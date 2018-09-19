@@ -47,7 +47,7 @@
 
 / {
 	model = "mqmaker MiQi";
-	compatible = "rockchip,rk3288-miqi", "rockchip,rk3288w", "rockchip,rk3288";
+	compatible = "rockchip,rk3288-miqi", "rockchip,rk3288";
 
 	chosen {
 		bootargs = "earlyprintk=uart8250-32bit,0xff690000";
