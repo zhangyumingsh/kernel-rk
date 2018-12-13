@@ -47,7 +47,4 @@
 #define MIPI_DSI_FMT_RGB666_PACKED	2
 #define MIPI_DSI_FMT_RGB565		3
 
-#define MIPI_CSI_FMT_RAW8		0
-#define MIPI_CSI_FMT_RAW10		1
-
 #endif /* __DRM_MIPI_DSI__ */

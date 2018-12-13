@@ -34,6 +34,7 @@
 
 #include <linux/iopoll.h>
 #include <linux/pm_runtime.h>
+#include <linux/regmap.h>
 #include <linux/videodev2.h>
 #include <linux/vmalloc.h>
 #include <media/v4l2-event.h>
@@ -41,10 +42,14 @@
 #include "common.h"
 #include "regs.h"
 
-#define CIF_ISP_INPUT_W_MAX		4032
-#define CIF_ISP_INPUT_H_MAX		3024
+#define CIF_ISP_INPUT_W_MAX		4416
+#define CIF_ISP_INPUT_H_MAX		3312
+#define CIF_ISP_INPUT_W_MAX_V12		3264
+#define CIF_ISP_INPUT_H_MAX_V12		2448
+#define CIF_ISP_INPUT_W_MAX_V13		1920
+#define CIF_ISP_INPUT_H_MAX_V13		1080
 #define CIF_ISP_INPUT_W_MIN		32
-#define CIF_ISP_INPUT_H_MIN		32
+#define CIF_ISP_INPUT_H_MIN		16
 #define CIF_ISP_OUTPUT_W_MAX		CIF_ISP_INPUT_W_MAX
 #define CIF_ISP_OUTPUT_H_MAX		CIF_ISP_INPUT_H_MAX
 #define CIF_ISP_OUTPUT_W_MIN		CIF_ISP_INPUT_W_MIN
@@ -265,6 +270,15 @@ static int rkisp1_config_dvp(struct rkisp1_device *dev)
 	val = readl(base + CIF_ISP_ACQ_PROP);
 	writel(val | input_sel, base + CIF_ISP_ACQ_PROP);
 
+	if (!IS_ERR(dev->grf) &&
+		(dev->isp_ver == ISP_V12 ||
+		dev->isp_ver == ISP_V13))
+		/* config isp cif 12bit datawidth */
+		regmap_update_bits(dev->grf,
+			GRF_VI_CON0,
+			ISP_CIF_DATA_WIDTH_MASK,
+			ISP_CIF_DATA_WIDTH_12B);
+
 	return 0;
 }
 
@@ -296,28 +310,49 @@ static int rkisp1_config_mipi(struct rkisp1_device *dev)
 		return -EINVAL;
 	}
 
-	mipi_ctrl = CIF_MIPI_CTRL_NUM_LANES(lanes - 1) |
-		    CIF_MIPI_CTRL_SHUTDOWNLANES(0xf) |
-		    CIF_MIPI_CTRL_ERR_SOT_SYNC_HS_SKIP |
-		    CIF_MIPI_CTRL_CLOCKLANE_ENA;
+	if (dev->isp_ver == ISP_V13) {
+		/* csi2host enable */
+		writel(1, base + CIF_ISP_CSI0_CTRL0);
 
-	writel(mipi_ctrl, base + CIF_MIPI_CTRL);
-	if (dev->isp_ver == ISP_V12)
-		writel(0, base + CIF_ISP_CSI0_CTRL0);
+		/* lanes */
+		writel(lanes - 1, base + CIF_ISP_CSI0_CTRL1);
 
-	/* Configure Data Type and Virtual Channel */
-	writel(CIF_MIPI_DATA_SEL_DT(in_fmt->mipi_dt) | CIF_MIPI_DATA_SEL_VC(0),
-	       base + CIF_MIPI_IMG_DATA_SEL);
+		/* linecnt */
+		writel(0x3FFF, base + CIF_ISP_CSI0_CTRL2);
 
-	/* Clear MIPI interrupts */
-	writel(~0, base + CIF_MIPI_ICR);
-	/*
-	 * Disable CIF_MIPI_ERR_DPHY interrupt here temporary for
-	 * isp bus may be dead when switch isp.
-	 */
-	writel(CIF_MIPI_FRAME_END | CIF_MIPI_ERR_CSI | CIF_MIPI_ERR_DPHY |
-	       CIF_MIPI_SYNC_FIFO_OVFLW(0x03) | CIF_MIPI_ADD_DATA_OVFLW,
-	       base + CIF_MIPI_IMSC);
+		/* Configure Data Type and Virtual Channel */
+		writel(CIF_MIPI_DATA_SEL_DT(in_fmt->mipi_dt) | CIF_MIPI_DATA_SEL_VC(0),
+		       base + CIF_ISP_CSI0_DATA_IDS_1);
+
+		/* interrupts */
+		writel(CIF_ISP_CSI0_IMASK_FRAME_END(0x3F) |
+		       CIF_ISP_CSI0_IMASK_LINECNT,
+		       base + CIF_ISP_CSI0_MASK3);
+
+	} else {
+		mipi_ctrl = CIF_MIPI_CTRL_NUM_LANES(lanes - 1) |
+			    CIF_MIPI_CTRL_SHUTDOWNLANES(0xf) |
+			    CIF_MIPI_CTRL_ERR_SOT_SYNC_HS_SKIP |
+			    CIF_MIPI_CTRL_CLOCKLANE_ENA;
+
+		writel(mipi_ctrl, base + CIF_MIPI_CTRL);
+		if (dev->isp_ver == ISP_V12)
+			writel(0, base + CIF_ISP_CSI0_CTRL0);
+
+		/* Configure Data Type and Virtual Channel */
+		writel(CIF_MIPI_DATA_SEL_DT(in_fmt->mipi_dt) | CIF_MIPI_DATA_SEL_VC(0),
+		       base + CIF_MIPI_IMG_DATA_SEL);
+
+		/* Clear MIPI interrupts */
+		writel(~0, base + CIF_MIPI_ICR);
+		/*
+		 * Disable CIF_MIPI_ERR_DPHY interrupt here temporary for
+		 * isp bus may be dead when switch isp.
+		 */
+		writel(CIF_MIPI_FRAME_END | CIF_MIPI_ERR_CSI | CIF_MIPI_ERR_DPHY |
+		       CIF_MIPI_SYNC_FIFO_OVFLW(0x03) | CIF_MIPI_ADD_DATA_OVFLW,
+		       base + CIF_MIPI_IMSC);
+	}
 
 	v4l2_dbg(1, rkisp1_debug, &dev->v4l2_dev, "\n  MIPI_CTRL 0x%08x\n"
 		 "  MIPI_IMG_DATA_SEL 0x%08x\n"
@@ -474,6 +509,14 @@ static void rkisp1_config_clk(struct rkisp1_device *dev)
 		CIF_ICCL_IE_CLK | CIF_ICCL_MIPI_CLK | CIF_ICCL_DCROP_CLK;
 
 	writel(val, dev->base_addr + CIF_ICCL);
+
+	if (dev->isp_ver == ISP_V12 || dev->isp_ver == ISP_V13) {
+		val = CIF_CLK_CTRL_MI_Y12 | CIF_CLK_CTRL_MI_SP |
+		      CIF_CLK_CTRL_MI_RAW0 | CIF_CLK_CTRL_MI_RAW1 |
+		      CIF_CLK_CTRL_MI_READ | CIF_CLK_CTRL_MI_RAWRD |
+		      CIF_CLK_CTRL_CP | CIF_CLK_CTRL_IE;
+		writel(val, dev->base_addr + CIF_VI_ISP_CLK_CTRL_V12);
+	}
 }
 
 /***************************** isp sub-devs *******************************/
@@ -765,10 +808,29 @@ static void rkisp1_isp_sd_try_fmt(struct v4l2_subdev *sd,
 			fmt->code = in_fmt->mbus_code;
 		else
 			fmt->code = MEDIA_BUS_FMT_SRGGB10_1X10;
-		fmt->width  = clamp_t(u32, fmt->width, CIF_ISP_INPUT_W_MIN,
+
+		if (isp_dev->isp_ver == ISP_V12) {
+			fmt->width  = clamp_t(u32, fmt->width,
+				      CIF_ISP_INPUT_W_MIN,
+				      CIF_ISP_INPUT_W_MAX_V12);
+			fmt->height = clamp_t(u32, fmt->height,
+				      CIF_ISP_INPUT_H_MIN,
+				      CIF_ISP_INPUT_H_MAX_V12);
+		} else if (isp_dev->isp_ver == ISP_V13) {
+			fmt->width  = clamp_t(u32, fmt->width,
+				      CIF_ISP_INPUT_W_MIN,
+				      CIF_ISP_INPUT_W_MAX_V13);
+			fmt->height = clamp_t(u32, fmt->height,
+				      CIF_ISP_INPUT_H_MIN,
+				      CIF_ISP_INPUT_H_MAX_V13);
+		} else {
+			fmt->width  = clamp_t(u32, fmt->width,
+				      CIF_ISP_INPUT_W_MIN,
 				      CIF_ISP_INPUT_W_MAX);
-		fmt->height = clamp_t(u32, fmt->height, CIF_ISP_INPUT_H_MIN,
+			fmt->height = clamp_t(u32, fmt->height,
+				      CIF_ISP_INPUT_H_MIN,
 				      CIF_ISP_INPUT_H_MAX);
+		}
 		break;
 	case RKISP1_ISP_PAD_SOURCE_PATH:
 		out_fmt = find_out_fmt(fmt->code);
@@ -1186,6 +1248,18 @@ void rkisp1_mipi_isr(unsigned int mis, struct rkisp1_device *dev)
 	} else {
 		v4l2_warn(v4l2_dev, "MIPI mis error: 0x%08x\n", mis);
 	}
+}
+
+void rkisp1_mipi_v13_isr(unsigned int err1, unsigned int err2,
+			       unsigned int err3, struct rkisp1_device *dev)
+{
+	struct v4l2_device *v4l2_dev = &dev->v4l2_dev;
+
+	if (err1)
+		v4l2_warn(v4l2_dev, "MIPI error: err1: 0x%08x\n", err1);
+
+	if (err2)
+		v4l2_warn(v4l2_dev, "MIPI error: err2: 0x%08x\n", err2);
 }
 
 void rkisp1_isp_isr(unsigned int isp_mis, struct rkisp1_device *dev)
