@@ -246,7 +246,6 @@ struct input_mask {
 #define BUS_GSC			0x1A
 #define BUS_ATARI		0x1B
 #define BUS_SPI			0x1C
-#define BUS_CEC			0x1E
 
 /*
  * MT_TOOL types
