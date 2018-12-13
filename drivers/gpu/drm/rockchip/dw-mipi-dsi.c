@@ -74,11 +74,11 @@
 #define DSI_DBI_CMDSIZE			0x28
 
 #define DSI_PCKHDL_CFG			0x2c
-#define CRC_RX_EN			BIT(4)
-#define ECC_RX_EN			BIT(3)
-#define BTA_EN				BIT(2)
-#define EOTP_RX_EN			BIT(1)
-#define EOTP_TX_EN			BIT(0)
+#define EN_CRC_RX			BIT(4)
+#define EN_ECC_RX			BIT(3)
+#define EN_BTA				BIT(2)
+#define EN_EOTP_RX			BIT(1)
+#define EN_EOTP_TX			BIT(0)
 
 #define DSI_MODE_CFG			0x34
 #define ENABLE_VIDEO_MODE		0
@@ -232,6 +232,7 @@
 
 enum soc_type {
 	PX30,
+	RK1808,
 	RK3126,
 	RK3288,
 	RK3366,
@@ -1082,12 +1083,8 @@ static void dw_mipi_dsi_dpi_config(struct dw_mipi_dsi *dsi,
 
 static void dw_mipi_dsi_packet_handler_config(struct dw_mipi_dsi *dsi)
 {
-	u32 val = CRC_RX_EN | ECC_RX_EN | BTA_EN | EOTP_TX_EN;
-
-	if (dsi->mode_flags & MIPI_DSI_MODE_EOT_PACKET)
-		val &= ~EOTP_TX_EN;
-
-	regmap_write(dsi->regmap, DSI_PCKHDL_CFG, val);
+	regmap_write(dsi->regmap, DSI_PCKHDL_CFG,
+		     EN_CRC_RX | EN_ECC_RX | EN_BTA);
 }
 
 static void dw_mipi_dsi_video_packet_config(struct dw_mipi_dsi *dsi,
@@ -1898,6 +1895,22 @@ static const struct dw_mipi_dsi_plat_data px30_socdata = {
 	.soc_type = PX30,
 };
 
+static const u32 rk1808_dsi_grf_reg_fields[MAX_FIELDS] = {
+	[MASTERSLAVEZ]          = GRF_REG_FIELD(0x0440,  8,  8),
+	[DPIUPDATECFG]          = GRF_REG_FIELD(0x0440,  7,  7),
+	[DPICOLORM]             = GRF_REG_FIELD(0x0440,  3,  3),
+	[DPISHUTDN]             = GRF_REG_FIELD(0x0440,  2,  2),
+	[FORCETXSTOPMODE]       = GRF_REG_FIELD(0x0444,  7, 10),
+	[FORCERXMODE]           = GRF_REG_FIELD(0x0444,  6,  6),
+	[TURNDISABLE]           = GRF_REG_FIELD(0x0444,  5,  5),
+};
+
+static const struct dw_mipi_dsi_plat_data rk1808_socdata = {
+	.dsi0_grf_reg_fields = rk1808_dsi_grf_reg_fields,
+	.max_bit_rate_per_lane = 2500000000UL,
+	.soc_type = RK1808,
+};
+
 static const u32 rk3128_dsi_grf_reg_fields[MAX_FIELDS] = {
 	[FORCETXSTOPMODE]	= GRF_REG_FIELD(0x0150, 10, 13),
 	[FORCERXMODE]		= GRF_REG_FIELD(0x0150,  9,  9),
@@ -2011,6 +2024,7 @@ static const struct dw_mipi_dsi_plat_data rk3399_socdata = {
 
 static const struct of_device_id dw_mipi_dsi_dt_ids[] = {
 	{ .compatible = "rockchip,px30-mipi-dsi", .data = &px30_socdata, },
+	{ .compatible = "rockchip,rk1808-mipi-dsi", .data = &rk1808_socdata, },
 	{ .compatible = "rockchip,rk3128-mipi-dsi", .data = &rk3128_socdata, },
 	{ .compatible = "rockchip,rk3288-mipi-dsi", .data = &rk3288_socdata, },
 	{ .compatible = "rockchip,rk3366-mipi-dsi", .data = &rk3366_socdata, },

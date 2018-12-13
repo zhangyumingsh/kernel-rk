@@ -1127,7 +1127,7 @@ int rockchip_init_opp_table(struct device *dev,
 	int ret = 0;
 
 	/* Get OPP descriptor node */
-	np = of_parse_phandle(dev->of_node, "operating-points-v2", 0);
+	np = _of_get_opp_desc_node(dev);
 	if (!np) {
 		dev_dbg(dev, "Failed to find operating-points-v2\n");
 		return -ENOENT;

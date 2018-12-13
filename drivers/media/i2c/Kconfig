@@ -501,14 +501,6 @@ config VIDEO_IMX219
 	---help---
 	  This driver supports IMX219 cameras from Sony
 
-config VIDEO_IMX323
-	tristate "Sony imx323 sensor support"
-	depends on VIDEO_V4L2 && I2C
-	depends on MEDIA_CAMERA_SUPPORT
-	select V4L2_FWNODE
-	help
-	  This driver supports IMX323 cameras from Sony
-
 config VIDEO_OV2659
 	tristate "OmniVision OV2659 sensor support"
 	depends on VIDEO_V4L2 && I2C
@@ -748,24 +740,6 @@ config VIDEO_GC2145
 	  To compile this driver as a module, choose M here: the
 	  module will be called gc2145.
 
-config VIDEO_GC0329
-	tristate "GalaxyCore GC0329 sensor support"
-	depends on VIDEO_V4L2 && I2C && VIDEO_V4L2_SUBDEV_API
-	help
-	  Support for the GalaxyCore GC0329 sensor.
-
-	  To compile this driver as a module, choose M here: the
-	  module will be called gc0329.
-
-config VIDEO_GC2035
-	tristate "GalaxyCore GC2035 sensor support"
-	depends on VIDEO_V4L2 && I2C && VIDEO_V4L2_SUBDEV_API
-	help
-	  Support for the GalaxyCore GC2035 sensor.
-
-	  To compile this driver as a module, choose M here: the
-	  module will be called gc2035.
-
 comment "Flash devices"
 
 config VIDEO_ADP1653
@@ -826,15 +800,6 @@ config VIDEO_UPD64083
 
 	  To compile this driver as a module, choose M here: the
 	  module will be called upd64083.
-
-comment "Camera lens devices"
-
-config VIDEO_VM149C
-	tristate "VM149C lens voice coil support"
-	depends on I2C && VIDEO_V4L2 && MEDIA_CONTROLLER
-	depends on VIDEO_V4L2_SUBDEV_API
-	---help---
-	  This is a driver for the VM149C camera lens voice coil.
 
 comment "Audio/Video compression chips"
 

@@ -59,8 +59,7 @@
 enum rkisp1_isp_ver {
 	ISP_V10 = 0,
 	ISP_V11,
-	ISP_V12,
-	ISP_V13
+	ISP_V12
 };
 
 /*
@@ -103,7 +102,6 @@ struct rkisp1_sensor_info {
  * @params_vdev: ISP input parameters device
  */
 struct rkisp1_device {
-	struct regmap *grf;
 	void __iomem *base_addr;
 	int irq;
 	struct device *dev;
