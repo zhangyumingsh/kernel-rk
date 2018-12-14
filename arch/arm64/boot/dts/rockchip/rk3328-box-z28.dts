@@ -81,6 +81,8 @@
 		pinctrl-names = "default";
 		pinctrl-0 = <&sdmmc0m1_gpio>;
 		regulator-name = "vcc_sd";
+		regulator-always-on;
+		regulator-boot-on;
 		regulator-min-microvolt = <3300000>;
 		regulator-max-microvolt = <3300000>;
 		vin-supply = <&vcc_io>;
@@ -115,14 +117,10 @@
 	leds {
 		compatible = "gpio-leds";
 
-		led1 {
-			gpios = <&rk805 0 GPIO_ACTIVE_LOW>;
-			linux,default-trigger = "heartbeat";
-		};
-
-		led2 {
-			gpios = <&rk805 1 GPIO_ACTIVE_LOW>;
-			linux,default-trigger = "mmc0";
+		power {
+			gpios = <&rk805 0 GPIO_ACTIVE_HIGH>;
+			linux,default-trigger = "default-on";
+			default-state = "on";
 		};
 	};
 
@@ -413,6 +411,14 @@
 	status = "okay";
 };
 
+&iep {
+	status = "okay";
+};
+
+&iep_mmu {
+	status = "okay";
+};
+
 &io_domains {
 	status = "okay";
 
@@ -520,7 +526,6 @@
 
 &u2phy {
 	status = "okay";
-
 };
 
 &u2phy_host {

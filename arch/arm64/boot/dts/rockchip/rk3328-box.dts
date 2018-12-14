@@ -59,20 +59,6 @@
 		#clock-cells = <0>;
 	};
 
-	sdio_pwrseq: sdio-pwrseq {
-		compatible = "mmc-pwrseq-simple";
-		pinctrl-names = "default";
-		pinctrl-0 = <&wifi_enable_h>;
-
-		/*
-		 * On the module itself this is one of these (depending
-		 * on the actual card populated):
-		 * - SDIO_RESET_L_WL_REG_ON
-		 * - PDN (power down when low)
-		 */
-		reset-gpios = <&gpio1 RK_PC2 GPIO_ACTIVE_LOW>;
-	};
-
 	vcc_phy: vcc-phy-regulator {
 		compatible = "regulator-fixed";
 		regulator-name = "vcc_phy";
@@ -95,6 +81,8 @@
 		pinctrl-names = "default";
 		pinctrl-0 = <&sdmmc0m1_gpio>;
 		regulator-name = "vcc_sd";
+		regulator-always-on;
+		regulator-boot-on;
 		regulator-min-microvolt = <3300000>;
 		regulator-max-microvolt = <3300000>;
 		vin-supply = <&vcc_io>;
@@ -131,7 +119,8 @@
 
 		led1 {
 			gpios = <&rk805 0 GPIO_ACTIVE_LOW>;
-			linux,default-trigger = "heartbeat";
+			linux,default-trigger = "default-on";
+			default-state = "on";
 		};
 
 		led2 {
@@ -175,6 +164,20 @@
 	spdif_out: spdif-out {
 		compatible = "linux,spdif-dit";
 		#sound-dai-cells = <0>;
+	};
+
+	sdio_pwrseq: sdio-pwrseq {
+		compatible = "mmc-pwrseq-simple";
+		pinctrl-names = "default";
+		pinctrl-0 = <&wifi_enable_h>;
+
+		/*
+		 * On the module itself this is one of these (depending
+		 * on the actual card populated):
+		 * - SDIO_RESET_L_WL_REG_ON
+		 * - PDN (power down when low)
+		 */
+		reset-gpios = <&gpio1 RK_PC2 GPIO_ACTIVE_LOW>;
 	};
 
 	wireless-bluetooth {
@@ -429,6 +432,14 @@
 	status = "okay";
 };
 
+&iep {
+	status = "okay";
+};
+
+&iep_mmu {
+	status = "okay";
+};
+
 &io_domains {
 	status = "okay";
 
@@ -465,7 +476,8 @@
 
 	sdio-pwrseq {
 		wifi_enable_h: wifi-enable-h {
-			rockchip,pins = <1 RK_PC2 RK_FUNC_GPIO &pcfg_pull_none>;
+			rockchip,pins = <1 RK_PC2 RK_FUNC_GPIO &pcfg_pull_none_4ma>,
+				<1 RK_PC3 RK_FUNC_GPIO &pcfg_pull_none_4ma>;
 		};
 	};
 
@@ -565,7 +577,6 @@
 
 &u2phy {
 	status = "okay";
-
 };
 
 &u2phy_host {

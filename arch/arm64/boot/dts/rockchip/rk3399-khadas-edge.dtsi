@@ -134,13 +134,15 @@
 	};
 
 	dw_hdmi_audio: dw-hdmi-audio {
-		status = "disabled";
+//		status = "disabled";
+		status = "okay";
 		compatible = "rockchip,dw-hdmi-audio";
 		#sound-dai-cells = <0>;
 	};
 
 	hdmi_sound: hdmi-sound {
-		status = "disabled";
+//		status = "disabled";
+		status = "okay";
 		compatible = "simple-audio-card";
 		simple-audio-card,format = "i2s";
 		simple-audio-card,mclk-fs = <256>;
@@ -155,7 +157,8 @@
 	};
 
 	hdmi_dp_sound: hdmi-dp-sound {
-		status = "disabled";
+//		status = "disabled";
+		status = "okay";
 		compatible = "rockchip,rk3399-hdmi-dp";
 		rockchip,cpu = <&i2s2>;
 		rockchip,codec = <&hdmi>, <&cdn_dp>;
@@ -293,8 +296,7 @@
 };
 
 &dmac_bus {
-	iram = <&iram>;
-	rockchip,force-iram;
+   iram = <&iram>;
 };
 
 &hdmi_in_vopl {
@@ -317,10 +319,6 @@
 
 &dp_in_vopb {
 	status = "disabled";
-};
-
-&dfi {
-	status = "okay";
 };
 
 &dmc {
@@ -904,9 +902,9 @@
 	assigned-clock-parents = <&cru PLL_VPLL>;
 };
 
-&hdmi_dp_sound {
-	status = "okay";
-};
+//&hdmi_dp_sound {
+//	status = "okay";
+//};
 
 &vopb_mmu {
 	status = "okay";

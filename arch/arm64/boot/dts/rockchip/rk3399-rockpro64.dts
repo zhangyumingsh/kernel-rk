@@ -21,6 +21,20 @@
 		reg = <0x0 0xff8d0000 0x0 0x20000>; /* 128k */
 	};
 
+	xin32k: xin32k {
+		compatible = "fixed-clock";
+		clock-frequency = <32768>;
+		clock-output-names = "xin32k";
+		#clock-cells = <0>;
+	};
+
+	clkin_gmac: external-gmac-clock {
+		compatible = "fixed-clock";
+		clock-frequency = <125000000>;
+		clock-output-names = "clkin_gmac";
+		#clock-cells = <0>;
+	};
+
 	dc_12v: dc-12v {
 		compatible = "regulator-fixed";
 		regulator-name = "dc_12v";
@@ -100,11 +114,26 @@
 		rockchip,pwm_voltage = <900000>;
 	};
 
-	clkin_gmac: external-gmac-clock {
-		compatible = "fixed-clock";
-		clock-frequency = <125000000>;
-		clock-output-names = "clkin_gmac";
-		#clock-cells = <0>;
+	leds {
+		compatible = "gpio-leds";
+
+		work-led {
+			gpios = <&gpio0 RK_PB3 GPIO_ACTIVE_HIGH>;
+			linux,default-trigger = "mmc0";
+		};
+
+		diy-led {
+			gpios = <&gpio0 RK_PA2 GPIO_ACTIVE_HIGH>;
+			linux,default-trigger = "heartbeat";
+		};
+	};
+
+	ir-receiver {
+		compatible = "gpio-ir-receiver";
+		gpios = <&gpio0 RK_PA6 GPIO_ACTIVE_LOW>;
+		linux,rc-map-name = "rc-pine64";
+		pinctrl-0 = <&ir_int>;
+		pinctrl-names = "default";
 	};
 
 	hdmi-sound {
@@ -120,59 +149,14 @@
 		};
 	};
 
-	spdif_out: spdif-out {
-		compatible = "linux,spdif-dit";
-		#sound-dai-cells = <0>;
-	};
-
-	sdio_pwrseq: sdio-pwrseq {
-		compatible = "mmc-pwrseq-simple";
-		clocks = <&rk808 1>;
-		clock-names = "ext_clock";
-		pinctrl-names = "default";
-		pinctrl-0 = <&wifi_enable_h>;
-
-		/*
-		 * On the module itself this is one of these (depending
-		 * on the actual card populated):
-		 * - SDIO_RESET_L_WL_REG_ON
-		 * - PDN (power down when low)
-		 */
-		reset-gpios = <&gpio0 RK_PB2 GPIO_ACTIVE_LOW>;
-	};
-
-	xin32k: xin32k {
-		compatible = "fixed-clock";
-		clock-frequency = <32768>;
-		clock-output-names = "xin32k";
-		#clock-cells = <0>;
-	};
-
-	wireless-wlan {
-		compatible = "wlan-platdata";
-		rockchip,grf = <&grf>;
-		wifi_chip_type = "ap6354";
-		sdio_vref = <1800>;
-		WIFI,host_wake_irq = <&gpio0 RK_PA3 GPIO_ACTIVE_HIGH>;
-		status = "okay";
-	};
-
-	wireless-bluetooth {
-		compatible = "bluetooth-platdata";
-		clocks = <&rk808 1>;
-		clock-names = "ext_clock";
-		uart_rts_gpios = <&gpio2 RK_PC3 GPIO_ACTIVE_LOW>;
-		pinctrl-names = "default", "rts_gpio";
-		pinctrl-0 = <&uart0_rts>;
-		pinctrl-1 = <&uart0_gpios>;
-		BT,reset_gpio    = <&gpio0 RK_PB1 GPIO_ACTIVE_HIGH>;
-		BT,wake_gpio     = <&gpio2 RK_PD3 GPIO_ACTIVE_HIGH>;
-		BT,wake_host_irq = <&gpio0 RK_PA4 GPIO_ACTIVE_HIGH>;
-		status = "okay";
+	hdmi-dp-sound {
+		compatible = "rockchip,rk3399-hdmi-dp";
+		rockchip,cpu = <&i2s2>;
+		rockchip,codec = <&hdmi>, <&cdn_dp>;
+		status = "disabled";
 	};
 
 	es8316-sound {
-		status = "okay";
 		compatible = "simple-audio-card";
 		simple-audio-card,format = "i2s";
 		simple-audio-card,name = "ES8316";
@@ -204,28 +188,53 @@
 		};
 	};
 
-	leds {
-		status = "okay";
-		compatible = "gpio-leds";
-		work-led {
-			gpios = <&gpio0 RK_PB3 GPIO_ACTIVE_HIGH>;
-			linux,default-trigger = "heartbeat";
-			default-state = "on";
-		};
-		diy-led {
-			gpios = <&gpio0 RK_PA2 GPIO_ACTIVE_HIGH>;
-			linux,default-trigger = "none";
-			default-state = "off";
-		};
+	spdif_out: spdif-out {
+		compatible = "linux,spdif-dit";
+		#sound-dai-cells = <0>;
 	};
 
-	test-power {
-		status = "okay";
+	sdio_pwrseq: sdio-pwrseq {
+		compatible = "mmc-pwrseq-simple";
+		clocks = <&rk808 1>;
+		clock-names = "ext_clock";
+		pinctrl-names = "default";
+		pinctrl-0 = <&wifi_enable_h>;
+
+		/*
+		 * On the module itself this is one of these (depending
+		 * on the actual card populated):
+		 * - SDIO_RESET_L_WL_REG_ON
+		 * - PDN (power down when low)
+		 */
+		reset-gpios = <&gpio0 RK_PB2 GPIO_ACTIVE_LOW>;
+	};
+
+	wireless-wlan {
+		compatible = "wlan-platdata";
+		rockchip,grf = <&grf>;
+		wifi_chip_type = "ap6354";
+		sdio_vref = <1800>;
+		WIFI,host_wake_irq = <&gpio0 RK_PA3 GPIO_ACTIVE_HIGH>;
+		status = "disabled";
+	};
+
+	wireless-bluetooth {
+		compatible = "bluetooth-platdata";
+		clocks = <&rk808 1>;
+		clock-names = "ext_clock";
+		uart_rts_gpios = <&gpio2 RK_PC3 GPIO_ACTIVE_LOW>;
+		pinctrl-names = "default", "rts_gpio";
+		pinctrl-0 = <&uart0_rts>;
+		pinctrl-1 = <&uart0_gpios>;
+		BT,reset_gpio    = <&gpio0 RK_PB1 GPIO_ACTIVE_HIGH>;
+		BT,wake_gpio     = <&gpio2 RK_PD3 GPIO_ACTIVE_HIGH>;
+		BT,wake_host_irq = <&gpio0 RK_PA4 GPIO_ACTIVE_HIGH>;
+		status = "disabled";
 	};
 };
 
 &cdn_dp {
-	status = "disabled";
+	status = "okay";
 	extcon = <&fusb0>;
 };
 
@@ -266,14 +275,12 @@
 };
 
 &dfi {
-	status = "disabled";
+	status = "okay";
 };
 
 &dmc {
-	status = "disabled";
+	status = "okay";
 	center-supply = <&vdd_center>;
-	upthreshold = <40>;
-	downdifferential = <20>;
 	system-status-freq = <
 		/*system status         freq(KHz)*/
 		SYS_STATUS_NORMAL       800000
@@ -287,13 +294,7 @@
 		SYS_STATUS_DUALVIEW     800000
 		SYS_STATUS_ISP          800000
 	>;
-	vop-bw-dmc-freq = <
-	/* min_bw(MB/s) max_bw(MB/s) freq(KHz) */
-		0       577      200000
-		578     1701     300000
-		1702    99999    400000
-	>;
-	auto-min-freq = <400000>;
+	auto-min-freq = <800000>;
 	auto-freq-en = <0>;
 };
 
@@ -342,6 +343,17 @@
 
 &display_subsystem {
 	status = "okay";
+
+	route {
+		route_hdmi: route-hdmi {
+			status = "okay";
+			connect = <&vopb_out_hdmi>;
+		};
+
+		route_dp: route-dp {
+			connect = <&vopl_out_dp>;
+		};
+	};
 };
 
 &emmc_phy {
@@ -403,7 +415,7 @@
 		rockchip,system-power-controller;
 		wakeup-source;
 		#clock-cells = <1>;
-		clock-output-names = "xin32k", "rk808-clkout2";
+		clock-output-names = "rk808-clkout1", "rk808-clkout2";
 
 		vcc1-supply = <&vcc_sys>;
 		vcc2-supply = <&vcc_sys>;
@@ -637,6 +649,7 @@
 	phy-supply = <&vcc_phy>;
 	phy-mode = "rgmii";
 	clock_in_out = "input";
+	snps,force_thresh_dma_mode;
 	snps,reset-gpio = <&gpio3 RK_PB7 GPIO_ACTIVE_LOW>;
 	snps,reset-active-low;
 	snps,reset-delays-us = <0 10000 50000>;
@@ -646,7 +659,7 @@
 	pinctrl-0 = <&rgmii_pins>;
 	pinctrl-1 = <&rgmii_sleep_pins>;
 	tx_delay = <0x28>;
-	rx_delay = <0x11>;
+	rx_delay = <0x20>;
 	status = "okay";
 };
 
@@ -659,6 +672,14 @@
 	#address-cells = <1>;
 	#size-cells = <0>;
 	#sound-dai-cells = <0>;
+	status = "okay";
+};
+
+&iep {
+	status = "okay";
+};
+
+&iep_mmu {
 	status = "okay";
 };
 
@@ -696,8 +717,8 @@
 };
 
 &sdio0 {
-	clock-frequency = <100000000>;
-	max-frequency = <100000000>;
+	clock-frequency = <50000000>;
+	max-frequency = <50000000>;
 	supports-sdio;
 	bus-width = <4>;
 	disable-wp;
@@ -715,7 +736,6 @@
 
 &sdhci {
 	bus-width = <8>;
-	mmc-hs200-1_8v;
 	mmc-hs400-1_8v;
 	mmc-hs400-enhanced-strobe;
 	supports-emmc;
@@ -871,6 +891,13 @@
 		};
 	};
 
+	ir {
+		ir_int: ir-int {
+			rockchip,pins =
+				<0 RK_PA6 RK_FUNC_GPIO &pcfg_pull_none>;
+		};
+	};
+
 	pcie {
 		pcie_pwr_en: pcie-pwr-en {
 			rockchip,pins =
@@ -1006,35 +1033,6 @@
 	status = "okay";
 };
 
-&rockchip_suspend {
-	status = "okay";
-	rockchip,sleep-debug-en = <0>;
-	rockchip,sleep-mode-config = <
-		(0
-		| RKPM_SLP_ARMPD
-		| RKPM_SLP_PERILPPD
-		| RKPM_SLP_DDR_RET
-		| RKPM_SLP_PLLPD
-		| RKPM_SLP_CENTER_PD
-		| RKPM_SLP_AP_PWROFF
-		)
-	>;
-	rockchip,wakeup-config = <
-		(0
-		| RKPM_GPIO_WKUP_EN
-		| RKPM_PWM_WKUP_EN
-		)
-	>;
-	rockchip,pwm-regulator-config = <
-		(0
-		| PWM2_REGULATOR_EN
-		)
-	>;
-	rockchip,power-ctrl =
-		<&gpio1 RK_PC1 GPIO_ACTIVE_HIGH>,
-		<&gpio1 RK_PB6 GPIO_ACTIVE_HIGH>;
-};
-
 &vdec_mmu {
 	status = "okay";
 };
@@ -1055,4 +1053,14 @@
 
 &vopb_mmu {
 	status = "okay";
+};
+
+&vopl {
+	status = "disabled";
+	assigned-clocks = <&cru DCLK_VOP1_DIV>;
+	assigned-clock-parents = <&cru PLL_CPLL>;
+};
+
+&vopl_mmu {
+	status = "disabled";
 };

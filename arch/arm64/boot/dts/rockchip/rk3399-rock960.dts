@@ -776,6 +776,14 @@
 	status = "okay";
 };
 
+&iep {
+	status = "okay";
+};
+
+&iep_mmu {
+	status = "okay";
+};
+
 &io_domains {
 	status = "okay";
 

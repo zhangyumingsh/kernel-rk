@@ -436,6 +436,14 @@
 	status = "okay";
 };
 
+&iep {
+	status = "okay";
+};
+
+&iep_mmu {
+	status = "okay";
+};
+
 &io_domains {
 	status = "okay";
 
@@ -515,7 +523,6 @@
 
 &u2phy {
 	status = "okay";
-
 };
 
 &u2phy_host {
