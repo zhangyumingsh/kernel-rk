@@ -902,9 +902,9 @@
 	assigned-clock-parents = <&cru PLL_VPLL>;
 };
 
-//&hdmi_dp_sound {
-//	status = "okay";
-//};
+&hdmi_dp_sound {
+	status = "okay";
+};
 
 &vopb_mmu {
 	status = "okay";
