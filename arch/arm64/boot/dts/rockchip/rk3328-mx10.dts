@@ -98,7 +98,7 @@
 		};
 	};
 
-	sound {
+	hdmi-sound {
 		compatible = "simple-audio-card";
 		simple-audio-card,format = "i2s";
 		simple-audio-card,mclk-fs = <128>;
