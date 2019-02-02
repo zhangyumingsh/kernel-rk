@@ -167,6 +167,7 @@
 			opp-microvolt-L1 = <1300000 1300000 1350000>;
 			clock-latency-ns = <40000>;
 		};
+/* 20190202
 		opp-1392000000 {
 			opp-hz = /bits/ 64 <1392000000>;
 			opp-microvolt = <1350000 1350000 1350000>;
@@ -181,6 +182,7 @@
 			opp-microvolt-L1 = <1425000 1425000 1450000>;
 			clock-latency-ns = <40000>;
 		};
+*/
 	};
 
 	arm-pmu {
