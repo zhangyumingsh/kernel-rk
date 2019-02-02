@@ -125,7 +125,7 @@
 			opp-microvolt-L1 = <1425000 1425000 1450000>;
 			clock-latency-ns = <40000>;
 		};
-	}
+	};
 
 	xin32k: xin32k {
 		compatible = "fixed-clock";
