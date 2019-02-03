@@ -22,7 +22,6 @@ dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3326-863-lp3-v10.dtb
 dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3326-863-lp3-v10-avb.dtb
 dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3326-86v-v10.dtb
 dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3328-a5x.dtb
-dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3328-a5x-1300.dtb
 dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3328-a5x-1500.dtb
 dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3328-box-liantong.dtb
 dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3328-box-trn9.dtb
