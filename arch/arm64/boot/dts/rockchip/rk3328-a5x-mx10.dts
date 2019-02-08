@@ -697,7 +697,7 @@
 		dma-names = "tx", "rx";
 		pinctrl-names = "default";
 		pinctrl-0 = <0x3b>;
-		status = "okay";
+		status = "disabled";
 		phandle = <0xa3>;
 	};
 
@@ -875,15 +875,15 @@
 				RK805_LDO3 {
 					regulator-compatible = "RK805_LDO3";
 					regulator-name = "vdd_10";
-					regulator-min-microvolt = <0xf4240>;
-					regulator-max-microvolt = <0xf4240>;
+					regulator-min-microvolt = <0x10c8e0>;
+					regulator-max-microvolt = <0x10c8e0>;
 					regulator-always-on;
 					regulator-boot-on;
 					phandle = <0xa8>;
 
 					regulator-state-mem {
 						regulator-on-in-suspend;
-						regulator-suspend-microvolt = <0xf4240>;
+						regulator-suspend-microvolt = <0x10c8e0>;
 					};
 				};
 			};
@@ -1050,7 +1050,8 @@
 		clock-names = "saradc", "apb_pclk";
 		resets = <0x2 0x56>;
 		reset-names = "saradc-apb";
-		status = "disabled";
+		status = "okay";
+		vref-supply = <0x2b>;
 		phandle = <0xb2>;
 	};
 
@@ -2872,7 +2873,7 @@
 		sdio-pwrseq {
 
 			wifi-enable-h {
-				rockchip,pins = <0x3 0x8 0x0 0x83>;
+				rockchip,pins = <0x1 0x12 0x0 0x82>;
 				phandle = <0x94>;
 			};
 		};
@@ -2896,7 +2897,7 @@
 		wireless-bluetooth {
 
 			uart0-gpios {
-				rockchip,pins = <0x1 0x1a 0x0 0x7f>;
+				rockchip,pins = <0x1 0xa 0x0 0x82>;
 				phandle = <0x97>;
 			};
 		};
@@ -3041,26 +3042,31 @@
 	};
 
 	wireless-bluetooth {
-		BT,power_gpio = <0x95 0x1a 0x0>;
-		BT,wake_host_irq = <0x95 0x18 0x0>;
+//		BT,power_gpio = <0x95 0x1a 0x0>;
+//		BT,wake_host_irq = <0x95 0x18 0x0>;
 		clock-names = "ext_clock";
 		clocks = <0x8e 0x1>;
 		compatible = "bluetooth-platdata";
 		pinctrl-0 = <0x96>;
 		pinctrl-1 = <0x97>;
 		pinctrl-names = "default", "rts_gpio";
+		BT,reset_gpio = <0x72 0x15 0x0>;
+		BT,wake_gpio = <0x72 0x17 0x0>;
+		BT,wake_host_irq = <0x72 0x1a 0x0>;
 		status = "okay";
-		uart_rts_gpios = <0x95 0xa 0x1>;
+		uart_rts_gpios = <0x72 0xa 0x1>;
 	};
 
 	wireless-wlan {
 		compatible = "wlan-platdata";
 		rockchip,grf = <0x1c>;
-		sdio_vref = <0x708>;
+		wifi_chip_type = [00];
+		sdio_vref = <0xce4>;
+		#WIFI,poweren_gpio = <0x90 0x8 0x0>;
+		WIFI,host_wake_irq = <0x90 0x1 0x0>;
 		status = "okay";
-		WIFI,chipen = <0x95 0x16 0x1>;
-		WIFI,host_wake_irq = <0x95 0x17 0x0>;
-		wifi_chip_type = "rtl8723cs";
+//		WIFI,chipen = <0x95 0x16 0x1>;
+//		WIFI,host_wake_irq = <0x95 0x17 0x0>;
 	};
 
 	__symbols__ {
