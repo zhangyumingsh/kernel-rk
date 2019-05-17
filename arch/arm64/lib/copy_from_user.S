@@ -16,8 +16,9 @@
 
 #include <linux/linkage.h>
 
+#include <asm/asm-uaccess.h>
+#include <asm/assembler.h>
 #include <asm/cache.h>
-#include <asm/uaccess.h>
 
 /*
  * Copy from user space to a kernel buffer (alignment handled by the hardware)
@@ -71,14 +72,10 @@ ENTRY(__arch_copy_from_user)
 	mov	x0, #0				// Nothing to copy
 	ret
 ENDPROC(__arch_copy_from_user)
+EXPORT_SYMBOL(__arch_copy_from_user)
 
 	.section .fixup,"ax"
 	.align	2
-9998:
-	sub	x0, end, dst
-9999:
-	strb	wzr, [dst], #1			// zero remaining buffer space
-	cmp	dst, end
-	b.lo	9999b
+9998:	sub	x0, end, dst			// bytes not copied
 	ret
 	.previous

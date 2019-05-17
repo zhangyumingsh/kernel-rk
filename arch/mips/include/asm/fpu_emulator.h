@@ -178,7 +178,7 @@ do {									\
 
 extern int fpu_emulator_cop1Handler(struct pt_regs *xcp,
 				    struct mips_fpu_struct *ctx, int has_fpu,
-				    void *__user *fault_addr);
+				    void __user **fault_addr);
 void force_fcr31_sig(unsigned long fcr31, void __user *fault_addr,
 		     struct task_struct *tsk);
 int process_fpemu_return(int sig, void __user *fault_addr,
@@ -187,17 +187,6 @@ int isBranchInstr(struct pt_regs *regs, struct mm_decoded_insn dec_insn,
 		  unsigned long *contpc);
 int mm_isBranchInstr(struct pt_regs *regs, struct mm_decoded_insn dec_insn,
 		     unsigned long *contpc);
-
-#define SIGNALLING_NAN 0x7ff800007ff80000LL
-
-static inline void fpu_emulator_init_fpu(void)
-{
-	struct task_struct *t = current;
-	int i;
-
-	for (i = 0; i < 32; i++)
-		set_fpr64(&t->thread.fpu.fpr[i], 0, SIGNALLING_NAN);
-}
 
 /*
  * Mask the FCSR Cause bits according to the Enable bits, observing

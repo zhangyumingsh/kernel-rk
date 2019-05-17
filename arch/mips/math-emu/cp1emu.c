@@ -35,7 +35,6 @@
  */
 #include <linux/sched.h>
 #include <linux/debugfs.h>
-#include <linux/kconfig.h>
 #include <linux/percpu-defs.h>
 #include <linux/perf_event.h>
 
@@ -43,7 +42,7 @@
 #include <asm/inst.h>
 #include <asm/ptrace.h>
 #include <asm/signal.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 
 #include <asm/cpu-info.h>
 #include <asm/processor.h>
@@ -59,7 +58,7 @@ static int fpu_emu(struct pt_regs *, struct mips_fpu_struct *,
 	mips_instruction);
 
 static int fpux_emu(struct pt_regs *,
-	struct mips_fpu_struct *, mips_instruction, void *__user *);
+	struct mips_fpu_struct *, mips_instruction, void __user **);
 
 /* Control registers */
 
@@ -794,10 +793,10 @@ int isBranchInstr(struct pt_regs *regs, struct mm_decoded_insn dec_insn,
  */
 static inline int cop1_64bit(struct pt_regs *xcp)
 {
-	if (config_enabled(CONFIG_64BIT) && !config_enabled(CONFIG_MIPS32_O32))
+	if (IS_ENABLED(CONFIG_64BIT) && !IS_ENABLED(CONFIG_MIPS32_O32))
 		return 1;
-	else if (config_enabled(CONFIG_32BIT) &&
-		 !config_enabled(CONFIG_MIPS_O32_FP64_SUPPORT))
+	else if (IS_ENABLED(CONFIG_32BIT) &&
+		 !IS_ENABLED(CONFIG_MIPS_O32_FP64_SUPPORT))
 		return 0;
 
 	return !test_thread_flag(TIF_32BIT_FPREGS);
@@ -982,7 +981,7 @@ static inline void cop1_ctc(struct pt_regs *xcp, struct mips_fpu_struct *ctx,
  */
 
 static int cop1Emulate(struct pt_regs *xcp, struct mips_fpu_struct *ctx,
-		struct mm_decoded_insn dec_insn, void *__user *fault_addr)
+		struct mm_decoded_insn dec_insn, void __user **fault_addr)
 {
 	unsigned long contpc = xcp->cp0_epc + dec_insn.pc_inc;
 	unsigned int cond, cbit, bit0;
@@ -1064,7 +1063,7 @@ emul:
 				     MIPSInst_SIMM(ir));
 		MIPS_FPU_EMU_INC_STATS(loads);
 
-		if (!access_ok(VERIFY_READ, dva, sizeof(u64))) {
+		if (!access_ok(dva, sizeof(u64))) {
 			MIPS_FPU_EMU_INC_STATS(errors);
 			*fault_addr = dva;
 			return SIGBUS;
@@ -1082,7 +1081,7 @@ emul:
 				      MIPSInst_SIMM(ir));
 		MIPS_FPU_EMU_INC_STATS(stores);
 		DIFROMREG(dval, MIPSInst_RT(ir));
-		if (!access_ok(VERIFY_WRITE, dva, sizeof(u64))) {
+		if (!access_ok(dva, sizeof(u64))) {
 			MIPS_FPU_EMU_INC_STATS(errors);
 			*fault_addr = dva;
 			return SIGBUS;
@@ -1098,7 +1097,7 @@ emul:
 		wva = (u32 __user *) (xcp->regs[MIPSInst_RS(ir)] +
 				      MIPSInst_SIMM(ir));
 		MIPS_FPU_EMU_INC_STATS(loads);
-		if (!access_ok(VERIFY_READ, wva, sizeof(u32))) {
+		if (!access_ok(wva, sizeof(u32))) {
 			MIPS_FPU_EMU_INC_STATS(errors);
 			*fault_addr = wva;
 			return SIGBUS;
@@ -1116,7 +1115,7 @@ emul:
 				      MIPSInst_SIMM(ir));
 		MIPS_FPU_EMU_INC_STATS(stores);
 		SIFROMREG(wval, MIPSInst_RT(ir));
-		if (!access_ok(VERIFY_WRITE, wva, sizeof(u32))) {
+		if (!access_ok(wva, sizeof(u32))) {
 			MIPS_FPU_EMU_INC_STATS(errors);
 			*fault_addr = wva;
 			return SIGBUS;
@@ -1151,7 +1150,7 @@ emul:
 
 		case mfhc_op:
 			if (!cpu_has_mips_r2_r6)
-				goto sigill;
+				return SIGILL;
 
 			/* copregister rd -> gpr[rt] */
 			if (MIPSInst_RT(ir) != 0) {
@@ -1162,7 +1161,7 @@ emul:
 
 		case mthc_op:
 			if (!cpu_has_mips_r2_r6)
-				goto sigill;
+				return SIGILL;
 
 			/* copregister rd <- gpr[rt] */
 			SITOHREG(xcp->regs[MIPSInst_RT(ir)], MIPSInst_RD(ir));
@@ -1390,7 +1389,6 @@ branch_common:
 				xcp->regs[MIPSInst_RS(ir)];
 		break;
 	default:
-sigill:
 		return SIGILL;
 	}
 
@@ -1475,7 +1473,7 @@ DEF3OP(nmadd, dp, ieee754dp_mul, ieee754dp_add, ieee754dp_neg);
 DEF3OP(nmsub, dp, ieee754dp_mul, ieee754dp_sub, ieee754dp_neg);
 
 static int fpux_emu(struct pt_regs *xcp, struct mips_fpu_struct *ctx,
-	mips_instruction ir, void *__user *fault_addr)
+	mips_instruction ir, void __user **fault_addr)
 {
 	unsigned int rcsr = 0;	/* resulting csr */
 
@@ -1495,7 +1493,7 @@ static int fpux_emu(struct pt_regs *xcp, struct mips_fpu_struct *ctx,
 				xcp->regs[MIPSInst_FT(ir)]);
 
 			MIPS_FPU_EMU_INC_STATS(loads);
-			if (!access_ok(VERIFY_READ, va, sizeof(u32))) {
+			if (!access_ok(va, sizeof(u32))) {
 				MIPS_FPU_EMU_INC_STATS(errors);
 				*fault_addr = va;
 				return SIGBUS;
@@ -1515,7 +1513,7 @@ static int fpux_emu(struct pt_regs *xcp, struct mips_fpu_struct *ctx,
 			MIPS_FPU_EMU_INC_STATS(stores);
 
 			SIFROMREG(val, MIPSInst_FS(ir));
-			if (!access_ok(VERIFY_WRITE, va, sizeof(u32))) {
+			if (!access_ok(va, sizeof(u32))) {
 				MIPS_FPU_EMU_INC_STATS(errors);
 				*fault_addr = va;
 				return SIGBUS;
@@ -1592,7 +1590,7 @@ static int fpux_emu(struct pt_regs *xcp, struct mips_fpu_struct *ctx,
 				xcp->regs[MIPSInst_FT(ir)]);
 
 			MIPS_FPU_EMU_INC_STATS(loads);
-			if (!access_ok(VERIFY_READ, va, sizeof(u64))) {
+			if (!access_ok(va, sizeof(u64))) {
 				MIPS_FPU_EMU_INC_STATS(errors);
 				*fault_addr = va;
 				return SIGBUS;
@@ -1611,7 +1609,7 @@ static int fpux_emu(struct pt_regs *xcp, struct mips_fpu_struct *ctx,
 
 			MIPS_FPU_EMU_INC_STATS(stores);
 			DIFROMREG(val, MIPSInst_FS(ir));
-			if (!access_ok(VERIFY_WRITE, va, sizeof(u64))) {
+			if (!access_ok(va, sizeof(u64))) {
 				MIPS_FPU_EMU_INC_STATS(errors);
 				*fault_addr = va;
 				return SIGBUS;
@@ -2825,13 +2823,20 @@ dcopuop:
  * For simplicity we always terminate upon an ISA mode switch.
  */
 int fpu_emulator_cop1Handler(struct pt_regs *xcp, struct mips_fpu_struct *ctx,
-	int has_fpu, void *__user *fault_addr)
+	int has_fpu, void __user **fault_addr)
 {
 	unsigned long oldepc, prevepc;
 	struct mm_decoded_insn dec_insn;
 	u16 instr[4];
 	u16 *instr_ptr;
 	int sig = 0;
+
+	/*
+	 * Initialize context if it hasn't been used already, otherwise ensure
+	 * it has been saved to struct thread_struct.
+	 */
+	if (!init_fp_ctx(current))
+		lose_fpu(1);
 
 	oldepc = xcp->cp0_epc;
 	do {

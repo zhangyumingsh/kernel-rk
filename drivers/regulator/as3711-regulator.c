@@ -1,12 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * AS3711 PMIC regulator driver, using DCDC Step Down and LDO supplies
  *
  * Copyright (C) 2012 Renesas Electronics Corporation
  * Author: Guennadi Liakhovetski, <g.liakhovetski@gmx.de>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the version 2 of the GNU General Public License as
- * published by the Free Software Foundation
  */
 
 #include <linux/err.h>
@@ -82,7 +79,7 @@ static unsigned int as3711_get_mode_sd(struct regulator_dev *rdev)
 	return -EINVAL;
 }
 
-static struct regulator_ops as3711_sd_ops = {
+static const struct regulator_ops as3711_sd_ops = {
 	.is_enabled		= regulator_is_enabled_regmap,
 	.enable			= regulator_enable_regmap,
 	.disable		= regulator_disable_regmap,
@@ -94,7 +91,7 @@ static struct regulator_ops as3711_sd_ops = {
 	.set_mode		= as3711_set_mode_sd,
 };
 
-static struct regulator_ops as3711_aldo_ops = {
+static const struct regulator_ops as3711_aldo_ops = {
 	.is_enabled		= regulator_is_enabled_regmap,
 	.enable			= regulator_enable_regmap,
 	.disable		= regulator_disable_regmap,
@@ -104,7 +101,7 @@ static struct regulator_ops as3711_aldo_ops = {
 	.map_voltage		= regulator_map_voltage_linear_range,
 };
 
-static struct regulator_ops as3711_dldo_ops = {
+static const struct regulator_ops as3711_dldo_ops = {
 	.is_enabled		= regulator_is_enabled_regmap,
 	.enable			= regulator_enable_regmap,
 	.disable		= regulator_disable_regmap,
@@ -239,8 +236,10 @@ static int as3711_regulator_probe(struct platform_device *pdev)
 		}
 	}
 
-	regs = devm_kzalloc(&pdev->dev, AS3711_REGULATOR_NUM *
-			sizeof(struct as3711_regulator), GFP_KERNEL);
+	regs = devm_kcalloc(&pdev->dev,
+			    AS3711_REGULATOR_NUM,
+			    sizeof(struct as3711_regulator),
+			    GFP_KERNEL);
 	if (!regs)
 		return -ENOMEM;
 

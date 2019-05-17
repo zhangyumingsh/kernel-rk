@@ -29,6 +29,7 @@
 
 #include "board.h"
 #include "iomap.h"
+#include "irq.h"
 
 #define SGI_MASK 0xFFFF
 
@@ -71,7 +72,7 @@ static const struct of_device_id tegra114_dt_gic_match[] __initconst = {
 	{ }
 };
 
-static void tegra114_gic_cpu_pm_registration(void)
+static void __init tegra114_gic_cpu_pm_registration(void)
 {
 	struct device_node *dn;
 
@@ -84,7 +85,7 @@ static void tegra114_gic_cpu_pm_registration(void)
 	cpu_pm_register_notifier(&tegra_gic_notifier_block);
 }
 #else
-static void tegra114_gic_cpu_pm_registration(void) { }
+static void __init tegra114_gic_cpu_pm_registration(void) { }
 #endif
 
 static const struct of_device_id tegra_ictlr_match[] __initconst = {

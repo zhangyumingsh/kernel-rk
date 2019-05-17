@@ -44,6 +44,7 @@
 #include <linux/mm.h>
 #include <net/tcp.h>
 #include <linux/inet_diag.h>
+#include "tcp_dctcp.h"
 
 #define DCTCP_MAX_ALPHA	1024U
 
@@ -118,54 +119,6 @@ static u32 dctcp_ssthresh(struct sock *sk)
 	return max(tp->snd_cwnd - ((tp->snd_cwnd * ca->dctcp_alpha) >> 11U), 2U);
 }
 
-/* Minimal DCTP CE state machine:
- *
- * S:	0 <- last pkt was non-CE
- *	1 <- last pkt was CE
- */
-
-static void dctcp_ce_state_0_to_1(struct sock *sk)
-{
-	struct dctcp *ca = inet_csk_ca(sk);
-	struct tcp_sock *tp = tcp_sk(sk);
-
-	if (!ca->ce_state) {
-		/* State has changed from CE=0 to CE=1, force an immediate
-		 * ACK to reflect the new CE state. If an ACK was delayed,
-		 * send that first to reflect the prior CE state.
-		 */
-		if (inet_csk(sk)->icsk_ack.pending & ICSK_ACK_TIMER)
-			__tcp_send_ack(sk, ca->prior_rcv_nxt);
-		tcp_enter_quickack_mode(sk, 1);
-	}
-
-	ca->prior_rcv_nxt = tp->rcv_nxt;
-	ca->ce_state = 1;
-
-	tp->ecn_flags |= TCP_ECN_DEMAND_CWR;
-}
-
-static void dctcp_ce_state_1_to_0(struct sock *sk)
-{
-	struct dctcp *ca = inet_csk_ca(sk);
-	struct tcp_sock *tp = tcp_sk(sk);
-
-	if (ca->ce_state) {
-		/* State has changed from CE=1 to CE=0, force an immediate
-		 * ACK to reflect the new CE state. If an ACK was delayed,
-		 * send that first to reflect the prior CE state.
-		 */
-		if (inet_csk(sk)->icsk_ack.pending & ICSK_ACK_TIMER)
-			__tcp_send_ack(sk, ca->prior_rcv_nxt);
-		tcp_enter_quickack_mode(sk, 1);
-	}
-
-	ca->prior_rcv_nxt = tp->rcv_nxt;
-	ca->ce_state = 0;
-
-	tp->ecn_flags &= ~TCP_ECN_DEMAND_CWR;
-}
-
 static void dctcp_update_alpha(struct sock *sk, u32 flags)
 {
 	const struct tcp_sock *tp = tcp_sk(sk);
@@ -230,12 +183,12 @@ static void dctcp_state(struct sock *sk, u8 new_state)
 
 static void dctcp_cwnd_event(struct sock *sk, enum tcp_ca_event ev)
 {
+	struct dctcp *ca = inet_csk_ca(sk);
+
 	switch (ev) {
 	case CA_EVENT_ECN_IS_CE:
-		dctcp_ce_state_0_to_1(sk);
-		break;
 	case CA_EVENT_ECN_NO_CE:
-		dctcp_ce_state_1_to_0(sk);
+		dctcp_ece_ack_update(sk, ev, &ca->prior_rcv_nxt, &ca->ce_state);
 		break;
 	default:
 		/* Don't care for the rest. */
@@ -253,7 +206,7 @@ static size_t dctcp_get_info(struct sock *sk, u32 ext, int *attr,
 	 */
 	if (ext & (1 << (INET_DIAG_DCTCPINFO - 1)) ||
 	    ext & (1 << (INET_DIAG_VEGASINFO - 1))) {
-		memset(info, 0, sizeof(struct tcp_dctcp_info));
+		memset(&info->dctcp, 0, sizeof(info->dctcp));
 		if (inet_csk(sk)->icsk_ca_ops != &dctcp_reno) {
 			info->dctcp.dctcp_enabled = 1;
 			info->dctcp.dctcp_ce_state = (u16) ca->ce_state;
@@ -263,7 +216,7 @@ static size_t dctcp_get_info(struct sock *sk, u32 ext, int *attr,
 		}
 
 		*attr = INET_DIAG_DCTCPINFO;
-		return sizeof(*info);
+		return sizeof(info->dctcp);
 	}
 	return 0;
 }
@@ -292,6 +245,7 @@ static struct tcp_congestion_ops dctcp __read_mostly = {
 static struct tcp_congestion_ops dctcp_reno __read_mostly = {
 	.ssthresh	= tcp_reno_ssthresh,
 	.cong_avoid	= tcp_reno_cong_avoid,
+	.undo_cwnd	= tcp_reno_undo_cwnd,
 	.get_info	= dctcp_get_info,
 	.owner		= THIS_MODULE,
 	.name		= "dctcp-reno",

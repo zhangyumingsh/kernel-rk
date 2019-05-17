@@ -16,8 +16,6 @@
 #ifndef __INNO_HDMI_H__
 #define __INNO_HDMI_H__
 
-#define RK618_HDMI_BASE			0x0400
-
 #define DDC_SEGMENT_ADDR		0x30
 
 enum PWR_MODE {
@@ -106,13 +104,11 @@ enum {
 #define HDMI_AV_MUTE			0x05
 #define m_AVMUTE_CLEAR			(1 << 7)
 #define m_AVMUTE_ENABLE			(1 << 6)
-#define m_AUDIO_PD			(1 << 2)
 #define m_AUDIO_MUTE			(1 << 1)
 #define m_VIDEO_BLACK			(1 << 0)
 #define v_AVMUTE_CLEAR(n)		(n << 7)
 #define v_AVMUTE_ENABLE(n)		(n << 6)
 #define v_AUDIO_MUTE(n)			(n << 1)
-#define v_AUDIO_PD(n)			(n << 2)
 #define v_VIDEO_MUTE(n)			(n << 0)
 
 #define HDMI_VIDEO_TIMING_CTL		0x08
@@ -273,7 +269,6 @@ enum {
 
 #define HDMI_INTERRUPT_MASK1		0xc0
 #define HDMI_INTERRUPT_STATUS1		0xc1
-#define m_INT_HOTPLUG_RK618		BIT(7)
 #define	m_INT_ACTIVE_VSYNC		(1 << 5)
 #define m_INT_EDID_READY		(1 << 2)
 

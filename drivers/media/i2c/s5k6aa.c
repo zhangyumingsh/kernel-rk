@@ -28,7 +28,7 @@
 #include <media/v4l2-device.h>
 #include <media/v4l2-subdev.h>
 #include <media/v4l2-mediabus.h>
-#include <media/s5k6aa.h>
+#include <media/i2c/s5k6aa.h>
 
 static int debug;
 module_param(debug, int, 0644);
@@ -688,7 +688,7 @@ static int s5k6aa_configure_video_bus(struct s5k6aa *s5k6aa,
 	 * but there is nothing indicating how to switch between both
 	 * in the datasheet. For now default BT.601 interface is assumed.
 	 */
-	if (bus_type == V4L2_MBUS_CSI2)
+	if (bus_type == V4L2_MBUS_CSI2_DPHY)
 		cfg = nlanes;
 	else if (bus_type != V4L2_MBUS_PARALLEL)
 		return -EINVAL;
@@ -843,7 +843,7 @@ static int __s5k6aa_power_on(struct s5k6aa *s5k6aa)
 
 	if (s5k6aa->s_power)
 		ret = s5k6aa->s_power(1);
-	usleep_range(4000, 4000);
+	usleep_range(4000, 5000);
 
 	if (s5k6aa_gpio_deassert(s5k6aa, RST))
 		msleep(20);
@@ -1576,14 +1576,15 @@ static int s5k6aa_probe(struct i2c_client *client,
 
 	sd = &s5k6aa->sd;
 	v4l2_i2c_subdev_init(sd, client, &s5k6aa_subdev_ops);
-	strlcpy(sd->name, DRIVER_NAME, sizeof(sd->name));
+	/* Static name; NEVER use in new drivers! */
+	strscpy(sd->name, DRIVER_NAME, sizeof(sd->name));
 
 	sd->internal_ops = &s5k6aa_subdev_internal_ops;
 	sd->flags |= V4L2_SUBDEV_FL_HAS_DEVNODE;
 
 	s5k6aa->pad.flags = MEDIA_PAD_FL_SOURCE;
-	sd->entity.type = MEDIA_ENT_T_V4L2_SUBDEV_SENSOR;
-	ret = media_entity_init(&sd->entity, 1, &s5k6aa->pad, 0);
+	sd->entity.function = MEDIA_ENT_F_CAM_SENSOR;
+	ret = media_entity_pads_init(&sd->entity, 1, &s5k6aa->pad);
 	if (ret)
 		return ret;
 

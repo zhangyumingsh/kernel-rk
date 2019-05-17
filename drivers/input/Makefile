@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0
 #
 # Makefile for the input core drivers.
 #
@@ -23,11 +24,8 @@ obj-$(CONFIG_INPUT_MOUSE)	+= mouse/
 obj-$(CONFIG_INPUT_JOYSTICK)	+= joystick/
 obj-$(CONFIG_INPUT_TABLET)	+= tablet/
 obj-$(CONFIG_INPUT_TOUCHSCREEN)	+= touchscreen/
-obj-$(CONFIG_ROCKCHIP_REMOTECTL)+= remotectl/
-obj-$(CONFIG_SENSOR_DEVICE)	+= sensors/
 obj-$(CONFIG_INPUT_MISC)	+= misc/
 
 obj-$(CONFIG_INPUT_APMPOWER)	+= apm-power.o
-obj-$(CONFIG_INPUT_KEYRESET)	+= keyreset.o
-obj-$(CONFIG_INPUT_KEYCOMBO)	+= keycombo.o
 
+obj-$(CONFIG_RMI4_CORE)		+= rmi4/

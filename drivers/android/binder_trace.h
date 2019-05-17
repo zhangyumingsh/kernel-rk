@@ -85,30 +85,6 @@ DEFINE_BINDER_FUNCTION_RETURN_EVENT(binder_ioctl_done);
 DEFINE_BINDER_FUNCTION_RETURN_EVENT(binder_write_done);
 DEFINE_BINDER_FUNCTION_RETURN_EVENT(binder_read_done);
 
-TRACE_EVENT(binder_set_priority,
-	TP_PROTO(int proc, int thread, unsigned int old_prio,
-		 unsigned int desired_prio, unsigned int new_prio),
-	TP_ARGS(proc, thread, old_prio, new_prio, desired_prio),
-
-	TP_STRUCT__entry(
-		__field(int, proc)
-		__field(int, thread)
-		__field(unsigned int, old_prio)
-		__field(unsigned int, new_prio)
-		__field(unsigned int, desired_prio)
-	),
-	TP_fast_assign(
-		__entry->proc = proc;
-		__entry->thread = thread;
-		__entry->old_prio = old_prio;
-		__entry->new_prio = new_prio;
-		__entry->desired_prio = desired_prio;
-	),
-	TP_printk("proc=%d thread=%d old=%d => new=%d desired=%d",
-		  __entry->proc, __entry->thread, __entry->old_prio,
-		  __entry->new_prio, __entry->desired_prio)
-);
-
 TRACE_EVENT(binder_wait_for_work,
 	TP_PROTO(bool proc_work, bool transaction_stack, bool thread_todo),
 	TP_ARGS(proc_work, transaction_stack, thread_todo),
@@ -247,22 +223,40 @@ TRACE_EVENT(binder_transaction_ref_to_ref,
 		  __entry->dest_ref_debug_id, __entry->dest_ref_desc)
 );
 
-TRACE_EVENT(binder_transaction_fd,
-	TP_PROTO(struct binder_transaction *t, int src_fd, int dest_fd),
-	TP_ARGS(t, src_fd, dest_fd),
+TRACE_EVENT(binder_transaction_fd_send,
+	TP_PROTO(struct binder_transaction *t, int fd, size_t offset),
+	TP_ARGS(t, fd, offset),
 
 	TP_STRUCT__entry(
 		__field(int, debug_id)
-		__field(int, src_fd)
-		__field(int, dest_fd)
+		__field(int, fd)
+		__field(size_t, offset)
 	),
 	TP_fast_assign(
 		__entry->debug_id = t->debug_id;
-		__entry->src_fd = src_fd;
-		__entry->dest_fd = dest_fd;
+		__entry->fd = fd;
+		__entry->offset = offset;
 	),
-	TP_printk("transaction=%d src_fd=%d ==> dest_fd=%d",
-		  __entry->debug_id, __entry->src_fd, __entry->dest_fd)
+	TP_printk("transaction=%d src_fd=%d offset=%zu",
+		  __entry->debug_id, __entry->fd, __entry->offset)
+);
+
+TRACE_EVENT(binder_transaction_fd_recv,
+	TP_PROTO(struct binder_transaction *t, int fd, size_t offset),
+	TP_ARGS(t, fd, offset),
+
+	TP_STRUCT__entry(
+		__field(int, debug_id)
+		__field(int, fd)
+		__field(size_t, offset)
+	),
+	TP_fast_assign(
+		__entry->debug_id = t->debug_id;
+		__entry->fd = fd;
+		__entry->offset = offset;
+	),
+	TP_printk("transaction=%d dest_fd=%d offset=%zu",
+		  __entry->debug_id, __entry->fd, __entry->offset)
 );
 
 DECLARE_EVENT_CLASS(binder_buffer_class,
@@ -272,14 +266,17 @@ DECLARE_EVENT_CLASS(binder_buffer_class,
 		__field(int, debug_id)
 		__field(size_t, data_size)
 		__field(size_t, offsets_size)
+		__field(size_t, extra_buffers_size)
 	),
 	TP_fast_assign(
 		__entry->debug_id = buf->debug_id;
 		__entry->data_size = buf->data_size;
 		__entry->offsets_size = buf->offsets_size;
+		__entry->extra_buffers_size = buf->extra_buffers_size;
 	),
-	TP_printk("transaction=%d data_size=%zd offsets_size=%zd",
-		  __entry->debug_id, __entry->data_size, __entry->offsets_size)
+	TP_printk("transaction=%d data_size=%zd offsets_size=%zd extra_buffers_size=%zd",
+		  __entry->debug_id, __entry->data_size, __entry->offsets_size,
+		  __entry->extra_buffers_size)
 );
 
 DEFINE_EVENT(binder_buffer_class, binder_transaction_alloc_buf,

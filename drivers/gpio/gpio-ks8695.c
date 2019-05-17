@@ -18,7 +18,7 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
-#include <linux/gpio.h>
+#include <linux/gpio/driver.h>
 #include <linux/kernel.h>
 #include <linux/mm.h>
 #include <linux/init.h>
@@ -205,18 +205,6 @@ static int ks8695_gpio_to_irq(struct gpio_chip *gc, unsigned int pin)
 	return gpio_irq[pin];
 }
 
-/*
- * Map IRQ number to GPIO line.
- */
-int irq_to_gpio(unsigned int irq)
-{
-	if ((irq < KS8695_IRQ_EXTERN0) || (irq > KS8695_IRQ_EXTERN3))
-		return -EINVAL;
-
-	return (irq - KS8695_IRQ_EXTERN0);
-}
-EXPORT_SYMBOL(irq_to_gpio);
-
 /* GPIOLIB interface */
 
 static struct gpio_chip ks8695_gpio_chip = {
@@ -234,7 +222,7 @@ static struct gpio_chip ks8695_gpio_chip = {
 /* Register the GPIOs */
 void ks8695_register_gpios(void)
 {
-	if (gpiochip_add(&ks8695_gpio_chip))
+	if (gpiochip_add_data(&ks8695_gpio_chip, NULL))
 		printk(KERN_ERR "Unable to register core GPIOs\n");
 }
 
@@ -294,22 +282,13 @@ static int ks8695_gpio_show(struct seq_file *s, void *unused)
 	return 0;
 }
 
-static int ks8695_gpio_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, ks8695_gpio_show, NULL);
-}
-
-static const struct file_operations ks8695_gpio_operations = {
-	.open		= ks8695_gpio_open,
-	.read		= seq_read,
-	.llseek		= seq_lseek,
-	.release	= single_release,
-};
+DEFINE_SHOW_ATTRIBUTE(ks8695_gpio);
 
 static int __init ks8695_gpio_debugfs_init(void)
 {
 	/* /sys/kernel/debug/ks8695_gpio */
-	(void) debugfs_create_file("ks8695_gpio", S_IFREG | S_IRUGO, NULL, NULL, &ks8695_gpio_operations);
+	debugfs_create_file("ks8695_gpio", S_IFREG | S_IRUGO, NULL, NULL,
+				&ks8695_gpio_fops);
 	return 0;
 }
 postcore_initcall(ks8695_gpio_debugfs_init);

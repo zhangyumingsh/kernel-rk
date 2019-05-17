@@ -43,10 +43,11 @@
 #include <linux/interrupt.h>
 #include <linux/init.h>
 #include <linux/blkdev.h>
+#include <linux/blk-pm.h>
 #include <linux/mutex.h>
 #include <linux/slab.h>
 #include <linux/pm_runtime.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 
 #include <scsi/scsi.h>
 #include <scsi/scsi_dbg.h>
@@ -79,11 +80,11 @@ MODULE_ALIAS_SCSI_DEVICE(TYPE_WORM);
 static DEFINE_MUTEX(sr_mutex);
 static int sr_probe(struct device *);
 static int sr_remove(struct device *);
-static int sr_init_command(struct scsi_cmnd *SCpnt);
+static blk_status_t sr_init_command(struct scsi_cmnd *SCpnt);
 static int sr_done(struct scsi_cmnd *);
 static int sr_runtime_suspend(struct device *dev);
 
-static struct dev_pm_ops sr_pm_ops = {
+static const struct dev_pm_ops sr_pm_ops = {
 	.runtime_suspend	= sr_runtime_suspend,
 };
 
@@ -117,7 +118,7 @@ static unsigned int sr_check_events(struct cdrom_device_info *cdi,
 				    unsigned int clearing, int slot);
 static int sr_packet(struct cdrom_device_info *, struct packet_command *);
 
-static struct cdrom_device_ops sr_dops = {
+static const struct cdrom_device_ops sr_dops = {
 	.open			= sr_open,
 	.release	 	= sr_release,
 	.drive_status	 	= sr_drive_status,
@@ -383,22 +384,22 @@ static int sr_done(struct scsi_cmnd *SCpnt)
 	return good_bytes;
 }
 
-static int sr_init_command(struct scsi_cmnd *SCpnt)
+static blk_status_t sr_init_command(struct scsi_cmnd *SCpnt)
 {
 	int block = 0, this_count, s_size;
 	struct scsi_cd *cd;
 	struct request *rq = SCpnt->request;
-	int ret;
+	blk_status_t ret;
 
 	ret = scsi_init_io(SCpnt);
-	if (ret != BLKPREP_OK)
+	if (ret != BLK_STS_OK)
 		goto out;
-	SCpnt = rq->special;
+	WARN_ON_ONCE(SCpnt != rq->special);
 	cd = scsi_cd(rq->rq_disk);
 
 	/* from here on until we're complete, any goto out
 	 * is used for a killable error condition */
-	ret = BLKPREP_KILL;
+	ret = BLK_STS_IOERR;
 
 	SCSI_LOG_HLQUEUE(1, scmd_printk(KERN_INFO, SCpnt,
 		"Doing sr request, block = %d\n", block));
@@ -437,14 +438,17 @@ static int sr_init_command(struct scsi_cmnd *SCpnt)
 		goto out;
 	}
 
-	if (rq_data_dir(rq) == WRITE) {
+	switch (req_op(rq)) {
+	case REQ_OP_WRITE:
 		if (!cd->writeable)
 			goto out;
 		SCpnt->cmnd[0] = WRITE_10;
 		cd->cdi.media_written = 1;
-	} else if (rq_data_dir(rq) == READ) {
+		break;
+	case REQ_OP_READ:
 		SCpnt->cmnd[0] = READ_10;
-	} else {
+		break;
+	default:
 		blk_dump_rq_flags(rq, "Unknown sr command");
 		goto out;
 	}
@@ -512,7 +516,7 @@ static int sr_init_command(struct scsi_cmnd *SCpnt)
 	 * This indicates that the command is ready from our end to be
 	 * queued.
 	 */
-	ret = BLKPREP_OK;
+	ret = BLK_STS_OK;
  out:
 	return ret;
 }
@@ -739,7 +743,6 @@ static int sr_probe(struct device *dev)
 	get_capabilities(cd);
 	sr_vendor_init(cd);
 
-	disk->driverfs_dev = &sdev->sdev_gendev;
 	set_capacity(disk, cd->capacity);
 	disk->private_data = &cd->driver;
 	disk->queue = sdev->request_queue;
@@ -756,7 +759,7 @@ static int sr_probe(struct device *dev)
 
 	dev_set_drvdata(dev, cd);
 	disk->flags |= GENHD_FL_REMOVABLE;
-	add_disk(disk);
+	device_add_disk(&sdev->sdev_gendev, disk, NULL);
 
 	sdev_printk(KERN_DEBUG, sdev,
 		    "Attached scsi CD-ROM %s\n", cd->cdi.name);

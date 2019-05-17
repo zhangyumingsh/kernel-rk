@@ -34,8 +34,10 @@
 
 #define RSTMGR_MPUMODRST_CPU1		0x2     /* CPU1 Reset */
 
-extern void socfpga_init_clocks(void);
-extern void socfpga_sysmgr_init(void);
+void socfpga_init_l2_ecc(void);
+void socfpga_init_ocram_ecc(void);
+void socfpga_init_arria10_l2_ecc(void);
+void socfpga_init_arria10_ocram_ecc(void);
 
 extern void __iomem *sys_manager_base_addr;
 extern void __iomem *rst_manager_base_addr;

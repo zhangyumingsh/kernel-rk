@@ -28,8 +28,6 @@
 #define  EP93XX_RTC_SWCOMP_INT_MASK	 0x0000ffff
 #define  EP93XX_RTC_SWCOMP_INT_SHIFT	 0
 
-#define DRV_VERSION "0.3"
-
 /*
  * struct device dev.platform_data is used to store our private data
  * because struct rtc_device does not have a variable to hold it.
@@ -63,7 +61,7 @@ static int ep93xx_rtc_read_time(struct device *dev, struct rtc_time *tm)
 	struct ep93xx_rtc *ep93xx_rtc = dev_get_platdata(dev);
 	unsigned long time;
 
-	 time = readl(ep93xx_rtc->mmio_base + EP93XX_RTC_DATA);
+	time = readl(ep93xx_rtc->mmio_base + EP93XX_RTC_DATA);
 
 	rtc_time_to_tm(time, tm);
 	return 0;
@@ -184,5 +182,4 @@ module_platform_driver(ep93xx_rtc_driver);
 MODULE_AUTHOR("Alessandro Zummo <a.zummo@towertech.it>");
 MODULE_DESCRIPTION("EP93XX RTC driver");
 MODULE_LICENSE("GPL");
-MODULE_VERSION(DRV_VERSION);
 MODULE_ALIAS("platform:ep93xx-rtc");

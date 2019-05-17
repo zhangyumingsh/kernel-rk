@@ -11,10 +11,6 @@
  *  basis, WITHOUT WARRANTY OF ANY KIND, either express or implied.
  *
  *  See the GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License
- *  along with this program; if not, write to the Free Software
- *  Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
 #include "sms-cards.h"
@@ -315,7 +311,7 @@ int sms_board_led_feedback(struct smscore_device_t *coredev, int led)
 	int board_id = smscore_get_board_id(coredev);
 	struct sms_board *board = sms_get_board(board_id);
 
-	/* dont touch GPIO if LEDs are already set */
+	/* don't touch GPIO if LEDs are already set */
 	if (smscore_led_state(coredev, -1) == led)
 		return 0;
 

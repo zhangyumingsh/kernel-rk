@@ -1,7 +1,8 @@
 /*
  * dw-hdmi-i2s-audio.c
  *
- * Copyright (c) 2016 Kuninori Morimoto <kuninori.morimoto.gx@renesas.com>
+ * Copyright (c) 2017 Renesas Solutions Corp.
+ * Kuninori Morimoto <kuninori.morimoto.gx@renesas.com>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -10,8 +11,6 @@
 #include <drm/bridge/dw_hdmi.h>
 
 #include <sound/hdmi-codec.h>
-
-#include <drm/drm_crtc.h> /* This is only to get MAX_ELD_BYTES */
 
 #include "dw-hdmi.h"
 #include "dw-hdmi-audio.h"
@@ -59,20 +58,7 @@ static int dw_hdmi_i2s_hw_params(struct device *dev, void *data,
 		return -EINVAL;
 	}
 
-	inputclkfs = HDMI_AUD_INPUTCLKFS_128FS;
-
-	switch (hparms->sample_width) {
-	case 16:
-		conf1 = HDMI_AUD_CONF1_WIDTH_16;
-		break;
-	case 24:
-	case 32:
-		conf1 = HDMI_AUD_CONF1_WIDTH_24;
-		break;
-	default:
-		dev_err(dev, "unsupported sample width [%d]\n", hparms->sample_width);
-		return -EINVAL;
-	}
+	inputclkfs = HDMI_AUD_INPUTCLKFS_64FS;
 
 	switch (hparms->channels) {
 	case 2:
@@ -85,46 +71,24 @@ static int dw_hdmi_i2s_hw_params(struct device *dev, void *data,
 		conf0 = HDMI_AUD_CONF0_I2S_6CHANNEL_ENABLE;
 		break;
 	case 8:
-		conf0 = HDMI_AUD_CONF0_I2S_8CHANNEL_ENABLE;
-		break;
 	default:
-		dev_err(dev, "unsupported channels [%d]\n", hparms->channels);
-		return -EINVAL;
+		conf0 = HDMI_AUD_CONF0_I2S_ALL_ENABLE;
+		break;
 	}
 
-	/*
-	 * dw-hdmi introduced insert_pcuv bit in version 2.10a.
-	 * When set (1'b1), this bit enables the insertion of the PCUV
-	 * (Parity, Channel Status, User bit and Validity) bits on the
-	 * incoming audio stream (support limited to Linear PCM audio)
-	 */
-	val = 0;
-	if (hdmi_read(audio, HDMI_DESIGN_ID) >= 0x21)
-		val = HDMI_AUD_CONF2_INSERT_PCUV;
+	switch (hparms->sample_width) {
+	case 16:
+		conf1 = HDMI_AUD_CONF1_WIDTH_16;
+		break;
+	case 24:
+	case 32:
+		conf1 = HDMI_AUD_CONF1_WIDTH_24;
+		break;
+	}
 
-	/*Mask fifo empty and full int and reset fifo*/
-	hdmi_update_bits(audio,
-			 HDMI_AUD_INT_FIFO_EMPTY_MSK |
-			 HDMI_AUD_INT_FIFO_FULL_MSK,
-			 HDMI_AUD_INT_FIFO_EMPTY_MSK |
-			 HDMI_AUD_INT_FIFO_FULL_MSK, HDMI_AUD_INT);
 	hdmi_update_bits(audio, HDMI_AUD_CONF0_SW_RESET,
 			 HDMI_AUD_CONF0_SW_RESET, HDMI_AUD_CONF0);
-	hdmi_write(audio, (u8)~HDMI_MC_SWRSTZ_I2S_RESET_MSK, HDMI_MC_SWRSTZ);
-
-	switch (hparms->mode) {
-	case NLPCM:
-		hdmi_write(audio, HDMI_AUD_CONF2_NLPCM, HDMI_AUD_CONF2);
-		conf1 = HDMI_AUD_CONF1_WIDTH_21;
-		break;
-	case HBR:
-		hdmi_write(audio, HDMI_AUD_CONF2_HBR, HDMI_AUD_CONF2);
-		conf1 = HDMI_AUD_CONF1_WIDTH_21;
-		break;
-	default:
-		hdmi_write(audio, val, HDMI_AUD_CONF2);
-		break;
-	}
+	hdmi_write(audio, (u8)~HDMI_MC_SWRSTZ_I2SSWRST_REQ, HDMI_MC_SWRSTZ);
 
 	dw_hdmi_set_sample_rate(hdmi, hparms->sample_rate);
 
@@ -140,57 +104,37 @@ static int dw_hdmi_i2s_hw_params(struct device *dev, void *data,
 
 	switch (hparms->sample_rate) {
 	case 32000:
-		val = HDMI_FC_AUDSCHNLS_32K;
+		val = HDMI_FC_AUDSCHNLS_SAMPFREQ_32K;
 		break;
 	case 44100:
-		val = HDMI_FC_AUDSCHNLS_441K;
+		val = HDMI_FC_AUDSCHNLS_SAMPFREQ_441K;
 		break;
 	case 48000:
-		val = HDMI_FC_AUDSCHNLS_48K;
+		val = HDMI_FC_AUDSCHNLS_SAMPFREQ_48K;
 		break;
 	case 88200:
-		val = HDMI_FC_AUDSCHNLS_882K;
+		val = HDMI_FC_AUDSCHNLS_SAMPFREQ_882K;
 		break;
 	case 96000:
-		val = HDMI_FC_AUDSCHNLS_96K;
+		val = HDMI_FC_AUDSCHNLS_SAMPFREQ_96K;
 		break;
 	case 176400:
-		val = HDMI_FC_AUDSCHNLS_1764K;
+		val = HDMI_FC_AUDSCHNLS_SAMPFREQ_1764K;
 		break;
 	case 192000:
-		val = HDMI_FC_AUDSCHNLS_192K;
+		val = HDMI_FC_AUDSCHNLS_SAMPFREQ_192K;
 		break;
 	default:
-		val = HDMI_FC_AUDSCHNLS_441K;
+		val = HDMI_FC_AUDSCHNLS_SAMPFREQ_441K;
 		break;
 	}
 
-	/* set channel status register */
-	hdmi_update_bits(audio, val,
-			 HDMI_FC_AUDSCHNLS7_SAMPFREQ_MASK,
+	hdmi_update_bits(audio, val, HDMI_FC_AUDSCHNLS7_SAMPFREQ_MASK,
 			 HDMI_FC_AUDSCHNLS7);
-	hdmi_write(audio,
-		   ((~val) << HDMI_FC_AUDSCHNLS8_ORIGSAMPFREQ_OFFSET),
-		   HDMI_FC_AUDSCHNLS8);
-
-	/* Refer to CEA861-E Audio infoFrame
-	 * Set both Audio Channel Count and Audio Coding
-	 * Type Refer to Stream Head for HDMI
-	 */
 	hdmi_update_bits(audio,
 			 (hparms->channels - 1) << HDMI_FC_AUDICONF0_CC_OFFSET,
 			 HDMI_FC_AUDICONF0_CC_MASK, HDMI_FC_AUDICONF0);
-
-	/* Set both Audio Sample Size and Sample Frequency
-	 * Refer to Stream Head for HDMI
-	 */
-	hdmi_write(audio, 0x00, HDMI_FC_AUDICONF1);
-
-	/* Set Channel Allocation */
 	hdmi_write(audio, hparms->cea.channel_allocation, HDMI_FC_AUDICONF2);
-
-	/* Set LFEPBLDOWN-MIX INH and LSV */
-	hdmi_write(audio, 0x00, HDMI_FC_AUDICONF3);
 
 	dw_hdmi_audio_enable(hdmi);
 
@@ -205,30 +149,70 @@ static void dw_hdmi_i2s_audio_shutdown(struct device *dev, void *data)
 	dw_hdmi_audio_disable(hdmi);
 
 	hdmi_write(audio, HDMI_AUD_CONF0_SW_RESET, HDMI_AUD_CONF0);
-	hdmi_write(audio, (u8)~HDMI_MC_SWRSTZ_I2S_RESET_MSK, HDMI_MC_SWRSTZ);
+	hdmi_write(audio, (u8)~HDMI_MC_SWRSTZ_I2SSWRST_REQ, HDMI_MC_SWRSTZ);
 }
 
-static int dw_hdmi_i2s_get_eld(struct device *dev, void *data, u8 *buf, size_t len)
+static void dw_hdmi_i2s_update_eld(struct device *dev, u8 *eld)
+{
+	struct dw_hdmi_i2s_audio_data *audio = dev_get_platdata(dev);
+	struct platform_device *hcpdev = dev_get_drvdata(dev);
+
+	if (!audio || !hcpdev)
+		return;
+
+	if (!memcmp(audio->eld, eld, sizeof(audio->eld)))
+		return;
+
+	memcpy(audio->eld, eld, sizeof(audio->eld));
+
+	hdmi_codec_eld_notify(&hcpdev->dev);
+}
+
+static int dw_hdmi_i2s_get_eld(struct device *dev, void *data,
+			       u8 *buf, size_t len)
 {
 	struct dw_hdmi_i2s_audio_data *audio = data;
 
-	memcpy(buf, audio->eld, min(len, (size_t)MAX_ELD_BYTES));
+	memcpy(buf, audio->eld, min(sizeof(audio->eld), len));
 
 	return 0;
+}
+
+static int dw_hdmi_i2s_get_dai_id(struct snd_soc_component *component,
+				  struct device_node *endpoint)
+{
+	struct of_endpoint of_ep;
+	int ret;
+
+	ret = of_graph_parse_endpoint(endpoint, &of_ep);
+	if (ret < 0)
+		return ret;
+
+	/*
+	 * HDMI sound should be located as reg = <2>
+	 * Then, it is sound port 0
+	 */
+	if (of_ep.port == 2)
+		return 0;
+
+	return -EINVAL;
 }
 
 static struct hdmi_codec_ops dw_hdmi_i2s_ops = {
 	.hw_params	= dw_hdmi_i2s_hw_params,
 	.audio_shutdown	= dw_hdmi_i2s_audio_shutdown,
 	.get_eld	= dw_hdmi_i2s_get_eld,
+	.get_dai_id	= dw_hdmi_i2s_get_dai_id,
 };
 
 static int snd_dw_hdmi_probe(struct platform_device *pdev)
 {
-	struct dw_hdmi_i2s_audio_data *audio = pdev->dev.platform_data;
+	struct dw_hdmi_i2s_audio_data *audio = dev_get_platdata(&pdev->dev);
 	struct platform_device_info pdevinfo;
 	struct hdmi_codec_pdata pdata;
 	struct platform_device *platform;
+
+	memset(audio->eld, 0, sizeof(audio->eld));
 
 	pdata.ops		= &dw_hdmi_i2s_ops;
 	pdata.i2s		= 1;
@@ -249,12 +233,17 @@ static int snd_dw_hdmi_probe(struct platform_device *pdev)
 
 	dev_set_drvdata(&pdev->dev, platform);
 
+	dw_hdmi_set_update_eld(audio->hdmi, dw_hdmi_i2s_update_eld);
+
 	return 0;
 }
 
 static int snd_dw_hdmi_remove(struct platform_device *pdev)
 {
+	struct dw_hdmi_i2s_audio_data *audio = dev_get_platdata(&pdev->dev);
 	struct platform_device *platform = dev_get_drvdata(&pdev->dev);
+
+	dw_hdmi_set_update_eld(audio->hdmi, NULL);
 
 	platform_device_unregister(platform);
 
@@ -266,7 +255,6 @@ static struct platform_driver snd_dw_hdmi_driver = {
 	.remove	= snd_dw_hdmi_remove,
 	.driver	= {
 		.name = DRIVER_NAME,
-		.owner = THIS_MODULE,
 	},
 };
 module_platform_driver(snd_dw_hdmi_driver);

@@ -31,11 +31,12 @@
 #include <linux/of_device.h>
 #include <linux/slab.h>
 #include <linux/time.h>
+#include <linux/string.h>
 
 #include <sound/core.h>
 #include <sound/initval.h>
 
-#include "hda_codec.h"
+#include <sound/hda_codec.h>
 #include "hda_controller.h"
 
 /* Defines for Nvidia Tegra HDA support */
@@ -99,36 +100,23 @@ static void dma_free_pages(struct hdac_bus *bus, struct snd_dma_buffer *buf)
 	snd_dma_free_pages(buf);
 }
 
-static int substream_alloc_pages(struct azx *chip,
-				 struct snd_pcm_substream *substream,
-				 size_t size)
-{
-	return snd_pcm_lib_malloc_pages(substream, size);
-}
-
-static int substream_free_pages(struct azx *chip,
-				struct snd_pcm_substream *substream)
-{
-	return snd_pcm_lib_free_pages(substream);
-}
-
 /*
  * Register access ops. Tegra HDA register access is DWORD only.
  */
-static void hda_tegra_writel(u32 value, u32 *addr)
+static void hda_tegra_writel(u32 value, u32 __iomem *addr)
 {
 	writel(value, addr);
 }
 
-static u32 hda_tegra_readl(u32 *addr)
+static u32 hda_tegra_readl(u32 __iomem *addr)
 {
 	return readl(addr);
 }
 
-static void hda_tegra_writew(u16 value, u16 *addr)
+static void hda_tegra_writew(u16 value, u16 __iomem  *addr)
 {
 	unsigned int shift = ((unsigned long)(addr) & 0x3) << 3;
-	void *dword_addr = (void *)((unsigned long)(addr) & ~0x3);
+	void __iomem *dword_addr = (void __iomem *)((unsigned long)(addr) & ~0x3);
 	u32 v;
 
 	v = readl(dword_addr);
@@ -137,20 +125,20 @@ static void hda_tegra_writew(u16 value, u16 *addr)
 	writel(v, dword_addr);
 }
 
-static u16 hda_tegra_readw(u16 *addr)
+static u16 hda_tegra_readw(u16 __iomem *addr)
 {
 	unsigned int shift = ((unsigned long)(addr) & 0x3) << 3;
-	void *dword_addr = (void *)((unsigned long)(addr) & ~0x3);
+	void __iomem *dword_addr = (void __iomem *)((unsigned long)(addr) & ~0x3);
 	u32 v;
 
 	v = readl(dword_addr);
 	return (v >> shift) & 0xffff;
 }
 
-static void hda_tegra_writeb(u8 value, u8 *addr)
+static void hda_tegra_writeb(u8 value, u8 __iomem *addr)
 {
 	unsigned int shift = ((unsigned long)(addr) & 0x3) << 3;
-	void *dword_addr = (void *)((unsigned long)(addr) & ~0x3);
+	void __iomem *dword_addr = (void __iomem *)((unsigned long)(addr) & ~0x3);
 	u32 v;
 
 	v = readl(dword_addr);
@@ -159,10 +147,10 @@ static void hda_tegra_writeb(u8 value, u8 *addr)
 	writel(v, dword_addr);
 }
 
-static u8 hda_tegra_readb(u8 *addr)
+static u8 hda_tegra_readb(u8 __iomem *addr)
 {
 	unsigned int shift = ((unsigned long)(addr) & 0x3) << 3;
-	void *dword_addr = (void *)((unsigned long)(addr) & ~0x3);
+	void __iomem *dword_addr = (void __iomem *)((unsigned long)(addr) & ~0x3);
 	u32 v;
 
 	v = readl(dword_addr);
@@ -180,10 +168,7 @@ static const struct hdac_io_ops hda_tegra_io_ops = {
 	.dma_free_pages = dma_free_pages,
 };
 
-static const struct hda_controller_ops hda_tegra_ops = {
-	.substream_alloc_pages = substream_alloc_pages,
-	.substream_free_pages = substream_free_pages,
-};
+static const struct hda_controller_ops hda_tegra_ops; /* nothing special */
 
 static void hda_tegra_init(struct hda_tegra *hda)
 {
@@ -249,10 +234,12 @@ static int hda_tegra_suspend(struct device *dev)
 	struct snd_card *card = dev_get_drvdata(dev);
 	struct azx *chip = card->private_data;
 	struct hda_tegra *hda = container_of(chip, struct hda_tegra, chip);
+	struct hdac_bus *bus = azx_bus(chip);
 
 	snd_power_change_state(card, SNDRV_CTL_POWER_D3hot);
 
 	azx_stop_chip(chip);
+	synchronize_irq(bus->irq);
 	azx_enter_link_reset(chip);
 	hda_tegra_disable_clocks(hda);
 
@@ -360,6 +347,8 @@ static int hda_tegra_first_init(struct azx *chip, struct platform_device *pdev)
 	int err;
 	unsigned short gcap;
 	int irq_id = platform_get_irq(pdev, 0);
+	const char *sname;
+	struct device_node *root;
 
 	err = hda_tegra_init_chip(chip, pdev);
 	if (err)
@@ -417,8 +406,23 @@ static int hda_tegra_first_init(struct azx *chip, struct platform_device *pdev)
 		return -ENODEV;
 	}
 
+	/* driver name */
 	strcpy(card->driver, "tegra-hda");
-	strcpy(card->shortname, "tegra-hda");
+
+	root = of_find_node_by_path("/");
+	sname = of_get_property(root, "compatible", NULL);
+	of_node_put(root);
+	if (!sname) {
+		dev_err(card->dev,
+			"failed to get compatible property from root node\n");
+		return -ENODEV;
+	}
+	/* shortname for card */
+	if (strlen(sname) > sizeof(card->shortname))
+		dev_info(card->dev, "truncating shortname for card\n");
+	strncpy(card->shortname, sname, sizeof(card->shortname));
+
+	/* longname for card */
 	snprintf(card->longname, sizeof(card->longname),
 		 "%s at 0x%lx irq %i",
 		 card->shortname, bus->addr, bus->irq);
@@ -529,7 +533,7 @@ static void hda_tegra_probe_work(struct work_struct *work)
 		goto out_free;
 
 	/* create codec instances */
-	err = azx_probe_codecs(chip, 0);
+	err = azx_probe_codecs(chip, 8);
 	if (err < 0)
 		goto out_free;
 

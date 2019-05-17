@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * S390 64-bit swsusp implementation
  *
@@ -28,10 +29,11 @@
 
 	.section .text
 ENTRY(swsusp_arch_suspend)
-	stmg	%r6,%r15,__SF_GPRS(%r15)
-	lgr	%r1,%r15
-	aghi	%r15,-STACK_FRAME_OVERHEAD
-	stg	%r1,__SF_BACKCHAIN(%r15)
+	lg	%r1,__LC_NODAT_STACK
+	stmg	%r6,%r15,__SF_GPRS(%r1)
+	aghi	%r1,-STACK_FRAME_OVERHEAD
+	stg	%r15,__SF_BACKCHAIN(%r1)
+	lgr	%r15,%r1
 
 	/* Store FPU registers */
 	brasl	%r14,save_fpu_regs
@@ -196,13 +198,9 @@ pgm_check_entry:
 	brc	2,3b				/* busy, try again */
 
 	/* Suspend CPU not available -> panic */
-	larl	%r15,init_thread_union
-	ahi	%r15,1<<(PAGE_SHIFT+THREAD_ORDER)
+	larl	%r15,init_thread_union+THREAD_SIZE-STACK_FRAME_OVERHEAD
 	larl	%r2,.Lpanic_string
-	lghi	%r1,0
-	sam31
-	sigp	%r1,%r0,SIGP_SET_ARCHITECTURE
-	brasl	%r14,_sclp_print_early
+	brasl	%r14,sclp_early_printk_force
 	larl	%r3,.Ldisabled_wait_31
 	lpsw	0(%r3)
 4:
@@ -275,7 +273,7 @@ restore_registers:
 .Ldisabled_wait_31:
 	.long  0x000a0000,0x00000000
 .Lpanic_string:
-	.asciz	"Resume not possible because suspend CPU is no longer available"
+	.asciz	"Resume not possible because suspend CPU is no longer available\n"
 	.align	8
 .Lrestart_diag308_psw:
 	.long	0x00080000,0x80000000

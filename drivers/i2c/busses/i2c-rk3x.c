@@ -25,8 +25,6 @@
 #include <linux/mfd/syscon.h>
 #include <linux/regmap.h>
 #include <linux/math64.h>
-#include <linux/reboot.h>
-#include <linux/delay.h>
 
 
 /* Register Map */
@@ -163,6 +161,7 @@ enum rk3x_i2c_state {
 };
 
 /**
+ * struct rk3x_i2c_soc_data:
  * @grf_offset: offset inside the grf regmap for setting the i2c type
  * @calc_timings: Callback function for i2c timing information calculated
  */
@@ -192,12 +191,11 @@ struct rk3x_i2c_soc_data {
  * @state: state of i2c transfer
  * @processed: byte length which has been send or received
  * @error: error code for i2c transfer
- * @i2c_restart_nb: make sure the i2c transfer to be finished
  */
 struct rk3x_i2c {
 	struct i2c_adapter adap;
 	struct device *dev;
-	struct rk3x_i2c_soc_data *soc_data;
+	const struct rk3x_i2c_soc_data *soc_data;
 
 	/* Hardware resources */
 	void __iomem *regs;
@@ -223,9 +221,6 @@ struct rk3x_i2c {
 	enum rk3x_i2c_state state;
 	unsigned int processed;
 	int error;
-	unsigned int suspended:1;
-
-	struct notifier_block i2c_restart_nb;
 };
 
 static inline void i2c_writel(struct rk3x_i2c *i2c, u32 value,
@@ -488,9 +483,7 @@ static irqreturn_t rk3x_i2c_irq(int irqno, void *dev_id)
 
 	ipd = i2c_readl(i2c, REG_IPD);
 	if (i2c->state == STATE_IDLE) {
-		dev_warn_ratelimited(i2c->dev,
-				     "irq in STATE_IDLE, ipd = 0x%x\n",
-				     ipd);
+		dev_warn(i2c->dev, "irq in STATE_IDLE, ipd = 0x%x\n", ipd);
 		rk3x_i2c_clean_ipd(i2c);
 		goto out;
 	}
@@ -927,7 +920,7 @@ static void rk3x_i2c_adapt_div(struct rk3x_i2c *i2c, unsigned long clk_rate)
  * Code adapted from i2c-cadence.c.
  *
  * Return:	NOTIFY_STOP if the rate change should be aborted, NOTIFY_OK
- *		to acknowedge the change, NOTIFY_DONE if the notification is
+ *		to acknowledge the change, NOTIFY_DONE if the notification is
  *		considered irrelevant.
  */
 static int rk3x_i2c_clk_notifier_cb(struct notifier_block *nb, unsigned long
@@ -1059,9 +1052,6 @@ static int rk3x_i2c_xfer(struct i2c_adapter *adap,
 	int ret = 0;
 	int i;
 
-	if (i2c->suspended)
-		return -EACCES;
-
 	spin_lock_irqsave(&i2c->lock, flags);
 
 	clk_enable(i2c->clk);
@@ -1084,9 +1074,9 @@ static int rk3x_i2c_xfer(struct i2c_adapter *adap,
 		if (i + ret >= num)
 			i2c->is_last_msg = true;
 
-		rk3x_i2c_start(i2c);
-
 		spin_unlock_irqrestore(&i2c->lock, flags);
+
+		rk3x_i2c_start(i2c);
 
 		timeout = wait_event_timeout(i2c->wait, !i2c->busy,
 					     msecs_to_jiffies(WAIT_TIMEOUT));
@@ -1123,67 +1113,11 @@ static int rk3x_i2c_xfer(struct i2c_adapter *adap,
 	return ret < 0 ? ret : num;
 }
 
-static int rk3x_i2c_restart_notify(struct notifier_block *this,
-				   unsigned long mode, void *cmd)
-{
-	struct rk3x_i2c *i2c = container_of(this, struct rk3x_i2c,
-					    i2c_restart_nb);
-	int tmo = WAIT_TIMEOUT * USEC_PER_MSEC;
-	u32 val;
-
-	if (i2c->state != STATE_IDLE) {
-		/* complete the unfinished job */
-		while (tmo-- && i2c->busy) {
-			udelay(1);
-			rk3x_i2c_irq(0, i2c);
-		}
-	}
-
-	if (tmo <= 0) {
-		dev_err(i2c->dev, "restart timeout, ipd: 0x%02x, state: %d\n",
-			i2c_readl(i2c, REG_IPD), i2c->state);
-
-		/* Force a STOP condition without interrupt */
-		i2c_writel(i2c, 0, REG_IEN);
-		val = i2c_readl(i2c, REG_CON) & REG_CON_TUNING_MASK;
-		val |= REG_CON_EN | REG_CON_STOP;
-		i2c_writel(i2c, val, REG_CON);
-
-		udelay(10);
-		i2c->state = STATE_IDLE;
-	}
-
-	return NOTIFY_DONE;
-}
-
-static __maybe_unused int rk3x_i2c_suspend_noirq(struct device *dev)
-{
-	struct rk3x_i2c *i2c = dev_get_drvdata(dev);
-
-	/*
-	 * Below code is needed only to ensure that there are no
-	 * activities on I2C bus. if at this moment any driver
-	 * is trying to use I2C bus - this may cause i2c timeout.
-	 *
-	 * So forbid access to I2C device using i2c->suspended flag.
-	 */
-	i2c_lock_adapter(&i2c->adap);
-	i2c->suspended = 1;
-	i2c_unlock_adapter(&i2c->adap);
-
-	return 0;
-}
-
-static __maybe_unused int rk3x_i2c_resume_noirq(struct device *dev)
+static __maybe_unused int rk3x_i2c_resume(struct device *dev)
 {
 	struct rk3x_i2c *i2c = dev_get_drvdata(dev);
 
 	rk3x_i2c_adapt_div(i2c, clk_get_rate(i2c->clk));
-
-	/* Allow access to I2C bus */
-	i2c_lock_adapter(&i2c->adap);
-	i2c->suspended = 0;
-	i2c_unlock_adapter(&i2c->adap);
 
 	return 0;
 }
@@ -1196,6 +1130,11 @@ static u32 rk3x_i2c_func(struct i2c_adapter *adap)
 static const struct i2c_algorithm rk3x_i2c_algorithm = {
 	.master_xfer		= rk3x_i2c_xfer,
 	.functionality		= rk3x_i2c_func,
+};
+
+static const struct rk3x_i2c_soc_data rv1108_soc_data = {
+	.grf_offset = -1,
+	.calc_timings = rk3x_i2c_v1_calc_timings,
 };
 
 static const struct rk3x_i2c_soc_data rk3066_soc_data = {
@@ -1218,11 +1157,6 @@ static const struct rk3x_i2c_soc_data rk3288_soc_data = {
 	.calc_timings = rk3x_i2c_v0_calc_timings,
 };
 
-static const struct rk3x_i2c_soc_data rk3328_soc_data = {
-	.grf_offset = -1,
-	.calc_timings = rk3x_i2c_v1_calc_timings,
-};
-
 static const struct rk3x_i2c_soc_data rk3399_soc_data = {
 	.grf_offset = -1,
 	.calc_timings = rk3x_i2c_v1_calc_timings,
@@ -1230,24 +1164,28 @@ static const struct rk3x_i2c_soc_data rk3399_soc_data = {
 
 static const struct of_device_id rk3x_i2c_match[] = {
 	{
+		.compatible = "rockchip,rv1108-i2c",
+		.data = &rv1108_soc_data
+	},
+	{
 		.compatible = "rockchip,rk3066-i2c",
-		.data = (void *)&rk3066_soc_data
+		.data = &rk3066_soc_data
 	},
 	{
 		.compatible = "rockchip,rk3188-i2c",
-		.data = (void *)&rk3188_soc_data
+		.data = &rk3188_soc_data
 	},
 	{
 		.compatible = "rockchip,rk3228-i2c",
-		.data = (void *)&rk3228_soc_data
+		.data = &rk3228_soc_data
 	},
 	{
 		.compatible = "rockchip,rk3288-i2c",
-		.data = (void *)&rk3288_soc_data
+		.data = &rk3288_soc_data
 	},
 	{
 		.compatible = "rockchip,rk3399-i2c",
-		.data = (void *)&rk3399_soc_data
+		.data = &rk3399_soc_data
 	},
 	{},
 };
@@ -1270,7 +1208,7 @@ static int rk3x_i2c_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	match = of_match_node(rk3x_i2c_match, np);
-	i2c->soc_data = (struct rk3x_i2c_soc_data *)match->data;
+	i2c->soc_data = match->data;
 
 	/* use common interface to get I2C timing properties */
 	i2c_parse_fw_timings(&pdev->dev, &i2c->t, true);
@@ -1287,14 +1225,6 @@ static int rk3x_i2c_probe(struct platform_device *pdev)
 
 	spin_lock_init(&i2c->lock);
 	init_waitqueue_head(&i2c->wait);
-
-	i2c->i2c_restart_nb.notifier_call = rk3x_i2c_restart_notify;
-	i2c->i2c_restart_nb.priority = 128;
-	ret = register_i2c_restart_handler(&i2c->i2c_restart_nb);
-	if (ret) {
-		dev_err(&pdev->dev, "failed to setup i2c restart handler.\n");
-		return ret;
-	}
 
 	mem = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	i2c->regs = devm_ioremap_resource(&pdev->dev, mem);
@@ -1393,12 +1323,8 @@ static int rk3x_i2c_probe(struct platform_device *pdev)
 	rk3x_i2c_adapt_div(i2c, clk_rate);
 
 	ret = i2c_add_adapter(&i2c->adap);
-	if (ret < 0) {
-		dev_err(&pdev->dev, "Could not register adapter\n");
+	if (ret < 0)
 		goto err_clk_notifier;
-	}
-
-	dev_info(&pdev->dev, "Initialized RK3xxx I2C bus at %p\n", i2c->regs);
 
 	return 0;
 
@@ -1418,17 +1344,13 @@ static int rk3x_i2c_remove(struct platform_device *pdev)
 	i2c_del_adapter(&i2c->adap);
 
 	clk_notifier_unregister(i2c->clk, &i2c->clk_rate_nb);
-	unregister_i2c_restart_handler(&i2c->i2c_restart_nb);
 	clk_unprepare(i2c->pclk);
 	clk_unprepare(i2c->clk);
 
 	return 0;
 }
 
-const static struct dev_pm_ops rk3x_i2c_pm_ops = {
-	SET_NOIRQ_SYSTEM_SLEEP_PM_OPS(rk3x_i2c_suspend_noirq,
-				      rk3x_i2c_resume_noirq)
-};
+static SIMPLE_DEV_PM_OPS(rk3x_i2c_pm_ops, NULL, rk3x_i2c_resume);
 
 static struct platform_driver rk3x_i2c_driver = {
 	.probe   = rk3x_i2c_probe,
