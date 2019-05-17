@@ -122,6 +122,14 @@
 		};
 	};
 
+	ir-receiver {
+		compatible = "gpio-ir-receiver";
+		gpios = <&gpio0 RK_PA6 GPIO_ACTIVE_LOW>;
+		linux,rc-map-name = "rc-magicn6";
+		pinctrl-0 = <&ir_int>;
+		pinctrl-names = "default";
+	};
+
 	hdmi-sound {
 		compatible = "simple-audio-card";
 		simple-audio-card,format = "i2s";
@@ -705,6 +713,13 @@
 			rockchip,pins =
 				<3 28 0 &pcfg_pull_none>,
 				<3 29 0 &pcfg_pull_none>;
+		};
+	};
+
+	ir {
+		ir_int: ir-int {
+			rockchip,pins =
+				<0 RK_PA6 RK_FUNC_GPIO &pcfg_pull_none>;
 		};
 	};
 

@@ -105,6 +105,7 @@ void rc_map_init(void);
 
 /* Names of the several keytables defined in-kernel */
 
+#define RC_MAP_k24			  "rc-k24"
 #define RC_MAP_ADSTECH_DVB_T_PCI         "rc-adstech-dvb-t-pci"
 #define RC_MAP_ALINK_DTU_M               "rc-alink-dtu-m"
 #define RC_MAP_ANYSEE                    "rc-anysee"
@@ -164,6 +165,7 @@ void rc_map_init(void);
 #define RC_MAP_LEADTEK_Y04G0051          "rc-leadtek-y04g0051"
 #define RC_MAP_LIRC                      "rc-lirc"
 #define RC_MAP_LME2510                   "rc-lme2510"
+#define RC_MAP_MAGICN6                   "rc-magicn6"
 #define RC_MAP_MANLI                     "rc-manli"
 #define RC_MAP_MEDION_X10                "rc-medion-x10"
 #define RC_MAP_MEDION_X10_DIGITAINER     "rc-medion-x10-digitainer"
@@ -214,7 +216,7 @@ void rc_map_init(void);
 #define RC_MAP_TT_1500                   "rc-tt-1500"
 #define RC_MAP_TWINHAN_DTV_CAB_CI        "rc-twinhan-dtv-cab-ci"
 #define RC_MAP_TWINHAN_VP1027_DVBS       "rc-twinhan1027"
-#define RC_MAP_TRN9                 	 "rc-trn9"
+#define RC_MAP_TRN9                 	  "rc-trn9"
 #define RC_MAP_WETEK_HUB                 "rc-wetek-hub"
 #define RC_MAP_WETEK_PLAY_2              "rc-wetek-play-2"
 #define RC_MAP_VIDEOMATE_K100            "rc-videomate-k100"

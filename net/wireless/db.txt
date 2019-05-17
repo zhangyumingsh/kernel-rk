@@ -359,13 +359,6 @@ country CZ: DFS-ETSI
 # Funkanwendungen zur breitbandigen Datenübertragung, WAS/WLAN („Wireless
 # Access Systems including Wireless Local Area Networks“).
 # https://www.bundesnetzagentur.de/SharedDocs/Downloads/DE/Sachgebiete/Telekommunikation/Unternehmen_Institutionen/Frequenzen/Allgemeinzuteilungen/2010_07_WLAN_5GHz_pdf.pdf
-# The values for the 5 GHz have been reduced by a factor of 2 (3db) for non TPC
-# devices (in other words: devices with TPC can use twice the tx power of this
-# table). Note that the docs do not require TPC for 5150--5250; the reduction
-# to 100mW thus is not strictly required -- however the conservative 100mW
-# limit is used here as the non-interference with radar and satellite
-# apps relies on the attenuation by the building walls only in the
-# absence of DFS; the neighbour countries have 100mW limit here as well.
 #
 # The ETSI EN 300 440-1 standard for short range devices in the 5 GHz band has
 # been implemented in Germany:
@@ -378,7 +371,7 @@ country CZ: DFS-ETSI
 
 country DE: DFS-ETSI
 	(2400 - 2483.5 @ 40), (100 mW)
-	(5150 - 5250 @ 80), (100 mW), NO-OUTDOOR, AUTO-BW, wmmrule=ETSI
+	(5150 - 5250 @ 80), (200 mW), NO-OUTDOOR, AUTO-BW, wmmrule=ETSI
 	(5250 - 5350 @ 80), (100 mW), NO-OUTDOOR, DFS, AUTO-BW, wmmrule=ETSI
 	(5470 - 5725 @ 160), (500 mW), DFS, wmmrule=ETSI
 	# short range devices (ETSI EN 300 440-1)
@@ -475,9 +468,9 @@ country FM: DFS-FCC
 
 country FR: DFS-ETSI
 	(2402 - 2482 @ 40), (20)
-	(5170 - 5250 @ 80), (20), AUTO-BW, wmmrule=ETSI
-	(5250 - 5330 @ 80), (20), DFS, AUTO-BW, wmmrule=ETSI
-	(5490 - 5710 @ 160), (27), DFS, wmmrule=ETSI
+	(5150 - 5250 @ 80), (23), NO-OUTDOOR, AUTO-BW, wmmrule=ETSI
+	(5250 - 5350 @ 80), (20), NO-OUTDOOR, DFS, AUTO-BW, wmmrule=ETSI
+	(5470 - 5725 @ 160), (27), DFS, wmmrule=ETSI
         # short range devices (ETSI EN 300 440)
 	(5725 - 5875 @ 80), (25 mW)
 	# 60 GHz band channels 1-4, ref: Etsi En 302 567
@@ -624,8 +617,10 @@ country IL: DFS-ETSI
 
 country IN:
 	(2402 - 2482 @ 40), (20)
-	(5150 - 5350 @ 160), (23)
-	(5725 - 5875 @ 80), (23)
+	(5150 - 5250 @ 80), (30)
+	(5250 - 5350 @ 80), (24)
+	(5470 - 5725 @ 160), (24)
+	(5725 - 5875 @ 80), (30)
 
 country IR: DFS-JP
 	(2402 - 2482 @ 40), (20)
@@ -1051,6 +1046,8 @@ country PT: DFS-ETSI
 	(5170 - 5250 @ 80), (20), AUTO-BW, wmmrule=ETSI
 	(5250 - 5330 @ 80), (20), DFS, AUTO-BW, wmmrule=ETSI
 	(5490 - 5710 @ 160), (27), DFS, wmmrule=ETSI
+	# short range devices (ETSI EN 300 440-1)
+	(5725 - 5875 @ 80), (25 mW)
 	# 60 GHz band channels 1-4, ref: Etsi En 302 567
 	(57000 - 66000 @ 2160), (40)
 
@@ -1122,13 +1119,18 @@ country SA: DFS-ETSI
 	(5250 - 5330 @ 80), (20), DFS, AUTO-BW
 	(5490 - 5710 @ 160), (27), DFS
 
+# Source:
+# https://pts.se/globalassets/startpage/dokument/legala-dokument/foreskrifter/radio/beslutade_ptsfs-2018-3-undantagsforeskrifter.pdf
 country SE: DFS-ETSI
-	(2402 - 2482 @ 40), (20)
-	(5170 - 5250 @ 80), (20), AUTO-BW, wmmrule=ETSI
-	(5250 - 5330 @ 80), (20), DFS, AUTO-BW, wmmrule=ETSI
-	(5490 - 5710 @ 160), (27), DFS, wmmrule=ETSI
+	(2400 - 2483.5 @ 40), (20)
+	(5150 - 5250 @ 80), (23), NO-OUTDOOR, AUTO-BW, wmmrule=ETSI
+	# note: max would be +3dB with TPC @ 5250-5725
+	(5250 - 5350 @ 80), (20), NO-OUTDOOR, DFS, AUTO-BW, wmmrule=ETSI
+	(5470 - 5725 @ 160), (27), DFS, wmmrule=ETSI
+	# short range devices (ETSI EN 300 440)
+	(5725 - 5875 @ 80), (25 mW)
 	# 60 GHz band channels 1-4, ref: Etsi En 302 567
-	(57000 - 66000 @ 2160), (40)
+	(57000 - 66000 @ 2160), (40), NO-OUTDOOR
 
 # Source
 # https://www.imda.gov.sg/~/media/imda/files/regulation%20licensing%20and%20consultations/ict%20standards/telecommunication%20standards/radio-comms/imdatssrd.pdf?la=en
@@ -1287,9 +1289,9 @@ country US: DFS-FCC
 	(5490 - 5730 @ 160), (23), DFS
 	(5735 - 5835 @ 80), (30)
 	# 60g band
-	# reference: http://cfr.regstoday.com/47cfr15.aspx#47_CFR_15p255
-	# channels 1,2,3, EIRP=40dBm(43dBm peak)
-	(57240 - 63720 @ 2160), (40)
+	# reference: section IV-D https://docs.fcc.gov/public/attachments/FCC-16-89A1.pdf
+	# channels 1-6 EIRP=40dBm(43dBm peak)
+	(57240 - 71000 @ 2160), (40)
 
 country UY: DFS-FCC
 	(2402 - 2482 @ 40), (20)
