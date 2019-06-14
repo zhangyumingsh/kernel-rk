@@ -11,6 +11,7 @@ obj-$(CONFIG_AIRO)		+= airo.o
 obj-$(CONFIG_AIRO_CS)		+= airo_cs.o airo.o
 
 obj-$(CONFIG_ATMEL)             += atmel.o
+obj-$(CONFIG_RTL8812AU) += rtl8812au/
 obj-$(CONFIG_PCI_ATMEL)         += atmel_pci.o 
 obj-$(CONFIG_PCMCIA_ATMEL)      += atmel_cs.o
 
