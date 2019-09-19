@@ -138,6 +138,7 @@
 		linux,rc-map-name = "rc-roc-cc";
 		pinctrl-0 = <&ir_int>;
 		pinctrl-names = "default";
+		status = "okay";
 	};
 
 	hdmi-sound {
