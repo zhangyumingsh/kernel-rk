@@ -309,6 +309,7 @@ struct xhci_op_regs {
  */
 #define PORT_PLS_MASK	(0xf << 5)
 #define XDEV_U0		(0x0 << 5)
+#define XDEV_U1		(0x1 << 5)
 #define XDEV_U2		(0x2 << 5)
 #define XDEV_U3		(0x3 << 5)
 #define XDEV_INACTIVE	(0x6 << 5)
@@ -1333,7 +1334,11 @@ union xhci_trb {
 #define TRB_SEGMENT_SIZE	(TRBS_PER_SEGMENT*16)
 #define TRB_SEGMENT_SHIFT	(ilog2(TRB_SEGMENT_SIZE))
 /* TRB buffer pointers can't cross 64KB boundaries */
+#ifdef CONFIG_ARCH_ROCKCHIP
+#define TRB_MAX_BUFF_SHIFT		12
+#else
 #define TRB_MAX_BUFF_SHIFT		16
+#endif
 #define TRB_MAX_BUFF_SIZE	(1 << TRB_MAX_BUFF_SHIFT)
 
 struct xhci_segment {
@@ -1490,7 +1495,7 @@ struct xhci_bus_state {
  * It can take up to 20 ms to transition from RExit to U0 on the
  * Intel Lynx Point LP xHCI host.
  */
-#define	XHCI_MAX_REXIT_TIMEOUT	(20 * 1000)
+#define	XHCI_MAX_REXIT_TIMEOUT_MS	20
 
 static inline unsigned int hcd_index(struct usb_hcd *hcd)
 {
@@ -1639,8 +1644,10 @@ struct xhci_hcd {
 #define XHCI_BROKEN_STREAMS	(1 << 19)
 #define XHCI_PME_STUCK_QUIRK	(1 << 20)
 #define XHCI_DIS_AUTOSUSPEND	(1 << 21)
+#define XHCI_NO_64BIT_SUPPORT	(1 << 23)
 #define XHCI_MISSING_CAS	(1 << 24)
 #define XHCI_WARM_RESET_ON_RESUME	(1 << 25)
+#define XHCI_TRB_ENT_QUIRK	(1 << 26)
 	unsigned int		num_active_eps;
 	unsigned int		limit_active_eps;
 	/* There are two roothubs to keep track of bus suspend info for */

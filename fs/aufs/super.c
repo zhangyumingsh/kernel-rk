@@ -850,7 +850,10 @@ static const struct super_operations aufs_sop = {
 	.statfs		= aufs_statfs,
 	.put_super	= aufs_put_super,
 	.sync_fs	= aufs_sync_fs,
-	.remount_fs	= aufs_remount_fs
+	.remount_fs	= aufs_remount_fs,
+#ifdef CONFIG_AUFS_BDEV_LOOP
+	.real_loop	= aufs_real_loop
+#endif
 };
 
 /* ---------------------------------------------------------------------- */

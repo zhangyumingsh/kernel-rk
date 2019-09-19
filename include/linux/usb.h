@@ -127,7 +127,6 @@ enum usb_interface_condition {
  * @dev: driver model's view of this device
  * @usb_dev: if an interface is bound to the USB major, this will point
  *	to the sysfs representation for that device.
- * @pm_usage_cnt: PM usage counter for this interface
  * @reset_ws: Used for scheduling resets from atomic context.
  * @resetting_device: USB core reset the device, so use alt setting 0 as
  *	current; needs bandwidth alloc after reset.
@@ -184,7 +183,6 @@ struct usb_interface {
 
 	struct device dev;		/* interface specific device info */
 	struct device *usb_dev;
-	atomic_t pm_usage_cnt;		/* usage counter for autosuspend */
 	struct work_struct reset_ws;	/* for resets in atomic context */
 };
 #define	to_usb_interface(d) container_of(d, struct usb_interface, dev)
@@ -334,11 +332,11 @@ struct usb_host_bos {
 };
 
 int __usb_get_extra_descriptor(char *buffer, unsigned size,
-	unsigned char type, void **ptr);
+	unsigned char type, void **ptr, size_t min);
 #define usb_get_extra_descriptor(ifpoint, type, ptr) \
 				__usb_get_extra_descriptor((ifpoint)->extra, \
 				(ifpoint)->extralen, \
-				type, (void **)ptr)
+				type, (void **)ptr, sizeof(**(ptr)))
 
 /* ----------------------------------------------------------------------- */
 
@@ -352,6 +350,7 @@ struct usb_devmap {
  */
 struct usb_bus {
 	struct device *controller;	/* host/master side hardware */
+	struct device *sysdev;		/* as seen from firmware or bus */
 	int busnum;			/* Bus number (in order of reg) */
 	const char *bus_name;		/* stable id (PCI slot_name etc) */
 	u8 uses_dma;			/* Does the host controller use DMA? */
@@ -478,6 +477,8 @@ struct usb3_lpm_parameters {
  * @route: tree topology hex string for use with xHCI
  * @state: device state: configured, not attached, etc.
  * @speed: device speed: high/full/low (or error)
+ * @rx_lanes: number of rx lanes in use, USB 3.2 adds dual-lane support
+ * @tx_lanes: number of tx lanes in use, USB 3.2 adds dual-lane support
  * @tt: Transaction Translator info; used with low/full speed dev, highspeed hub
  * @ttport: device port on that tt hub
  * @toggle: one bit for each endpoint, with ([0] = IN, [1] = OUT) endpoints
@@ -548,6 +549,8 @@ struct usb_device {
 	u32		route;
 	enum usb_device_state	state;
 	enum usb_device_speed	speed;
+	unsigned int		rx_lanes;
+	unsigned int		tx_lanes;
 
 	struct usb_tt	*tt;
 	int		ttport;

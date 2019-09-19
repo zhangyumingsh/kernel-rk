@@ -51,7 +51,7 @@ static int clk_gpio_gate_is_enabled(struct clk_hw *hw)
 {
 	struct clk_gpio *clk = to_clk_gpio(hw);
 
-	return gpiod_get_value(clk->gpiod);
+	return gpiod_get_value_cansleep(clk->gpiod);
 }
 
 const struct clk_ops clk_gpio_gate_ops = {
@@ -73,7 +73,7 @@ static u8 clk_gpio_mux_get_parent(struct clk_hw *hw)
 {
 	struct clk_gpio *clk = to_clk_gpio(hw);
 
-	return gpiod_get_value(clk->gpiod);
+	return gpiod_get_value_cansleep(clk->gpiod);
 }
 
 static int clk_gpio_mux_set_parent(struct clk_hw *hw, u8 index)

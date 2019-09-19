@@ -105,7 +105,6 @@ void rc_map_init(void);
 
 /* Names of the several keytables defined in-kernel */
 
-#define RC_MAP_k24			  "rc-k24"
 #define RC_MAP_ADSTECH_DVB_T_PCI         "rc-adstech-dvb-t-pci"
 #define RC_MAP_ALINK_DTU_M               "rc-alink-dtu-m"
 #define RC_MAP_ANYSEE                    "rc-anysee"
@@ -158,14 +157,12 @@ void rc_map_init(void);
 #define RC_MAP_IT913X_V1                 "rc-it913x-v1"
 #define RC_MAP_IT913X_V2                 "rc-it913x-v2"
 #define RC_MAP_KAIOMY                    "rc-kaiomy"
-#define RC_MAP_KHADAS                    "rc-khadas"
 #define RC_MAP_KWORLD_315U               "rc-kworld-315u"
 #define RC_MAP_KWORLD_PC150U             "rc-kworld-pc150u"
 #define RC_MAP_KWORLD_PLUS_TV_ANALOG     "rc-kworld-plus-tv-analog"
 #define RC_MAP_LEADTEK_Y04G0051          "rc-leadtek-y04g0051"
 #define RC_MAP_LIRC                      "rc-lirc"
 #define RC_MAP_LME2510                   "rc-lme2510"
-#define RC_MAP_MAGICN6                   "rc-magicn6"
 #define RC_MAP_MANLI                     "rc-manli"
 #define RC_MAP_MEDION_X10                "rc-medion-x10"
 #define RC_MAP_MEDION_X10_DIGITAINER     "rc-medion-x10-digitainer"

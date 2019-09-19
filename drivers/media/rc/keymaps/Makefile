@@ -1,5 +1,4 @@
-obj-$(CONFIG_RC_MAP) += rc-k24.o \
-			rc-adstech-dvb-t-pci.o \
+obj-$(CONFIG_RC_MAP) += rc-adstech-dvb-t-pci.o \
 			rc-alink-dtu-m.o \
 			rc-anysee.o \
 			rc-apac-viewcomp.o \
@@ -49,14 +48,12 @@ obj-$(CONFIG_RC_MAP) += rc-k24.o \
 			rc-it913x-v1.o \
 			rc-it913x-v2.o \
 			rc-kaiomy.o \
-			rc-khadas.o \
 			rc-kworld-315u.o \
 			rc-kworld-pc150u.o \
 			rc-kworld-plus-tv-analog.o \
 			rc-leadtek-y04g0051.o \
 			rc-lirc.o \
 			rc-lme2510.o \
-			rc-magicn6.o \
 			rc-manli.o \
 			rc-medion-x10.o \
 			rc-medion-x10-digitainer.o \

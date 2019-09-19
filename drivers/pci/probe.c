@@ -1686,6 +1686,9 @@ static void pci_init_capabilities(struct pci_dev *dev)
 	pci_enable_acs(dev);
 
 	pci_cleanup_aer_error_status_regs(dev);
+
+	if (pci_probe_reset_function(dev) == 0)
+		dev->reset_fn = 1;
 }
 
 /*
@@ -1894,13 +1897,13 @@ int pci_scan_slot(struct pci_bus *bus, int devfn)
 	dev = pci_scan_single_device(bus, devfn);
 	if (!dev)
 		return 0;
-	if (!dev->is_added)
+	if (!pci_dev_is_added(dev))
 		nr++;
 
 	for (fn = next_fn(bus, dev, 0); fn > 0; fn = next_fn(bus, dev, fn)) {
 		dev = pci_scan_single_device(bus, devfn + fn);
 		if (dev) {
-			if (!dev->is_added)
+			if (!pci_dev_is_added(dev))
 				nr++;
 			dev->multifunction = 1;
 		}

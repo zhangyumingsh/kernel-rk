@@ -404,7 +404,9 @@ int mmc_add_host(struct mmc_host *host)
 	if (err)
 		return err;
 
-	led_trigger_register_simple(dev_name(&host->class_dev), &host->led);
+	/* Trigger the LED (if available) */
+	ledtrig_disk_activity();
+	ledtrig_disk_activity_inverted();
 
 #ifdef CONFIG_DEBUG_FS
 	mmc_add_host_debugfs(host);
@@ -451,7 +453,7 @@ void mmc_remove_host(struct mmc_host *host)
 
 	device_del(&host->class_dev);
 
-	led_trigger_unregister_simple(host->led);
+	/* led_trigger_unregister_simple(host->led); */
 }
 
 EXPORT_SYMBOL(mmc_remove_host);

@@ -2092,9 +2092,7 @@ static __maybe_unused int rk3399_dmc_init(struct platform_device *pdev,
 		timing = (u32 *)dram_timing;
 		size = sizeof(struct rk3399_dram_timing) / 4;
 		for (index = 0; index < size; index++) {
-			arm_smccc_smc(ROCKCHIP_SIP_DRAM_FREQ, *timing++, index,
-				      ROCKCHIP_SIP_CONFIG_DRAM_SET_PARAM,
-				      0, 0, 0, 0, &res);
+			res = sip_smc_dram(*timing++, index, ROCKCHIP_SIP_CONFIG_DRAM_SET_PARAM);
 			if (res.a0) {
 				dev_err(dev, "Failed to set dram param: %ld\n",
 					res.a0);
@@ -2103,9 +2101,7 @@ static __maybe_unused int rk3399_dmc_init(struct platform_device *pdev,
 		}
 	}
 
-	arm_smccc_smc(ROCKCHIP_SIP_DRAM_FREQ, 0, 0,
-		      ROCKCHIP_SIP_CONFIG_DRAM_INIT,
-		      0, 0, 0, 0, &res);
+	res = sip_smc_dram(0, 0, ROCKCHIP_SIP_CONFIG_DRAM_INIT);
 
 	return 0;
 }
@@ -2982,9 +2978,7 @@ static void rockchip_dmcfreq_parse_dt(struct rockchip_dmcfreq *dmcfreq)
 			     (u32 *)&dmcfreq->auto_min_rate);
 	dmcfreq->auto_min_rate *= 1000;
 
-	if (rockchip_get_freq_map_talbe(np, "vop-bw-dmc-freq",
-					&dmcfreq->vop_bw_tbl))
-		dev_err(dev, "failed to get vop bandwidth to dmc rate\n");
+	rockchip_get_freq_map_talbe(np, "vop-bw-dmc-freq", &dmcfreq->vop_bw_tbl);
 
 	of_property_read_u32(np, "touchboost_duration",
 			     (u32 *)&dmcfreq->touchboostpulse_duration_val);

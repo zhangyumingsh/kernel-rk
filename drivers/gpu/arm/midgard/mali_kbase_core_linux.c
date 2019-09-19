@@ -1173,6 +1173,7 @@ static int kbase_open(struct inode *inode, struct file *filp)
 	init_waitqueue_head(&kctx->event_queue);
 	filp->f_mode |= FMODE_UNSIGNED_OFFSET;
 	filp->private_data = kctx;
+	filp->f_mode |= FMODE_UNSIGNED_OFFSET;
 	kctx->filp = filp;
 
 	if (kbdev->infinite_cache_active_default)
@@ -4858,6 +4859,7 @@ static const struct dev_pm_ops kbase_pm_ops = {
 static const struct of_device_id kbase_dt_ids[] = {
 	{ .compatible = "arm,malit7xx" },
 	{ .compatible = "arm,mali-midgard" },
+	{ .compatible = "arm,malit860" },
 	{ /* sentinel */ }
 };
 MODULE_DEVICE_TABLE(of, kbase_dt_ids);

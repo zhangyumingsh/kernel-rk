@@ -617,11 +617,11 @@ static void hidinput_configure_usage(struct hid_input *hidinput, struct hid_fiel
 		/* These usage IDs map directly to the usage codes. */
 		case HID_GD_X: case HID_GD_Y: case HID_GD_Z:
 		case HID_GD_RX: case HID_GD_RY: case HID_GD_RZ:
-			if (field->flags & HID_MAIN_ITEM_RELATIVE)
-				map_rel(usage->hid & 0xf);
-			else
-				map_abs_clear(usage->hid & 0xf);
-			break;
+//			if (field->flags & HID_MAIN_ITEM_RELATIVE)
+//				map_rel(usage->hid & 0xf);
+//			else
+//				map_abs_clear(usage->hid & 0xf);
+//			break;
 
 		case HID_GD_SLIDER: case HID_GD_DIAL: case HID_GD_WHEEL:
 			if (field->flags & HID_MAIN_ITEM_RELATIVE)
@@ -783,6 +783,10 @@ static void hidinput_configure_usage(struct hid_input *hidinput, struct hid_fiel
 		case 0x074: map_key_clear(KEY_BRIGHTNESS_MAX);		break;
 		case 0x075: map_key_clear(KEY_BRIGHTNESS_AUTO);		break;
 
+		case 0x079: map_key_clear(KEY_KBDILLUMUP);	break;
+		case 0x07a: map_key_clear(KEY_KBDILLUMDOWN);	break;
+		case 0x07c: map_key_clear(KEY_KBDILLUMTOGGLE);	break;
+
 		case 0x082: map_key_clear(KEY_VIDEO_NEXT);	break;
 		case 0x083: map_key_clear(KEY_LAST);		break;
 		case 0x084: map_key_clear(KEY_ENTER);		break;
@@ -912,6 +916,8 @@ static void hidinput_configure_usage(struct hid_input *hidinput, struct hid_fiel
 		case 0x2ca: map_key_clear(KEY_KBDINPUTASSIST_NEXTGROUP);		break;
 		case 0x2cb: map_key_clear(KEY_KBDINPUTASSIST_ACCEPT);	break;
 		case 0x2cc: map_key_clear(KEY_KBDINPUTASSIST_CANCEL);	break;
+
+		case 0x29f: map_key_clear(KEY_SCALE);		break;
 
 		default: map_key_clear(KEY_UNKNOWN);
 		}
@@ -1142,8 +1148,10 @@ void hidinput_hid_event(struct hid_device *hid, struct hid_field *field, struct 
 		if (field->flags & HID_MAIN_ITEM_NULL_STATE &&
 		    (value < field->logical_minimum ||
 		     value > field->logical_maximum)) {
-			dbg_hid("Ignoring out-of-range value %x\n", value);
-			return;
+	             if(value < field->logical_minimum)
+	                 value = field->logical_minimum;
+	             else
+	                 value = field->logical_maximum;
 		}
 		value = clamp(value,
 			      field->logical_minimum,

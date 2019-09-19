@@ -345,7 +345,7 @@ static void __exception_irq_entry gic_handle_irq(struct pt_regs *regs)
 		irqstat = readl_relaxed(cpu_base + GIC_CPU_INTACK);
 		irqnr = irqstat & GICC_IAR_INT_ID_MASK;
 
-		if (likely(irqnr > 15 && irqnr < 1021)) {
+		if (likely(irqnr > 15 && irqnr < 1020)) {
 			if (static_key_true(&supports_deactivate))
 				writel_relaxed(irqstat, cpu_base + GIC_CPU_EOI);
 			handle_domain_irq(gic->domain, irqnr, regs);
@@ -722,7 +722,8 @@ static void gic_cpu_restore(unsigned int gic_nr)
 	gic_cpu_if_up(&gic_data[gic_nr]);
 }
 
-static int gic_notifier(struct notifier_block *self, unsigned long cmd,	void *v)
+static int gic_notifier(struct notifier_block *self, unsigned long cmd,
+			void *aff_level)
 {
 	int i;
 
@@ -741,11 +742,20 @@ static int gic_notifier(struct notifier_block *self, unsigned long cmd,	void *v)
 			gic_cpu_restore(i);
 			break;
 		case CPU_CLUSTER_PM_ENTER:
-			gic_dist_save(i);
+			/*
+			 * Affinity level of the node
+			 * eg:
+			 *    cpu level = 0
+			 *    l2 level  = 1
+			 *    cci level = 2
+			 */
+			if (!(unsigned long)aff_level)
+				gic_dist_save(i);
 			break;
 		case CPU_CLUSTER_PM_ENTER_FAILED:
 		case CPU_CLUSTER_PM_EXIT:
-			gic_dist_restore(i);
+			if (!(unsigned long)aff_level)
+				gic_dist_restore(i);
 			break;
 		}
 	}

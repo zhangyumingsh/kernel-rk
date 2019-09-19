@@ -1562,7 +1562,7 @@ static void handle_port_status(struct xhci_hcd *xhci,
 
 	/* Find the right roothub. */
 	hcd = xhci_to_hcd(xhci);
-	if ((major_revision == 0x03) != (hcd->speed >= HCD_USB3))
+	if ((major_revision == 0x03) != (hcd->speed >= HCD_USB3) && xhci->shared_hcd)
 		hcd = xhci->shared_hcd;
 
 	if (major_revision == 0) {
@@ -1642,10 +1642,13 @@ static void handle_port_status(struct xhci_hcd *xhci,
 		}
 	}
 
-	if ((temp & PORT_PLC) && (temp & PORT_PLS_MASK) == XDEV_U0 &&
-			DEV_SUPERSPEED_ANY(temp)) {
+	if ((temp & PORT_PLC) &&
+	    DEV_SUPERSPEED_ANY(temp) &&
+	    ((temp & PORT_PLS_MASK) == XDEV_U0 ||
+	     (temp & PORT_PLS_MASK) == XDEV_U1 ||
+	     (temp & PORT_PLS_MASK) == XDEV_U2)) {
 		xhci_dbg(xhci, "resume SS port %d finished\n", port_id);
-		/* We've just brought the device into U0 through either the
+		/* We've just brought the device into U0/1/2 through either the
 		 * Resume state after a device remote wakeup, or through the
 		 * U3Exit state after a host-initiated resume.  If it's a device
 		 * initiated remote wake, don't pass up the link state change,
@@ -1673,7 +1676,7 @@ static void handle_port_status(struct xhci_hcd *xhci,
 	 * RExit to a disconnect state).  If so, let the the driver know it's
 	 * out of the RExit state.
 	 */
-	if (!DEV_SUPERSPEED_ANY(temp) &&
+	if (!DEV_SUPERSPEED_ANY(temp) && hcd->speed < HCD_USB3 &&
 			test_and_clear_bit(faked_port_index,
 				&bus_state->rexit_ports)) {
 		complete(&bus_state->rexit_done[faked_port_index]);
@@ -2479,12 +2482,16 @@ static int handle_tx_event(struct xhci_hcd *xhci,
 		 */
 		if (list_empty(&ep_ring->td_list)) {
 			/*
-			 * A stopped endpoint may generate an extra completion
-			 * event if the device was suspended.  Don't print
-			 * warnings.
+			 * Don't print wanings if it's due to a stopped endpoint
+			 * generating an extra completion event if the device
+			 * was suspended. Or, a event for the last TRB of a
+			 * short TD we already got a short event for.
+			 * The short TD is already removed from the TD list.
 			 */
+
 			if (!(trb_comp_code == COMP_STOP ||
-						trb_comp_code == COMP_STOP_INVAL)) {
+			      trb_comp_code == COMP_STOP_INVAL ||
+			      ep_ring->last_td_was_short)) {
 				xhci_warn(xhci, "WARN Event TRB for slot %d ep %d with no TDs queued?\n",
 						TRB_TO_SLOT_ID(le32_to_cpu(event->flags)),
 						ep_index);
@@ -2709,7 +2716,8 @@ static int xhci_handle_event(struct xhci_hcd *xhci)
 	/* Any of the above functions may drop and re-acquire the lock, so check
 	 * to make sure a watchdog timer didn't mark the host as non-responsive.
 	 */
-	if (xhci->xhc_state & XHCI_STATE_DYING) {
+	if (xhci->xhc_state & XHCI_STATE_DYING ||
+	    xhci->xhc_state & XHCI_STATE_HALTED) {
 		xhci_dbg(xhci, "xHCI host dying, returning from "
 				"event handler.\n");
 		return 0;
@@ -3145,6 +3153,7 @@ static int queue_bulk_sg_tx(struct xhci_hcd *xhci, gfp_t mem_flags,
 	int last_trb_num;
 	u64 addr;
 	bool more_trbs_coming;
+	bool en_trb_ent;
 
 	struct xhci_generic_trb *start_trb;
 	int start_cycle;
@@ -3207,6 +3216,17 @@ static int queue_bulk_sg_tx(struct xhci_hcd *xhci, gfp_t mem_flags,
 	if (trb_buff_len > urb->transfer_buffer_length)
 		trb_buff_len = urb->transfer_buffer_length;
 
+	/*
+	 * Don't enable the ENT flag in the TRB in the following cases:
+	 * 1. The transfer length of the first TRB isn't an integer
+	 *    multiple of the EP maxpacket.
+	 * 2. The EP support bulk streaming protocol.
+	 */
+	if (trb_buff_len % usb_endpoint_maxp(&urb->ep->desc) || urb->stream_id)
+		en_trb_ent = false;
+	else
+		en_trb_ent = true;
+
 	first_trb = true;
 	last_trb_num = zero_length_needed ? 2 : 1;
 	/* Queue the first TRB, even if it's zero-length */
@@ -3228,6 +3248,8 @@ static int queue_bulk_sg_tx(struct xhci_hcd *xhci, gfp_t mem_flags,
 		 */
 		if (num_trbs > last_trb_num) {
 			field |= TRB_CHAIN;
+			if (xhci->quirks & XHCI_TRB_ENT_QUIRK && en_trb_ent)
+				field |= TRB_ENT;
 		} else if (num_trbs == last_trb_num) {
 			td->last_trb = ep_ring->enqueue;
 			field |= TRB_IOC;
@@ -3312,6 +3334,7 @@ int xhci_queue_bulk_tx(struct xhci_hcd *xhci, gfp_t mem_flags,
 	int last_trb_num;
 	bool more_trbs_coming;
 	bool zero_length_needed;
+	bool en_trb_ent;
 	int start_cycle;
 	u32 field, length_field;
 
@@ -3384,6 +3407,17 @@ int xhci_queue_bulk_tx(struct xhci_hcd *xhci, gfp_t mem_flags,
 	if (trb_buff_len > urb->transfer_buffer_length)
 		trb_buff_len = urb->transfer_buffer_length;
 
+	/*
+	 * Don't enable the ENT flag in the TRB in the following cases:
+	 * 1. The transfer length of the first TRB isn't an integer
+	 *    multiple of the EP maxpacket.
+	 * 2. The EP support bulk streaming protocol.
+	 */
+	if (trb_buff_len % usb_endpoint_maxp(&urb->ep->desc) || urb->stream_id)
+		en_trb_ent = false;
+	else
+		en_trb_ent = true;
+
 	first_trb = true;
 	last_trb_num = zero_length_needed ? 2 : 1;
 	/* Queue the first TRB, even if it's zero-length */
@@ -3404,6 +3438,8 @@ int xhci_queue_bulk_tx(struct xhci_hcd *xhci, gfp_t mem_flags,
 		 */
 		if (num_trbs > last_trb_num) {
 			field |= TRB_CHAIN;
+			if (xhci->quirks & XHCI_TRB_ENT_QUIRK && en_trb_ent)
+				field |= TRB_ENT;
 		} else if (num_trbs == last_trb_num) {
 			td->last_trb = ep_ring->enqueue;
 			field |= TRB_IOC;

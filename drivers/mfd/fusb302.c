@@ -217,32 +217,8 @@ static int fusb302_set_pos_power_by_charge_ic(struct fusb30x_chip *chip)
 	max_vol = 0;
 	max_cur = 0;
 	psy = power_supply_get_by_phandle(chip->dev->of_node, "charge-dev");
-	if (!psy || IS_ERR(psy)) {
-		int ret;
-		u32 value;
-
-		ret = of_property_read_u32(chip->dev->of_node, "max-input-voltage", &value);
-		if (ret) {
-			dev_err(chip->dev, "'max-input-voltage' not found!\n");
-			return -1;
-		}
-
-		max_vol = value / 1000;
-
-		ret = of_property_read_u32(chip->dev->of_node, "max-input-current", &value);
-
-		if (ret) {
-			dev_err(chip->dev, "'max-input-current' not found!\n");
-			return -1;
-		}
-
-		max_cur = value / 1000;
-
-		if (max_vol > 0 && max_cur > 0)
-			fusb_set_pos_power(chip, max_vol, max_cur);
-
-		return 0;
-	}
+	if (!psy || IS_ERR(psy))
+		return -1;
 
 	psp = POWER_SUPPLY_PROP_CHARGE_CONTROL_LIMIT_MAX;
 	if (power_supply_get_property(psy, psp, &val) == 0)
@@ -3214,7 +3190,8 @@ static void fusb302_work_func(struct work_struct *work)
 	struct fusb30x_chip *chip;
 
 	chip = container_of(work, struct fusb30x_chip, work);
-	state_machine_typec(chip);
+	if (!chip->suspended)
+		state_machine_typec(chip);
 }
 
 static int fusb30x_probe(struct i2c_client *client,
@@ -3434,6 +3411,33 @@ static void fusb30x_shutdown(struct i2c_client *client)
 	}
 }
 
+static int fusb30x_pm_suspend(struct device *dev)
+{
+	struct fusb30x_chip *chip = dev_get_drvdata(dev);
+
+	fusb_irq_disable(chip);
+	chip->suspended = true;
+	cancel_work_sync(&chip->work);
+
+	return 0;
+}
+
+static int fusb30x_pm_resume(struct device *dev)
+{
+	struct fusb30x_chip *chip = dev_get_drvdata(dev);
+
+	fusb_irq_enable(chip);
+	chip->suspended = false;
+	queue_work(chip->fusb30x_wq, &chip->work);
+
+	return 0;
+}
+
+static const struct dev_pm_ops fusb30x_pm_ops = {
+	SET_SYSTEM_SLEEP_PM_OPS(fusb30x_pm_suspend,
+				fusb30x_pm_resume)
+};
+
 static const struct of_device_id fusb30x_dt_match[] = {
 	{ .compatible = FUSB30X_I2C_DEVICETREE_NAME },
 	{},
@@ -3450,6 +3454,7 @@ static struct i2c_driver fusb30x_driver = {
 	.driver = {
 		.name = FUSB30X_I2C_DRIVER_NAME,
 		.of_match_table = of_match_ptr(fusb30x_dt_match),
+		.pm = &fusb30x_pm_ops,
 	},
 	.probe = fusb30x_probe,
 	.remove = fusb30x_remove,

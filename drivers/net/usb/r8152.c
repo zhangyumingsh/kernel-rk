@@ -3663,6 +3663,9 @@ static int rtl8152_set_wol(struct net_device *dev, struct ethtool_wolinfo *wol)
 	if (!rtl_can_wakeup(tp))
 		return -EOPNOTSUPP;
 
+	if (wol->wolopts & ~WAKE_ANY)
+		return -EINVAL;
+
 	ret = usb_autopm_get_interface(tp->intf);
 	if (ret < 0)
 		goto out_set_wol;
@@ -4154,6 +4157,7 @@ static void r8152b_get_version(struct r8152 *tp)
 		tp->mii.supports_gmii = 1;
 		break;
 	case 0x5c30:
+	case 0x6010:
 		tp->version = RTL_VER_06;
 		tp->mii.supports_gmii = 1;
 		break;

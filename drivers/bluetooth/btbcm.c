@@ -178,6 +178,9 @@ static int btbcm_reset(struct hci_dev *hdev)
 	}
 	kfree_skb(skb);
 
+	/* 100 msec delay for module to complete reset process */
+	msleep(100);
+
 	return 0;
 }
 
@@ -270,14 +273,16 @@ static const struct {
 	{ 0x4103, "BCM4330B1"	},	/* 002.001.003 */
 	{ 0x410e, "BCM43341B0"	},	/* 002.001.014 */
 	{ 0x4406, "BCM4324B3"	},	/* 002.004.006 */
+	{ 0x6109, "BCM4335C0"	},	/* 003.001.009 */
 	{ 0x610c, "BCM4354"	},	/* 003.001.012 */
+	{ 0x6106, "BCM4359C0"	},	/* unknown */
 	{ }
 };
 
 int btbcm_initialize(struct hci_dev *hdev, char *fw_name, size_t len)
 {
 	u16 subver, rev;
-	const char *hw_name = NULL;
+	const char *hw_name = "BCM";
 	struct sk_buff *skb;
 	struct hci_rp_read_local_version *ver;
 	int i, err;

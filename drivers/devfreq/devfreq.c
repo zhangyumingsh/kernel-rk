@@ -90,12 +90,16 @@ static int devfreq_get_freq_level(struct devfreq *devfreq, unsigned long freq)
  * @devfreq:	the devfreq instance
  * @freq:	the update target frequency
  */
-static int devfreq_update_status(struct devfreq *devfreq, unsigned long freq)
+int devfreq_update_status(struct devfreq *devfreq, unsigned long freq)
 {
 	int lev, prev_lev, ret = 0;
 	unsigned long cur_time;
 
 	cur_time = jiffies;
+
+	/* Immediately exit if previous_freq is not initialized yet. */
+	if (!devfreq->previous_freq)
+		goto out;
 
 	prev_lev = devfreq_get_freq_level(devfreq, devfreq->previous_freq);
 	if (prev_lev < 0) {
@@ -122,6 +126,7 @@ out:
 	devfreq->last_stat_updated = cur_time;
 	return ret;
 }
+EXPORT_SYMBOL(devfreq_update_status);
 
 /**
  * find_devfreq_governor() - find devfreq governor from name
@@ -238,9 +243,7 @@ int update_devfreq(struct devfreq *devfreq)
 	devfreq_notify_transition(devfreq, &freqs, DEVFREQ_POSTCHANGE);
 
 	if (devfreq->profile->freq_table)
-		if (devfreq_update_status(devfreq, freq))
-			dev_err(&devfreq->dev,
-				"Couldn't update frequency transition information.\n");
+		devfreq_update_status(devfreq, freq);
 
 	devfreq->previous_freq = freq;
 	return err;

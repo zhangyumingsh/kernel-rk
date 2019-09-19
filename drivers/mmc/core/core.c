@@ -133,6 +133,10 @@ void mmc_request_done(struct mmc_host *host, struct mmc_request *mrq)
 	struct mmc_command *cmd = mrq->cmd;
 	int err = cmd->error;
 
+	/* Trigger the LED (if available) */
+	ledtrig_disk_activity();
+	ledtrig_disk_activity_inverted();
+
 	/* Flag re-tuning needed on CRC errors */
 	if ((cmd->opcode != MMC_SEND_TUNING_BLOCK &&
 	    cmd->opcode != MMC_SEND_TUNING_BLOCK_HS200) &&
@@ -157,7 +161,7 @@ void mmc_request_done(struct mmc_host *host, struct mmc_request *mrq)
 	} else {
 		mmc_should_fail_request(host, mrq);
 
-		led_trigger_event(host->led, LED_OFF);
+		/* led_trigger_event(host->led, LED_OFF); */
 
 		if (mrq->sbc) {
 			pr_debug("%s: req done <CMD%u>: %d: %08x %08x %08x %08x\n",
@@ -306,7 +310,7 @@ static int mmc_start_request(struct mmc_host *host, struct mmc_request *mrq)
 			mrq->stop->mrq = mrq;
 		}
 	}
-	led_trigger_event(host->led, LED_FULL);
+	/* led_trigger_event(host->led, LED_FULL); */
 	__mmc_start_request(host, mrq);
 
 	return 0;

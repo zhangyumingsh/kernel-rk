@@ -13,6 +13,7 @@
 #include <linux/module.h>
 #include <linux/platform_device.h>
 #include <linux/rockchip/cpu.h>
+#include <linux/hdmi-notifier.h>
 #include <linux/regmap.h>
 #include <linux/pm_runtime.h>
 #include <linux/phy/phy.h>
@@ -558,6 +559,7 @@ static void dw_hdmi_rockchip_encoder_disable(struct drm_encoder *encoder)
 	if (hdmi->phy)
 		phy_set_bus_width(hdmi->phy, 8);
 	clk_disable_unprepare(hdmi->dclk);
+	hdmi_event_disconnect(hdmi->dev);
 }
 
 static void dw_hdmi_rockchip_encoder_enable(struct drm_encoder *encoder)
@@ -629,6 +631,7 @@ static void dw_hdmi_rockchip_encoder_enable(struct drm_encoder *encoder)
 	}
 
 	clk_disable_unprepare(hdmi->grf_clk);
+	hdmi_event_connect(hdmi->dev);
 }
 
 static void
@@ -1162,6 +1165,7 @@ static const struct dw_hdmi_plat_data rk3328_hdmi_drv_data = {
 	.phy_ops    = &inno_dw_hdmi_phy_ops,
 	.phy_name   = "inno_dw_hdmi_phy2",
 	.dev_type   = RK3328_HDMI,
+	.phy_force_vendor = true,
 };
 
 static const struct dw_hdmi_plat_data rk3366_hdmi_drv_data = {
@@ -1324,6 +1328,12 @@ static int dw_hdmi_rockchip_probe(struct platform_device *pdev)
 	return component_add(&pdev->dev, &dw_hdmi_rockchip_ops);
 }
 
+static void dw_hdmi_rockchip_shutdown(struct platform_device *pdev)
+{
+	dw_hdmi_suspend(&pdev->dev);
+	pm_runtime_put_sync(&pdev->dev);
+}
+
 static int dw_hdmi_rockchip_remove(struct platform_device *pdev)
 {
 	component_del(&pdev->dev, &dw_hdmi_rockchip_ops);
@@ -1356,6 +1366,7 @@ static const struct dev_pm_ops dw_hdmi_pm_ops = {
 static struct platform_driver dw_hdmi_rockchip_pltfm_driver = {
 	.probe  = dw_hdmi_rockchip_probe,
 	.remove = dw_hdmi_rockchip_remove,
+	.shutdown = dw_hdmi_rockchip_shutdown,
 	.driver = {
 		.name = "dwhdmi-rockchip",
 		.of_match_table = dw_hdmi_rockchip_dt_ids,

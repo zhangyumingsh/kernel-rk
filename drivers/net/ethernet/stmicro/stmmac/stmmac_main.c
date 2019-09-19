@@ -1795,8 +1795,6 @@ static int stmmac_open(struct net_device *dev)
 	struct stmmac_priv *priv = netdev_priv(dev);
 	int ret;
 
-	stmmac_check_ether_addr(priv);
-
 	if (priv->pcs != STMMAC_PCS_RGMII && priv->pcs != STMMAC_PCS_TBI &&
 	    priv->pcs != STMMAC_PCS_RTBI) {
 		ret = stmmac_init_phy(dev);
@@ -2421,6 +2419,10 @@ static netdev_features_t stmmac_fix_features(struct net_device *dev,
 	if (priv->plat->bugged_jumbo && (dev->mtu > ETH_DATA_LEN))
 		features &= ~NETIF_F_ALL_CSUM;
 
+	/* Including very small MTUs of 1498 for Rockchip devices */
+	if (priv->plat->bugged_tx_coe && (dev->mtu > ETH_DATA_LEN - 2))
+		features &= ~NETIF_F_ALL_CSUM;
+
 	return features;
 }
 
@@ -2528,6 +2530,20 @@ static int stmmac_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
 	default:
 		break;
 	}
+
+	return ret;
+}
+
+static int stmmac_set_mac_address(struct net_device *ndev, void *addr)
+{
+	struct stmmac_priv *priv = netdev_priv(ndev);
+	int ret = 0;
+
+	ret = eth_mac_addr(ndev, addr);
+	if (ret)
+		return ret;
+
+	priv->hw->mac->set_umac_addr(priv->hw, ndev->dev_addr, 0);
 
 	return ret;
 }
@@ -2733,7 +2749,7 @@ static const struct net_device_ops stmmac_netdev_ops = {
 #ifdef CONFIG_NET_POLL_CONTROLLER
 	.ndo_poll_controller = stmmac_poll_controller,
 #endif
-	.ndo_set_mac_address = eth_mac_addr,
+	.ndo_set_mac_address = stmmac_set_mac_address,
 };
 
 /**
@@ -2917,6 +2933,8 @@ int stmmac_dvr_probe(struct device *device,
 	ret = stmmac_hw_init(priv);
 	if (ret)
 		goto error_hw_init;
+
+	stmmac_check_ether_addr(priv);
 
 	ndev->netdev_ops = &stmmac_netdev_ops;
 
@@ -3124,7 +3142,6 @@ int stmmac_resume(struct device *dev)
 	stmmac_clear_descriptors(priv);
 
 	stmmac_hw_setup(ndev, false);
-	stmmac_init_tx_coalesce(priv);
 	stmmac_set_rx_mode(ndev);
 
 	napi_enable(&priv->napi);

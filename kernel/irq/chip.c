@@ -186,24 +186,94 @@ static void irq_state_set_started(struct irq_desc *desc)
 	irqd_set(&desc->irq_data, IRQD_IRQ_STARTED);
 }
 
-int irq_startup(struct irq_desc *desc, bool resend)
+enum {
+	IRQ_STARTUP_NORMAL,
+	IRQ_STARTUP_MANAGED,
+	IRQ_STARTUP_ABORT,
+};
+
+#ifdef CONFIG_SMP
+static int
+__irq_startup_managed(struct irq_desc *desc, struct cpumask *aff, bool force)
 {
+	struct irq_data *d = irq_desc_get_irq_data(desc);
+
+	if (!irqd_affinity_is_managed(d))
+		return IRQ_STARTUP_NORMAL;
+
+	irqd_clr_managed_shutdown(d);
+
+	if (cpumask_any_and(aff, cpu_online_mask) > nr_cpu_ids) {
+		/*
+		 * Catch code which fiddles with enable_irq() on a managed
+		 * and potentially shutdown IRQ. Chained interrupt
+		 * installment or irq auto probing should not happen on
+		 * managed irqs either. Emit a warning, break the affinity
+		 * and start it up as a normal interrupt.
+		 */
+		if (WARN_ON_ONCE(force))
+			return IRQ_STARTUP_NORMAL;
+		/*
+		 * The interrupt was requested, but there is no online CPU
+		 * in it's affinity mask. Put it into managed shutdown
+		 * state and let the cpu hotplug mechanism start it up once
+		 * a CPU in the mask becomes available.
+		 */
+		irqd_set_managed_shutdown(d);
+		return IRQ_STARTUP_ABORT;
+	}
+	return IRQ_STARTUP_MANAGED;
+}
+#else
+static int
+__irq_startup_managed(struct irq_desc *desc, struct cpumask *aff, bool force)
+{
+	return IRQ_STARTUP_NORMAL;
+}
+#endif
+
+static int __irq_startup(struct irq_desc *desc)
+{
+	struct irq_data *d = irq_desc_get_irq_data(desc);
+	int ret = 0;
+
+	irq_domain_activate_irq(d);
+	if (d->chip->irq_startup) {
+		ret = d->chip->irq_startup(d);
+		irq_state_clr_disabled(desc);
+		irq_state_clr_masked(desc);
+	} else {
+		irq_enable(desc);
+	}
+	irq_state_set_started(desc);
+	/* Set default affinity mask once everything is setup */
+	irq_setup_affinity(desc);
+	return ret;
+}
+
+int irq_startup(struct irq_desc *desc, bool resend, bool force)
+{
+	struct irq_data *d = irq_desc_get_irq_data(desc);
+	struct cpumask *aff = irq_data_get_affinity_mask(d);
 	int ret = 0;
 
 	desc->depth = 0;
 
-	if (irqd_is_started(&desc->irq_data)) {
+	if (irqd_is_started(d)) {
 		irq_enable(desc);
 	} else {
-		irq_domain_activate_irq(&desc->irq_data);
-		if (desc->irq_data.chip->irq_startup) {
-			ret = desc->irq_data.chip->irq_startup(&desc->irq_data);
-			irq_state_clr_disabled(desc);
-			irq_state_clr_masked(desc);
-		} else {
-			irq_enable(desc);
+		switch (__irq_startup_managed(desc, aff, force)) {
+		case IRQ_STARTUP_NORMAL:
+			ret = __irq_startup(desc);
+			irq_setup_affinity(desc);
+			break;
+		case IRQ_STARTUP_MANAGED:
+			ret = __irq_startup(desc);
+			irq_set_affinity_locked(d, aff, false);
+			break;
+		case IRQ_STARTUP_ABORT:
+			return 0;
 		}
-		irq_state_set_started(desc);
 	}
 
 	if (resend)
@@ -373,7 +443,6 @@ void handle_nested_irq(unsigned int irq)
 	raw_spin_lock_irq(&desc->lock);
 
 	desc->istate &= ~(IRQS_REPLAY | IRQS_WAITING);
-	kstat_incr_irqs_this_cpu(desc);
 
 	action = desc->action;
 	if (unlikely(!action || irqd_irq_disabled(&desc->irq_data))) {
@@ -381,6 +450,7 @@ void handle_nested_irq(unsigned int irq)
 		goto out_unlock;
 	}
 
+	kstat_incr_irqs_this_cpu(desc);
 	irqd_set(&desc->irq_data, IRQD_IRQ_INPROGRESS);
 	raw_spin_unlock_irq(&desc->lock);
 
@@ -447,13 +517,13 @@ void handle_simple_irq(struct irq_desc *desc)
 		goto out_unlock;
 
 	desc->istate &= ~(IRQS_REPLAY | IRQS_WAITING);
-	kstat_incr_irqs_this_cpu(desc);
 
 	if (unlikely(!desc->action || irqd_irq_disabled(&desc->irq_data))) {
 		desc->istate |= IRQS_PENDING;
 		goto out_unlock;
 	}
 
+	kstat_incr_irqs_this_cpu(desc);
 	handle_irq_event(desc);
 
 out_unlock:
@@ -497,7 +567,6 @@ void handle_level_irq(struct irq_desc *desc)
 		goto out_unlock;
 
 	desc->istate &= ~(IRQS_REPLAY | IRQS_WAITING);
-	kstat_incr_irqs_this_cpu(desc);
 
 	/*
 	 * If its disabled or no action available
@@ -508,6 +577,7 @@ void handle_level_irq(struct irq_desc *desc)
 		goto out_unlock;
 	}
 
+	kstat_incr_irqs_this_cpu(desc);
 	handle_irq_event(desc);
 
 	cond_unmask_irq(desc);
@@ -567,7 +637,6 @@ void handle_fasteoi_irq(struct irq_desc *desc)
 		goto out;
 
 	desc->istate &= ~(IRQS_REPLAY | IRQS_WAITING);
-	kstat_incr_irqs_this_cpu(desc);
 
 	/*
 	 * If its disabled or no action available
@@ -579,6 +648,7 @@ void handle_fasteoi_irq(struct irq_desc *desc)
 		goto out;
 	}
 
+	kstat_incr_irqs_this_cpu(desc);
 	if (desc->istate & IRQS_ONESHOT)
 		mask_irq(desc);
 
@@ -816,7 +886,7 @@ __irq_do_set_handler(struct irq_desc *desc, irq_flow_handler_t handle,
 		irq_settings_set_norequest(desc);
 		irq_settings_set_nothread(desc);
 		desc->action = &chained_action;
-		irq_startup(desc, true);
+		irq_startup(desc, IRQ_RESEND, IRQ_START_FORCE);
 	}
 }
 
@@ -1098,6 +1168,10 @@ int irq_chip_set_vcpu_affinity_parent(struct irq_data *data, void *vcpu_info)
 int irq_chip_set_wake_parent(struct irq_data *data, unsigned int on)
 {
 	data = data->parent_data;
+
+	if (data->chip->flags & IRQCHIP_SKIP_SET_WAKE)
+		return 0;
+
 	if (data->chip->irq_set_wake)
 		return data->chip->irq_set_wake(data, on);
 

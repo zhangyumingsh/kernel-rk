@@ -358,7 +358,7 @@ static ssize_t aufs_read_iter(struct kiocb *kio, struct iov_iter *iov_iter)
 	if (IS_ERR(h_file))
 		goto out;
 
-	if (au_test_loopback_kthread()) {
+	if (0 && au_test_loopback_kthread()) {
 		au_warn_loopback(h_file->f_path.dentry->d_sb);
 		if (file->f_mapping != h_file->f_mapping) {
 			file->f_mapping = h_file->f_mapping;

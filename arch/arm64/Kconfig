@@ -98,7 +98,6 @@ config ARM64
 	select PERF_USE_VMALLOC
 	select POWER_RESET
 	select POWER_SUPPLY
-	select RTC_LIB
 	select SPARSE_IRQ
 	select SYSCTL_EXCEPTION_TRACE
 	select HAVE_CONTEXT_TRACKING
@@ -830,6 +829,10 @@ config ARM64_LSE_ATOMICS
 	  not support these instructions and requires the kernel to be
 	  built with binutils >= 2.25.
 
+config KEYS_COMPAT
+	def_bool y
+	depends on COMPAT && KEYS
+
 endmenu
 
 config ARM64_UAO
@@ -1092,6 +1095,8 @@ source "fs/Kconfig"
 source "arch/arm64/kvm/Kconfig"
 
 source "arch/arm64/Kconfig.debug"
+
+source "arch/arm64/hotplug/Kconfig"
 
 source "security/Kconfig"
 

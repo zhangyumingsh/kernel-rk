@@ -145,3 +145,19 @@ void au_loopback_fin(void)
 		symbol_put(loop_backing_file);
 	kfree(au_warn_loopback_array);
 }
+
+/* ---------------------------------------------------------------------- */
+
+/* support the loopback block device insude aufs */
+
+struct file *aufs_real_loop(struct file *file)
+{
+	struct file *f;
+
+	BUG_ON(!au_test_aufs(file->f_path.dentry->d_sb));
+	fi_read_lock(file);
+	f = au_hf_top(file);
+	fi_read_unlock(file);
+	AuDebugOn(!f);
+	return f;
+}

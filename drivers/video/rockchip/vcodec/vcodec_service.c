@@ -3551,7 +3551,11 @@ static int vcodec_probe(struct platform_device *pdev)
 		vcodec_subdev_probe(pdev, pservice);
 	}
 
-	ret = vcodec_power_model_simple_init(pservice);
+	if (pservice->dev_id == VCODEC_DEVICE_ID_RKVDEC) {
+		ret = vcodec_power_model_simple_init(pservice);
+	} else {
+		ret = NULL;
+	}
 
 	if (!ret && pservice->devfreq) {
 		pservice->devfreq_cooling = of_devfreq_cooling_register_power

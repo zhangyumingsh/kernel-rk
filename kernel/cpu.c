@@ -8,6 +8,7 @@
 #include <linux/init.h>
 #include <linux/notifier.h>
 #include <linux/sched.h>
+#include <linux/sched/smt.h>
 #include <linux/unistd.h>
 #include <linux/cpu.h>
 #include <linux/oom.h>
@@ -200,6 +201,12 @@ void cpu_hotplug_enable(void)
 }
 EXPORT_SYMBOL_GPL(cpu_hotplug_enable);
 #endif	/* CONFIG_HOTPLUG_CPU */
+
+/*
+ * Architectures that need SMT-specific errata handling during SMT hotplug
+ * should override this.
+ */
+void __weak arch_smt_update(void) { }
 
 /* Need to know about CPUs going up/down? */
 int register_cpu_notifier(struct notifier_block *nb)
@@ -437,6 +444,7 @@ out_release:
 	trace_sched_cpu_hotplug(cpu, err, 0);
 	if (!err)
 		cpu_notify_nofail(CPU_POST_DEAD | mod, hcpu);
+	arch_smt_update();
 	return err;
 }
 
@@ -541,7 +549,7 @@ out_notify:
 out:
 	cpu_hotplug_done();
 	trace_sched_cpu_hotplug(cpu, ret, 1);
-
+	arch_smt_update();
 	return ret;
 }
 
@@ -580,12 +588,13 @@ EXPORT_SYMBOL_GPL(cpu_up);
 #ifdef CONFIG_PM_SLEEP_SMP
 static cpumask_var_t frozen_cpus;
 
-int disable_nonboot_cpus(void)
+int freeze_secondary_cpus(int primary)
 {
-	int cpu, first_cpu, error = 0;
+	int cpu, error = 0;
 
 	cpu_maps_update_begin();
-	first_cpu = cpumask_first(cpu_online_mask);
+	if (!cpu_online(primary))
+		primary = cpumask_first(cpu_online_mask);
 	/*
 	 * We take down all of the non-boot CPUs in one shot to avoid races
 	 * with the userspace trying to use the CPU hotplug at the same time
@@ -594,7 +603,7 @@ int disable_nonboot_cpus(void)
 
 	pr_info("Disabling non-boot CPUs ...\n");
 	for_each_online_cpu(cpu) {
-		if (cpu == first_cpu)
+		if (cpu == primary)
 			continue;
 		trace_suspend_resume(TPS("CPU_OFF"), cpu, true);
 		error = _cpu_down(cpu, 1);
@@ -739,6 +748,8 @@ void notify_cpu_starting(unsigned int cpu)
 {
 	unsigned long val = CPU_STARTING;
 
+	rcu_cpu_starting(cpu);  /* All CPU_STARTING notifiers can use RCU. */
+
 #ifdef CONFIG_PM_SLEEP_SMP
 	if (frozen_cpus != NULL && cpumask_test_cpu(cpu, frozen_cpus))
 		val = CPU_STARTING_FROZEN;
@@ -845,6 +856,22 @@ void init_cpu_online(const struct cpumask *src)
 {
 	cpumask_copy(to_cpumask(cpu_online_bits), src);
 }
+
+enum cpu_mitigations cpu_mitigations = CPU_MITIGATIONS_AUTO;
+
+static int __init mitigations_parse_cmdline(char *arg)
+{
+	if (!strcmp(arg, "off"))
+		cpu_mitigations = CPU_MITIGATIONS_OFF;
+	else if (!strcmp(arg, "auto"))
+		cpu_mitigations = CPU_MITIGATIONS_AUTO;
+	else
+		pr_crit("Unsupported mitigations=%s, system may still be vulnerable\n",
+			arg);
+
+	return 0;
+}
+early_param("mitigations", mitigations_parse_cmdline);
 
 static ATOMIC_NOTIFIER_HEAD(idle_notifier);
 

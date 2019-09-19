@@ -229,7 +229,10 @@ void acpi_set_irq_model(enum acpi_irq_model_id model,
 #ifdef CONFIG_X86_IO_APIC
 extern int acpi_get_override_irq(u32 gsi, int *trigger, int *polarity);
 #else
-#define acpi_get_override_irq(gsi, trigger, polarity) (-1)
+static inline int acpi_get_override_irq(u32 gsi, int *trigger, int *polarity)
+{
+	return -1;
+}
 #endif
 /*
  * This function undoes the effect of one call to acpi_register_gsi().
@@ -800,9 +803,18 @@ struct acpi_reference_args {
 #ifdef CONFIG_ACPI
 int acpi_dev_get_property(struct acpi_device *adev, const char *name,
 			  acpi_object_type type, const union acpi_object **obj);
-int acpi_node_get_property_reference(struct fwnode_handle *fwnode,
-				     const char *name, size_t index,
-				     struct acpi_reference_args *args);
+int __acpi_node_get_property_reference(struct fwnode_handle *fwnode,
+				const char *name, size_t index, size_t num_args,
+				struct acpi_reference_args *args);
+
+static inline int acpi_node_get_property_reference(
+				struct fwnode_handle *fwnode,
+				const char *name, size_t index,
+				struct acpi_reference_args *args)
+{
+	return __acpi_node_get_property_reference(fwnode, name, index,
+		NR_OF_FWNODE_REFERENCE_ARGS, args);
+}
 
 int acpi_node_prop_get(struct fwnode_handle *fwnode, const char *propname,
 		       void **valptr);
@@ -886,9 +898,18 @@ static inline int acpi_dev_get_property(struct acpi_device *adev,
 	return -ENXIO;
 }
 
-static inline int acpi_node_get_property_reference(struct fwnode_handle *fwnode,
-				const char *name, size_t index,
+static inline int
+__acpi_node_get_property_reference(struct fwnode_handle *fwnode,
+				const char *name, size_t index, size_t num_args,
 				struct acpi_reference_args *args)
+{
+	return -ENXIO;
+}
+
+static inline int
+acpi_node_get_property_reference(struct fwnode_handle *fwnode,
+				 const char *name, size_t index,
+				 struct acpi_reference_args *args)
 {
 	return -ENXIO;
 }

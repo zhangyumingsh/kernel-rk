@@ -28,6 +28,7 @@
 #include <asm/intel-family.h>
 #include <asm/e820.h>
 
+static void __init spectre_v1_select_mitigation(void);
 static void __init spectre_v2_select_mitigation(void);
 static void __init ssb_select_mitigation(void);
 static void __init l1tf_select_mitigation(void);
@@ -73,13 +74,9 @@ void __init check_bugs(void)
 	if (boot_cpu_has(X86_FEATURE_STIBP))
 		x86_spec_ctrl_mask |= SPEC_CTRL_STIBP;
 
-	/* Select the proper spectre mitigation before patching alternatives */
+	/* Select the proper CPU mitigations before patching alternatives: */
+	spectre_v1_select_mitigation();
 	spectre_v2_select_mitigation();
-
-	/*
-	 * Select proper mitigation for any exposure to the Speculative Store
-	 * Bypass vulnerability.
-	 */
 	ssb_select_mitigation();
 
 	l1tf_select_mitigation();
@@ -133,6 +130,98 @@ static const char *spectre_v2_strings[] = {
 	[SPECTRE_V2_RETPOLINE_GENERIC]		= "Mitigation: Full generic retpoline",
 	[SPECTRE_V2_RETPOLINE_AMD]		= "Mitigation: Full AMD retpoline",
 };
+
+#undef pr_fmt
+#define pr_fmt(fmt)     "Spectre V1 : " fmt
+
+enum spectre_v1_mitigation {
+	SPECTRE_V1_MITIGATION_NONE,
+	SPECTRE_V1_MITIGATION_AUTO,
+};
+
+static enum spectre_v1_mitigation spectre_v1_mitigation =
+	SPECTRE_V1_MITIGATION_AUTO;
+
+static const char * const spectre_v1_strings[] = {
+	[SPECTRE_V1_MITIGATION_NONE] = "Vulnerable: __user pointer sanitization and usercopy barriers only; no swapgs barriers",
+	[SPECTRE_V1_MITIGATION_AUTO] = "Mitigation: usercopy/swapgs barriers and __user pointer sanitization",
+};
+
+/*
+ * Does SMAP provide full mitigation against speculative kernel access to
+ * userspace?
+ */
+static bool smap_works_speculatively(void)
+{
+	if (!boot_cpu_has(X86_FEATURE_SMAP))
+		return false;
+
+	/*
+	 * On CPUs which are vulnerable to Meltdown, SMAP does not
+	 * prevent speculative access to user data in the L1 cache.
+	 * Consider SMAP to be non-functional as a mitigation on these
+	 * CPUs.
+	 */
+	if (boot_cpu_has(X86_BUG_CPU_MELTDOWN))
+		return false;
+
+	return true;
+}
+
+static void __init spectre_v1_select_mitigation(void)
+{
+	if (!boot_cpu_has_bug(X86_BUG_SPECTRE_V1) || cpu_mitigations_off()) {
+		spectre_v1_mitigation = SPECTRE_V1_MITIGATION_NONE;
+		return;
+	}
+
+	if (spectre_v1_mitigation == SPECTRE_V1_MITIGATION_AUTO) {
+		/*
+		 * With Spectre v1, a user can speculatively control either
+		 * path of a conditional swapgs with a user-controlled GS
+		 * value.  The mitigation is to add lfences to both code paths.
+		 *
+		 * If FSGSBASE is enabled, the user can put a kernel address in
+		 * GS, in which case SMAP provides no protection.
+		 *
+		 * [ NOTE: Don't check for X86_FEATURE_FSGSBASE until the
+		 *	   FSGSBASE enablement patches have been merged. ]
+		 *
+		 * If FSGSBASE is disabled, the user can only put a user space
+		 * address in GS.  That makes an attack harder, but still
+		 * possible if there's no SMAP protection.
+		 */
+		if (!smap_works_speculatively()) {
+			/*
+			 * Mitigation can be provided from SWAPGS itself or
+			 * PTI as the CR3 write in the Meltdown mitigation
+			 * is serializing.
+			 *
+			 * If neither is there, mitigate with an LFENCE to
+			 * stop speculation through swapgs.
+			 */
+			if (boot_cpu_has_bug(X86_BUG_SWAPGS) &&
+			    !boot_cpu_has(X86_FEATURE_KAISER))
+				setup_force_cpu_cap(X86_FEATURE_FENCE_SWAPGS_USER);
+
+			/*
+			 * Enable lfences in the kernel entry (non-swapgs)
+			 * paths, to prevent user entry from speculatively
+			 * skipping swapgs.
+			 */
+			setup_force_cpu_cap(X86_FEATURE_FENCE_SWAPGS_KERNEL);
+		}
+	}
+
+	pr_info("%s\n", spectre_v1_strings[spectre_v1_mitigation]);
+}
+
+static int __init nospectre_v1_cmdline(char *str)
+{
+	spectre_v1_mitigation = SPECTRE_V1_MITIGATION_NONE;
+	return 0;
+}
+early_param("nospectre_v1", nospectre_v1_cmdline);
 
 #undef pr_fmt
 #define pr_fmt(fmt)     "Spectre V2 : " fmt
@@ -499,6 +588,16 @@ static enum ssb_mitigation __init __ssb_select_mitigation(void)
 	}
 
 	/*
+	 * If SSBD is controlled by the SPEC_CTRL MSR, then set the proper
+	 * bit in the mask to allow guests to use the mitigation even in the
+	 * case where the host does not enable it.
+	 */
+	if (static_cpu_has(X86_FEATURE_SPEC_CTRL_SSBD) ||
+	    static_cpu_has(X86_FEATURE_AMD_SSBD)) {
+		x86_spec_ctrl_mask |= SPEC_CTRL_SSBD;
+	}
+
+	/*
 	 * We have three CPU feature flags that are in play here:
 	 *  - X86_BUG_SPEC_STORE_BYPASS - CPU is susceptible.
 	 *  - X86_FEATURE_SSBD - CPU is able to turn off speculative store bypass
@@ -513,7 +612,6 @@ static enum ssb_mitigation __init __ssb_select_mitigation(void)
 		switch (boot_cpu_data.x86_vendor) {
 		case X86_VENDOR_INTEL:
 			x86_spec_ctrl_base |= SPEC_CTRL_SSBD;
-			x86_spec_ctrl_mask |= SPEC_CTRL_SSBD;
 			wrmsrl(MSR_IA32_SPEC_CTRL, x86_spec_ctrl_base);
 			break;
 		case X86_VENDOR_AMD:
@@ -634,6 +732,46 @@ void x86_spec_ctrl_setup_ap(void)
 
 #undef pr_fmt
 #define pr_fmt(fmt)	"L1TF: " fmt
+
+/*
+ * These CPUs all support 44bits physical address space internally in the
+ * cache but CPUID can report a smaller number of physical address bits.
+ *
+ * The L1TF mitigation uses the top most address bit for the inversion of
+ * non present PTEs. When the installed memory reaches into the top most
+ * address bit due to memory holes, which has been observed on machines
+ * which report 36bits physical address bits and have 32G RAM installed,
+ * then the mitigation range check in l1tf_select_mitigation() triggers.
+ * This is a false positive because the mitigation is still possible due to
+ * the fact that the cache uses 44bit internally. Use the cache bits
+ * instead of the reported physical bits and adjust them on the affected
+ * machines to 44bit if the reported bits are less than 44.
+ */
+static void override_cache_bits(struct cpuinfo_x86 *c)
+{
+	if (c->x86 != 6)
+		return;
+
+	switch (c->x86_model) {
+	case INTEL_FAM6_NEHALEM:
+	case INTEL_FAM6_WESTMERE:
+	case INTEL_FAM6_SANDYBRIDGE:
+	case INTEL_FAM6_IVYBRIDGE:
+	case INTEL_FAM6_HASWELL_CORE:
+	case INTEL_FAM6_HASWELL_ULT:
+	case INTEL_FAM6_HASWELL_GT3E:
+	case INTEL_FAM6_BROADWELL_CORE:
+	case INTEL_FAM6_BROADWELL_GT3E:
+	case INTEL_FAM6_SKYLAKE_MOBILE:
+	case INTEL_FAM6_SKYLAKE_DESKTOP:
+	case INTEL_FAM6_KABYLAKE_MOBILE:
+	case INTEL_FAM6_KABYLAKE_DESKTOP:
+		if (c->x86_cache_bits < 44)
+			c->x86_cache_bits = 44;
+		break;
+	}
+}
+
 static void __init l1tf_select_mitigation(void)
 {
 	u64 half_pa;
@@ -641,16 +779,13 @@ static void __init l1tf_select_mitigation(void)
 	if (!boot_cpu_has_bug(X86_BUG_L1TF))
 		return;
 
+	override_cache_bits(&boot_cpu_data);
+
 #if CONFIG_PGTABLE_LEVELS == 2
 	pr_warn("Kernel not compiled for PAE. No mitigation for L1TF\n");
 	return;
 #endif
 
-	/*
-	 * This is extremely unlikely to happen because almost all
-	 * systems have far more MAX_PA/2 than RAM can be fit into
-	 * DIMM slots.
-	 */
 	half_pa = (u64)l1tf_pfn_limit() << PAGE_SHIFT;
 	if (e820_any_mapped(half_pa, ULLONG_MAX - half_pa, E820_RAM)) {
 		pr_warn("System has more than MAX_PA/2 memory. L1TF mitigation not effective.\n");
@@ -681,7 +816,7 @@ static ssize_t cpu_show_common(struct device *dev, struct device_attribute *attr
 		break;
 
 	case X86_BUG_SPECTRE_V1:
-		return sprintf(buf, "Mitigation: __user pointer sanitization\n");
+		return sprintf(buf, "%s\n", spectre_v1_strings[spectre_v1_mitigation]);
 
 	case X86_BUG_SPECTRE_V2:
 		return sprintf(buf, "%s%s%s%s\n", spectre_v2_strings[spectre_v2_enabled],

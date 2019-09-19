@@ -153,21 +153,11 @@ static inline int qlen(struct usb_gadget *gadget, unsigned qmult)
 
 static int ueth_change_mtu(struct net_device *net, int new_mtu)
 {
-	struct eth_dev	*dev = netdev_priv(net);
-	unsigned long	flags;
-	int		status = 0;
+	if (new_mtu <= ETH_HLEN || new_mtu > GETHER_MAX_ETH_FRAME_LEN)
+		return -ERANGE;
+	net->mtu = new_mtu;
 
-	/* don't change MTU on "live" link (peer won't know) */
-	spin_lock_irqsave(&dev->lock, flags);
-	if (dev->port_usb)
-		status = -EBUSY;
-	else if (new_mtu <= ETH_HLEN || new_mtu > GETHER_MAX_ETH_FRAME_LEN)
-		status = -ERANGE;
-	else
-		net->mtu = new_mtu;
-	spin_unlock_irqrestore(&dev->lock, flags);
-
-	return status;
+	return 0;
 }
 
 static void eth_get_drvinfo(struct net_device *net, struct ethtool_drvinfo *p)
@@ -217,11 +207,12 @@ rx_submit(struct eth_dev *dev, struct usb_request *req, gfp_t gfp_flags)
 		out = dev->port_usb->out_ep;
 	else
 		out = NULL;
-	spin_unlock_irqrestore(&dev->lock, flags);
 
 	if (!out)
+	{
+		spin_unlock_irqrestore(&dev->lock, flags);
 		return -ENOTCONN;
-
+	}
 
 	/* Padding up to RX_EXTRA handles minor disagreements with host.
 	 * Normally we use the USB "terminate on short read" convention;
@@ -245,6 +236,7 @@ rx_submit(struct eth_dev *dev, struct usb_request *req, gfp_t gfp_flags)
 
 	if (dev->port_usb->is_fixed)
 		size = max_t(size_t, size, dev->port_usb->fixed_out_len);
+	spin_unlock_irqrestore(&dev->lock, flags);
 
 	DBG(dev, "%s: size: %zd\n", __func__, size);
 	skb = alloc_skb(size + NET_IP_ALIGN, gfp_flags);
@@ -450,7 +442,7 @@ static void process_rx_w(struct work_struct *work)
 	while ((skb = skb_dequeue(&dev->rx_frames))) {
 		if (status < 0
 				|| ETH_HLEN > skb->len
-				|| skb->len > ETH_FRAME_LEN) {
+				|| skb->len > GETHER_MAX_ETH_FRAME_LEN) {
 			dev->net->stats.rx_errors++;
 			dev->net->stats.rx_length_errors++;
 			DBG(dev, "rx length %d\n", skb->len);

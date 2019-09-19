@@ -14,6 +14,7 @@
 #include <linux/scatterlist.h>
 #include <linux/usb/quirks.h>
 #include <linux/usb/hcd.h>	/* for usbcore internals */
+#include <linux/usb/of.h>
 #include <asm/byteorder.h>
 
 #include "usb.h"
@@ -267,10 +268,11 @@ static void sg_clean(struct usb_sg_request *io)
 
 static void sg_complete(struct urb *urb)
 {
+	unsigned long flags;
 	struct usb_sg_request *io = urb->context;
 	int status = urb->status;
 
-	spin_lock(&io->lock);
+	spin_lock_irqsave(&io->lock, flags);
 
 	/* In 2.5 we require hcds' endpoint queues not to progress after fault
 	 * reports, until the completion callback (this!) returns.  That lets
@@ -304,7 +306,7 @@ static void sg_complete(struct urb *urb)
 		 * unlink pending urbs so they won't rx/tx bad data.
 		 * careful: unlink can sometimes be synchronous...
 		 */
-		spin_unlock(&io->lock);
+		spin_unlock_irqrestore(&io->lock, flags);
 		for (i = 0, found = 0; i < io->entries; i++) {
 			if (!io->urbs[i] || !io->urbs[i]->dev)
 				continue;
@@ -320,7 +322,7 @@ static void sg_complete(struct urb *urb)
 			} else if (urb == io->urbs[i])
 				found = 1;
 		}
-		spin_lock(&io->lock);
+		spin_lock_irqsave(&io->lock, flags);
 	}
 
 	/* on the last completion, signal usb_sg_wait() */
@@ -329,7 +331,7 @@ static void sg_complete(struct urb *urb)
 	if (!io->count)
 		complete(&io->complete);
 
-	spin_unlock(&io->lock);
+	spin_unlock_irqrestore(&io->lock, flags);
 }
 
 
@@ -820,9 +822,11 @@ int usb_string(struct usb_device *dev, int index, char *buf, size_t size)
 
 	if (dev->state == USB_STATE_SUSPENDED)
 		return -EHOSTUNREACH;
-	if (size <= 0 || !buf || !index)
+	if (size <= 0 || !buf)
 		return -EINVAL;
 	buf[0] = 0;
+	if (index <= 0 || index >= 256)
+		return -EINVAL;
 	tbuf = kmalloc(256, GFP_NOIO);
 	if (!tbuf)
 		return -ENOMEM;
@@ -1205,8 +1209,7 @@ void usb_disable_device(struct usb_device *dev, int skip_ep0)
 			dev->actconfig->interface[i] = NULL;
 		}
 
-		if (dev->usb2_hw_lpm_enabled == 1)
-			usb_set_usb2_hardware_lpm(dev, 0);
+		usb_disable_usb2_hardware_lpm(dev);
 		usb_unlocked_disable_lpm(dev);
 		usb_disable_ltm(dev);
 
@@ -1303,6 +1306,11 @@ void usb_enable_interface(struct usb_device *dev,
  * is submitted that needs that bandwidth.  Some other operating systems
  * allocate bandwidth early, when a configuration is chosen.
  *
+ * xHCI reserves bandwidth and configures the alternate setting in
+ * usb_hcd_alloc_bandwidth(). If it fails the original interface altsetting
+ * may be disabled. Drivers cannot rely on any particular alternate
+ * setting being in effect after a failure.
+ *
  * This call is synchronous, and may not be used in an interrupt context.
  * Also, drivers must not change altsettings while urbs are scheduled for
  * endpoints in that interface; all such urbs must first be completed
@@ -1338,6 +1346,12 @@ int usb_set_interface(struct usb_device *dev, int interface, int alternate)
 			 alternate);
 		return -EINVAL;
 	}
+	/*
+	 * usb3 hosts configure the interface in usb_hcd_alloc_bandwidth,
+	 * including freeing dropped endpoint ring buffers.
+	 * Make sure the interface endpoints are flushed before that
+	 */
+	usb_disable_interface(dev, iface, false);
 
 	/* Make sure we have enough bandwidth for this alternate interface.
 	 * Remove the current alt setting and add the new alt setting.
@@ -1891,6 +1905,7 @@ free_interfaces:
 		intf->dev.type = &usb_if_device_type;
 		intf->dev.groups = usb_interface_groups;
 		intf->dev.dma_mask = dev->dev.dma_mask;
+		intf->dev.dma_pfn_offset = dev->dev.dma_pfn_offset;
 		INIT_WORK(&intf->reset_ws, __usb_queue_reset_device);
 		intf->minor = -1;
 		device_initialize(&intf->dev);
@@ -1948,6 +1963,13 @@ free_interfaces:
 	 */
 	for (i = 0; i < nintf; ++i) {
 		struct usb_interface *intf = cp->interface[i];
+
+		if (intf->dev.of_node &&
+		    !of_device_is_available(intf->dev.of_node)) {
+			dev_info(&dev->dev, "skipping disabled interface %d\n",
+				 intf->cur_altsetting->desc.bInterfaceNumber);
+			continue;
+		}
 
 		dev_dbg(&dev->dev,
 			"adding %s (config #%d, interface %d)\n",

@@ -257,45 +257,6 @@ struct tsadc_table {
 	int temp;
 };
 
-static const struct tsadc_table rk1808_code_table[] = {
-	{TSADCV2_DATA_MASK, -40000},
-	{641, -40000},
-	{633, -35000},
-	{625, -30000},
-	{617, -25000},
-	{609, -20000},
-	{601, -15000},
-	{593, -10000},
-	{585, -5000},
-	{577, 0},
-	{569, 5000},
-	{561, 10000},
-	{553, 15000},
-	{545, 20000},
-	{537, 25000},
-	{529, 30000},
-	{520, 35000},
-	{512, 40000},
-	{504, 45000},
-	{496, 50000},
-	{487, 55000},
-	{479, 60000},
-	{471, 65000},
-	{463, 70000},
-	{454, 75000},
-	{446, 80000},
-	{437, 85000},
-	{429, 90000},
-	{421, 95000},
-	{412, 100000},
-	{404, 105000},
-	{395, 110000},
-	{387, 115000},
-	{378, 120000},
-	{370, 125000},
-	{0, 125000},
-};
-
 static const struct tsadc_table rk3228_code_table[] = {
 	{0, -40000},
 	{588, -40000},
@@ -493,6 +454,8 @@ static u32 rk_tsadcv2_temp_to_code(struct chip_tsadc_table table,
 				   int temp)
 {
 	int high, low, mid;
+	unsigned long num;
+	unsigned int denom;
 	u32 error = table.data_mask;
 
 	low = 0;
@@ -511,6 +474,26 @@ static u32 rk_tsadcv2_temp_to_code(struct chip_tsadc_table table,
 		else
 			low = mid + 1;
 		mid = (low + high) / 2;
+	}
+
+	/*
+	 * The conversion code granularity provided by the table. Let's
+	 * assume that the relationship between temperature and
+	 * analog value between 2 table entries is linear and interpolate
+	 * to produce less granular result.
+	 */
+	num = abs(table.id[mid + 1].code - table.id[mid].code);
+	num *= temp - table.id[mid].temp;
+	denom = table.id[mid + 1].temp - table.id[mid].temp;
+
+	switch (table.mode) {
+	case ADC_DECREMENT:
+		return table.id[mid].code - (num / denom);
+	case ADC_INCREMENT:
+		return table.id[mid].code + (num / denom);
+	default:
+		pr_err("%s: unknown table mode: %d\n", __func__, table.mode);
+		return error;
 	}
 
 exit:
@@ -538,8 +521,8 @@ static int rk_tsadcv2_code_to_temp(struct chip_tsadc_table table, u32 code,
 			return -EAGAIN;		/* Incorrect reading */
 
 		while (low <= high) {
-			if (code >= table.id[mid].code &&
-			    code < table.id[mid - 1].code)
+			if (code <= table.id[mid].code &&
+			    code > table.id[mid - 1].code)
 				break;
 			else if (code < table.id[mid].code)
 				low = mid + 1;
@@ -658,10 +641,10 @@ static void rk_tsadcv3_initialize(struct regmap *grf, void __iomem *regs,
 		regmap_write(grf, GRF_TSADC_TESTBIT_L, GRF_TSADC_VCM_EN_L);
 		regmap_write(grf, GRF_TSADC_TESTBIT_H, GRF_TSADC_VCM_EN_H);
 
-		udelay(100); /* The spec note says at least 15 us */
+		usleep_range(15, 100); /* The spec note says at least 15 us */
 		regmap_write(grf, GRF_SARADC_TESTBIT, GRF_SARADC_TESTBIT_ON);
 		regmap_write(grf, GRF_TSADC_TESTBIT_H, GRF_TSADC_TESTBIT_H_ON);
-		udelay(200); /* The spec note says at least 90 us */
+		usleep_range(90, 200); /* The spec note says at least 90 us */
 
 		writel_relaxed(TSADCV3_AUTO_PERIOD_TIME, regs + TSADCV2_AUTO_PERIOD);
 		writel_relaxed(TSADCV2_HIGHT_INT_DEBOUNCE_COUNT,
@@ -884,30 +867,6 @@ static void rk_tsadcv2_tshut_mode(int chn, void __iomem *regs,
 	writel_relaxed(val, regs + TSADCV2_INT_EN);
 }
 
-static const struct rockchip_tsadc_chip rk1808_tsadc_data = {
-	.chn_id[SENSOR_CPU] = 0, /* cpu sensor is channel 0 */
-	.chn_num = 1, /* one channel for tsadc */
-
-	.tshut_mode = TSHUT_MODE_GPIO, /* default TSHUT via GPIO give PMIC */
-	.tshut_polarity = TSHUT_LOW_ACTIVE, /* default TSHUT LOW ACTIVE */
-	.tshut_temp = 95000,
-
-	.initialize = rk_tsadcv2_initialize,
-	.irq_ack = rk_tsadcv3_irq_ack,
-	.control = rk_tsadcv3_control,
-	.get_temp = rk_tsadcv2_get_temp,
-	.set_alarm_temp = rk_tsadcv2_alarm_temp,
-	.set_tshut_temp = rk_tsadcv2_tshut_temp,
-	.set_tshut_mode = rk_tsadcv2_tshut_mode,
-
-	.table = {
-		.id = rk1808_code_table,
-		.length = ARRAY_SIZE(rk1808_code_table),
-		.data_mask = TSADCV2_DATA_MASK,
-		.mode = ADC_DECREMENT,
-	},
-};
-
 static const struct rockchip_tsadc_chip rk3228_tsadc_data = {
 	.chn_id[SENSOR_CPU] = 0, /* cpu sensor is channel 0 */
 	.chn_num = 1, /* one channel for tsadc */
@@ -1107,10 +1066,6 @@ static const struct of_device_id of_rockchip_thermal_match[] = {
 	{
 		.compatible = "rockchip,px30-tsadc",
 		.data = (void *)&px30_tsadc_data,
-	},
-	{
-		.compatible = "rockchip,rk1808-tsadc",
-		.data = (void *)&rk1808_tsadc_data,
 	},
 	{
 		.compatible = "rockchip,rk3228-tsadc",

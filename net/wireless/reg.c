@@ -780,7 +780,7 @@ static bool reg_does_bw_fit(const struct ieee80211_freq_range *freq_range,
  * definitions (the "2.4 GHz band", the "5 GHz band" and the "60GHz band"),
  * however it is safe for now to assume that a frequency rule should not be
  * part of a frequency's band if the start freq or end freq are off by more
- * than 2 GHz for the 2.4 and 5 GHz bands, and by more than 10 GHz for the
+ * than 2 GHz for the 2.4 and 5 GHz bands, and by more than 20 GHz for the
  * 60 GHz band.
  * This resolution can be lowered and should be considered as we add
  * regulatory rule support for other "bands".
@@ -795,7 +795,7 @@ static bool freq_in_rule_band(const struct ieee80211_freq_range *freq_range,
 	 * with the Channel starting frequency above 45 GHz.
 	 */
 	u32 limit = freq_khz > 45 * ONE_GHZ_IN_KHZ ?
-			10 * ONE_GHZ_IN_KHZ : 2 * ONE_GHZ_IN_KHZ;
+			20 * ONE_GHZ_IN_KHZ : 2 * ONE_GHZ_IN_KHZ;
 	if (abs(freq_khz - freq_range->start_freq_khz) <= limit)
 		return true;
 	if (abs(freq_khz - freq_range->end_freq_khz) <= limit)
@@ -1458,8 +1458,7 @@ static void handle_reg_beacon(struct wiphy *wiphy, unsigned int chan_idx,
 	if (wiphy->regulatory_flags & REGULATORY_DISABLE_BEACON_HINTS)
 		return;
 
-	chan_before.center_freq = chan->center_freq;
-	chan_before.flags = chan->flags;
+	chan_before = *chan;
 
 	if (chan->flags & IEEE80211_CHAN_NO_IR) {
 		chan->flags &= ~IEEE80211_CHAN_NO_IR;
@@ -2234,7 +2233,7 @@ static void reg_process_pending_hints(void)
 
 	/* When last_request->processed becomes true this will be rescheduled */
 	if (lr && !lr->processed) {
-		reg_process_hint(lr);
+		pr_debug("Pending regulatory request, waiting for it to be processed...\n");
 		return;
 	}
 
@@ -2367,6 +2366,7 @@ static int regulatory_hint_core(const char *alpha2)
 	request->alpha2[0] = alpha2[0];
 	request->alpha2[1] = alpha2[1];
 	request->initiator = NL80211_REGDOM_SET_BY_CORE;
+	request->wiphy_idx = WIPHY_IDX_INVALID;
 
 	queue_regulatory_request(request);
 
@@ -3200,24 +3200,12 @@ bool regulatory_indoor_allowed(void)
 	return reg_is_indoor;
 }
 
-int __init regulatory_init(void)
+static int __init regulatory_init_db(void)
 {
-	int err = 0;
+	int err;
 
-	reg_pdev = platform_device_register_simple("regulatory", 0, NULL, 0);
-	if (IS_ERR(reg_pdev))
-		return PTR_ERR(reg_pdev);
-
-	spin_lock_init(&reg_requests_lock);
-	spin_lock_init(&reg_pending_beacons_lock);
-	spin_lock_init(&reg_indoor_lock);
-
-	reg_regdb_size_check();
-
-	rcu_assign_pointer(cfg80211_regdomain, cfg80211_world_regdom);
-
-	user_alpha2[0] = '9';
-	user_alpha2[1] = '7';
+	if (IS_ERR_OR_NULL(reg_pdev))
+		return -EINVAL;
 
 	/* We always try to get an update for the static regdomain */
 	err = regulatory_hint_core(cfg80211_world_regdom->alpha2);
@@ -3245,6 +3233,34 @@ int __init regulatory_init(void)
 				     NL80211_USER_REG_HINT_USER);
 
 	return 0;
+}
+
+#ifndef MODULE
+late_initcall(regulatory_init_db);
+#endif
+
+int __init regulatory_init(void)
+{
+	reg_pdev = platform_device_register_simple("regulatory", 0, NULL, 0);
+	if (IS_ERR(reg_pdev))
+		return PTR_ERR(reg_pdev);
+
+	spin_lock_init(&reg_requests_lock);
+	spin_lock_init(&reg_pending_beacons_lock);
+	spin_lock_init(&reg_indoor_lock);
+
+	/* reg_regdb_size_check(); */
+
+	rcu_assign_pointer(cfg80211_regdomain, cfg80211_world_regdom);
+
+	user_alpha2[0] = '9';
+	user_alpha2[1] = '7';
+
+#ifdef MODULE
+	return regulatory_init_db();
+#else
+	return 0;
+#endif
 }
 
 void regulatory_exit(void)
