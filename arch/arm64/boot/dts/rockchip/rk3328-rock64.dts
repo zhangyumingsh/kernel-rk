@@ -126,7 +126,6 @@
 		linux,rc-map-name = "rc-pine64";
 		pinctrl-0 = <&ir_int>;
 		pinctrl-names = "default";
-		status = "okay";
 	};
 
 	dummy_codec: dummy-codec {

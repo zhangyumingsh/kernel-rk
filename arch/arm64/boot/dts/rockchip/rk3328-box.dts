@@ -134,7 +134,6 @@
 		gpios = <&gpio2 RK_PA2 GPIO_ACTIVE_LOW>;
 		pinctrl-0 = <&ir_int>;
 		pinctrl-names = "default";
-		status = "okay";
 	};
 
 	hdmi-sound {
@@ -188,7 +187,6 @@
 		pinctrl-1 = <&uart0_gpios>;
 		BT,power_gpio = <&gpio1 RK_PC5 GPIO_ACTIVE_HIGH>;
 		BT,wake_host_irq = <&gpio1 RK_PD2 GPIO_ACTIVE_HIGH>;
-		status = "okay";
 	};
 
 	wireless-wlan {
@@ -196,7 +194,6 @@
 		rockchip,grf = <&grf>;
 		wifi_chip_type = "rtl8723bs";
 		WIFI,host_wake_irq = <&gpio1 RK_PC3 GPIO_ACTIVE_HIGH>;
-		status = "okay";
 	};
 };
 

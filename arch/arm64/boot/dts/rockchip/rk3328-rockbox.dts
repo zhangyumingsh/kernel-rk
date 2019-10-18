@@ -113,7 +113,6 @@
 		linux,rc-map-name = "rc-pine64";
 		pinctrl-0 = <&ir_int>;
 		pinctrl-names = "default";
-		status = "okay";
 	};
 
 	hdmi-sound {
@@ -164,7 +163,6 @@
 		rockchip,grf = <&grf>;
 		wifi_chip_type = "rtl8189fs";
 		WIFI,host_wake_irq = <&gpio1 RK_PC3 GPIO_ACTIVE_HIGH>;
-		status = "okay";
 	};
 };
 

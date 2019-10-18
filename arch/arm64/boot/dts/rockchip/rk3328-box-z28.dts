@@ -129,7 +129,6 @@
 		gpios = <&gpio2 RK_PA2 GPIO_ACTIVE_LOW>;
 		pinctrl-0 = <&ir_int>;
 		pinctrl-names = "default";
-		status = "okay";
 	};
 
 	hdmi-sound {
@@ -165,7 +164,6 @@
 		compatible = "bluetooth-platdata";
 		BT,power_gpio = <&gpio2 RK_PC5 GPIO_ACTIVE_HIGH>;
 		BT,wake_host_irq = <&gpio2 RK_PC0 GPIO_ACTIVE_HIGH>;
-		status = "okay";
 	};
 
 	wireless-wlan {
@@ -175,7 +173,6 @@
 		WIFI,poweren_gpio = <&gpio2 RK_PC3 GPIO_ACTIVE_HIGH>;
 		WIFI,reset_gpio = <&gpio2 RK_PC4 GPIO_ACTIVE_HIGH>;
 		WIFI,host_wake_irq = <&gpio2 RK_PC6 GPIO_ACTIVE_HIGH>;
-		status = "okay";
 	};
 };
 
