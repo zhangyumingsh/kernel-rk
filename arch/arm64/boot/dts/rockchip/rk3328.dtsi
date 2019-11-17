@@ -283,7 +283,6 @@
 			pd_vpu@RK3328_PD_VPU {
 				reg = <RK3328_PD_VPU>;
 				clocks = <&cru ACLK_VPU>, <&cru HCLK_VPU>;
-				pm_qos = <&qos_vpu>;
 			};
 		};
 
@@ -413,6 +412,7 @@
 		compatible = "snps,dw-wdt";
 		reg = <0x0 0xff1a0000 0x0 0x100>;
 		interrupts = <GIC_SPI 40 IRQ_TYPE_LEVEL_HIGH>;
+		clocks = <&cru PCLK_WDT>;
 	};
 
 	pwm0: pwm@ff1b0000 {
@@ -591,23 +591,12 @@
 		status = "disabled";
 	};
 
-	vepu: video-codec@ff340000 {
-		compatible = "rockchip,rk3328-vepu";
-		reg = <0x0 0xff340000 0x0 0x400>;
-		interrupts = <GIC_SPI 97 IRQ_TYPE_LEVEL_HIGH>;
-		interrupt-names = "vepu";
-		clocks = <&cru ACLK_H264>, <&cru HCLK_H264>;
-		clock-names = "aclk", "hclk";
-		iommus = <&vepu_mmu>;
-		status = "disabled";
-	};
-
 	vepu_mmu: iommu@ff340800 {
 		compatible = "rockchip,iommu";
 		reg = <0x0 0xff340800 0x0 0x40>;
 		interrupts = <GIC_SPI 98 IRQ_TYPE_LEVEL_HIGH>;
 		interrupt-names = "vepu_mmu";
-		clocks = <&cru ACLK_H264>, <&cru HCLK_H264>;
+		clocks = <&cru ACLK_VPU>, <&cru HCLK_VPU>;
 		clock-names = "aclk", "iface";
 		#iommu-cells = <0>;
 		status = "disabled";
@@ -831,6 +820,7 @@
 			 <&cru SCLK_SDMMC_DRV>, <&cru SCLK_SDMMC_SAMPLE>;
 		clock-names = "biu", "ciu", "ciu-drive", "ciu-sample";
 		fifo-depth = <0x100>;
+		max-frequency = <150000000>;
 		status = "disabled";
 	};
 
@@ -842,6 +832,7 @@
 			 <&cru SCLK_SDIO_DRV>, <&cru SCLK_SDIO_SAMPLE>;
 		clock-names = "biu", "ciu", "ciu-drive", "ciu-sample";
 		fifo-depth = <0x100>;
+		max-frequency = <150000000>;
 		status = "disabled";
 	};
 
@@ -853,6 +844,7 @@
 			 <&cru SCLK_EMMC_DRV>, <&cru SCLK_EMMC_SAMPLE>;
 		clock-names = "biu", "ciu", "ciu-drive", "ciu-sample";
 		fifo-depth = <0x100>;
+		max-frequency = <150000000>;
 		status = "disabled";
 	};
 
@@ -976,11 +968,6 @@
 			snps,dis-tx-ipgap-linecheck-quirk;
 			status = "disabled";
 		};
-	};
-
-	qos_vpu: qos@ff778000 {
-		compatible = "syscon";
-		reg = <0x0 0xff778000 0x0 0x20>;
 	};
 
 	gic: interrupt-controller@ff811000 {

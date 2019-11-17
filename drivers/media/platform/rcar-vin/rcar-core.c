@@ -766,6 +766,7 @@ static int rvin_mc_parse_of_endpoint(struct device *dev,
 				     struct v4l2_async_subdev *asd)
 {
 	struct rvin_dev *vin = dev_get_drvdata(dev);
+	int ret = 0;
 
 	if (vep->base.port != 1 || vep->base.id >= RVIN_CSI_MAX)
 		return -EINVAL;
@@ -776,37 +777,47 @@ static int rvin_mc_parse_of_endpoint(struct device *dev,
 		return -ENOTCONN;
 	}
 
+	mutex_lock(&vin->group->lock);
+
 	if (vin->group->csi[vep->base.id].fwnode) {
 		vin_dbg(vin, "OF device %pOF already handled\n",
 			to_of_node(asd->match.fwnode));
-		return -ENOTCONN;
+		ret = -ENOTCONN;
+		goto out;
 	}
 
 	vin->group->csi[vep->base.id].fwnode = asd->match.fwnode;
 
 	vin_dbg(vin, "Add group OF device %pOF to slot %u\n",
 		to_of_node(asd->match.fwnode), vep->base.id);
+out:
+	mutex_unlock(&vin->group->lock);
 
-	return 0;
+	return ret;
 }
 
 static int rvin_mc_parse_of_graph(struct rvin_dev *vin)
 {
-	unsigned int count = 0;
+	unsigned int count = 0, vin_mask = 0;
 	unsigned int i;
 	int ret;
 
 	mutex_lock(&vin->group->lock);
 
 	/* If not all VIN's are registered don't register the notifier. */
-	for (i = 0; i < RCAR_VIN_NUM; i++)
-		if (vin->group->vin[i])
+	for (i = 0; i < RCAR_VIN_NUM; i++) {
+		if (vin->group->vin[i]) {
 			count++;
+			vin_mask |= BIT(i);
+		}
+	}
 
 	if (vin->group->count != count) {
 		mutex_unlock(&vin->group->lock);
 		return 0;
 	}
+
+	mutex_unlock(&vin->group->lock);
 
 	v4l2_async_notifier_init(&vin->group->notifier);
 
@@ -816,20 +827,16 @@ static int rvin_mc_parse_of_graph(struct rvin_dev *vin)
 	 * will only be registered once with the group notifier.
 	 */
 	for (i = 0; i < RCAR_VIN_NUM; i++) {
-		if (!vin->group->vin[i])
+		if (!(vin_mask & BIT(i)))
 			continue;
 
 		ret = v4l2_async_notifier_parse_fwnode_endpoints_by_port(
 				vin->group->vin[i]->dev, &vin->group->notifier,
 				sizeof(struct v4l2_async_subdev), 1,
 				rvin_mc_parse_of_endpoint);
-		if (ret) {
-			mutex_unlock(&vin->group->lock);
+		if (ret)
 			return ret;
-		}
 	}
-
-	mutex_unlock(&vin->group->lock);
 
 	if (list_empty(&vin->group->notifier.asd_list))
 		return 0;
@@ -1149,6 +1156,14 @@ static const struct rvin_info rcar_info_r8a77995 = {
 };
 
 static const struct of_device_id rvin_of_id_table[] = {
+	{
+		.compatible = "renesas,vin-r8a774a1",
+		.data = &rcar_info_r8a7796,
+	},
+	{
+		.compatible = "renesas,vin-r8a774c0",
+		.data = &rcar_info_r8a77990,
+	},
 	{
 		.compatible = "renesas,vin-r8a7778",
 		.data = &rcar_info_m1,

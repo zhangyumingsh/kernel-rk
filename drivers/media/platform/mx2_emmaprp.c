@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Support eMMa-PrP through mem2mem framework.
  *
@@ -10,11 +11,6 @@
  *
  * Copyright (c) 2011 Vista Silicon S.L.
  * Javier Martin <javier.martin@vista-silicon.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by the
- * Free Software Foundation; either version 2 of the
- * License, or (at your option) any later version
  */
 #include <linux/module.h>
 #include <linux/clk.h>
@@ -124,7 +120,7 @@ module_param(debug, bool, 0644);
 #define PRP_CNTL_RZ_FIFO_LEVEL(x)       ((x) << 27)
 #define PRP_CNTL_CH2B1EN        (1 << 29)
 #define PRP_CNTL_CH2B2EN        (1 << 30)
-#define PRP_CNTL_CH2FEN         (1 << 31)
+#define PRP_CNTL_CH2FEN         (1UL << 31)
 
 #define PRP_SIZE_HEIGHT(x)	(x)
 #define PRP_SIZE_WIDTH(x)	((x) << 16)
@@ -385,8 +381,8 @@ static irqreturn_t emmaprp_irq(int irq_emma, void *data)
 static int vidioc_querycap(struct file *file, void *priv,
 			   struct v4l2_capability *cap)
 {
-	strncpy(cap->driver, MEM2MEM_NAME, sizeof(cap->driver) - 1);
-	strncpy(cap->card, MEM2MEM_NAME, sizeof(cap->card) - 1);
+	strscpy(cap->driver, MEM2MEM_NAME, sizeof(cap->driver));
+	strscpy(cap->card, MEM2MEM_NAME, sizeof(cap->card));
 	cap->device_caps = V4L2_CAP_VIDEO_M2M | V4L2_CAP_STREAMING;
 	cap->capabilities = cap->device_caps | V4L2_CAP_DEVICE_CAPS;
 	return 0;

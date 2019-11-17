@@ -1,10 +1,6 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Copyright (C) 2011 Freescale Semiconductor, Inc.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
  */
 
 #ifndef __DW_HDMI_H__
@@ -162,13 +158,6 @@
 #define HDMI_FC_SPDDEVICEINF                    0x1062
 #define HDMI_FC_AUDSCONF                        0x1063
 #define HDMI_FC_AUDSSTAT                        0x1064
-#define HDMI_FC_AUDSCHNLS0                      0x1067
-#define HDMI_FC_AUDSCHNLS1                      0x1068
-#define HDMI_FC_AUDSCHNLS2                      0x1069
-#define HDMI_FC_AUDSCHNLS3                      0x106a
-#define HDMI_FC_AUDSCHNLS4                      0x106b
-#define HDMI_FC_AUDSCHNLS5                      0x106c
-#define HDMI_FC_AUDSCHNLS6                      0x106d
 #define HDMI_FC_AUDSCHNLS7                      0x106e
 #define HDMI_FC_AUDSCHNLS8                      0x106f
 #define HDMI_FC_DATACH0FILL                     0x1070
@@ -264,6 +253,7 @@
 #define HDMI_FC_MASK2                           0x10DA
 #define HDMI_FC_POL2                            0x10DB
 #define HDMI_FC_PRCONF                          0x10E0
+#define HDMI_FC_SCRAMBLER_CTRL                  0x10E1
 
 #define HDMI_FC_GMD_STAT                        0x1100
 #define HDMI_FC_GMD_EN                          0x1101
@@ -718,23 +708,12 @@ enum {
 /* HDMI_FC_AUDSCHNLS7 field values */
 	HDMI_FC_AUDSCHNLS7_ACCURACY_OFFSET = 4,
 	HDMI_FC_AUDSCHNLS7_ACCURACY_MASK = 0x30,
-	HDMI_FC_AUDSCHNLS7_SAMPFREQ_OFFSET = 0,
-	HDMI_FC_AUDSCHNLS7_SAMPFREQ_MASK = 0x0f,
 
 /* HDMI_FC_AUDSCHNLS8 field values */
 	HDMI_FC_AUDSCHNLS8_ORIGSAMPFREQ_MASK = 0xf0,
 	HDMI_FC_AUDSCHNLS8_ORIGSAMPFREQ_OFFSET = 4,
 	HDMI_FC_AUDSCHNLS8_WORDLEGNTH_MASK = 0x0f,
 	HDMI_FC_AUDSCHNLS8_WORDLEGNTH_OFFSET = 0,
-
-/* HDMI_FC_AUDSCHNLS sampling frequency */
-	HDMI_FC_AUDSCHNLS_SAMPFREQ_32K = 0x3,
-	HDMI_FC_AUDSCHNLS_SAMPFREQ_441K = 0x0,
-	HDMI_FC_AUDSCHNLS_SAMPFREQ_48K = 0x2,
-	HDMI_FC_AUDSCHNLS_SAMPFREQ_882K = 0x8,
-	HDMI_FC_AUDSCHNLS_SAMPFREQ_96K = 0xa,
-	HDMI_FC_AUDSCHNLS_SAMPFREQ_1764K = 0xc,
-	HDMI_FC_AUDSCHNLS_SAMPFREQ_192K = 0xe,
 
 /* FC_AUDSCONF field values */
 	HDMI_FC_AUDSCONF_AUD_PACKET_SAMPFIT_MASK = 0xF0,
@@ -888,15 +867,18 @@ enum {
 
 /* AUD_CONF0 field values */
 	HDMI_AUD_CONF0_SW_RESET = 0x80,
-	HDMI_AUD_CONF0_I2S_2CHANNEL_ENABLE = 0x21,
-	HDMI_AUD_CONF0_I2S_4CHANNEL_ENABLE = 0x23,
-	HDMI_AUD_CONF0_I2S_6CHANNEL_ENABLE = 0x27,
-	HDMI_AUD_CONF0_I2S_ALL_ENABLE = 0x2F,
+	HDMI_AUD_CONF0_I2S_SELECT = 0x20,
+	HDMI_AUD_CONF0_I2S_EN3 = 0x08,
+	HDMI_AUD_CONF0_I2S_EN2 = 0x04,
+	HDMI_AUD_CONF0_I2S_EN1 = 0x02,
+	HDMI_AUD_CONF0_I2S_EN0 = 0x01,
 
 /* AUD_CONF1 field values */
 	HDMI_AUD_CONF1_MODE_I2S = 0x00,
-	HDMI_AUD_CONF1_MODE_RIGHT_J = 0x02,
-	HDMI_AUD_CONF1_MODE_LEFT_J = 0x04,
+	HDMI_AUD_CONF1_MODE_RIGHT_J = 0x20,
+	HDMI_AUD_CONF1_MODE_LEFT_J = 0x40,
+	HDMI_AUD_CONF1_MODE_BURST_1 = 0x60,
+	HDMI_AUD_CONF1_MODE_BURST_2 = 0x80,
 	HDMI_AUD_CONF1_WIDTH_16 = 0x10,
 	HDMI_AUD_CONF1_WIDTH_24 = 0x18,
 

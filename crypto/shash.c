@@ -1,13 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Synchronous Cryptographic Hash operations.
  *
  * Copyright (c) 2008 Herbert Xu <herbert@gondor.apana.org.au>
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License as published by the Free
- * Software Foundation; either version 2 of the License, or (at your option)
- * any later version.
- *
  */
 
 #include <crypto/scatterwalk.h>
@@ -238,7 +233,6 @@ static int shash_async_init(struct ahash_request *req)
 	struct shash_desc *desc = ahash_request_ctx(req);
 
 	desc->tfm = *ctx;
-	desc->flags = req->base.flags;
 
 	return crypto_shash_init(desc);
 }
@@ -293,7 +287,6 @@ static int shash_async_finup(struct ahash_request *req)
 	struct shash_desc *desc = ahash_request_ctx(req);
 
 	desc->tfm = *ctx;
-	desc->flags = req->base.flags;
 
 	return shash_ahash_finup(req, desc);
 }
@@ -307,14 +300,13 @@ int shash_ahash_digest(struct ahash_request *req, struct shash_desc *desc)
 
 	if (nbytes &&
 	    (sg = req->src, offset = sg->offset,
-	     nbytes < min(sg->length, ((unsigned int)(PAGE_SIZE)) - offset))) {
+	     nbytes <= min(sg->length, ((unsigned int)(PAGE_SIZE)) - offset))) {
 		void *data;
 
 		data = kmap_atomic(sg_page(sg));
 		err = crypto_shash_digest(desc, data + offset, nbytes,
 					  req->result);
 		kunmap_atomic(data);
-		crypto_yield(desc->flags);
 	} else
 		err = crypto_shash_init(desc) ?:
 		      shash_ahash_finup(req, desc);
@@ -329,7 +321,6 @@ static int shash_async_digest(struct ahash_request *req)
 	struct shash_desc *desc = ahash_request_ctx(req);
 
 	desc->tfm = *ctx;
-	desc->flags = req->base.flags;
 
 	return shash_ahash_digest(req, desc);
 }
@@ -345,7 +336,6 @@ static int shash_async_import(struct ahash_request *req, const void *in)
 	struct shash_desc *desc = ahash_request_ctx(req);
 
 	desc->tfm = *ctx;
-	desc->flags = req->base.flags;
 
 	return crypto_shash_import(desc, in);
 }
@@ -388,10 +378,8 @@ int crypto_init_shash_ops_async(struct crypto_tfm *tfm)
 	crypto_ahash_set_flags(crt, crypto_shash_get_flags(shash) &
 				    CRYPTO_TFM_NEED_KEY);
 
-	if (alg->export)
-		crt->export = shash_async_export;
-	if (alg->import)
-		crt->import = shash_async_import;
+	crt->export = shash_async_export;
+	crt->import = shash_async_import;
 
 	crt->reqsize = sizeof(struct shash_desc) + crypto_shash_descsize(shash);
 
@@ -470,6 +458,9 @@ static int shash_prepare_alg(struct shash_alg *alg)
 	if (alg->digestsize > HASH_MAX_DIGESTSIZE ||
 	    alg->descsize > HASH_MAX_DESCSIZE ||
 	    alg->statesize > HASH_MAX_STATESIZE)
+		return -EINVAL;
+
+	if ((alg->export && !alg->import) || (alg->import && !alg->export))
 		return -EINVAL;
 
 	base->cra_type = &crypto_shash_type;
