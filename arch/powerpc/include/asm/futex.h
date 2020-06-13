@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _ASM_POWERPC_FUTEX_H
 #define _ASM_POWERPC_FUTEX_H
 
@@ -7,7 +8,7 @@
 #include <linux/uaccess.h>
 #include <asm/errno.h>
 #include <asm/synch.h>
-#include <asm/asm-compat.h>
+#include <asm/asm-405.h>
 
 #define __futex_atomic_op(insn, ret, oldval, uaddr, oparg) \
   __asm__ __volatile ( \
@@ -23,10 +24,8 @@
 "4:	li	%1,%3\n" \
 	"b	3b\n" \
 	".previous\n" \
-	".section __ex_table,\"a\"\n" \
-	".align 3\n" \
-	PPC_LONG "1b,4b,2b,4b\n" \
-	".previous" \
+	EX_TABLE(1b, 4b) \
+	EX_TABLE(2b, 4b) \
 	: "=&r" (oldval), "=&r" (ret) \
 	: "b" (uaddr), "i" (-EFAULT), "r" (oparg) \
 	: "cr0", "memory")
@@ -36,7 +35,9 @@ static inline int arch_futex_atomic_op_inuser(int op, int oparg, int *oval,
 {
 	int oldval = 0, ret;
 
-	pagefault_disable();
+	if (!access_ok(uaddr, sizeof(u32)))
+		return -EFAULT;
+	allow_read_write_user(uaddr, uaddr, sizeof(*uaddr));
 
 	switch (op) {
 	case FUTEX_OP_SET:
@@ -58,11 +59,9 @@ static inline int arch_futex_atomic_op_inuser(int op, int oparg, int *oval,
 		ret = -ENOSYS;
 	}
 
-	pagefault_enable();
+	*oval = oldval;
 
-	if (!ret)
-		*oval = oldval;
-
+	prevent_read_write_user(uaddr, uaddr, sizeof(*uaddr));
 	return ret;
 }
 
@@ -73,8 +72,10 @@ futex_atomic_cmpxchg_inatomic(u32 *uval, u32 __user *uaddr,
 	int ret = 0;
 	u32 prev;
 
-	if (!access_ok(VERIFY_WRITE, uaddr, sizeof(u32)))
+	if (!access_ok(uaddr, sizeof(u32)))
 		return -EFAULT;
+
+	allow_read_write_user(uaddr, uaddr, sizeof(*uaddr));
 
         __asm__ __volatile__ (
         PPC_ATOMIC_ENTRY_BARRIER
@@ -88,16 +89,16 @@ futex_atomic_cmpxchg_inatomic(u32 *uval, u32 __user *uaddr,
 "3:	.section .fixup,\"ax\"\n\
 4:	li	%0,%6\n\
 	b	3b\n\
-	.previous\n\
-	.section __ex_table,\"a\"\n\
-	.align 3\n\
-	" PPC_LONG "1b,4b,2b,4b\n\
-	.previous" \
+	.previous\n"
+	EX_TABLE(1b, 4b)
+	EX_TABLE(2b, 4b)
         : "+r" (ret), "=&r" (prev), "+m" (*uaddr)
         : "r" (uaddr), "r" (oldval), "r" (newval), "i" (-EFAULT)
         : "cc", "memory");
 
 	*uval = prev;
+	prevent_read_write_user(uaddr, uaddr, sizeof(*uaddr));
+
         return ret;
 }
 

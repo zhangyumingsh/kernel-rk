@@ -1,8 +1,10 @@
-#include <linux/bitops.h>
-#include <linux/kernel.h>
+// SPDX-License-Identifier: GPL-2.0
+
+#include <linux/sched.h>
+#include <linux/sched/clock.h>
 
 #include <asm/cpufeature.h>
-#include <asm/e820.h>
+#include <asm/e820/api.h>
 #include <asm/mtrr.h>
 #include <asm/msr.h>
 
@@ -29,7 +31,7 @@ static void init_c3(struct cpuinfo_x86 *c)
 			rdmsr(MSR_VIA_FCR, lo, hi);
 			lo |= ACE_FCR;		/* enable ACE unit */
 			wrmsr(MSR_VIA_FCR, lo, hi);
-			printk(KERN_INFO "CPU: Enabled ACE h/w crypto\n");
+			pr_info("CPU: Enabled ACE h/w crypto\n");
 		}
 
 		/* enable RNG unit, if present and disabled */
@@ -37,7 +39,7 @@ static void init_c3(struct cpuinfo_x86 *c)
 			rdmsr(MSR_VIA_RNG, lo, hi);
 			lo |= RNG_ENABLE;	/* enable RNG unit */
 			wrmsr(MSR_VIA_RNG, lo, hi);
-			printk(KERN_INFO "CPU: Enabled h/w RNG\n");
+			pr_info("CPU: Enabled h/w RNG\n");
 		}
 
 		/* store Centaur Extended Feature Flags as
@@ -62,8 +64,6 @@ static void init_c3(struct cpuinfo_x86 *c)
 		c->x86_cache_alignment = c->x86_clflush_size * 2;
 		set_cpu_cap(c, X86_FEATURE_REP_GOOD);
 	}
-
-	cpu_detect_cache_sizes(c);
 }
 
 enum {
@@ -104,6 +104,10 @@ static void early_init_centaur(struct cpuinfo_x86 *c)
 #ifdef CONFIG_X86_64
 	set_cpu_cap(c, X86_FEATURE_SYSENTER32);
 #endif
+	if (c->x86_power & (1 << 8)) {
+		set_cpu_cap(c, X86_FEATURE_CONSTANT_TSC);
+		set_cpu_cap(c, X86_FEATURE_NONSTOP_TSC);
+	}
 }
 
 static void init_centaur(struct cpuinfo_x86 *c)
@@ -122,6 +126,24 @@ static void init_centaur(struct cpuinfo_x86 *c)
 	clear_cpu_cap(c, 0*32+31);
 #endif
 	early_init_centaur(c);
+	init_intel_cacheinfo(c);
+	detect_num_cpu_cores(c);
+#ifdef CONFIG_X86_32
+	detect_ht(c);
+#endif
+
+	if (c->cpuid_level > 9) {
+		unsigned int eax = cpuid_eax(10);
+
+		/*
+		 * Check for version and the number of counters
+		 * Version(eax[7:0]) can't be 0;
+		 * Counters(eax[15:8]) should be greater than 1;
+		 */
+		if ((eax & 0xff) && (((eax >> 8) & 0xff) > 1))
+			set_cpu_cap(c, X86_FEATURE_ARCH_PERFMON);
+	}
+
 	switch (c->x86) {
 #ifdef CONFIG_X86_32
 	case 5:
@@ -130,11 +152,11 @@ static void init_centaur(struct cpuinfo_x86 *c)
 			name = "C6";
 			fcr_set = ECX8|DSMC|EDCTLB|EMMX|ERETSTK;
 			fcr_clr = DPDC;
-			printk(KERN_NOTICE "Disabling bugged TSC.\n");
+			pr_notice("Disabling bugged TSC.\n");
 			clear_cpu_cap(c, X86_FEATURE_TSC);
 			break;
 		case 8:
-			switch (c->x86_mask) {
+			switch (c->x86_stepping) {
 			default:
 			name = "2";
 				break;
@@ -163,11 +185,11 @@ static void init_centaur(struct cpuinfo_x86 *c)
 		newlo = (lo|fcr_set) & (~fcr_clr);
 
 		if (newlo != lo) {
-			printk(KERN_INFO "Centaur FCR was 0x%X now 0x%X\n",
+			pr_info("Centaur FCR was 0x%X now 0x%X\n",
 				lo, newlo);
 			wrmsr(MSR_IDT_FCR1, newlo, hi);
 		} else {
-			printk(KERN_INFO "Centaur FCR is 0x%X\n", lo);
+			pr_info("Centaur FCR is 0x%X\n", lo);
 		}
 		/* Emulate MTRRs using Centaur's MCR. */
 		set_cpu_cap(c, X86_FEATURE_CENTAUR_MCR);
@@ -193,6 +215,8 @@ static void init_centaur(struct cpuinfo_x86 *c)
 #ifdef CONFIG_X86_64
 	set_cpu_cap(c, X86_FEATURE_LFENCE_RDTSC);
 #endif
+
+	init_ia32_feat_ctl(c);
 }
 
 #ifdef CONFIG_X86_32
@@ -209,7 +233,7 @@ centaur_size_cache(struct cpuinfo_x86 *c, unsigned int size)
 	 *  - Note, it seems this may only be in engineering samples.
 	 */
 	if ((c->x86 == 6) && (c->x86_model == 9) &&
-				(c->x86_mask == 1) && (size == 65))
+				(c->x86_stepping == 1) && (size == 65))
 		size -= 1;
 	return size;
 }

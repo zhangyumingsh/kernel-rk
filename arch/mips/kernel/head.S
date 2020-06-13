@@ -21,7 +21,6 @@
 #include <asm/asmmacro.h>
 #include <asm/irqflags.h>
 #include <asm/regdef.h>
-#include <asm/pgtable-bits.h>
 #include <asm/mipsregs.h>
 #include <asm/stackframe.h>
 
@@ -78,7 +77,7 @@ EXPORT(_stext)
 	 */
 FEXPORT(__kernel_entry)
 	j	kernel_entry
-#endif
+#endif /* CONFIG_BOOT_RAW */
 
 	__REF
 
@@ -95,24 +94,26 @@ NESTED(kernel_entry, 16, sp)			# kernel entry point
 0:
 
 #ifdef CONFIG_USE_OF
-#ifdef CONFIG_MIPS_RAW_APPENDED_DTB
+#if defined(CONFIG_MIPS_RAW_APPENDED_DTB) || \
+	defined(CONFIG_MIPS_ELF_APPENDED_DTB)
+
 	PTR_LA		t2, __appended_dtb
 
 #ifdef CONFIG_CPU_BIG_ENDIAN
 	li		t1, 0xd00dfeed
-#else
+#else  /* !CONFIG_CPU_BIG_ENDIAN */
 	li		t1, 0xedfe0dd0
-#endif
+#endif /* !CONFIG_CPU_BIG_ENDIAN */
 	lw		t0, (t2)
 	beq		t0, t1, dtb_found
-#endif
+#endif /* CONFIG_MIPS_RAW_APPENDED_DTB || CONFIG_MIPS_ELF_APPENDED_DTB */
 	li		t1, -2
-	beq		a0, t1, dtb_found
 	move		t2, a1
+	beq		a0, t1, dtb_found
 
 	li		t2, 0
 dtb_found:
-#endif
+#endif /* CONFIG_USE_OF */
 	PTR_LA		t0, __bss_start		# clear .bss
 	LONG_S		zero, (t0)
 	PTR_LA		t1, __bss_stop - LONGSIZE
@@ -139,7 +140,27 @@ dtb_found:
 	set_saved_sp	sp, t0, t1
 	PTR_SUBU	sp, 4 * SZREG		# init stack pointer
 
+#ifdef CONFIG_RELOCATABLE
+	/* Copy kernel and apply the relocations */
+	jal		relocate_kernel
+
+	/* Repoint the sp into the new kernel image */
+	PTR_LI		sp, _THREAD_SIZE - 32 - PT_SIZE
+	PTR_ADDU	sp, $28
+	set_saved_sp	sp, t0, t1
+	PTR_SUBU	sp, 4 * SZREG		# init stack pointer
+
+	/*
+	 * relocate_kernel returns the entry point either
+	 * in the relocated kernel or the original if for
+	 * some reason relocation failed - jump there now
+	 * with instruction hazard barrier because of the
+	 * newly sync'd icache.
+	 */
+	jr.hb		v0
+#else  /* !CONFIG_RELOCATABLE */
 	j		start_kernel
+#endif /* !CONFIG_RELOCATABLE */
 	END(kernel_entry)
 
 #ifdef CONFIG_SMP

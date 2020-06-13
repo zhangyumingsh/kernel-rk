@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * fault.c:  Page fault handlers for the Sparc.
  *
@@ -112,7 +113,7 @@ show_signal_msg(struct pt_regs *regs, int sig, int code,
 	if (!printk_ratelimit())
 		return;
 
-	printk("%s%s[%d]: segfault at %lx ip %p (rpc %p) sp %p error %x",
+	printk("%s%s[%d]: segfault at %lx ip %px (rpc %px) sp %px error %x",
 	       task_pid_nr(tsk) > 1 ? KERN_INFO : KERN_EMERG,
 	       tsk->comm, task_pid_nr(tsk), address,
 	       (void *)regs->pc, (void *)regs->u_regs[UREG_I7],
@@ -126,19 +127,11 @@ show_signal_msg(struct pt_regs *regs, int sig, int code,
 static void __do_fault_siginfo(int code, int sig, struct pt_regs *regs,
 			       unsigned long addr)
 {
-	siginfo_t info;
-
-	info.si_signo = sig;
-	info.si_code = code;
-	info.si_errno = 0;
-	info.si_addr = (void __user *) addr;
-	info.si_trapno = 0;
-
 	if (unlikely(show_unhandled_signals))
-		show_signal_msg(regs, sig, info.si_code,
+		show_signal_msg(regs, sig, code,
 				addr, current);
 
-	force_sig_info (sig, &info, current);
+	force_sig_fault(sig, code, (void __user *) addr, 0);
 }
 
 static unsigned long compute_si_addr(struct pt_regs *regs, int text_fault)
@@ -173,8 +166,9 @@ asmlinkage void do_sparc_fault(struct pt_regs *regs, int text_fault, int write,
 	unsigned int fixup;
 	unsigned long g2;
 	int from_user = !(regs->psr & PSR_PS);
-	int fault, code;
-	unsigned int flags = FAULT_FLAG_ALLOW_RETRY | FAULT_FLAG_KILLABLE;
+	int code;
+	vm_fault_t fault;
+	unsigned int flags = FAULT_FLAG_DEFAULT;
 
 	if (text_fault)
 		address = regs->pc;
@@ -241,9 +235,9 @@ good_area:
 	 * make sure we exit gracefully rather than endlessly redo
 	 * the fault.
 	 */
-	fault = handle_mm_fault(mm, vma, address, flags);
+	fault = handle_mm_fault(vma, address, flags);
 
-	if ((fault & VM_FAULT_RETRY) && fatal_signal_pending(current))
+	if (fault_signal_pending(fault, regs))
 		return;
 
 	if (unlikely(fault & VM_FAULT_ERROR)) {
@@ -267,7 +261,6 @@ good_area:
 				      1, regs, address);
 		}
 		if (fault & VM_FAULT_RETRY) {
-			flags &= ~FAULT_FLAG_ALLOW_RETRY;
 			flags |= FAULT_FLAG_TRIED;
 
 			/* No need to up_read(&mm->mmap_sem) as we would
@@ -303,10 +296,10 @@ no_context:
 		fixup = search_extables_range(regs->pc, &g2);
 		/* Values below 10 are reserved for other things */
 		if (fixup > 10) {
-			extern const unsigned __memset_start[];
-			extern const unsigned __memset_end[];
-			extern const unsigned __csum_partial_copy_start[];
-			extern const unsigned __csum_partial_copy_end[];
+			extern const unsigned int __memset_start[];
+			extern const unsigned int __memset_end[];
+			extern const unsigned int __csum_partial_copy_start[];
+			extern const unsigned int __csum_partial_copy_end[];
 
 #ifdef DEBUG_EXCEPTIONS
 			printk("Exception: PC<%08lx> faddr<%08lx>\n",
@@ -357,6 +350,8 @@ vmalloc_fault:
 		 */
 		int offset = pgd_index(address);
 		pgd_t *pgd, *pgd_k;
+		p4d_t *p4d, *p4d_k;
+		pud_t *pud, *pud_k;
 		pmd_t *pmd, *pmd_k;
 
 		pgd = tsk->active_mm->pgd + offset;
@@ -369,8 +364,13 @@ vmalloc_fault:
 			return;
 		}
 
-		pmd = pmd_offset(pgd, address);
-		pmd_k = pmd_offset(pgd_k, address);
+		p4d = p4d_offset(pgd, address);
+		pud = pud_offset(p4d, address);
+		pmd = pmd_offset(pud, address);
+
+		p4d_k = p4d_offset(pgd_k, address);
+		pud_k = pud_offset(p4d_k, address);
+		pmd_k = pmd_offset(pud_k, address);
 
 		if (pmd_present(*pmd) || !pmd_present(*pmd_k))
 			goto bad_area_nosemaphore;
@@ -411,7 +411,7 @@ good_area:
 		if (!(vma->vm_flags & (VM_READ | VM_EXEC)))
 			goto bad_area;
 	}
-	switch (handle_mm_fault(mm, vma, address, flags)) {
+	switch (handle_mm_fault(vma, address, flags)) {
 	case VM_FAULT_SIGBUS:
 	case VM_FAULT_OOM:
 		goto do_sigbus;
@@ -431,7 +431,7 @@ do_sigbus:
 static void check_stack_aligned(unsigned long sp)
 {
 	if (sp & 0x7UL)
-		force_sig(SIGILL, current);
+		force_sig(SIGILL);
 }
 
 void window_overflow_fault(void)

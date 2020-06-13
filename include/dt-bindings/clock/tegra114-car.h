@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * This header provides constants for binding nvidia,tegra114-car.
  *
@@ -156,7 +157,7 @@
 /* 133 */
 /* 134 */
 /* 135 */
-/* 136 */
+#define TEGRA114_CLK_CEC 136
 /* 137 */
 /* 138 */
 /* 139 */
@@ -227,6 +228,8 @@
 #define TEGRA114_CLK_CLK_M 201
 #define TEGRA114_CLK_CLK_M_DIV2 202
 #define TEGRA114_CLK_CLK_M_DIV4 203
+#define TEGRA114_CLK_OSC_DIV2 202
+#define TEGRA114_CLK_OSC_DIV4 203
 #define TEGRA114_CLK_PLL_REF 204
 #define TEGRA114_CLK_PLL_C 205
 #define TEGRA114_CLK_PLL_C_OUT1 206
@@ -273,7 +276,7 @@
 #define TEGRA114_CLK_CLK_OUT_2 246
 #define TEGRA114_CLK_CLK_OUT_3 247
 #define TEGRA114_CLK_BLINK 248
-/* 249 */
+#define TEGRA114_CLK_OSC 249
 /* 250 */
 /* 251 */
 #define TEGRA114_CLK_XUSB_HOST_SRC 252

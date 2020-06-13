@@ -1,18 +1,15 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 as published
- * by the Free Software Foundation.
  *
  * Parts of this file are based on Ralink's 2.6.21 BSP
  *
  * Copyright (C) 2008-2011 Gabor Juhos <juhosg@openwrt.org>
  * Copyright (C) 2008 Imre Kaloz <kaloz@openwrt.org>
- * Copyright (C) 2013 John Crispin <blogic@openwrt.org>
+ * Copyright (C) 2013 John Crispin <john@phrozen.org>
  */
 
 #include <linux/kernel.h>
 #include <linux/init.h>
-#include <linux/module.h>
 
 #include <asm/mipsregs.h>
 #include <asm/mach-ralink/ralink_regs.h>
@@ -65,6 +62,7 @@ void __init ralink_clk_init(void)
 	ralink_clk_add("300100.timer", cpu_rate / 2);
 	ralink_clk_add("300120.watchdog", cpu_rate / 2);
 	ralink_clk_add("300500.uart", cpu_rate / 2);
+	ralink_clk_add("300900.i2c", cpu_rate / 2);
 	ralink_clk_add("300c00.uartlite", cpu_rate / 2);
 	ralink_clk_add("400000.ethernet", cpu_rate / 2);
 	ralink_clk_add("480000.wmac", wmac_rate);

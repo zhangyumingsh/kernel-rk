@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  *    Copyright IBM Corp. 2007, 2012
  *    Author(s): Peter Oberparleiter <peter.oberparleiter@de.ibm.com>
@@ -12,7 +13,7 @@
 struct idset {
 	int num_ssid;
 	int num_id;
-	unsigned long bitmap[0];
+	unsigned long bitmap[];
 };
 
 static inline unsigned long bitmap_size(int num_ssid, int num_id)

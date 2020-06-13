@@ -1,10 +1,8 @@
-# kbuild trick to avoid linker error. Can be omitted if a module is built.
-obj- := dummy.o
-
+# SPDX-License-Identifier: GPL-2.0-only
 # List of programs to build
-hostprogs-y := uhid-example
+hostprogs := uhid-example
 
 # Tell kbuild to always build the programs
-always := $(hostprogs-y)
+always-y := $(hostprogs)
 
 HOSTCFLAGS_uhid-example.o += -I$(objtree)/usr/include

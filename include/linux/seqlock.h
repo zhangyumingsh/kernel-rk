@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef __LINUX_SEQLOCK_H
 #define __LINUX_SEQLOCK_H
 /*
@@ -78,7 +79,7 @@ static inline void seqcount_lockdep_reader_access(const seqcount_t *s)
 
 	local_irq_save(flags);
 	seqcount_acquire_read(&l->dep_map, 0, 0, _RET_IP_);
-	seqcount_release(&l->dep_map, 1, _RET_IP_);
+	seqcount_release(&l->dep_map, _RET_IP_);
 	local_irq_restore(flags);
 }
 
@@ -277,7 +278,9 @@ static inline void raw_write_seqcount_barrier(seqcount_t *s)
 
 static inline int raw_read_seqcount_latch(seqcount_t *s)
 {
-	return lockless_dereference(s->sequence);
+	/* Pairs with the first smp_wmb() in raw_write_seqcount_latch() */
+	int seq = READ_ONCE(s->sequence); /* ^^^ */
+	return seq;
 }
 
 /**
@@ -331,7 +334,7 @@ static inline int raw_read_seqcount_latch(seqcount_t *s)
  *	unsigned seq, idx;
  *
  *	do {
- *		seq = lockless_dereference(latch->seq);
+ *		seq = raw_read_seqcount_latch(&latch->seq);
  *
  *		idx = seq & 0x01;
  *		entry = data_query(latch->data[idx], ...);
@@ -381,7 +384,7 @@ static inline void write_seqcount_begin(seqcount_t *s)
 
 static inline void write_seqcount_end(seqcount_t *s)
 {
-	seqcount_release(&s->dep_map, 1, _RET_IP_);
+	seqcount_release(&s->dep_map, _RET_IP_);
 	raw_write_seqcount_end(s);
 }
 

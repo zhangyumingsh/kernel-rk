@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * page.h:  Various defines and such for MMU operations on the Sparc for
  *          the Linux kernel.
@@ -68,8 +69,8 @@ typedef struct { unsigned long iopgprot; } iopgprot_t;
 #define iopgprot_val(x)	((x).iopgprot)
 
 #define __pte(x)	((pte_t) { (x) } )
+#define __pmd(x)	((pmd_t) { { (x) }, })
 #define __iopte(x)	((iopte_t) { (x) } )
-/* #define __pmd(x)        ((pmd_t) { (x) } ) */ /* XXX procedure with loop */
 #define __pgd(x)	((pgd_t) { (x) } )
 #define __ctxd(x)	((ctxd_t) { (x) } )
 #define __pgprot(x)	((pgprot_t) { (x) } )
@@ -96,8 +97,8 @@ typedef unsigned long iopgprot_t;
 #define iopgprot_val(x)	(x)
 
 #define __pte(x)	(x)
+#define __pmd(x)	((pmd_t) { { (x) }, })
 #define __iopte(x)	(x)
-/* #define __pmd(x)        (x) */ /* XXX later */
 #define __pgd(x)	(x)
 #define __ctxd(x)	(x)
 #define __pgprot(x)	(x)
@@ -131,9 +132,6 @@ extern unsigned long pfn_base;
 
 #define pfn_valid(pfn)		(((pfn) >= (pfn_base)) && (((pfn)-(pfn_base)) < max_mapnr))
 #define virt_addr_valid(kaddr)	((((unsigned long)(kaddr)-PAGE_OFFSET)>>PAGE_SHIFT) < max_mapnr)
-
-#define VM_DATA_DEFAULT_FLAGS	(VM_READ | VM_WRITE | VM_EXEC | \
-				 VM_MAYREAD | VM_MAYWRITE | VM_MAYEXEC)
 
 #include <asm-generic/memory_model.h>
 #include <asm-generic/getorder.h>

@@ -1,15 +1,6 @@
-#
-# Generated files
-#
-config*
-*.lex.c
-*.tab.c
-*.tab.h
-zconf.hash.c
+# SPDX-License-Identifier: GPL-2.0-only
 *.moc
-gconf.glade.h
-*.pot
-*.mo
+*conf-cfg
 
 #
 # configuration programs
@@ -19,4 +10,3 @@ mconf
 nconf
 qconf
 gconf
-kxgettext

@@ -8,7 +8,8 @@
 #include <linux/netdevice.h>
 #include <linux/version.h>
 #include <uapi/linux/bpf.h>
-#include "bpf_helpers.h"
+#include <bpf/bpf_helpers.h>
+#include <bpf/bpf_tracing.h>
 
 struct bpf_map_def SEC("maps") my_map = {
 	.type = BPF_MAP_TYPE_HASH,
@@ -42,13 +43,13 @@ static unsigned int log2l(unsigned long long n)
 #define SLOTS 100
 
 struct bpf_map_def SEC("maps") lat_map = {
-	.type = BPF_MAP_TYPE_ARRAY,
+	.type = BPF_MAP_TYPE_PERCPU_ARRAY,
 	.key_size = sizeof(u32),
 	.value_size = sizeof(u64),
 	.max_entries = SLOTS,
 };
 
-SEC("kprobe/blk_update_request")
+SEC("kprobe/blk_account_io_completion")
 int bpf_prog2(struct pt_regs *ctx)
 {
 	long rq = PT_REGS_PARM1(ctx);
@@ -81,7 +82,7 @@ int bpf_prog2(struct pt_regs *ctx)
 
 	value = bpf_map_lookup_elem(&lat_map, &index);
 	if (value)
-		__sync_fetch_and_add((long *)value, 1);
+		*value += 1;
 
 	return 0;
 }

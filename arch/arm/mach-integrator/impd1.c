@@ -1,11 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  *  linux/arch/arm/mach-integrator/impd1.c
  *
  *  Copyright (C) 2003 Deep Blue Solutions Ltd, All Rights Reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  *
  *  This file provides the core support for the IM-PD1 module.
  *
@@ -21,14 +18,13 @@
 #include <linux/amba/bus.h>
 #include <linux/amba/clcd.h>
 #include <linux/amba/mmci.h>
-#include <linux/amba/pl061.h>
 #include <linux/io.h>
 #include <linux/platform_data/clk-integrator.h>
 #include <linux/slab.h>
 #include <linux/irqchip/arm-vic.h>
 #include <linux/gpio/machine.h>
 
-#include <asm/sizes.h>
+#include <linux/sizes.h>
 #include "lm.h"
 #include "impd1.h"
 
@@ -320,11 +316,11 @@ static struct impd1_device impd1_devs[] = {
 #define IMPD1_VALID_IRQS 0x00000bffU
 
 /*
- * As this module is bool, it is OK to have this as __init_refok() - no
+ * As this module is bool, it is OK to have this as __ref() - no
  * probe calls will be done after the initial system bootup, as devices
  * are discovered as part of the machine startup.
  */
-static int __init_refok impd1_probe(struct lm_device *dev)
+static int __ref impd1_probe(struct lm_device *dev)
 {
 	struct impd1_module *impd1;
 	int irq_base;
@@ -391,7 +387,7 @@ static int __init_refok impd1_probe(struct lm_device *dev)
 			char *mmciname;
 
 			lookup = devm_kzalloc(&dev->dev,
-					      sizeof(*lookup) + 3 * sizeof(struct gpiod_lookup),
+					      struct_size(lookup, table, 3),
 					      GFP_KERNEL);
 			chipname = devm_kstrdup(&dev->dev, devname, GFP_KERNEL);
 			mmciname = devm_kasprintf(&dev->dev, GFP_KERNEL,
@@ -414,13 +410,10 @@ static int __init_refok impd1_probe(struct lm_device *dev)
 			 * 5 = Key lower right
 			 */
 			/* We need the two MMCI GPIO entries */
-			lookup->table[0].chip_label = chipname;
-			lookup->table[0].chip_hwnum = 3;
-			lookup->table[0].con_id = "wp";
-			lookup->table[1].chip_label = chipname;
-			lookup->table[1].chip_hwnum = 4;
-			lookup->table[1].con_id = "cd";
-			lookup->table[1].flags = GPIO_ACTIVE_LOW;
+			lookup->table[0] = (struct gpiod_lookup)
+				GPIO_LOOKUP(chipname, 3, "wp", 0);
+			lookup->table[1] = (struct gpiod_lookup)
+				GPIO_LOOKUP(chipname, 4, "cd", GPIO_ACTIVE_LOW);
 			gpiod_add_lookup_table(lookup);
 		}
 

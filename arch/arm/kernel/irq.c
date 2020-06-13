@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  *  linux/arch/arm/kernel/irq.c
  *
@@ -7,10 +8,6 @@
  *  Support for Dynamic Tick Timer Copyright (C) 2004-2005 Nokia Corporation.
  *  Dynamic Tick Timer written by Tony Lindgren <tony@atomide.com> and
  *  Tuukka Tikkanen <tuukka.tikkanen@elektrobit.com>.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  *
  *  This file contains the code used by various IRQ handling routines:
  *  asking for different IRQ's should be done through these routines
@@ -94,22 +91,12 @@ void __init init_IRQ(void)
 			outer_cache.write_sec = machine_desc->l2c_write_sec;
 		ret = l2x0_of_init(machine_desc->l2c_aux_val,
 				   machine_desc->l2c_aux_mask);
-		if (ret)
+		if (ret && ret != -ENODEV)
 			pr_err("L2C: failed to init: %d\n", ret);
 	}
 
 	uniphier_cache_init();
 }
-
-#ifdef CONFIG_MULTI_IRQ_HANDLER
-void __init set_handle_irq(void (*handle_irq)(struct pt_regs *))
-{
-	if (handle_arch_irq)
-		return;
-
-	handle_arch_irq = handle_irq;
-}
-#endif
 
 #ifdef CONFIG_SPARSE_IRQ
 int __init arch_probe_nr_irqs(void)

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /* sound/soc/rockchip/rk_spdif.c
  *
  * ALSA SoC Audio Layer - Rockchip I2S Controller driver
@@ -6,10 +7,6 @@
  * Author: Jianqun <jay.xu@rock-chips.com>
  * Copyright (c) 2015 Collabora Ltd.
  * Author: Sjoerd Simons <sjoerd.simons@collabora.co.uk>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/module.h>
@@ -111,16 +108,34 @@ static int rk_spdif_hw_params(struct snd_pcm_substream *substream,
 {
 	struct rk_spdif_dev *spdif = snd_soc_dai_get_drvdata(dai);
 	unsigned int val = SPDIF_CFGR_HALFWORD_ENABLE;
-	int mclk;
+	int srate, mclk;
 	int ret;
 
-	/* bmc = 128fs */
-	mclk = 128 * params_rate(params);
-	ret = clk_set_rate(spdif->mclk, mclk);
-	if (ret)
-		return ret;
+	srate = params_rate(params);
+	mclk = srate * 128;
 
-	val |= SPDIF_CFGR_CLK_DIV(0);
+	switch (params_format(params)) {
+	case SNDRV_PCM_FORMAT_S16_LE:
+		val |= SPDIF_CFGR_VDW_16;
+		break;
+	case SNDRV_PCM_FORMAT_S20_3LE:
+		val |= SPDIF_CFGR_VDW_20;
+		break;
+	case SNDRV_PCM_FORMAT_S24_LE:
+		val |= SPDIF_CFGR_VDW_24;
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	/* Set clock and calculate divider */
+	ret = clk_set_rate(spdif->mclk, mclk);
+	if (ret != 0) {
+		dev_err(spdif->dev, "Failed to set module clock rate: %d\n",
+			ret);
+		return ret;
+	}
+
 	ret = regmap_update_bits(spdif->regmap, SPDIF_CFGR,
 		SPDIF_CFGR_CLK_DIV_MASK | SPDIF_CFGR_HALFWORD_ENABLE |
 		SDPIF_CFGR_VDW_MASK,
@@ -381,35 +396,9 @@ static int rk_spdif_remove(struct platform_device *pdev)
 	return 0;
 }
 
-#ifdef CONFIG_PM_SLEEP
-static int rockchip_spdif_suspend(struct device *dev)
-{
-	struct rk_spdif_dev *spdif = dev_get_drvdata(dev);
-
-	regcache_mark_dirty(spdif->regmap);
-
-	return 0;
-}
-
-static int rockchip_spdif_resume(struct device *dev)
-{
-	struct rk_spdif_dev *spdif = dev_get_drvdata(dev);
-	int ret;
-
-	ret = pm_runtime_get_sync(dev);
-	if (ret < 0)
-		return ret;
-	ret = regcache_sync(spdif->regmap);
-	pm_runtime_put(dev);
-
-	return ret;
-}
-#endif
-
 static const struct dev_pm_ops rk_spdif_pm_ops = {
 	SET_RUNTIME_PM_OPS(rk_spdif_runtime_suspend, rk_spdif_runtime_resume,
 			   NULL)
-	SET_SYSTEM_SLEEP_PM_OPS(rockchip_spdif_suspend, rockchip_spdif_resume)
 };
 
 static struct platform_driver rk_spdif_driver = {

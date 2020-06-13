@@ -1,22 +1,12 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (C) Fuzhou Rockchip Electronics Co.Ltd
  *    Zheng Yang <zhengyang@rock-chips.com>
  *    Yakir Yang <ykk@rock-chips.com>
- *
- * This software is licensed under the terms of the GNU General Public
- * License version 2, as published by the Free Software Foundation, and
- * may be copied, distributed, and modified under those terms.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 
 #ifndef __INNO_HDMI_H__
 #define __INNO_HDMI_H__
-
-#define RK618_HDMI_BASE			0x0400
 
 #define DDC_SEGMENT_ADDR		0x30
 
@@ -106,13 +96,11 @@ enum {
 #define HDMI_AV_MUTE			0x05
 #define m_AVMUTE_CLEAR			(1 << 7)
 #define m_AVMUTE_ENABLE			(1 << 6)
-#define m_AUDIO_PD			(1 << 2)
 #define m_AUDIO_MUTE			(1 << 1)
 #define m_VIDEO_BLACK			(1 << 0)
 #define v_AVMUTE_CLEAR(n)		(n << 7)
 #define v_AVMUTE_ENABLE(n)		(n << 6)
 #define v_AUDIO_MUTE(n)			(n << 1)
-#define v_AUDIO_PD(n)			(n << 2)
 #define v_VIDEO_MUTE(n)			(n << 0)
 
 #define HDMI_VIDEO_TIMING_CTL		0x08
@@ -273,7 +261,6 @@ enum {
 
 #define HDMI_INTERRUPT_MASK1		0xc0
 #define HDMI_INTERRUPT_STATUS1		0xc1
-#define m_INT_HOTPLUG_RK618		BIT(7)
 #define	m_INT_ACTIVE_VSYNC		(1 << 5)
 #define m_INT_EDID_READY		(1 << 2)
 

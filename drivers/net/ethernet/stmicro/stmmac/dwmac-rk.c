@@ -1,19 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /**
  * dwmac-rk.c - Rockchip RK3288 DWMAC specific glue layer
  *
  * Copyright (C) 2014 Chen-Zhi (Roger Chen)
  *
  * Chen-Zhi (Roger Chen)  <roger.chen@rock-chips.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 
 #include <linux/stmmac.h>
@@ -31,7 +22,7 @@
 #include <linux/mfd/syscon.h>
 #include <linux/regmap.h>
 #include <linux/pm_runtime.h>
-#include <linux/soc/rockchip/rk_vendor_storage.h>
+
 #include "stmmac_platform.h"
 
 struct rk_priv_data;
@@ -46,7 +37,7 @@ struct rk_gmac_ops {
 
 struct rk_priv_data {
 	struct platform_device *pdev;
-	int phy_iface;
+	phy_interface_t phy_iface;
 	struct regulator *regulator;
 	bool suspended;
 	const struct rk_gmac_ops *ops;
@@ -489,64 +480,6 @@ static const struct rk_gmac_ops rk3288_ops = {
 	.set_to_rmii = rk3288_set_to_rmii,
 	.set_rgmii_speed = rk3288_set_rgmii_speed,
 	.set_rmii_speed = rk3288_set_rmii_speed,
-};
-
-#define RK3308_GRF_MAC_CON0		0x04a0
-
-/* Rk3308_GRF_MAC_CON1 */
-#define RK3308_MAC_PHY_INTF_SEL_RMII	(GRF_CLR_BIT(2) | GRF_CLR_BIT(3) | \
-					GRF_BIT(4))
-#define RK3308_MAC_SPEED_10M		GRF_CLR_BIT(0)
-#define Rk3308_MAC_SPEED_100M		GRF_BIT(0)
-
-static void rk3308_set_to_rmii(struct rk_priv_data *bsp_priv)
-{
-	struct device *dev = &bsp_priv->pdev->dev;
-
-	if (IS_ERR(bsp_priv->grf)) {
-		dev_err(dev, "%s: Missing rockchip,grf property\n", __func__);
-		return;
-	}
-
-	regmap_write(bsp_priv->grf, RK3308_GRF_MAC_CON0,
-		     RK3308_MAC_PHY_INTF_SEL_RMII);
-}
-
-static void rk3308_set_rmii_speed(struct rk_priv_data *bsp_priv, int speed)
-{
-	struct device *dev = &bsp_priv->pdev->dev;
-	int ret;
-
-	if (IS_ERR(bsp_priv->clk_mac_speed)) {
-		dev_err(dev, "%s: Missing clk_mac_speed clock\n", __func__);
-		return;
-	}
-
-	if (speed == 10) {
-		regmap_write(bsp_priv->grf, RK3308_GRF_MAC_CON0,
-			     RK3308_MAC_SPEED_10M);
-
-		ret = clk_set_rate(bsp_priv->clk_mac_speed, 2500000);
-		if (ret)
-			dev_err(dev, "%s: set clk_mac_speed rate 2500000 failed: %d\n",
-				__func__, ret);
-	} else if (speed == 100) {
-		regmap_write(bsp_priv->grf, RK3308_GRF_MAC_CON0,
-			     Rk3308_MAC_SPEED_100M);
-
-		ret = clk_set_rate(bsp_priv->clk_mac_speed, 25000000);
-		if (ret)
-			dev_err(dev, "%s: set clk_mac_speed rate 25000000 failed: %d\n",
-				__func__, ret);
-
-	} else {
-		dev_err(dev, "unknown speed value for RMII! speed=%d", speed);
-	}
-}
-
-static const struct rk_gmac_ops rk3308_ops = {
-	.set_to_rmii = rk3308_set_to_rmii,
-	.set_rmii_speed = rk3308_set_rmii_speed,
 };
 
 #define RK3328_GRF_MAC_CON0	0x0900
@@ -1160,6 +1093,8 @@ static int rk_gmac_clk_init(struct plat_stmmacenet_data *plat)
 	}
 
 	bsp_priv->clk_mac_speed = devm_clk_get(dev, "clk_mac_speed");
+	if (IS_ERR(bsp_priv->clk_mac_speed))
+		dev_err(dev, "cannot get clock %s\n", "clk_mac_speed");
 
 	if (bsp_priv->clock_input) {
 		dev_info(dev, "clock input from PHY\n");
@@ -1168,8 +1103,8 @@ static int rk_gmac_clk_init(struct plat_stmmacenet_data *plat)
 			clk_set_rate(bsp_priv->clk_mac, 50000000);
 	}
 
-	if (bsp_priv->integrated_phy) {
-		bsp_priv->clk_phy = devm_clk_get(dev, "clk_macphy");
+	if (plat->phy_node && bsp_priv->integrated_phy) {
+		bsp_priv->clk_phy = of_clk_get(plat->phy_node, 0);
 		if (IS_ERR(bsp_priv->clk_phy)) {
 			ret = PTR_ERR(bsp_priv->clk_phy);
 			dev_err(dev, "Cannot get PHY clock: %d\n", ret);
@@ -1259,10 +1194,8 @@ static int phy_power_on(struct rk_priv_data *bsp_priv, bool enable)
 	int ret;
 	struct device *dev = &bsp_priv->pdev->dev;
 
-	if (!ldo) {
-		dev_err(dev, "no regulator found\n");
-		return -1;
-	}
+	if (!ldo)
+		return 0;
 
 	if (enable) {
 		ret = regulator_enable(ldo);
@@ -1291,7 +1224,7 @@ static struct rk_priv_data *rk_gmac_setup(struct platform_device *pdev,
 	if (!bsp_priv)
 		return ERR_PTR(-ENOMEM);
 
-	bsp_priv->phy_iface = of_get_phy_mode(dev->of_node);
+	of_get_phy_mode(dev->of_node, &bsp_priv->phy_iface);
 	bsp_priv->ops = ops;
 
 	bsp_priv->regulator = devm_regulator_get_optional(dev, "phy");
@@ -1342,12 +1275,15 @@ static struct rk_priv_data *rk_gmac_setup(struct platform_device *pdev,
 	bsp_priv->grf = syscon_regmap_lookup_by_phandle(dev->of_node,
 							"rockchip,grf");
 
-	bsp_priv->integrated_phy = device_property_read_bool(dev, "phy-is-integrated");
-	if (bsp_priv->integrated_phy) {
-		bsp_priv->phy_reset = devm_reset_control_get(dev, "mac-phy");
-		if (IS_ERR(bsp_priv->phy_reset)) {
-			dev_err(&pdev->dev, "No PHY reset control found.\n");
-			bsp_priv->phy_reset = NULL;
+	if (plat->phy_node) {
+		bsp_priv->integrated_phy = of_property_read_bool(plat->phy_node,
+								 "phy-is-integrated");
+		if (bsp_priv->integrated_phy) {
+			bsp_priv->phy_reset = of_reset_control_get(plat->phy_node, NULL);
+			if (IS_ERR(bsp_priv->phy_reset)) {
+				dev_err(&pdev->dev, "No PHY reset control found.\n");
+				bsp_priv->phy_reset = NULL;
+			}
 		}
 	}
 	dev_info(dev, "integrated PHY? (%s).\n",
@@ -1443,40 +1379,6 @@ static void rk_fix_speed(void *priv, unsigned int speed)
 	}
 }
 
-void __weak rk_devinfo_get_eth_mac(u8 *mac)
-{
-}
-
-void rk_get_eth_addr(void *priv, unsigned char *addr)
-{
-	int ret;
-	struct rk_priv_data *bsp_priv = priv;
-	struct device *dev = &bsp_priv->pdev->dev;
-
-	rk_devinfo_get_eth_mac(addr);
-	if (is_valid_ether_addr(addr))
-		goto out;
-
-	ret = rk_vendor_read(LAN_MAC_ID, addr, 6);
-	if (ret != 6 || is_zero_ether_addr(addr)) {
-		dev_err(dev, "%s: rk_vendor_read eth mac address failed (%d)",
-					__func__, ret);
-		random_ether_addr(addr);
-		dev_err(dev, "%s: generate random eth mac address: %02x:%02x:%02x:%02x:%02x:%02x",
-					__func__, addr[0], addr[1], addr[2],
-					addr[3], addr[4], addr[5]);
-		ret = rk_vendor_write(LAN_MAC_ID, addr, 6);
-		if (ret != 0)
-			dev_err(dev, "%s: rk_vendor_write eth mac address failed (%d)",
-					__func__, ret);
-	}
-
-out:
-	dev_err(dev, "%s: mac address: %02x:%02x:%02x:%02x:%02x:%02x",
-				__func__, addr[0], addr[1], addr[2],
-				addr[3], addr[4], addr[5]);
-}
-
 static int rk_gmac_probe(struct platform_device *pdev)
 {
 	struct plat_stmmacenet_data *plat_dat;
@@ -1500,19 +1402,20 @@ static int rk_gmac_probe(struct platform_device *pdev)
 
 	plat_dat->has_gmac = true;
 	plat_dat->fix_mac_speed = rk_fix_speed;
-	plat_dat->get_eth_addr = rk_get_eth_addr;
 
 	plat_dat->bsp_priv = rk_gmac_setup(pdev, plat_dat, data);
-	if (IS_ERR(plat_dat->bsp_priv))
-		return PTR_ERR(plat_dat->bsp_priv);
+	if (IS_ERR(plat_dat->bsp_priv)) {
+		ret = PTR_ERR(plat_dat->bsp_priv);
+		goto err_remove_config_dt;
+	}
 
 	ret = rk_gmac_clk_init(plat_dat);
 	if (ret)
-		return ret;
+		goto err_remove_config_dt;
 
 	ret = rk_gmac_powerup(plat_dat->bsp_priv);
 	if (ret)
-		return ret;
+		goto err_remove_config_dt;
 
 	ret = stmmac_dvr_probe(&pdev->dev, plat_dat, &stmmac_res);
 	if (ret)
@@ -1522,6 +1425,8 @@ static int rk_gmac_probe(struct platform_device *pdev)
 
 err_gmac_powerdown:
 	rk_gmac_powerdown(plat_dat->bsp_priv);
+err_remove_config_dt:
+	stmmac_remove_config_dt(pdev, plat_dat);
 
 	return ret;
 }
@@ -1572,7 +1477,6 @@ static const struct of_device_id rk_gmac_dwmac_match[] = {
 	{ .compatible = "rockchip,rk3128-gmac", .data = &rk3128_ops },
 	{ .compatible = "rockchip,rk3228-gmac", .data = &rk3228_ops },
 	{ .compatible = "rockchip,rk3288-gmac", .data = &rk3288_ops },
-	{ .compatible = "rockchip,rk3308-mac",  .data = &rk3308_ops },
 	{ .compatible = "rockchip,rk3328-gmac", .data = &rk3328_ops },
 	{ .compatible = "rockchip,rk3366-gmac", .data = &rk3366_ops },
 	{ .compatible = "rockchip,rk3368-gmac", .data = &rk3368_ops },

@@ -1,12 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2008
  * Guennadi Liakhovetski, DENX Software Engineering, <lg@denx.de>
  *
  * Copyright 2004-2007 Freescale Semiconductor, Inc. All Rights Reserved.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/module.h>
@@ -33,7 +30,7 @@
 #include <linux/platform_data/video-mx3fb.h>
 
 #include <asm/io.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 
 #define MX3FB_NAME		"mx3_sdc_fb"
 
@@ -845,7 +842,7 @@ static int __set_par(struct fb_info *fbi, bool lock)
 		if (fbi->var.sync & FB_SYNC_SHARP_MODE)
 			mode = IPU_PANEL_SHARP_TFT;
 
-		dev_dbg(fbi->device, "pixclock = %ul Hz\n",
+		dev_dbg(fbi->device, "pixclock = %u Hz\n",
 			(u32) (PICOS2KHZ(fbi->var.pixclock) * 1000UL));
 
 		if (sdc_init_panel(mx3fb, mode,
@@ -1252,7 +1249,7 @@ static int mx3fb_pan_display(struct fb_var_screeninfo *var,
  * invoked by the core framebuffer driver to perform operations like
  * blitting, rectangle filling, copy regions and cursor definition.
  */
-static struct fb_ops mx3fb_ops = {
+static const struct fb_ops mx3fb_ops = {
 	.owner = THIS_MODULE,
 	.fb_set_par = mx3fb_set_par,
 	.fb_check_var = mx3fb_check_var,
@@ -1336,9 +1333,8 @@ static int mx3fb_map_video_memory(struct fb_info *fbi, unsigned int mem_len,
 	int retval = 0;
 	dma_addr_t addr;
 
-	fbi->screen_base = dma_alloc_writecombine(fbi->device,
-						  mem_len,
-						  &addr, GFP_DMA | GFP_KERNEL);
+	fbi->screen_base = dma_alloc_wc(fbi->device, mem_len, &addr,
+					GFP_DMA | GFP_KERNEL);
 
 	if (!fbi->screen_base) {
 		dev_err(fbi->device, "Cannot allocate %u bytes framebuffer memory\n",
@@ -1378,8 +1374,8 @@ err0:
  */
 static int mx3fb_unmap_video_memory(struct fb_info *fbi)
 {
-	dma_free_writecombine(fbi->device, fbi->fix.smem_len,
-			      fbi->screen_base, fbi->fix.smem_start);
+	dma_free_wc(fbi->device, fbi->fix.smem_len, fbi->screen_base,
+		    fbi->fix.smem_start);
 
 	fbi->screen_base = NULL;
 	mutex_lock(&fbi->mm_lock);
@@ -1393,7 +1389,8 @@ static int mx3fb_unmap_video_memory(struct fb_info *fbi)
  * mx3fb_init_fbinfo() - initialize framebuffer information object.
  * @return:	initialized framebuffer structure.
  */
-static struct fb_info *mx3fb_init_fbinfo(struct device *dev, struct fb_ops *ops)
+static struct fb_info *mx3fb_init_fbinfo(struct device *dev,
+					 const struct fb_ops *ops)
 {
 	struct fb_info *fbi;
 	struct mx3fb_info *mx3fbi;

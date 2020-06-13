@@ -11,7 +11,7 @@
 
 #include <asm/time.h>
 
-static cycle_t c0_hpt_read(struct clocksource *cs)
+static u64 c0_hpt_read(struct clocksource *cs)
 {
 	return read_c0_count();
 }
@@ -78,7 +78,7 @@ int __init init_r4k_clocksource(void)
 	 * by the VDSO (HWREna is configured by configure_hwrena()).
 	 */
 	if (cpu_has_mips_r2_r6 && rdhwr_count_usable())
-		clocksource_mips.archdata.vdso_clock_mode = VDSO_CLOCK_R4K;
+		clocksource_mips.vdso_clock_mode = VDSO_CLOCKMODE_R4K;
 
 	clocksource_register_hz(&clocksource_mips, mips_hpt_frequency);
 

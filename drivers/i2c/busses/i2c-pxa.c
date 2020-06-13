@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  *  i2c_adap_pxa.c
  *
@@ -5,10 +6,6 @@
  *
  *  Copyright (C) 2002 Intrinsyc Software Inc.
  *  Copyright (C) 2004-2005 Deep Blue Solutions Ltd.
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License version 2 as
- *  published by the Free Software Foundation.
  *
  *  History:
  *    Apr 2002: Initial version [CS]
@@ -28,7 +25,6 @@
 #include <linux/delay.h>
 #include <linux/errno.h>
 #include <linux/interrupt.h>
-#include <linux/i2c-pxa.h>
 #include <linux/of.h>
 #include <linux/of_device.h>
 #include <linux/platform_device.h>
@@ -36,7 +32,7 @@
 #include <linux/clk.h>
 #include <linux/slab.h>
 #include <linux/io.h>
-#include <linux/i2c/pxa-i2c.h>
+#include <linux/platform_data/i2c-pxa.h>
 
 #include <asm/irq.h>
 
@@ -48,6 +44,8 @@ struct pxa_reg_layout {
 	u32 isar;
 	u32 ilcr;
 	u32 iwcr;
+	u32 fm;
+	u32 hs;
 };
 
 enum pxa_i2c_types {
@@ -55,7 +53,11 @@ enum pxa_i2c_types {
 	REGS_PXA3XX,
 	REGS_CE4100,
 	REGS_PXA910,
+	REGS_A3700,
 };
+
+#define ICR_BUSMODE_FM	(1 << 16)	   /* shifted fast mode for armada-3700 */
+#define ICR_BUSMODE_HS	(1 << 17)	   /* shifted high speed mode for armada-3700 */
 
 /*
  * I2C registers definitions
@@ -91,6 +93,15 @@ static struct pxa_reg_layout pxa_reg_layout[] = {
 		.ilcr = 0x28,
 		.iwcr = 0x30,
 	},
+	[REGS_A3700] = {
+		.ibmr =	0x00,
+		.idbr =	0x04,
+		.icr =	0x08,
+		.isr =	0x0c,
+		.isar =	0x10,
+		.fm = ICR_BUSMODE_FM,
+		.hs = ICR_BUSMODE_HS,
+	},
 };
 
 static const struct platform_device_id i2c_pxa_id_table[] = {
@@ -98,6 +109,7 @@ static const struct platform_device_id i2c_pxa_id_table[] = {
 	{ "pxa3xx-pwri2c",	REGS_PXA3XX },
 	{ "ce4100-i2c",		REGS_CE4100 },
 	{ "pxa910-i2c",		REGS_PXA910 },
+	{ "armada-3700-i2c",	REGS_A3700  },
 	{ },
 };
 MODULE_DEVICE_TABLE(platform, i2c_pxa_id_table);
@@ -167,7 +179,7 @@ struct pxa_i2c {
 	struct i2c_adapter	adap;
 	struct clk		*clk;
 #ifdef CONFIG_I2C_PXA_SLAVE
-	struct i2c_slave_client *slave;
+	struct i2c_client	*slave;
 #endif
 
 	unsigned int		irqlogidx;
@@ -193,6 +205,8 @@ struct pxa_i2c {
 	unsigned char		master_code;
 	unsigned long		rate;
 	bool			highmode_enter;
+	u32			fm_mask;
+	u32			hs_mask;
 };
 
 #define _IBMR(i2c)	((i2c)->reg_ibmr)
@@ -503,8 +517,8 @@ static void i2c_pxa_reset(struct pxa_i2c *i2c)
 		writel(i2c->slave_addr, _ISAR(i2c));
 
 	/* set control register values */
-	writel(I2C_ICR_INIT | (i2c->fast_mode ? ICR_FM : 0), _ICR(i2c));
-	writel(readl(_ICR(i2c)) | (i2c->high_mode ? ICR_HS : 0), _ICR(i2c));
+	writel(I2C_ICR_INIT | (i2c->fast_mode ? i2c->fm_mask : 0), _ICR(i2c));
+	writel(readl(_ICR(i2c)) | (i2c->high_mode ? i2c->hs_mask : 0), _ICR(i2c));
 
 #ifdef CONFIG_I2C_PXA_SLAVE
 	dev_info(&i2c->adap.dev, "Enabling slave mode\n");
@@ -529,22 +543,23 @@ static void i2c_pxa_slave_txempty(struct pxa_i2c *i2c, u32 isr)
 	if (isr & ISR_BED) {
 		/* what should we do here? */
 	} else {
-		int ret = 0;
+		u8 byte = 0;
 
 		if (i2c->slave != NULL)
-			ret = i2c->slave->read(i2c->slave->data);
+			i2c_slave_event(i2c->slave, I2C_SLAVE_READ_PROCESSED,
+					&byte);
 
-		writel(ret, _IDBR(i2c));
+		writel(byte, _IDBR(i2c));
 		writel(readl(_ICR(i2c)) | ICR_TB, _ICR(i2c));   /* allow next byte */
 	}
 }
 
 static void i2c_pxa_slave_rxfull(struct pxa_i2c *i2c, u32 isr)
 {
-	unsigned int byte = readl(_IDBR(i2c));
+	u8 byte = readl(_IDBR(i2c));
 
 	if (i2c->slave != NULL)
-		i2c->slave->write(i2c->slave->data, byte);
+		i2c_slave_event(i2c->slave, I2C_SLAVE_WRITE_RECEIVED, &byte);
 
 	writel(readl(_ICR(i2c)) | ICR_TB, _ICR(i2c));
 }
@@ -557,9 +572,18 @@ static void i2c_pxa_slave_start(struct pxa_i2c *i2c, u32 isr)
 		dev_dbg(&i2c->adap.dev, "SAD, mode is slave-%cx\n",
 		       (isr & ISR_RWM) ? 'r' : 't');
 
-	if (i2c->slave != NULL)
-		i2c->slave->event(i2c->slave->data,
-				 (isr & ISR_RWM) ? I2C_SLAVE_EVENT_START_READ : I2C_SLAVE_EVENT_START_WRITE);
+	if (i2c->slave != NULL) {
+		if (isr & ISR_RWM) {
+			u8 byte = 0;
+
+			i2c_slave_event(i2c->slave, I2C_SLAVE_READ_REQUESTED,
+					&byte);
+			writel(byte, _IDBR(i2c));
+		} else {
+			i2c_slave_event(i2c->slave, I2C_SLAVE_WRITE_REQUESTED,
+					NULL);
+		}
+	}
 
 	/*
 	 * slave could interrupt in the middle of us generating a
@@ -592,7 +616,7 @@ static void i2c_pxa_slave_stop(struct pxa_i2c *i2c)
 		dev_dbg(&i2c->adap.dev, "ISR: SSD (Slave Stop)\n");
 
 	if (i2c->slave != NULL)
-		i2c->slave->event(i2c->slave->data, I2C_SLAVE_EVENT_STOP);
+		i2c_slave_event(i2c->slave, I2C_SLAVE_STOP, NULL);
 
 	if (i2c_debug > 2)
 		dev_dbg(&i2c->adap.dev, "ISR: SSD (Slave Stop) acked\n");
@@ -603,6 +627,38 @@ static void i2c_pxa_slave_stop(struct pxa_i2c *i2c)
 	 */
 	if (i2c->msg)
 		i2c_pxa_master_complete(i2c, I2C_RETRY);
+}
+
+static int i2c_pxa_slave_reg(struct i2c_client *slave)
+{
+	struct pxa_i2c *i2c = slave->adapter->algo_data;
+
+	if (i2c->slave)
+		return -EBUSY;
+
+	if (!i2c->reg_isar)
+		return -EAFNOSUPPORT;
+
+	i2c->slave = slave;
+	i2c->slave_addr = slave->addr;
+
+	writel(i2c->slave_addr, _ISAR(i2c));
+
+	return 0;
+}
+
+static int i2c_pxa_slave_unreg(struct i2c_client *slave)
+{
+	struct pxa_i2c *i2c = slave->adapter->algo_data;
+
+	WARN_ON(!i2c->slave);
+
+	i2c->slave_addr = I2C_PXA_SLAVE_ADDR;
+	writel(i2c->slave_addr, _ISAR(i2c));
+
+	i2c->slave = NULL;
+
+	return 0;
 }
 #else
 static void i2c_pxa_slave_txempty(struct pxa_i2c *i2c, u32 isr)
@@ -1126,17 +1182,26 @@ static u32 i2c_pxa_functionality(struct i2c_adapter *adap)
 static const struct i2c_algorithm i2c_pxa_algorithm = {
 	.master_xfer	= i2c_pxa_xfer,
 	.functionality	= i2c_pxa_functionality,
+#ifdef CONFIG_I2C_PXA_SLAVE
+	.reg_slave	= i2c_pxa_slave_reg,
+	.unreg_slave	= i2c_pxa_slave_unreg,
+#endif
 };
 
 static const struct i2c_algorithm i2c_pxa_pio_algorithm = {
 	.master_xfer	= i2c_pxa_pio_xfer,
 	.functionality	= i2c_pxa_functionality,
+#ifdef CONFIG_I2C_PXA_SLAVE
+	.reg_slave	= i2c_pxa_slave_reg,
+	.unreg_slave	= i2c_pxa_slave_unreg,
+#endif
 };
 
 static const struct of_device_id i2c_pxa_dt_ids[] = {
 	{ .compatible = "mrvl,pxa-i2c", .data = (void *)REGS_PXA2XX },
 	{ .compatible = "mrvl,pwri2c", .data = (void *)REGS_PXA3XX },
 	{ .compatible = "mrvl,mmp-twsi", .data = (void *)REGS_PXA910 },
+	{ .compatible = "marvell,armada-3700-i2c", .data = (void *)REGS_A3700 },
 	{}
 };
 MODULE_DEVICE_TABLE(of, i2c_pxa_dt_ids);
@@ -1234,6 +1299,9 @@ static int i2c_pxa_probe(struct platform_device *dev)
 	i2c->reg_idbr = i2c->reg_base + pxa_reg_layout[i2c_type].idbr;
 	i2c->reg_icr = i2c->reg_base + pxa_reg_layout[i2c_type].icr;
 	i2c->reg_isr = i2c->reg_base + pxa_reg_layout[i2c_type].isr;
+	i2c->fm_mask = pxa_reg_layout[i2c_type].fm ? : ICR_FM;
+	i2c->hs_mask = pxa_reg_layout[i2c_type].hs ? : ICR_HS;
+
 	if (i2c_type != REGS_CE4100)
 		i2c->reg_isar = i2c->reg_base + pxa_reg_layout[i2c_type].isar;
 
@@ -1251,10 +1319,6 @@ static int i2c_pxa_probe(struct platform_device *dev)
 	i2c->highmode_enter = false;
 
 	if (plat) {
-#ifdef CONFIG_I2C_PXA_SLAVE
-		i2c->slave_addr = plat->slave_addr;
-		i2c->slave = plat->slave;
-#endif
 		i2c->adap.class = plat->class;
 	}
 
@@ -1292,10 +1356,8 @@ static int i2c_pxa_probe(struct platform_device *dev)
 #endif
 
 	ret = i2c_add_numbered_adapter(&i2c->adap);
-	if (ret < 0) {
-		dev_err(&dev->dev, "failed to add bus: %d\n", ret);
+	if (ret < 0)
 		goto ereqirq;
-	}
 
 	platform_set_drvdata(dev, i2c);
 
@@ -1326,8 +1388,7 @@ static int i2c_pxa_remove(struct platform_device *dev)
 #ifdef CONFIG_PM
 static int i2c_pxa_suspend_noirq(struct device *dev)
 {
-	struct platform_device *pdev = to_platform_device(dev);
-	struct pxa_i2c *i2c = platform_get_drvdata(pdev);
+	struct pxa_i2c *i2c = dev_get_drvdata(dev);
 
 	clk_disable(i2c->clk);
 
@@ -1336,8 +1397,7 @@ static int i2c_pxa_suspend_noirq(struct device *dev)
 
 static int i2c_pxa_resume_noirq(struct device *dev)
 {
-	struct platform_device *pdev = to_platform_device(dev);
-	struct pxa_i2c *i2c = platform_get_drvdata(pdev);
+	struct pxa_i2c *i2c = dev_get_drvdata(dev);
 
 	clk_enable(i2c->clk);
 	i2c_pxa_reset(i2c);

@@ -1,11 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Rockchip Generic Register Files setup
  *
  * Copyright (c) 2016 Heiko Stuebner <heiko@sntech.de>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/err.h>
@@ -26,21 +23,6 @@ struct rockchip_grf_value {
 struct rockchip_grf_info {
 	const struct rockchip_grf_value *values;
 	int num_values;
-};
-
-#define PX30_GRF_SOC_CON5		0x414
-
-static const struct rockchip_grf_value px30_defaults[] __initconst = {
-	/*
-	 * Postponing auto jtag/sdmmc switching by 5 seconds.
-	 * The counter value is calculated based on 24MHz clock.
-	 */
-	{ "jtag switching delay", PX30_GRF_SOC_CON5, 0x7270E00},
-};
-
-static const struct rockchip_grf_info px30_grf __initconst = {
-	.values = px30_defaults,
-	.num_values = ARRAY_SIZE(px30_defaults),
 };
 
 #define RK3036_GRF_SOC_CON0		0x140
@@ -81,9 +63,11 @@ static const struct rockchip_grf_info rk3228_grf __initconst = {
 };
 
 #define RK3288_GRF_SOC_CON0		0x244
+#define RK3288_GRF_SOC_CON2		0x24c
 
 static const struct rockchip_grf_value rk3288_defaults[] __initconst = {
 	{ "jtag switching", RK3288_GRF_SOC_CON0, HIWORD_UPDATE(0, 1, 12) },
+	{ "pwm select", RK3288_GRF_SOC_CON2, HIWORD_UPDATE(1, 1, 0) },
 };
 
 static const struct rockchip_grf_info rk3288_grf __initconst = {
@@ -100,17 +84,6 @@ static const struct rockchip_grf_value rk3328_defaults[] __initconst = {
 static const struct rockchip_grf_info rk3328_grf __initconst = {
 	.values = rk3328_defaults,
 	.num_values = ARRAY_SIZE(rk3328_defaults),
-};
-
-#define RK3308_GRF_SOC_CON3		0x30c
-
-static const struct rockchip_grf_value rk3308_defaults[] __initconst = {
-	{ "uart dma mask", RK3308_GRF_SOC_CON3, HIWORD_UPDATE(0, 0x1f, 10) },
-};
-
-static const struct rockchip_grf_info rk3308_grf __initconst = {
-	.values = rk3308_defaults,
-	.num_values = ARRAY_SIZE(rk3308_defaults),
 };
 
 #define RK3368_GRF_SOC_CON15		0x43c
@@ -137,9 +110,6 @@ static const struct rockchip_grf_info rk3399_grf __initconst = {
 
 static const struct of_device_id rockchip_grf_dt_match[] __initconst = {
 	{
-		.compatible = "rockchip,px30-grf",
-		.data = (void *)&px30_grf,
-	}, {
 		.compatible = "rockchip,rk3036-grf",
 		.data = (void *)&rk3036_grf,
 	}, {
@@ -151,9 +121,6 @@ static const struct of_device_id rockchip_grf_dt_match[] __initconst = {
 	}, {
 		.compatible = "rockchip,rk3288-grf",
 		.data = (void *)&rk3288_grf,
-	}, {
-		.compatible = "rockchip,rk3308-grf",
-		.data = (void *)&rk3308_grf,
 	}, {
 		.compatible = "rockchip,rk3328-grf",
 		.data = (void *)&rk3328_grf,

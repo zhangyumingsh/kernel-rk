@@ -7,7 +7,8 @@
 #include <linux/ptrace.h>
 #include <linux/version.h>
 #include <uapi/linux/bpf.h>
-#include "bpf_helpers.h"
+#include <bpf/bpf_helpers.h>
+#include <bpf/bpf_tracing.h>
 
 struct pair {
 	u64 val;
@@ -40,7 +41,7 @@ int bpf_prog2(struct pt_regs *ctx)
 	long ip = 0;
 
 	/* get ip address of kmem_cache_alloc_node() caller */
-	bpf_probe_read(&ip, sizeof(ip), (void *)(PT_REGS_FP(ctx) + sizeof(ip)));
+	BPF_KRETPROBE_READ_RET_IP(ip, ctx);
 
 	struct pair v = {
 		.val = bpf_ktime_get_ns(),

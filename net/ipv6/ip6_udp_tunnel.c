@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 #include <linux/module.h>
 #include <linux/errno.h>
 #include <linux/socket.h>
@@ -28,6 +29,13 @@ int udp_sock_create6(struct net *net, struct udp_port_cfg *cfg,
 
 		err = kernel_setsockopt(sock, IPPROTO_IPV6, IPV6_V6ONLY,
 					(char *) &val, sizeof(val));
+		if (err < 0)
+			goto error;
+	}
+	if (cfg->bind_ifindex) {
+		err = kernel_setsockopt(sock, SOL_SOCKET, SO_BINDTOIFINDEX,
+					(void *)&cfg->bind_ifindex,
+					sizeof(cfg->bind_ifindex));
 		if (err < 0)
 			goto error;
 	}
@@ -74,8 +82,8 @@ int udp_tunnel6_xmit_skb(struct dst_entry *dst, struct sock *sk,
 			 struct sk_buff *skb,
 			 struct net_device *dev, struct in6_addr *saddr,
 			 struct in6_addr *daddr,
-			 __u8 prio, __u8 ttl, __be16 src_port,
-			 __be16 dst_port, bool nocheck)
+			 __u8 prio, __u8 ttl, __be32 label,
+			 __be16 src_port, __be16 dst_port, bool nocheck)
 {
 	struct udphdr *uh;
 	struct ipv6hdr *ip6h;
@@ -89,9 +97,6 @@ int udp_tunnel6_xmit_skb(struct dst_entry *dst, struct sock *sk,
 
 	uh->len = htons(skb->len);
 
-	memset(&(IPCB(skb)->opt), 0, sizeof(IPCB(skb)->opt));
-	IPCB(skb)->flags &= ~(IPSKB_XFRM_TUNNEL_SIZE | IPSKB_XFRM_TRANSFORMED
-			    | IPSKB_REROUTED);
 	skb_dst_set(skb, dst);
 
 	udp6_set_csum(nocheck, skb, saddr, daddr, skb->len);
@@ -99,7 +104,7 @@ int udp_tunnel6_xmit_skb(struct dst_entry *dst, struct sock *sk,
 	__skb_push(skb, sizeof(*ip6h));
 	skb_reset_network_header(skb);
 	ip6h		  = ipv6_hdr(skb);
-	ip6_flow_hdr(ip6h, prio, htonl(0));
+	ip6_flow_hdr(ip6h, prio, label);
 	ip6h->payload_len = htons(skb->len);
 	ip6h->nexthdr     = IPPROTO_UDP;
 	ip6h->hop_limit   = ttl;

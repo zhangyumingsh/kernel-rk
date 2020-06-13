@@ -1,13 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * I2C bus driver for Conexant Digicolor SoCs
  *
  * Author: Baruch Siach <baruch@tkos.co.il>
  *
  * Copyright (C) 2015 Paradox Innovation Ltd.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/clk.h>
@@ -21,7 +18,6 @@
 #include <linux/of.h>
 #include <linux/platform_device.h>
 
-#define DEFAULT_FREQ		100000
 #define TIMEOUT_MS		100
 
 #define II_CONTROL		0x0
@@ -303,7 +299,7 @@ static int dc_i2c_probe(struct platform_device *pdev)
 
 	if (of_property_read_u32(pdev->dev.of_node, "clock-frequency",
 				 &i2c->frequency))
-		i2c->frequency = DEFAULT_FREQ;
+		i2c->frequency = I2C_MAX_STANDARD_MODE_FREQ;
 
 	i2c->dev = &pdev->dev;
 	platform_set_drvdata(pdev, i2c);
@@ -347,7 +343,7 @@ static int dc_i2c_probe(struct platform_device *pdev)
 
 	ret = i2c_add_adapter(&i2c->adap);
 	if (ret < 0) {
-		clk_unprepare(i2c->clk);
+		clk_disable_unprepare(i2c->clk);
 		return ret;
 	}
 
@@ -368,6 +364,7 @@ static const struct of_device_id dc_i2c_match[] = {
 	{ .compatible = "cnxt,cx92755-i2c" },
 	{ },
 };
+MODULE_DEVICE_TABLE(of, dc_i2c_match);
 
 static struct platform_driver dc_i2c_driver = {
 	.probe   = dc_i2c_probe,

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *  Copyright (C) 2012, Analog Devices Inc.
  *	Author: Lars-Peter Clausen <lars@metafoo.de>
@@ -7,16 +8,6 @@
  *	mxs-pcm.c, Copyright (C) 2011 Freescale Semiconductor, Inc.
  *	ep93xx-pcm.c, Copyright (C) 2006 Lennert Buytenhek <buytenh@wantstofly.org>
  *		      Copyright (C) 2006 Applied Data Systems
- *
- *  This program is free software; you can redistribute it and/or modify it
- *  under  the terms of the GNU General  Public License as published by the
- *  Free Software Foundation;  either version 2 of the License, or (at your
- *  option) any later version.
- *
- *  You should have received a copy of the GNU General Public License along
- *  with this program; if not, write to the Free Software Foundation, Inc.,
- *  675 Mass Ave, Cambridge, MA 02139, USA.
- *
  */
 #include <linux/module.h>
 #include <linux/init.h>
@@ -33,10 +24,6 @@ struct dmaengine_pcm_runtime_data {
 	dma_cookie_t cookie;
 
 	unsigned int pos;
-#ifdef CONFIG_SND_SOC_ROCKCHIP_VAD
-	unsigned int vpos;
-	unsigned int vresidue_bytes;
-#endif
 };
 
 static inline struct dmaengine_pcm_runtime_data *substream_to_prtd(
@@ -110,8 +97,9 @@ EXPORT_SYMBOL_GPL(snd_hwparams_to_dma_slave_config);
  * direction of the substream. If the substream is a playback stream the dst
  * fields will be initialized, if it is a capture stream the src fields will be
  * initialized. The {dst,src}_addr_width field will only be initialized if the
- * addr_width field of the DAI DMA data struct is not equal to
- * DMA_SLAVE_BUSWIDTH_UNDEFINED.
+ * SND_DMAENGINE_PCM_DAI_FLAG_PACK flag is set or if the addr_width field of
+ * the DAI DMA data struct is not equal to DMA_SLAVE_BUSWIDTH_UNDEFINED. If
+ * both conditions are met the latter takes priority.
  */
 void snd_dmaengine_pcm_set_config_from_dai_data(
 	const struct snd_pcm_substream *substream,
@@ -121,11 +109,17 @@ void snd_dmaengine_pcm_set_config_from_dai_data(
 	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) {
 		slave_config->dst_addr = dma_data->addr;
 		slave_config->dst_maxburst = dma_data->maxburst;
+		if (dma_data->flags & SND_DMAENGINE_PCM_DAI_FLAG_PACK)
+			slave_config->dst_addr_width =
+				DMA_SLAVE_BUSWIDTH_UNDEFINED;
 		if (dma_data->addr_width != DMA_SLAVE_BUSWIDTH_UNDEFINED)
 			slave_config->dst_addr_width = dma_data->addr_width;
 	} else {
 		slave_config->src_addr = dma_data->addr;
 		slave_config->src_maxburst = dma_data->maxburst;
+		if (dma_data->flags & SND_DMAENGINE_PCM_DAI_FLAG_PACK)
+			slave_config->src_addr_width =
+				DMA_SLAVE_BUSWIDTH_UNDEFINED;
 		if (dma_data->addr_width != DMA_SLAVE_BUSWIDTH_UNDEFINED)
 			slave_config->src_addr_width = dma_data->addr_width;
 	}
@@ -139,15 +133,6 @@ static void dmaengine_pcm_dma_complete(void *arg)
 	struct snd_pcm_substream *substream = arg;
 	struct dmaengine_pcm_runtime_data *prtd = substream_to_prtd(substream);
 
-#ifdef CONFIG_SND_SOC_ROCKCHIP_VAD
-	if (snd_pcm_vad_attached(substream) &&
-	    substream->stream == SNDRV_PCM_STREAM_CAPTURE) {
-		void *buf = substream->runtime->dma_area + prtd->pos;
-
-		snd_pcm_vad_preprocess(substream, buf,
-				       substream->runtime->period_size);
-	}
-#endif
 	prtd->pos += snd_pcm_lib_period_bytes(substream);
 	if (prtd->pos >= snd_pcm_lib_buffer_bytes(substream))
 		prtd->pos = 0;
@@ -184,88 +169,6 @@ static int dmaengine_pcm_prepare_and_submit(struct snd_pcm_substream *substream)
 	return 0;
 }
 
-#ifdef CONFIG_SND_SOC_ROCKCHIP_VAD
-static void dmaengine_pcm_vad_dma_complete(void *arg)
-{
-	struct snd_pcm_substream *substream = arg;
-	struct dmaengine_pcm_runtime_data *prtd = substream_to_prtd(substream);
-	unsigned int pos, size;
-	void *buf;
-
-	if (snd_pcm_vad_attached(substream) &&
-	    substream->stream == SNDRV_PCM_STREAM_CAPTURE) {
-		buf = substream->runtime->dma_area + prtd->vpos;
-		pos = prtd->vpos + snd_pcm_lib_period_bytes(substream);
-
-		if (pos <= snd_pcm_lib_buffer_bytes(substream))
-			size = substream->runtime->period_size;
-		else
-			size = bytes_to_frames(substream->runtime,
-					       prtd->vresidue_bytes);
-		snd_pcm_vad_preprocess(substream, buf, size);
-	}
-	prtd->vpos += snd_pcm_lib_period_bytes(substream);
-	if (prtd->vpos >= snd_pcm_lib_buffer_bytes(substream))
-		prtd->vpos = 0;
-	snd_pcm_period_elapsed(substream);
-}
-
-static int dmaengine_pcm_prepare_single_and_submit(struct snd_pcm_substream *substream)
-{
-	struct dmaengine_pcm_runtime_data *prtd = substream_to_prtd(substream);
-	struct dma_chan *chan = prtd->dma_chan;
-	struct dma_async_tx_descriptor *desc;
-	enum dma_transfer_direction direction;
-	unsigned long flags = DMA_CTRL_ACK;
-	snd_pcm_uframes_t avail;
-	dma_addr_t buf_start, buf_end;
-	int offset, i, count, residue_bytes;
-	int period_bytes, buffer_bytes;
-
-	direction = snd_pcm_substream_to_dma_direction(substream);
-
-	if (!substream->runtime->no_period_wakeup)
-		flags |= DMA_PREP_INTERRUPT;
-
-	period_bytes = snd_pcm_lib_period_bytes(substream);
-	buffer_bytes = snd_pcm_lib_buffer_bytes(substream);
-	avail = snd_pcm_vad_avail(substream);
-	offset = frames_to_bytes(substream->runtime, avail);
-	prtd->vpos = offset;
-	buf_start = substream->runtime->dma_addr + offset;
-	buf_end = substream->runtime->dma_addr + snd_pcm_lib_buffer_bytes(substream);
-	count = (buf_end - buf_start) / period_bytes;
-	residue_bytes = (buf_end - buf_start) % period_bytes;
-	prtd->vresidue_bytes = residue_bytes;
-	pr_debug("%s: offset: %d, buffer_bytes: %d\n", __func__, offset, buffer_bytes);
-	pr_debug("%s: count: %d, residue_bytes: %d\n", __func__, count, residue_bytes);
-	for (i = 0; i < count; i++) {
-		desc = dmaengine_prep_slave_single(chan, buf_start,
-						   period_bytes,
-						   direction, flags);
-		if (!desc)
-			return -ENOMEM;
-		desc->callback = dmaengine_pcm_vad_dma_complete;
-		desc->callback_param = substream;
-		dmaengine_submit(desc);
-		buf_start += period_bytes;
-	}
-
-	if (residue_bytes) {
-		desc = dmaengine_prep_slave_single(chan, buf_start,
-						   residue_bytes,
-						   direction, flags);
-		if (!desc)
-			return -ENOMEM;
-		desc->callback = dmaengine_pcm_vad_dma_complete;
-		desc->callback_param = substream;
-		dmaengine_submit(desc);
-	}
-
-	return 0;
-}
-#endif
-
 /**
  * snd_dmaengine_pcm_trigger - dmaengine based PCM trigger implementation
  * @substream: PCM substream
@@ -284,14 +187,6 @@ int snd_dmaengine_pcm_trigger(struct snd_pcm_substream *substream, int cmd)
 
 	switch (cmd) {
 	case SNDRV_PCM_TRIGGER_START:
-#ifdef CONFIG_SND_SOC_ROCKCHIP_VAD
-		if (substream->stream == SNDRV_PCM_STREAM_CAPTURE &&
-		    snd_pcm_vad_attached(substream) &&
-		    snd_pcm_vad_avail(substream)) {
-			dmaengine_pcm_prepare_single_and_submit(substream);
-			dma_async_issue_pending(prtd->dma_chan);
-		}
-#endif
 		ret = dmaengine_pcm_prepare_and_submit(substream);
 		if (ret)
 			return ret;
@@ -345,20 +240,23 @@ EXPORT_SYMBOL_GPL(snd_dmaengine_pcm_pointer_no_residue);
 snd_pcm_uframes_t snd_dmaengine_pcm_pointer(struct snd_pcm_substream *substream)
 {
 	struct dmaengine_pcm_runtime_data *prtd = substream_to_prtd(substream);
+	struct snd_pcm_runtime *runtime = substream->runtime;
 	struct dma_tx_state state;
+	enum dma_status status;
 	unsigned int buf_size;
 	unsigned int pos = 0;
 
-#ifdef CONFIG_SND_SOC_ROCKCHIP_VAD
-	if (prtd->vpos)
-		return bytes_to_frames(substream->runtime, prtd->vpos);
-#endif
-	dmaengine_tx_status(prtd->dma_chan, prtd->cookie, &state);
-	buf_size = snd_pcm_lib_buffer_bytes(substream);
-	if (state.residue > 0 && state.residue <= buf_size)
-		pos = buf_size - state.residue;
+	status = dmaengine_tx_status(prtd->dma_chan, prtd->cookie, &state);
+	if (status == DMA_IN_PROGRESS || status == DMA_PAUSED) {
+		buf_size = snd_pcm_lib_buffer_bytes(substream);
+		if (state.residue > 0 && state.residue <= buf_size)
+			pos = buf_size - state.residue;
 
-	return bytes_to_frames(substream->runtime, pos);
+		runtime->delay = bytes_to_frames(runtime,
+						 state.in_flight_bytes);
+	}
+
+	return bytes_to_frames(runtime, pos);
 }
 EXPORT_SYMBOL_GPL(snd_dmaengine_pcm_pointer);
 
@@ -474,5 +372,88 @@ int snd_dmaengine_pcm_close_release_chan(struct snd_pcm_substream *substream)
 	return 0;
 }
 EXPORT_SYMBOL_GPL(snd_dmaengine_pcm_close_release_chan);
+
+/**
+ * snd_dmaengine_pcm_refine_runtime_hwparams - Refine runtime hw params
+ * @substream: PCM substream
+ * @dma_data: DAI DMA data
+ * @hw: PCM hw params
+ * @chan: DMA channel to use for data transfers
+ *
+ * Returns 0 on success, a negative error code otherwise.
+ *
+ * This function will query DMA capability, then refine the pcm hardware
+ * parameters.
+ */
+int snd_dmaengine_pcm_refine_runtime_hwparams(
+	struct snd_pcm_substream *substream,
+	struct snd_dmaengine_dai_dma_data *dma_data,
+	struct snd_pcm_hardware *hw,
+	struct dma_chan *chan)
+{
+	struct dma_slave_caps dma_caps;
+	u32 addr_widths = BIT(DMA_SLAVE_BUSWIDTH_1_BYTE) |
+			  BIT(DMA_SLAVE_BUSWIDTH_2_BYTES) |
+			  BIT(DMA_SLAVE_BUSWIDTH_4_BYTES);
+	snd_pcm_format_t i;
+	int ret = 0;
+
+	if (!hw || !chan || !dma_data)
+		return -EINVAL;
+
+	ret = dma_get_slave_caps(chan, &dma_caps);
+	if (ret == 0) {
+		if (dma_caps.cmd_pause && dma_caps.cmd_resume)
+			hw->info |= SNDRV_PCM_INFO_PAUSE | SNDRV_PCM_INFO_RESUME;
+		if (dma_caps.residue_granularity <= DMA_RESIDUE_GRANULARITY_SEGMENT)
+			hw->info |= SNDRV_PCM_INFO_BATCH;
+
+		if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK)
+			addr_widths = dma_caps.dst_addr_widths;
+		else
+			addr_widths = dma_caps.src_addr_widths;
+	}
+
+	/*
+	 * If SND_DMAENGINE_PCM_DAI_FLAG_PACK is set keep
+	 * hw.formats set to 0, meaning no restrictions are in place.
+	 * In this case it's the responsibility of the DAI driver to
+	 * provide the supported format information.
+	 */
+	if (!(dma_data->flags & SND_DMAENGINE_PCM_DAI_FLAG_PACK))
+		/*
+		 * Prepare formats mask for valid/allowed sample types. If the
+		 * dma does not have support for the given physical word size,
+		 * it needs to be masked out so user space can not use the
+		 * format which produces corrupted audio.
+		 * In case the dma driver does not implement the slave_caps the
+		 * default assumption is that it supports 1, 2 and 4 bytes
+		 * widths.
+		 */
+		pcm_for_each_format(i) {
+			int bits = snd_pcm_format_physical_width(i);
+
+			/*
+			 * Enable only samples with DMA supported physical
+			 * widths
+			 */
+			switch (bits) {
+			case 8:
+			case 16:
+			case 24:
+			case 32:
+			case 64:
+				if (addr_widths & (1 << (bits / 8)))
+					hw->formats |= pcm_format_to_bits(i);
+				break;
+			default:
+				/* Unsupported types */
+				break;
+			}
+		}
+
+	return ret;
+}
+EXPORT_SYMBOL_GPL(snd_dmaengine_pcm_refine_runtime_hwparams);
 
 MODULE_LICENSE("GPL");

@@ -22,6 +22,7 @@
 #include <asm/tlbflush.h>
 
 #include <asm/pgtable-bits.h>
+#define __ARCH_USE_5LEVEL_HACK
 #include <asm-generic/pgtable-nopmd.h>
 
 #define FIRST_USER_ADDRESS	0UL
@@ -112,7 +113,6 @@ static inline int pte_dirty(pte_t pte)		\
 	{ return pte_val(pte) & _PAGE_DIRTY; }
 static inline int pte_young(pte_t pte)		\
 	{ return pte_val(pte) & _PAGE_ACCESSED; }
-static inline int pte_special(pte_t pte)	{ return 0; }
 
 #define pgprot_noncached pgprot_noncached
 
@@ -167,8 +167,6 @@ static inline pte_t pte_mkdirty(pte_t pte)
 	return pte;
 }
 
-static inline pte_t pte_mkspecial(pte_t pte)	{ return pte; }
-
 static inline pte_t pte_mkyoung(pte_t pte)
 {
 	pte_val(pte) |= _PAGE_ACCESSED;
@@ -209,7 +207,7 @@ static inline void set_pte(pte_t *ptep, pte_t pteval)
 static inline void set_pte_at(struct mm_struct *mm, unsigned long addr,
 			      pte_t *ptep, pte_t pteval)
 {
-	unsigned long paddr = page_to_virt(pte_page(pteval));
+	unsigned long paddr = (unsigned long)page_to_virt(pte_page(pteval));
 
 	flush_dcache_range(paddr, paddr + PAGE_SIZE);
 	set_pte(ptep, pteval);
@@ -231,7 +229,6 @@ static inline void pte_clear(struct mm_struct *mm,
 	pte_val(null) = (addr >> PAGE_SHIFT) & 0xf;
 
 	set_pte_at(mm, addr, ptep, null);
-	flush_tlb_one(addr);
 }
 
 /*
@@ -290,8 +287,6 @@ static inline void pte_clear(struct mm_struct *mm,
 #define kern_addr_valid(addr)		(1)
 
 #include <asm-generic/pgtable.h>
-
-#define pgtable_cache_init()		do { } while (0)
 
 extern void __init paging_init(void);
 extern void __init mmu_init(void);

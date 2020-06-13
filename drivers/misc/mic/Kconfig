@@ -1,8 +1,9 @@
-comment "Intel MIC Bus Driver"
+# SPDX-License-Identifier: GPL-2.0-only
+menu "Intel MIC & related support"
 
 config INTEL_MIC_BUS
 	tristate "Intel MIC Bus Driver"
-	depends on 64BIT && PCI && X86 && X86_DEV_DMA_OPS
+	depends on 64BIT && PCI && X86
 	help
 	  This option is selected by any driver which registers a
 	  device or driver on the MIC Bus, such as CONFIG_INTEL_MIC_HOST,
@@ -15,11 +16,9 @@ config INTEL_MIC_BUS
 	  OS and tools for MIC to use with this driver are available from
 	  <http://software.intel.com/en-us/mic-developer>.
 
-comment "SCIF Bus Driver"
-
 config SCIF_BUS
 	tristate "SCIF Bus Driver"
-	depends on 64BIT && PCI && X86 && X86_DEV_DMA_OPS
+	depends on 64BIT && PCI && X86
 	help
 	  This option is selected by any driver which registers a
 	  device or driver on the SCIF Bus, such as CONFIG_INTEL_MIC_HOST
@@ -32,12 +31,24 @@ config SCIF_BUS
 	  OS and tools for MIC to use with this driver are available from
 	  <http://software.intel.com/en-us/mic-developer>.
 
-comment "Intel MIC Host Driver"
+config VOP_BUS
+	tristate "VOP Bus Driver"
+	help
+	  This option is selected by any driver which registers a
+	  device or driver on the VOP Bus, such as CONFIG_INTEL_MIC_HOST
+	  and CONFIG_INTEL_MIC_CARD.
+
+	  If you are building a host/card kernel with an Intel MIC device
+	  then say M (recommended) or Y, else say N. If unsure say N.
+
+	  More information about the Intel MIC family as well as the Linux
+	  OS and tools for MIC to use with this driver are available from
+	  <http://software.intel.com/en-us/mic-developer>.
 
 config INTEL_MIC_HOST
 	tristate "Intel MIC Host Driver"
-	depends on 64BIT && PCI && X86 && INTEL_MIC_BUS && SCIF_BUS && MIC_COSM
-	select VHOST_RING
+	depends on 64BIT && PCI && X86
+	depends on INTEL_MIC_BUS && SCIF_BUS && MIC_COSM && VOP_BUS
 	help
 	  This enables Host Driver support for the Intel Many Integrated
 	  Core (MIC) family of PCIe form factor coprocessor devices that
@@ -52,11 +63,10 @@ config INTEL_MIC_HOST
 	  OS and tools for MIC to use with this driver are available from
 	  <http://software.intel.com/en-us/mic-developer>.
 
-comment "Intel MIC Card Driver"
-
 config INTEL_MIC_CARD
 	tristate "Intel MIC Card Driver"
-	depends on 64BIT && X86 && INTEL_MIC_BUS && SCIF_BUS && MIC_COSM
+	depends on 64BIT && X86
+	depends on INTEL_MIC_BUS && SCIF_BUS && MIC_COSM && VOP_BUS
 	select VIRTIO
 	help
 	  This enables card driver support for the Intel Many Integrated
@@ -69,8 +79,6 @@ config INTEL_MIC_CARD
 
 	  For more information see
 	  <http://software.intel.com/en-us/mic-developer>.
-
-comment "SCIF Driver"
 
 config SCIF
 	tristate "SCIF Driver"
@@ -90,8 +98,6 @@ config SCIF
 	  OS and tools for MIC to use with this driver are available from
 	  <http://software.intel.com/en-us/mic-developer>.
 
-comment "Intel MIC Coprocessor State Management (COSM) Drivers"
-
 config MIC_COSM
 	tristate "Intel MIC Coprocessor State Management (COSM) Drivers"
 	depends on 64BIT && PCI && X86 && SCIF
@@ -107,3 +113,24 @@ config MIC_COSM
 	  More information about the Intel MIC family as well as the Linux
 	  OS and tools for MIC to use with this driver are available from
 	  <http://software.intel.com/en-us/mic-developer>.
+
+config VOP
+	tristate "VOP Driver"
+	depends on VOP_BUS && VHOST_DPN
+	select VHOST_RING
+	select VIRTIO
+	help
+	  This enables VOP (Virtio over PCIe) Driver support for the Intel
+	  Many Integrated Core (MIC) family of PCIe form factor coprocessor
+	  devices. The VOP driver allows virtio drivers, e.g. net, console
+	  and block drivers, on the card connect to user space virtio
+	  devices on the host.
+
+	  If you are building a host kernel with an Intel MIC device then
+	  say M (recommended) or Y, else say N. If unsure say N.
+
+	  More information about the Intel MIC family as well as the Linux
+	  OS and tools for MIC to use with this driver are available from
+	  <http://software.intel.com/en-us/mic-developer>.
+
+endmenu

@@ -1,11 +1,8 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  *  arch/arm/include/asm/mmu_context.h
  *
  *  Copyright (C) 1996 Russell King.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  *
  *  Changelog:
  *   27-06-1996	RMK	Created
@@ -15,6 +12,9 @@
 
 #include <linux/compiler.h>
 #include <linux/sched.h>
+#include <linux/mm_types.h>
+#include <linux/preempt.h>
+
 #include <asm/cacheflush.h>
 #include <asm/cachetype.h>
 #include <asm/proc-fns.h>
@@ -26,7 +26,12 @@ void __check_vmalloc_seq(struct mm_struct *mm);
 #ifdef CONFIG_CPU_HAS_ASID
 
 void check_and_switch_context(struct mm_struct *mm, struct task_struct *tsk);
-#define init_new_context(tsk,mm)	({ atomic64_set(&mm->context.id, 0); 0; })
+static inline int
+init_new_context(struct task_struct *tsk, struct mm_struct *mm)
+{
+	atomic64_set(&mm->context.id, 0);
+	return 0;
+}
 
 #ifdef CONFIG_ARM_ERRATA_798181
 void a15_erratum_get_cpumask(int this_cpu, struct mm_struct *mm,
@@ -87,7 +92,12 @@ static inline void finish_arch_post_lock_switch(void)
 
 #endif	/* CONFIG_MMU */
 
-#define init_new_context(tsk,mm)	0
+static inline int
+init_new_context(struct task_struct *tsk, struct mm_struct *mm)
+{
+	return 0;
+}
+
 
 #endif	/* CONFIG_CPU_HAS_ASID */
 

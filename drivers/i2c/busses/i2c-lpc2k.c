@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Copyright (C) 2011 NXP Semiconductors
  *
@@ -9,12 +10,6 @@
  * Anton Protopopov, Emcraft Systems, antonp@emcraft.com
  *
  * Copyright (C) 2015 Joachim Eastwood <manabian@gmail.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
  */
 
 #include <linux/clk.h>
@@ -133,9 +128,7 @@ static void i2c_lpc2k_pump_msg(struct lpc2k_i2c *i2c)
 	case M_START:
 	case M_REPSTART:
 		/* Start bit was just sent out, send out addr and dir */
-		data = i2c->msg->addr << 1;
-		if (i2c->msg->flags & I2C_M_RD)
-			data |= 1;
+		data = i2c_8bit_addr_from_msg(i2c->msg);
 
 		writel(data, i2c->base + LPC24XX_I2DAT);
 		writel(LPC24XX_STA, i2c->base + LPC24XX_I2CONCLR);
@@ -403,7 +396,7 @@ static int i2c_lpc2k_probe(struct platform_device *pdev)
 	ret = of_property_read_u32(pdev->dev.of_node, "clock-frequency",
 				   &bus_clk_rate);
 	if (ret)
-		bus_clk_rate = 100000; /* 100 kHz default clock rate */
+		bus_clk_rate = I2C_MAX_STANDARD_MODE_FREQ;
 
 	clkrate = clk_get_rate(i2c->clk);
 	if (clkrate == 0) {
@@ -414,9 +407,9 @@ static int i2c_lpc2k_probe(struct platform_device *pdev)
 
 	/* Setup I2C dividers to generate clock with proper duty cycle */
 	clkrate = clkrate / bus_clk_rate;
-	if (bus_clk_rate <= 100000)
+	if (bus_clk_rate <= I2C_MAX_STANDARD_MODE_FREQ)
 		scl_high = (clkrate * I2C_STD_MODE_DUTY) / 100;
-	else if (bus_clk_rate <= 400000)
+	else if (bus_clk_rate <= I2C_MAX_FAST_MODE_FREQ)
 		scl_high = (clkrate * I2C_FAST_MODE_DUTY) / 100;
 	else
 		scl_high = (clkrate * I2C_FAST_MODE_PLUS_DUTY) / 100;
@@ -434,10 +427,8 @@ static int i2c_lpc2k_probe(struct platform_device *pdev)
 	i2c->adap.dev.of_node = pdev->dev.of_node;
 
 	ret = i2c_add_adapter(&i2c->adap);
-	if (ret < 0) {
-		dev_err(&pdev->dev, "failed to add adapter!\n");
+	if (ret < 0)
 		goto fail_clk;
-	}
 
 	dev_info(&pdev->dev, "LPC2K I2C adapter\n");
 
@@ -461,8 +452,7 @@ static int i2c_lpc2k_remove(struct platform_device *dev)
 #ifdef CONFIG_PM
 static int i2c_lpc2k_suspend(struct device *dev)
 {
-	struct platform_device *pdev = to_platform_device(dev);
-	struct lpc2k_i2c *i2c = platform_get_drvdata(pdev);
+	struct lpc2k_i2c *i2c = dev_get_drvdata(dev);
 
 	clk_disable(i2c->clk);
 
@@ -471,8 +461,7 @@ static int i2c_lpc2k_suspend(struct device *dev)
 
 static int i2c_lpc2k_resume(struct device *dev)
 {
-	struct platform_device *pdev = to_platform_device(dev);
-	struct lpc2k_i2c *i2c = platform_get_drvdata(pdev);
+	struct lpc2k_i2c *i2c = dev_get_drvdata(dev);
 
 	clk_enable(i2c->clk);
 	i2c_lpc2k_reset(i2c);

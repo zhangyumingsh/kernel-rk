@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * Interface to the libusual.
  *
@@ -81,6 +82,8 @@
 		/* Sets max_sectors to 240 */			\
 	US_FLAG(NO_REPORT_LUNS,	0x10000000)			\
 		/* Cannot handle REPORT_LUNS */			\
+	US_FLAG(ALWAYS_SYNC, 0x20000000)			\
+		/* lies about caching, so always sync */	\
 
 #define US_FLAG(name, value)	US_FL_##name = value ,
 enum { US_DO_ALL_FLAGS };
@@ -89,6 +92,6 @@ enum { US_DO_ALL_FLAGS };
 #include <linux/usb/storage.h>
 
 extern int usb_usual_ignore_device(struct usb_interface *intf);
-extern struct usb_device_id usb_storage_usb_ids[];
+extern const struct usb_device_id usb_storage_usb_ids[];
 
 #endif /* __LINUX_USB_USUAL_H */

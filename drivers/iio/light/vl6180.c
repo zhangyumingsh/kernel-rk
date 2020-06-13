@@ -1,13 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * vl6180.c - Support for STMicroelectronics VL6180 ALS, range and proximity
  * sensor
  *
  * Copyright 2017 Peter Meerwald-Stadler <pmeerw@pmeerw.net>
  * Copyright 2017 Manivannan Sadhasivam <manivannanece23@gmail.com>
- *
- * This file is subject to the terms and conditions of version 2 of
- * the GNU General Public License.  See the file COPYING in the main
- * directory of this archive for more details.
  *
  * IIO driver for VL6180 (7-bit I2C slave address 0x29)
  *
@@ -439,7 +436,6 @@ static const struct iio_info vl6180_info = {
 	.read_raw = vl6180_read_raw,
 	.write_raw = vl6180_write_raw,
 	.attrs = &vl6180_attribute_group,
-	.driver_module = THIS_MODULE,
 };
 
 static int vl6180_init(struct vl6180_data *data)

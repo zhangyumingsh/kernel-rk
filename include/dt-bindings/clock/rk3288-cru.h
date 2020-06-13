@@ -1,16 +1,7 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Copyright (c) 2014 MundoReader S.L.
  * Author: Heiko Stuebner <heiko@sntech.de>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 
 #ifndef _DT_BINDINGS_CLK_ROCKCHIP_RK3288_H
@@ -89,15 +80,7 @@
 #define SCLK_CRYPTO		125
 #define SCLK_MIPIDSI_24M	126
 #define SCLK_VIP_OUT		127
-#define SCLK_DDRCLK		128
-#define SCLK_I2S_SRC		129
-#define SCLK_TSPOUT		130
-#define SCLK_TSP		131
-#define SCLK_HSADC0_TSP		132
-#define SCLK_HSADC1_TSP		133
-#define SCLK_27M_TSP		134
 
-#define SCLK_MAC_PLL		150
 #define SCLK_MAC		151
 #define SCLK_MACREF_OUT		152
 
@@ -124,8 +107,6 @@
 #define ACLK_VCODEC		208
 #define ACLK_CPU		209
 #define ACLK_PERI		210
-#define ACLK_VIO0		211
-#define ACLK_VIO1		212
 
 /* pclk gates */
 #define PCLK_GPIO0		320
@@ -180,10 +161,6 @@
 #define PCLK_EFUSE256		369
 #define PCLK_EFUSE1024		370
 #define PCLK_ISP_IN		371
-#define PCLK_VIP                372
-#define PCLK_VIP_IN             373
-#define PCLK_PD_ALIVE		374
-#define PCLK_PD_PMU		375
 
 /* hclk gates */
 #define HCLK_GPS		448
@@ -217,10 +194,8 @@
 #define HCLK_VCODEC		476
 #define HCLK_CPU		477
 #define HCLK_PERI		478
-#define HCLK_USB_PERI		479
-#define HCLK_VIO		480
 
-#define CLK_NR_CLKS		(HCLK_VIO + 1)
+#define CLK_NR_CLKS		(HCLK_PERI + 1)
 
 /* soft-reset indices */
 #define SRST_CORE0		0

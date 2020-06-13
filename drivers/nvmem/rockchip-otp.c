@@ -1,17 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Rockchip OTP Driver
  *
  * Copyright (c) 2018 Rockchip Electronics Co. Ltd.
  * Author: Finley Xiao <finley.xiao@rock-chips.com>
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of version 2 of the GNU General Public License as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
- * more details.
  */
 
 #include <linux/clk.h>
@@ -65,10 +57,14 @@
 struct rockchip_otp {
 	struct device *dev;
 	void __iomem *base;
-	struct clk *clk;
-	struct clk *pclk;
-	struct clk *pclk_phy;
+	struct clk_bulk_data	*clks;
+	int num_clks;
 	struct reset_control *rst;
+};
+
+/* list of required clocks */
+static const char * const rockchip_otp_clocks[] = {
+	"otp", "apb_pclk", "phy",
 };
 
 struct rockchip_data {
@@ -143,34 +139,22 @@ static int rockchip_otp_read(void *context, unsigned int offset,
 	u8 *buf = val;
 	int ret = 0;
 
-	ret = clk_prepare_enable(otp->clk);
+	ret = clk_bulk_prepare_enable(otp->num_clks, otp->clks);
 	if (ret < 0) {
-		dev_err(otp->dev, "failed to prepare/enable otp clk\n");
+		dev_err(otp->dev, "failed to prepare/enable clks\n");
 		return ret;
-	}
-
-	ret = clk_prepare_enable(otp->pclk);
-	if (ret < 0) {
-		dev_err(otp->dev, "failed to prepare/enable otp pclk\n");
-		goto otp_clk;
-	}
-
-	ret = clk_prepare_enable(otp->pclk_phy);
-	if (ret < 0) {
-		dev_err(otp->dev, "failed to prepare/enable otp pclk phy\n");
-		goto opt_pclk;
 	}
 
 	ret = rockchip_otp_reset(otp);
 	if (ret) {
 		dev_err(otp->dev, "failed to reset otp phy\n");
-		goto opt_pclk_phy;
+		goto disable_clks;
 	}
 
 	ret = rockchip_otp_ecc_enable(otp, false);
 	if (ret < 0) {
 		dev_err(otp->dev, "rockchip_otp_ecc_enable err\n");
-		goto opt_pclk_phy;
+		goto disable_clks;
 	}
 
 	writel(OTPC_USE_USER | OTPC_USE_USER_MASK, otp->base + OTPC_USER_CTRL);
@@ -190,12 +174,8 @@ static int rockchip_otp_read(void *context, unsigned int offset,
 
 read_end:
 	writel(0x0 | OTPC_USE_USER_MASK, otp->base + OTPC_USER_CTRL);
-opt_pclk_phy:
-	clk_disable_unprepare(otp->pclk_phy);
-opt_pclk:
-	clk_disable_unprepare(otp->pclk);
-otp_clk:
-	clk_disable_unprepare(otp->clk);
+disable_clks:
+	clk_bulk_disable_unprepare(otp->num_clks, otp->clks);
 
 	return ret;
 }
@@ -222,87 +202,67 @@ static const struct of_device_id rockchip_otp_match[] = {
 		.compatible = "rockchip,rk3308-otp",
 		.data = (void *)&px30_data,
 	},
-	{ /* sentinel */},
+	{ /* sentinel */ },
 };
 MODULE_DEVICE_TABLE(of, rockchip_otp_match);
 
-static int __init rockchip_otp_probe(struct platform_device *pdev)
+static int rockchip_otp_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
 	struct rockchip_otp *otp;
 	const struct rockchip_data *data;
-	struct resource *res;
 	struct nvmem_device *nvmem;
-	const struct of_device_id *match;
+	int ret, i;
 
-	match = of_match_device(dev->driver->of_match_table, dev);
-	if (!match || !match->data) {
+	data = of_device_get_match_data(dev);
+	if (!data) {
 		dev_err(dev, "failed to get match data\n");
 		return -EINVAL;
 	}
-	data = match->data;
 
 	otp = devm_kzalloc(&pdev->dev, sizeof(struct rockchip_otp),
 			   GFP_KERNEL);
 	if (!otp)
 		return -ENOMEM;
-	otp->dev = dev;
 
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	otp->base = devm_ioremap_resource(&pdev->dev, res);
+	otp->dev = dev;
+	otp->base = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(otp->base))
 		return PTR_ERR(otp->base);
 
-	otp->clk = devm_clk_get(&pdev->dev, "clk_otp");
-	if (IS_ERR(otp->clk))
-		return PTR_ERR(otp->clk);
+	otp->num_clks = ARRAY_SIZE(rockchip_otp_clocks);
+	otp->clks = devm_kcalloc(dev, otp->num_clks,
+				     sizeof(*otp->clks), GFP_KERNEL);
+	if (!otp->clks)
+		return -ENOMEM;
 
-	otp->pclk = devm_clk_get(&pdev->dev, "pclk_otp");
-	if (IS_ERR(otp->pclk))
-		return PTR_ERR(otp->pclk);
+	for (i = 0; i < otp->num_clks; ++i)
+		otp->clks[i].id = rockchip_otp_clocks[i];
 
-	otp->pclk_phy = devm_clk_get(&pdev->dev, "pclk_otp_phy");
-	if (IS_ERR(otp->pclk_phy))
-		return PTR_ERR(otp->pclk_phy);
+	ret = devm_clk_bulk_get(dev, otp->num_clks, otp->clks);
+	if (ret)
+		return ret;
 
-	otp->rst = devm_reset_control_get(dev, "otp_phy");
+	otp->rst = devm_reset_control_get(dev, "phy");
 	if (IS_ERR(otp->rst))
 		return PTR_ERR(otp->rst);
 
 	otp_config.size = data->size;
 	otp_config.priv = otp;
 	otp_config.dev = dev;
-	nvmem = nvmem_register(&otp_config);
-	if (IS_ERR(nvmem))
-		return PTR_ERR(nvmem);
+	nvmem = devm_nvmem_register(dev, &otp_config);
 
-	platform_set_drvdata(pdev, nvmem);
-
-	return 0;
-}
-
-static int rockchip_otp_remove(struct platform_device *pdev)
-{
-	struct nvmem_device *nvmem = platform_get_drvdata(pdev);
-
-	return nvmem_unregister(nvmem);
+	return PTR_ERR_OR_ZERO(nvmem);
 }
 
 static struct platform_driver rockchip_otp_driver = {
-	.remove = rockchip_otp_remove,
+	.probe = rockchip_otp_probe,
 	.driver = {
 		.name = "rockchip-otp",
 		.of_match_table = rockchip_otp_match,
 	},
 };
 
-static int __init rockchip_otp_module_init(void)
-{
-	return platform_driver_probe(&rockchip_otp_driver,
-				     rockchip_otp_probe);
-}
-
-subsys_initcall(rockchip_otp_module_init);
-
+module_platform_driver(rockchip_otp_driver);
 MODULE_DESCRIPTION("Rockchip OTP driver");
 MODULE_LICENSE("GPL v2");

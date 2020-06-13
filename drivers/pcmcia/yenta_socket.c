@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Regular cardbus driver ("yenta_socket")
  *
@@ -172,20 +173,19 @@ static void exca_writew(struct yenta_socket *socket, unsigned reg, u16 val)
 
 static ssize_t show_yenta_registers(struct device *yentadev, struct device_attribute *attr, char *buf)
 {
-	struct pci_dev *dev = to_pci_dev(yentadev);
-	struct yenta_socket *socket = pci_get_drvdata(dev);
+	struct yenta_socket *socket = dev_get_drvdata(yentadev);
 	int offset = 0, i;
 
 	offset = snprintf(buf, PAGE_SIZE, "CB registers:");
 	for (i = 0; i < 0x24; i += 4) {
 		unsigned val;
 		if (!(i & 15))
-			offset += snprintf(buf + offset, PAGE_SIZE - offset, "\n%02x:", i);
+			offset += scnprintf(buf + offset, PAGE_SIZE - offset, "\n%02x:", i);
 		val = cb_readl(socket, i);
-		offset += snprintf(buf + offset, PAGE_SIZE - offset, " %08x", val);
+		offset += scnprintf(buf + offset, PAGE_SIZE - offset, " %08x", val);
 	}
 
-	offset += snprintf(buf + offset, PAGE_SIZE - offset, "\n\nExCA registers:");
+	offset += scnprintf(buf + offset, PAGE_SIZE - offset, "\n\nExCA registers:");
 	for (i = 0; i < 0x45; i++) {
 		unsigned char val;
 		if (!(i & 7)) {
@@ -193,10 +193,10 @@ static ssize_t show_yenta_registers(struct device *yentadev, struct device_attri
 				memcpy(buf + offset, " -", 2);
 				offset += 2;
 			} else
-				offset += snprintf(buf + offset, PAGE_SIZE - offset, "\n%02x:", i);
+				offset += scnprintf(buf + offset, PAGE_SIZE - offset, "\n%02x:", i);
 		}
 		val = exca_readb(socket, i);
-		offset += snprintf(buf + offset, PAGE_SIZE - offset, " %02x", val);
+		offset += scnprintf(buf + offset, PAGE_SIZE - offset, " %02x", val);
 	}
 	buf[offset++] = '\n';
 	return offset;
@@ -535,9 +535,9 @@ static irqreturn_t yenta_interrupt(int irq, void *dev_id)
 	return IRQ_HANDLED;
 }
 
-static void yenta_interrupt_wrapper(unsigned long data)
+static void yenta_interrupt_wrapper(struct timer_list *t)
 {
-	struct yenta_socket *socket = (struct yenta_socket *) data;
+	struct yenta_socket *socket = from_timer(socket, t, poll_timer);
 
 	yenta_interrupt(0, (void *)socket);
 	socket->poll_timer.expires = jiffies + HZ;
@@ -1234,8 +1234,7 @@ static int yenta_probe(struct pci_dev *dev, const struct pci_device_id *id)
 	if (!socket->cb_irq || request_irq(socket->cb_irq, yenta_interrupt, IRQF_SHARED, "yenta", socket)) {
 		/* No IRQ or request_irq failed. Poll */
 		socket->cb_irq = 0; /* But zero is a valid IRQ number. */
-		setup_timer(&socket->poll_timer, yenta_interrupt_wrapper,
-			    (unsigned long)socket);
+		timer_setup(&socket->poll_timer, yenta_interrupt_wrapper, 0);
 		mod_timer(&socket->poll_timer, jiffies + HZ);
 		dev_info(&dev->dev,
 			 "no PCI IRQ, CardBus support disabled for this socket.\n");

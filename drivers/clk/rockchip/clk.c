@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Copyright (c) 2014 MundoReader S.L.
  * Author: Heiko Stuebner <heiko@sntech.de>
@@ -11,21 +12,12 @@
  * Copyright (c) 2013 Samsung Electronics Co., Ltd.
  * Copyright (c) 2013 Linaro Ltd.
  * Author: Thomas Abraham <thomas.ab@samsung.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 
 #include <linux/slab.h>
 #include <linux/clk.h>
 #include <linux/clk-provider.h>
+#include <linux/io.h>
 #include <linux/mfd/syscon.h>
 #include <linux/regmap.h>
 #include <linux/reboot.h>
@@ -43,7 +35,8 @@
  * sometimes without one of those components.
  */
 static struct clk *rockchip_clk_register_branch(const char *name,
-		const char *const *parent_names, u8 num_parents, void __iomem *base,
+		const char *const *parent_names, u8 num_parents,
+		void __iomem *base,
 		int muxdiv_offset, u8 mux_shift, u8 mux_width, u8 mux_flags,
 		int div_offset, u8 div_shift, u8 div_width, u8 div_flags,
 		struct clk_div_table *div_table, int gate_offset,
@@ -117,7 +110,7 @@ static struct clk *rockchip_clk_register_branch(const char *name,
 		ret = PTR_ERR(clk);
 		goto err_composite;
 	}
-	
+
 	return clk;
 err_composite:
 	kfree(div);
@@ -155,9 +148,11 @@ static int rockchip_clk_frac_notifier_cb(struct notifier_block *nb,
 	pr_debug("%s: event %lu, old_rate %lu, new_rate: %lu\n",
 		 __func__, event, ndata->old_rate, ndata->new_rate);
 	if (event == PRE_RATE_CHANGE) {
-		frac->rate_change_idx = frac->mux_ops->get_parent(&frac_mux->hw);
+		frac->rate_change_idx =
+				frac->mux_ops->get_parent(&frac_mux->hw);
 		if (frac->rate_change_idx != frac->mux_frac_idx) {
-			frac->mux_ops->set_parent(&frac_mux->hw, frac->mux_frac_idx);
+			frac->mux_ops->set_parent(&frac_mux->hw,
+						  frac->mux_frac_idx);
 			frac->rate_change_remuxed = 1;
 		}
 	} else if (event == POST_RATE_CHANGE) {
@@ -168,7 +163,8 @@ static int rockchip_clk_frac_notifier_cb(struct notifier_block *nb,
 		 * reaches the mux itself.
 		 */
 		if (frac->rate_change_remuxed) {
-			frac->mux_ops->set_parent(&frac_mux->hw, frac->rate_change_idx);
+			frac->mux_ops->set_parent(&frac_mux->hw,
+						  frac->rate_change_idx);
 			frac->rate_change_remuxed = 0;
 		}
 	}
@@ -186,58 +182,16 @@ static void rockchip_fractional_approximation(struct clk_hw *hw,
 {
 	struct clk_fractional_divider *fd = to_clk_fd(hw);
 	unsigned long p_rate, p_parent_rate;
-	unsigned long min_rate = 0, max_rate = 0;
 	struct clk_hw *p_parent;
 	unsigned long scale;
-	u32 div;
 
 	p_rate = clk_hw_get_rate(clk_hw_get_parent(hw));
-
-	if (strstr(clk_hw_get_name(hw), "uart")) {
-		if (rate <= 24000000) {
-			*parent_rate = 24000000;
-		} else {
-			if (fd->max_prate)
-				*parent_rate = fd->max_prate;
-			else
-				*parent_rate = 480000000;
-		}
-		goto frac_ration;
-	}
-
-	if (((rate * 20 > p_rate) && (p_rate % rate != 0)) ||
-	    (fd->max_prate && fd->max_prate < p_rate)) {
+	if ((rate * 20 > p_rate) && (p_rate % rate != 0)) {
 		p_parent = clk_hw_get_parent(clk_hw_get_parent(hw));
-		if (!p_parent) {
-			p_parent_rate = p_rate;
-		} else {
-			p_parent_rate = clk_hw_get_rate(p_parent);
-			if (fd->max_prate && p_parent_rate > fd->max_prate) {
-				div = DIV_ROUND_UP(p_parent_rate,
-						   fd->max_prate);
-				p_parent_rate = p_parent_rate / div;
-			}
-		}
-
-		clk_hw_get_boundaries(clk_hw_get_parent(hw),
-			&min_rate, &max_rate);
-		if (p_parent_rate < min_rate)
-			p_parent_rate = min_rate;
-		if (p_parent_rate > max_rate)
-			p_parent_rate = max_rate;
-
+		p_parent_rate = clk_hw_get_rate(p_parent);
 		*parent_rate = p_parent_rate;
-
-		if (*parent_rate < rate * 20) {
-			pr_warn("%s p_rate(%ld) is low than rate(%ld)*20, use integer or half-div\n",
-				clk_hw_get_name(hw), *parent_rate, rate);
-			*m = 0;
-			*n = 1;
-			return;
-		}
 	}
 
-frac_ration:
 	/*
 	 * Get rate closer to *parent_rate to guarantee there is no overflow
 	 * for m and n. In the result it will be the nearest rate left shifted
@@ -248,9 +202,8 @@ frac_ration:
 		rate <<= scale - fd->nwidth;
 
 	rational_best_approximation(rate, *parent_rate,
-				    GENMASK(fd->mwidth - 1, 0),
-				    GENMASK(fd->nwidth - 1, 0),
-				    m, n);
+			GENMASK(fd->mwidth - 1, 0), GENMASK(fd->nwidth - 1, 0),
+			m, n);
 }
 
 static struct clk *rockchip_clk_register_frac_branch(
@@ -259,7 +212,7 @@ static struct clk *rockchip_clk_register_frac_branch(
 		void __iomem *base, int muxdiv_offset, u8 div_flags,
 		int gate_offset, u8 gate_shift, u8 gate_flags,
 		unsigned long flags, struct rockchip_clk_branch *child,
-		unsigned long max_prate, spinlock_t *lock)
+		spinlock_t *lock)
 {
 	struct rockchip_clk_frac *frac;
 	struct clk *clk;
@@ -300,7 +253,6 @@ static struct clk *rockchip_clk_register_frac_branch(
 	div->nmask = GENMASK(div->nwidth - 1, 0) << div->nshift;
 	div->lock = lock;
 	div->approximation = rockchip_fractional_approximation;
-	div->max_prate = max_prate;
 	div_ops = &clk_fractional_divider_ops;
 
 	clk = clk_register_composite(NULL, name, parent_names, num_parents,
@@ -317,18 +269,10 @@ static struct clk *rockchip_clk_register_frac_branch(
 		struct clk_mux *frac_mux = &frac->mux;
 		struct clk_init_data init;
 		struct clk *mux_clk;
-		int i, ret;
+		int ret;
 
-		frac->mux_frac_idx = -1;
-		for (i = 0; i < child->num_parents; i++) {
-			if (!strcmp(name, child->parent_names[i])) {
-				pr_debug("%s: found fractional parent in mux at pos %d\n",
-					 __func__, i);
-				frac->mux_frac_idx = i;
-				break;
-			}
-		}
-
+		frac->mux_frac_idx = match_string(child->parent_names,
+						  child->num_parents, name);
 		frac->mux_ops = &clk_mux_ops;
 		frac->clk_nb.notifier_call = rockchip_clk_frac_notifier_cb;
 
@@ -355,6 +299,8 @@ static struct clk *rockchip_clk_register_frac_branch(
 
 		/* notifier on the fraction divider to catch rate changes */
 		if (frac->mux_frac_idx >= 0) {
+			pr_debug("%s: found fractional parent in mux at pos %d\n",
+				 __func__, frac->mux_frac_idx);
 			ret = clk_notifier_register(clk, &frac->clk_nb);
 			if (ret)
 				pr_err("%s: failed to register clock notifier for %s\n",
@@ -423,18 +369,12 @@ struct rockchip_clk_provider * __init rockchip_clk_init(struct device_node *np,
 	int i;
 
 	ctx = kzalloc(sizeof(struct rockchip_clk_provider), GFP_KERNEL);
-	if (!ctx) {
-		pr_err("%s: Could not allocate clock provider context\n",
-			__func__);
+	if (!ctx)
 		return ERR_PTR(-ENOMEM);
-	}
 
 	clk_table = kcalloc(nr_clks, sizeof(struct clk *), GFP_KERNEL);
-	if (!clk_table) {
-		pr_err("%s: Could not allocate clock lookup table\n",
-			__func__);
+	if (!clk_table)
 		goto err_free;
-	}
 
 	for (i = 0; i < nr_clks; ++i)
 		clk_table[i] = ERR_PTR(-ENOENT);
@@ -443,8 +383,8 @@ struct rockchip_clk_provider * __init rockchip_clk_init(struct device_node *np,
 	ctx->clk_data.clks = clk_table;
 	ctx->clk_data.clk_num = nr_clks;
 	ctx->cru_node = np;
-	ctx->grf = ERR_PTR(-EPROBE_DEFER);
 	spin_lock_init(&ctx->lock);
+
 	ctx->grf = syscon_regmap_lookup_by_phandle(ctx->cru_node,
 						   "rockchip,grf");
 
@@ -461,13 +401,6 @@ void __init rockchip_clk_of_add_provider(struct device_node *np,
 	if (of_clk_add_provider(np, of_clk_src_onecell_get,
 				&ctx->clk_data))
 		pr_err("%s: could not register clk provider\n", __func__);
-}
-
-struct regmap *rockchip_clk_get_grf(struct rockchip_clk_provider *ctx)
-{
-	if (IS_ERR(ctx->grf))
-		ctx->grf = syscon_regmap_lookup_by_phandle(ctx->cru_node, "rockchip,grf");
-	return ctx->grf;
 }
 
 void rockchip_clk_add_lookup(struct rockchip_clk_provider *ctx,
@@ -533,7 +466,8 @@ void __init rockchip_clk_register_branches(
 			if (list->div_table)
 				clk = clk_register_divider_table(NULL,
 					list->name, list->parent_names[0],
-					flags, ctx->reg_base + list->muxdiv_offset,
+					flags,
+					ctx->reg_base + list->muxdiv_offset,
 					list->div_shift, list->div_width,
 					list->div_flags, list->div_table,
 					&ctx->lock);
@@ -547,10 +481,11 @@ void __init rockchip_clk_register_branches(
 		case branch_fraction_divider:
 			clk = rockchip_clk_register_frac_branch(ctx, list->name,
 				list->parent_names, list->num_parents,
-				ctx->reg_base, list->muxdiv_offset, list->div_flags,
+				ctx->reg_base, list->muxdiv_offset,
+				list->div_flags,
 				list->gate_offset, list->gate_shift,
 				list->gate_flags, flags, list->child,
-				list->max_prate, &ctx->lock);
+				&ctx->lock);
 			break;
 		case branch_half_divider:
 			clk = rockchip_clk_register_halfdiv(list->name,
@@ -573,7 +508,8 @@ void __init rockchip_clk_register_branches(
 		case branch_composite:
 			clk = rockchip_clk_register_branch(list->name,
 				list->parent_names, list->num_parents,
-				ctx->reg_base, list->muxdiv_offset, list->mux_shift,
+				ctx->reg_base, list->muxdiv_offset,
+				list->mux_shift,
 				list->mux_width, list->mux_flags,
 				list->div_offset, list->div_shift, list->div_width,
 				list->div_flags, list->div_table,
@@ -603,14 +539,14 @@ void __init rockchip_clk_register_branches(
 				list->gate_offset, list->gate_shift,
 				list->gate_flags, flags, &ctx->lock);
 			break;
-		case branch_ddrc:
+		case branch_ddrclk:
 			clk = rockchip_clk_register_ddrclk(
 				list->name, list->flags,
 				list->parent_names, list->num_parents,
 				list->muxdiv_offset, list->mux_shift,
 				list->mux_width, list->div_shift,
 				list->div_width, list->div_flags,
-				ctx->reg_base);
+				ctx->reg_base, &ctx->lock);
 			break;
 		}
 
@@ -642,8 +578,8 @@ void __init rockchip_clk_register_armclk(struct rockchip_clk_provider *ctx,
 	struct clk *clk;
 
 	clk = rockchip_clk_register_cpuclk(name, parent_names, num_parents,
-					   reg_data, rates, nrates, ctx->reg_base,
-					   &ctx->lock);
+					   reg_data, rates, nrates,
+					   ctx->reg_base, &ctx->lock);
 	if (IS_ERR(clk)) {
 		pr_err("%s: failed to register clock %s: %ld\n",
 		       __func__, name, PTR_ERR(clk));
@@ -685,8 +621,10 @@ static struct notifier_block rockchip_restart_handler = {
 	.priority = 128,
 };
 
-void __init rockchip_register_restart_notifier(struct rockchip_clk_provider *ctx,
-					       unsigned int reg, void (*cb)(void))
+void __init
+rockchip_register_restart_notifier(struct rockchip_clk_provider *ctx,
+					       unsigned int reg,
+					       void (*cb)(void))
 {
 	int ret;
 

@@ -1,7 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /* Copyright (C) 2009 Red Hat, Inc.
  * Author: Michael S. Tsirkin <mst@redhat.com>
- *
- * This work is licensed under the terms of the GNU GPL, version 2.
  *
  * test virtio server in host kernel.
  */
@@ -22,6 +21,12 @@
 /* Max number of bytes transferred before requeueing the job.
  * Using this limit prevents one virtqueue from starving others. */
 #define VHOST_TEST_WEIGHT 0x80000
+
+/* Max number of packets transferred before requeueing the job.
+ * Using this limit prevents one virtqueue from starving others with
+ * pkts.
+ */
+#define VHOST_TEST_PKT_WEIGHT 256
 
 enum {
 	VHOST_TEST_VQ = 0,
@@ -44,7 +49,7 @@ static void handle_vq(struct vhost_test *n)
 	void *private;
 
 	mutex_lock(&vq->mutex);
-	private = vq->private_data;
+	private = vhost_vq_get_backend(vq);
 	if (!private) {
 		mutex_unlock(&vq->mutex);
 		return;
@@ -81,10 +86,8 @@ static void handle_vq(struct vhost_test *n)
 		}
 		vhost_add_used_and_signal(&n->dev, vq, head, 0);
 		total_len += len;
-		if (unlikely(total_len >= VHOST_TEST_WEIGHT)) {
-			vhost_poll_queue(&vq->poll);
+		if (unlikely(vhost_exceeds_weight(vq, 0, total_len)))
 			break;
-		}
 	}
 
 	mutex_unlock(&vq->mutex);
@@ -107,7 +110,7 @@ static int vhost_test_open(struct inode *inode, struct file *f)
 
 	if (!n)
 		return -ENOMEM;
-	vqs = kmalloc(VHOST_TEST_VQ_MAX * sizeof(*vqs), GFP_KERNEL);
+	vqs = kmalloc_array(VHOST_TEST_VQ_MAX, sizeof(*vqs), GFP_KERNEL);
 	if (!vqs) {
 		kfree(n);
 		return -ENOMEM;
@@ -116,7 +119,8 @@ static int vhost_test_open(struct inode *inode, struct file *f)
 	dev = &n->dev;
 	vqs[VHOST_TEST_VQ] = &n->vqs[VHOST_TEST_VQ];
 	n->vqs[VHOST_TEST_VQ].handle_kick = handle_vq_kick;
-	vhost_dev_init(dev, vqs, VHOST_TEST_VQ_MAX);
+	vhost_dev_init(dev, vqs, VHOST_TEST_VQ_MAX, UIO_MAXIOV,
+		       VHOST_TEST_PKT_WEIGHT, VHOST_TEST_WEIGHT, NULL);
 
 	f->private_data = n;
 
@@ -129,8 +133,8 @@ static void *vhost_test_stop_vq(struct vhost_test *n,
 	void *private;
 
 	mutex_lock(&vq->mutex);
-	private = vq->private_data;
-	vq->private_data = NULL;
+	private = vhost_vq_get_backend(vq);
+	vhost_vq_set_backend(vq, NULL);
 	mutex_unlock(&vq->mutex);
 	return private;
 }
@@ -157,7 +161,8 @@ static int vhost_test_release(struct inode *inode, struct file *f)
 
 	vhost_test_stop(n, &private);
 	vhost_test_flush(n);
-	vhost_dev_cleanup(&n->dev, false);
+	vhost_dev_stop(&n->dev);
+	vhost_dev_cleanup(&n->dev);
 	/* We do an extra flush before freeing memory,
 	 * since jobs can re-queue themselves. */
 	vhost_test_flush(n);
@@ -193,10 +198,10 @@ static long vhost_test_run(struct vhost_test *n, int test)
 		priv = test ? n : NULL;
 
 		/* start polling new socket */
-		oldpriv = vq->private_data;
-		vq->private_data = priv;
+		oldpriv = vhost_vq_get_backend(vq);
+		vhost_vq_set_backend(vq, priv);
 
-		r = vhost_init_used(&n->vqs[index]);
+		r = vhost_vq_init_access(&n->vqs[index]);
 
 		mutex_unlock(&vq->mutex);
 
@@ -220,20 +225,21 @@ static long vhost_test_reset_owner(struct vhost_test *n)
 {
 	void *priv = NULL;
 	long err;
-	struct vhost_memory *memory;
+	struct vhost_iotlb *umem;
 
 	mutex_lock(&n->dev.mutex);
 	err = vhost_dev_check_owner(&n->dev);
 	if (err)
 		goto done;
-	memory = vhost_dev_reset_owner_prepare();
-	if (!memory) {
+	umem = vhost_dev_reset_owner_prepare();
+	if (!umem) {
 		err = -ENOMEM;
 		goto done;
 	}
 	vhost_test_stop(n, &priv);
 	vhost_test_flush(n);
-	vhost_dev_reset_owner(&n->dev, memory);
+	vhost_dev_stop(&n->dev);
+	vhost_dev_reset_owner(&n->dev, umem);
 done:
 	mutex_unlock(&n->dev.mutex);
 	return err;
@@ -298,21 +304,11 @@ static long vhost_test_ioctl(struct file *f, unsigned int ioctl,
 	}
 }
 
-#ifdef CONFIG_COMPAT
-static long vhost_test_compat_ioctl(struct file *f, unsigned int ioctl,
-				   unsigned long arg)
-{
-	return vhost_test_ioctl(f, ioctl, (unsigned long)compat_ptr(arg));
-}
-#endif
-
 static const struct file_operations vhost_test_fops = {
 	.owner          = THIS_MODULE,
 	.release        = vhost_test_release,
 	.unlocked_ioctl = vhost_test_ioctl,
-#ifdef CONFIG_COMPAT
-	.compat_ioctl   = vhost_test_compat_ioctl,
-#endif
+	.compat_ioctl   = compat_ptr_ioctl,
 	.open           = vhost_test_open,
 	.llseek		= noop_llseek,
 };
@@ -322,18 +318,7 @@ static struct miscdevice vhost_test_misc = {
 	"vhost-test",
 	&vhost_test_fops,
 };
-
-static int vhost_test_init(void)
-{
-	return misc_register(&vhost_test_misc);
-}
-module_init(vhost_test_init);
-
-static void vhost_test_exit(void)
-{
-	misc_deregister(&vhost_test_misc);
-}
-module_exit(vhost_test_exit);
+module_misc_device(vhost_test_misc);
 
 MODULE_VERSION("0.0.1");
 MODULE_LICENSE("GPL v2");

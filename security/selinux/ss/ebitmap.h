@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * An extensible bitmap is a bitmap that supports an
  * arbitrary number of bits.  Extensible bitmaps are
@@ -9,7 +10,7 @@
  * an explicitly specified starting bit position within
  * the total bitmap.
  *
- * Author : Stephen Smalley, <sds@epoch.ncsc.mil>
+ * Author : Stephen Smalley, <sds@tycho.nsa.gov>
  */
 #ifndef _SS_EBITMAP_H_
 #define _SS_EBITMAP_H_
@@ -123,6 +124,7 @@ static inline void ebitmap_node_clr_bit(struct ebitmap_node *n,
 
 int ebitmap_cmp(struct ebitmap *e1, struct ebitmap *e2);
 int ebitmap_cpy(struct ebitmap *dst, struct ebitmap *src);
+int ebitmap_and(struct ebitmap *dst, struct ebitmap *e1, struct ebitmap *e2);
 int ebitmap_contains(struct ebitmap *e1, struct ebitmap *e2, u32 last_e2bit);
 int ebitmap_get_bit(struct ebitmap *e, unsigned long bit);
 int ebitmap_set_bit(struct ebitmap *e, unsigned long bit, int value);

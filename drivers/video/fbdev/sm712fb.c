@@ -33,8 +33,8 @@
 #include "sm712.h"
 
 /*
-* Private structure
-*/
+ * Private structure
+ */
 struct smtcfb_info {
 	struct pci_dev *pdev;
 	struct fb_info *fb;
@@ -56,7 +56,7 @@ struct smtcfb_info {
 
 void __iomem *smtc_regbaseaddress;	/* Memory Map IO starting address */
 
-static struct fb_var_screeninfo smtcfb_var = {
+static const struct fb_var_screeninfo smtcfb_var = {
 	.xres           = 1024,
 	.yres           = 600,
 	.xres_virtual   = 1024,
@@ -844,7 +844,7 @@ static void __init sm7xx_vga_setup(char *options)
 	smtc_scr_info.lfb_height = 0;
 	smtc_scr_info.lfb_depth = 0;
 
-	pr_debug("sm7xx_vga_setup = %s\n", options);
+	pr_debug("%s = %s\n", __func__, options);
 
 	for (i = 0; i < ARRAY_SIZE(vesa_mode_table); i++) {
 		if (strstr(options, vesa_mode_table[i].index)) {
@@ -857,8 +857,8 @@ static void __init sm7xx_vga_setup(char *options)
 	}
 }
 
-static void sm712_setpalette(int regno, unsigned red, unsigned green,
-			     unsigned blue, struct fb_info *info)
+static void sm712_setpalette(int regno, unsigned int red, unsigned int green,
+			     unsigned int blue, struct fb_info *info)
 {
 	/* set bit 5:4 = 01 (write LCD RAM only) */
 	smtc_seqw(0x66, (smtc_seqr(0x66) & 0xC3) | 0x10);
@@ -968,8 +968,9 @@ static int smtc_blank(int blank_mode, struct fb_info *info)
 	return 0;
 }
 
-static int smtc_setcolreg(unsigned regno, unsigned red, unsigned green,
-			  unsigned blue, unsigned trans, struct fb_info *info)
+static int smtc_setcolreg(unsigned int regno, unsigned int red,
+			  unsigned int green, unsigned int blue,
+			  unsigned int trans, struct fb_info *info)
 {
 	struct smtcfb_info *sfb;
 	u32 val;
@@ -1368,7 +1369,7 @@ static int smtc_set_par(struct fb_info *info)
 	return 0;
 }
 
-static struct fb_ops smtcfb_ops = {
+static const struct fb_ops smtcfb_ops = {
 	.owner        = THIS_MODULE,
 	.fb_check_var = smtc_check_var,
 	.fb_set_par   = smtc_set_par,
@@ -1537,7 +1538,6 @@ static int smtcfb_pci_probe(struct pci_dev *pdev,
 
 	info = framebuffer_alloc(sizeof(*sfb), &pdev->dev);
 	if (!info) {
-		dev_err(&pdev->dev, "framebuffer_alloc failed\n");
 		err = -ENOMEM;
 		goto failed_free;
 	}
@@ -1622,7 +1622,7 @@ static int smtcfb_pci_probe(struct pci_dev *pdev,
 	sm7xx_resolution_probe(sfb);
 
 	/* can support 32 bpp */
-	if (15 == sfb->fb->var.bits_per_pixel)
+	if (sfb->fb->var.bits_per_pixel == 15)
 		sfb->fb->var.bits_per_pixel = 16;
 
 	sfb->fb->var.xres_virtual = sfb->fb->var.xres;
@@ -1694,10 +1694,8 @@ static void smtcfb_pci_remove(struct pci_dev *pdev)
 
 static int __maybe_unused smtcfb_pci_suspend(struct device *device)
 {
-	struct pci_dev *pdev = to_pci_dev(device);
-	struct smtcfb_info *sfb;
+	struct smtcfb_info *sfb = dev_get_drvdata(device);
 
-	sfb = pci_get_drvdata(pdev);
 
 	/* set the hw in sleep mode use external clock and self memory refresh
 	 * so that we can turn off internal PLLs later on
@@ -1717,10 +1715,8 @@ static int __maybe_unused smtcfb_pci_suspend(struct device *device)
 
 static int __maybe_unused smtcfb_pci_resume(struct device *device)
 {
-	struct pci_dev *pdev = to_pci_dev(device);
-	struct smtcfb_info *sfb;
+	struct smtcfb_info *sfb = dev_get_drvdata(device);
 
-	sfb = pci_get_drvdata(pdev);
 
 	/* reinit hardware */
 	sm7xx_init_hw();

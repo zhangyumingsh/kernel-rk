@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #include <linux/usb.h>
 #include <linux/usb/hcd.h>
 #include "usb.h"
@@ -114,14 +115,6 @@ static int uas_use_uas_driver(struct usb_interface *intf,
 	/* All Seagate disk enclosures have broken ATA pass-through support */
 	if (le16_to_cpu(udev->descriptor.idVendor) == 0x0bc2)
 		flags |= US_FL_NO_ATA_1X;
-
-	/* ayufan: All Seagate disk do probably have broken UAS support */
-	if (le16_to_cpu(udev->descriptor.idVendor) == 0x0bc2)
-		flags |= US_FL_IGNORE_UAS;
-
-	/* ayufan: All WD disk do probably have broken UAS support */
-	if (le16_to_cpu(udev->descriptor.idVendor) == 0x1058)
-		flags |= US_FL_IGNORE_UAS;
 
 	usb_stor_adjust_quirks(udev, &flags);
 
