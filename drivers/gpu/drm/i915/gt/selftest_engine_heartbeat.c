@@ -142,24 +142,6 @@ out:
 	return err;
 }
 
-static void engine_heartbeat_disable(struct intel_engine_cs *engine,
-				     unsigned long *saved)
-{
-	*saved = engine->props.heartbeat_interval_ms;
-	engine->props.heartbeat_interval_ms = 0;
-
-	intel_engine_pm_get(engine);
-	intel_engine_park_heartbeat(engine);
-}
-
-static void engine_heartbeat_enable(struct intel_engine_cs *engine,
-				    unsigned long saved)
-{
-	intel_engine_pm_put(engine);
-
-	engine->props.heartbeat_interval_ms = saved;
-}
-
 static int live_idle_flush(void *arg)
 {
 	struct intel_gt *gt = arg;
@@ -170,11 +152,9 @@ static int live_idle_flush(void *arg)
 	/* Check that we can flush the idle barriers */
 
 	for_each_engine(engine, gt, id) {
-		unsigned long heartbeat;
-
-		engine_heartbeat_disable(engine, &heartbeat);
+		intel_engine_pm_get(engine);
 		err = __live_idle_pulse(engine, intel_engine_flush_barriers);
-		engine_heartbeat_enable(engine, heartbeat);
+		intel_engine_pm_put(engine);
 		if (err)
 			break;
 	}
@@ -192,11 +172,9 @@ static int live_idle_pulse(void *arg)
 	/* Check that heartbeat pulses flush the idle barriers */
 
 	for_each_engine(engine, gt, id) {
-		unsigned long heartbeat;
-
-		engine_heartbeat_disable(engine, &heartbeat);
+		intel_engine_pm_get(engine);
 		err = __live_idle_pulse(engine, intel_engine_pulse);
-		engine_heartbeat_enable(engine, heartbeat);
+		intel_engine_pm_put(engine);
 		if (err && err != -ENODEV)
 			break;
 

@@ -834,7 +834,7 @@ static int chip_ready (struct map_info *map, struct flchip *chip, unsigned long 
 			/* Someone else might have been playing with it. */
 			return -EAGAIN;
 		}
-		fallthrough;
+		/* Fall through */
 	case FL_READY:
 	case FL_CFI_QUERY:
 	case FL_JEDEC_QUERY:
@@ -907,7 +907,7 @@ static int chip_ready (struct map_info *map, struct flchip *chip, unsigned long 
 		/* Only if there's no operation suspended... */
 		if (mode == FL_READY && chip->oldstate == FL_READY)
 			return 0;
-		fallthrough;
+		/* Fall through */
 	default:
 	sleep:
 		set_current_state(TASK_UNINTERRUPTIBLE);

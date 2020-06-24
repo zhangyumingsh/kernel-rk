@@ -722,16 +722,16 @@ static int bcm_kona_i2c_assign_bus_speed(struct bcm_kona_i2c_dev *dev)
 	}
 
 	switch (bus_speed) {
-	case I2C_MAX_STANDARD_MODE_FREQ:
+	case 100000:
 		dev->std_cfg = &std_cfg_table[BCM_SPD_100K];
 		break;
-	case I2C_MAX_FAST_MODE_FREQ:
+	case 400000:
 		dev->std_cfg = &std_cfg_table[BCM_SPD_400K];
 		break;
-	case I2C_MAX_FAST_MODE_PLUS_FREQ:
+	case 1000000:
 		dev->std_cfg = &std_cfg_table[BCM_SPD_1MHZ];
 		break;
-	case I2C_MAX_HIGH_SPEED_MODE_FREQ:
+	case 3400000:
 		/* Send mastercode at 100k */
 		dev->std_cfg = &std_cfg_table[BCM_SPD_100K];
 		dev->hs_cfg = &hs_cfg_table[BCM_SPD_3P4MHZ];

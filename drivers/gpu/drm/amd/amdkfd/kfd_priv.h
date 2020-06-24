@@ -41,7 +41,6 @@
 #include <drm/drm_drv.h>
 #include <drm/drm_device.h>
 #include <kgd_kfd_interface.h>
-#include <linux/swap.h>
 
 #include "amd_shared.h"
 
@@ -294,9 +293,6 @@ struct kfd_dev {
 
 	/* xGMI */
 	uint64_t hive_id;
-    
-	/* UUID */
-	uint64_t unique_id;
 
 	bool pci_atomic_requested;
 
@@ -506,9 +502,6 @@ struct queue {
 	struct kfd_process	*process;
 	struct kfd_dev		*device;
 	void *gws;
-
-	/* procfs */
-	struct kobject kobj;
 };
 
 /*
@@ -653,7 +646,6 @@ struct kfd_process_device {
 	 * function.
 	 */
 	bool already_dequeued;
-	bool runtime_inuse;
 
 	/* Is this process/pasid bound to this device? (amd_iommu_bind_pasid) */
 	enum kfd_pdd_bound bound;
@@ -737,7 +729,6 @@ struct kfd_process {
 
 	/* Kobj for our procfs */
 	struct kobject *kobj;
-	struct kobject *kobj_queues;
 	struct attribute attr_pasid;
 };
 
@@ -844,8 +835,6 @@ extern struct device *kfd_device;
 /* KFD's procfs */
 void kfd_procfs_init(void);
 void kfd_procfs_shutdown(void);
-int kfd_procfs_add_queue(struct queue *q);
-void kfd_procfs_del_queue(struct queue *q);
 
 /* Topology */
 int kfd_topology_init(void);
@@ -1050,7 +1039,7 @@ void kfd_dec_compute_active(struct kfd_dev *dev);
 /* Check with device cgroup if @kfd device is accessible */
 static inline int kfd_devcgroup_check_permission(struct kfd_dev *kfd)
 {
-#if defined(CONFIG_CGROUP_DEVICE) || defined(CONFIG_CGROUP_BPF)
+#if defined(CONFIG_CGROUP_DEVICE)
 	struct drm_device *ddev = kfd->ddev;
 
 	return devcgroup_check_permission(DEVCG_DEV_CHAR, ddev->driver->major,

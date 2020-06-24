@@ -114,7 +114,7 @@ struct icm_notification {
 struct ep_name_entry {
 	u8 len;
 	u8 type;
-	u8 data[];
+	u8 data[0];
 };
 
 #define EP_NAME_INTEL_VSS	0x10

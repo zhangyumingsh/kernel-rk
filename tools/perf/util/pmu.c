@@ -21,6 +21,7 @@
 #include "pmu.h"
 #include "parse-events.h"
 #include "header.h"
+#include "pmu-events/pmu-events.h"
 #include "string2.h"
 #include "strbuf.h"
 #include "fncache.h"
@@ -698,7 +699,7 @@ struct pmu_events_map *perf_pmu__find_map(struct perf_pmu *pmu)
 	return map;
 }
 
-bool pmu_uncore_alias_match(const char *pmu_name, const char *name)
+static bool pmu_uncore_alias_match(const char *pmu_name, const char *name)
 {
 	char *tmp = NULL, *tok, *str;
 	bool res;
@@ -743,11 +744,16 @@ out:
  * to the current running CPU. Then, add all PMU events from that table
  * as aliases.
  */
-void pmu_add_cpu_aliases_map(struct list_head *head, struct perf_pmu *pmu,
-			     struct pmu_events_map *map)
+static void pmu_add_cpu_aliases(struct list_head *head, struct perf_pmu *pmu)
 {
 	int i;
+	struct pmu_events_map *map;
 	const char *name = pmu->name;
+
+	map = perf_pmu__find_map(pmu);
+	if (!map)
+		return;
+
 	/*
 	 * Found a matching PMU events table. Create aliases
 	 */
@@ -780,17 +786,6 @@ new_alias:
 				(char *)pe->metric_name,
 				(char *)pe->deprecated);
 	}
-}
-
-static void pmu_add_cpu_aliases(struct list_head *head, struct perf_pmu *pmu)
-{
-	struct pmu_events_map *map;
-
-	map = perf_pmu__find_map(pmu);
-	if (!map)
-		return;
-
-	pmu_add_cpu_aliases_map(head, pmu, map);
 }
 
 struct perf_event_attr * __weak
@@ -984,11 +979,12 @@ static int pmu_resolve_param_term(struct parse_events_term *term,
 	struct parse_events_term *t;
 
 	list_for_each_entry(t, head_terms, list) {
-		if (t->type_val == PARSE_EVENTS__TERM_TYPE_NUM &&
-		    t->config && !strcmp(t->config, term->config)) {
-			t->used = true;
-			*value = t->val.num;
-			return 0;
+		if (t->type_val == PARSE_EVENTS__TERM_TYPE_NUM) {
+			if (!strcmp(t->config, term->config)) {
+				t->used = true;
+				*value = t->val.num;
+				return 0;
+			}
 		}
 	}
 
@@ -1397,11 +1393,6 @@ static void wordwrap(char *s, int start, int max, int corr)
 		column += n;
 		s = skip_spaces(s);
 	}
-}
-
-bool is_pmu_core(const char *name)
-{
-	return !strcmp(name, "cpu") || is_arm_pmu_core(name);
 }
 
 void print_pmu_events(const char *event_glob, bool name_only, bool quiet_flag,

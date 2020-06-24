@@ -48,6 +48,7 @@
  * produce command buffers which are send to the kernel and
  * put in IBs for execution by the requested ring.
  */
+static int amdgpu_debugfs_sa_init(struct amdgpu_device *adev);
 
 /**
  * amdgpu_ib_get - request an IB (Indirect Buffer)
@@ -294,7 +295,9 @@ int amdgpu_ib_pool_init(struct amdgpu_device *adev)
 	}
 
 	adev->ib_pool_ready = true;
-
+	if (amdgpu_debugfs_sa_init(adev)) {
+		dev_err(adev->dev, "failed to register debugfs file for SA\n");
+	}
 	return 0;
 }
 
@@ -418,7 +421,7 @@ static const struct drm_info_list amdgpu_debugfs_sa_list[] = {
 
 #endif
 
-int amdgpu_debugfs_sa_init(struct amdgpu_device *adev)
+static int amdgpu_debugfs_sa_init(struct amdgpu_device *adev)
 {
 #if defined(CONFIG_DEBUG_FS)
 	return amdgpu_debugfs_add_files(adev, amdgpu_debugfs_sa_list, 1);

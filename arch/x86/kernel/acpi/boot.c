@@ -45,7 +45,6 @@ EXPORT_SYMBOL(acpi_disabled);
 #define PREFIX			"ACPI: "
 
 int acpi_noirq;				/* skip ACPI IRQ initialization */
-static int acpi_nobgrt;			/* skip ACPI BGRT */
 int acpi_pci_disabled;		/* skip ACPI PCI scan and IRQ initialization */
 EXPORT_SYMBOL(acpi_pci_disabled);
 
@@ -1620,7 +1619,7 @@ int __init acpi_boot_init(void)
 	acpi_process_madt();
 
 	acpi_table_parse(ACPI_SIG_HPET, acpi_parse_hpet);
-	if (IS_ENABLED(CONFIG_ACPI_BGRT) && !acpi_nobgrt)
+	if (IS_ENABLED(CONFIG_ACPI_BGRT))
 		acpi_table_parse(ACPI_SIG_BGRT, acpi_parse_bgrt);
 
 	if (!acpi_noirq)
@@ -1671,13 +1670,6 @@ static int __init parse_acpi(char *arg)
 	return 0;
 }
 early_param("acpi", parse_acpi);
-
-static int __init parse_acpi_bgrt(char *arg)
-{
-	acpi_nobgrt = true;
-	return 0;
-}
-early_param("bgrt_disable", parse_acpi_bgrt);
 
 /* FIXME: Using pci= for an ACPI parameter is a travesty. */
 static int __init parse_pci(char *arg)

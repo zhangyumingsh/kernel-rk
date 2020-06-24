@@ -1844,7 +1844,7 @@ static const struct pci_device_id pci_ids[] = { {
 MODULE_DEVICE_TABLE (pci, pci_ids);
 
 static struct pci_driver goku_pci_driver = {
-	.name =		driver_name,
+	.name =		(char *) driver_name,
 	.id_table =	pci_ids,
 
 	.probe =	goku_probe,

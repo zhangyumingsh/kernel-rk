@@ -160,14 +160,23 @@ static int audit_mark_handle_event(struct fsnotify_group *group,
 {
 	struct fsnotify_mark *inode_mark = fsnotify_iter_inode_mark(iter_info);
 	struct audit_fsnotify_mark *audit_mark;
-	const struct inode *inode = fsnotify_data_inode(data, data_type);
+	const struct inode *inode = NULL;
 
 	audit_mark = container_of(inode_mark, struct audit_fsnotify_mark, mark);
 
 	BUG_ON(group != audit_fsnotify_group);
 
-	if (WARN_ON(!inode))
+	switch (data_type) {
+	case (FSNOTIFY_EVENT_PATH):
+		inode = ((const struct path *)data)->dentry->d_inode;
+		break;
+	case (FSNOTIFY_EVENT_INODE):
+		inode = (const struct inode *)data;
+		break;
+	default:
+		BUG();
 		return 0;
+	}
 
 	if (mask & (FS_CREATE|FS_MOVED_TO|FS_DELETE|FS_MOVED_FROM)) {
 		if (audit_compare_dname_path(dname, audit_mark->path, AUDIT_NAME_FULL))

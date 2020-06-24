@@ -139,7 +139,7 @@ int qca_send_pre_shutdown_cmd(struct hci_dev *hdev)
 EXPORT_SYMBOL_GPL(qca_send_pre_shutdown_cmd);
 
 static void qca_tlv_check_data(struct qca_fw_config *config,
-		const struct firmware *fw, enum qca_btsoc_type soc_type)
+				const struct firmware *fw)
 {
 	const u8 *data;
 	u32 type_len;
@@ -148,7 +148,6 @@ static void qca_tlv_check_data(struct qca_fw_config *config,
 	struct tlv_type_hdr *tlv;
 	struct tlv_type_patch *tlv_patch;
 	struct tlv_type_nvm *tlv_nvm;
-	uint8_t nvm_baud_rate = config->user_baud_rate;
 
 	tlv = (struct tlv_type_hdr *)fw->data;
 
@@ -217,10 +216,7 @@ static void qca_tlv_check_data(struct qca_fw_config *config,
 				tlv_nvm->data[0] |= 0x80;
 
 				/* UART Baud Rate */
-				if (soc_type == QCA_WCN3991)
-					tlv_nvm->data[1] = nvm_baud_rate;
-				else
-					tlv_nvm->data[2] = nvm_baud_rate;
+				tlv_nvm->data[2] = config->user_baud_rate;
 
 				break;
 
@@ -358,7 +354,7 @@ static int qca_download_firmware(struct hci_dev *hdev,
 		return ret;
 	}
 
-	qca_tlv_check_data(config, fw, soc_type);
+	qca_tlv_check_data(config, fw);
 
 	segment = fw->data;
 	remain = fw->size;

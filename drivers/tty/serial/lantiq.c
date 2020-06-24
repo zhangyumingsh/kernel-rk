@@ -11,6 +11,7 @@
 #include <linux/clk.h>
 #include <linux/console.h>
 #include <linux/device.h>
+#include <linux/gpio.h>
 #include <linux/init.h>
 #include <linux/io.h>
 #include <linux/ioport.h>

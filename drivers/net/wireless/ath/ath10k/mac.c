@@ -258,7 +258,6 @@ static int ath10k_send_key(struct ath10k_vif *arvif,
 	case WLAN_CIPHER_SUITE_GCMP:
 	case WLAN_CIPHER_SUITE_GCMP_256:
 		arg.key_cipher = ar->wmi_key_cipher[WMI_CIPHER_AES_GCM];
-		key->flags |= IEEE80211_KEY_FLAG_GENERATE_IV_MGMT;
 		break;
 	case WLAN_CIPHER_SUITE_BIP_GMAC_128:
 	case WLAN_CIPHER_SUITE_BIP_GMAC_256:
@@ -3577,7 +3576,6 @@ static void ath10k_tx_h_add_p2p_noa_ie(struct ath10k *ar,
 static void ath10k_mac_tx_h_fill_cb(struct ath10k *ar,
 				    struct ieee80211_vif *vif,
 				    struct ieee80211_txq *txq,
-				    struct ieee80211_sta *sta,
 				    struct sk_buff *skb, u16 airtime)
 {
 	struct ieee80211_hdr *hdr = (void *)skb->data;
@@ -3585,7 +3583,6 @@ static void ath10k_mac_tx_h_fill_cb(struct ath10k *ar,
 	const struct ieee80211_tx_info *info = IEEE80211_SKB_CB(skb);
 	bool is_data = ieee80211_is_data(hdr->frame_control) ||
 			ieee80211_is_data_qos(hdr->frame_control);
-	struct ath10k_sta *arsta;
 
 	cb->flags = 0;
 	if (!ath10k_tx_h_use_hwcrypto(vif, skb))
@@ -3610,12 +3607,6 @@ static void ath10k_mac_tx_h_fill_cb(struct ath10k *ar,
 	cb->vif = vif;
 	cb->txq = txq;
 	cb->airtime_est = airtime;
-	if (sta) {
-		arsta = (struct ath10k_sta *)sta->drv_priv;
-		spin_lock_bh(&ar->data_lock);
-		cb->ucast_cipher = arsta->ucast_cipher;
-		spin_unlock_bh(&ar->data_lock);
-	}
 }
 
 bool ath10k_mac_tx_frm_has_freq(struct ath10k *ar)
@@ -4087,7 +4078,7 @@ int ath10k_mac_tx_push_txq(struct ieee80211_hw *hw,
 	}
 
 	airtime = ath10k_mac_update_airtime(ar, txq, skb);
-	ath10k_mac_tx_h_fill_cb(ar, vif, txq, sta, skb, airtime);
+	ath10k_mac_tx_h_fill_cb(ar, vif, txq, skb, airtime);
 
 	skb_len = skb->len;
 	txmode = ath10k_mac_tx_h_get_txmode(ar, vif, sta, skb);
@@ -4357,7 +4348,7 @@ static void ath10k_mac_op_tx(struct ieee80211_hw *hw,
 	u16 airtime;
 
 	airtime = ath10k_mac_update_airtime(ar, txq, skb);
-	ath10k_mac_tx_h_fill_cb(ar, vif, txq, sta, skb, airtime);
+	ath10k_mac_tx_h_fill_cb(ar, vif, txq, skb, airtime);
 
 	txmode = ath10k_mac_tx_h_get_txmode(ar, vif, sta, skb);
 	txpath = ath10k_mac_tx_h_get_txpath(ar, skb, txmode);
@@ -4991,8 +4982,7 @@ static int ath10k_start(struct ieee80211_hw *hw)
 	param = ar->wmi.pdev_param->enable_btcoex;
 	if (test_bit(WMI_SERVICE_COEX_GPIO, ar->wmi.svc_map) &&
 	    test_bit(ATH10K_FW_FEATURE_BTCOEX_PARAM,
-		     ar->running_fw->fw_file.fw_features) &&
-	    ar->coex_support) {
+		     ar->running_fw->fw_file.fw_features)) {
 		ret = ath10k_wmi_pdev_set_param(ar, param, 0);
 		if (ret) {
 			ath10k_warn(ar,
@@ -5113,8 +5103,7 @@ static int ath10k_mac_txpower_recalc(struct ath10k *ar)
 	lockdep_assert_held(&ar->conf_mutex);
 
 	list_for_each_entry(arvif, &ar->arvifs, list) {
-		/* txpower not initialized yet? */
-		if (arvif->txpower == INT_MIN)
+		if (arvif->txpower <= 0)
 			continue;
 
 		if (txpower == -1)
@@ -6206,7 +6195,6 @@ static int ath10k_set_key(struct ieee80211_hw *hw, enum set_key_cmd cmd,
 {
 	struct ath10k *ar = hw->priv;
 	struct ath10k_vif *arvif = (void *)vif->drv_priv;
-	struct ath10k_sta *arsta;
 	struct ath10k_peer *peer;
 	const u8 *peer_addr;
 	bool is_wep = key->cipher == WLAN_CIPHER_SUITE_WEP40 ||
@@ -6231,17 +6219,12 @@ static int ath10k_set_key(struct ieee80211_hw *hw, enum set_key_cmd cmd,
 
 	mutex_lock(&ar->conf_mutex);
 
-	if (sta) {
-		arsta = (struct ath10k_sta *)sta->drv_priv;
+	if (sta)
 		peer_addr = sta->addr;
-		spin_lock_bh(&ar->data_lock);
-		arsta->ucast_cipher = key->cipher;
-		spin_unlock_bh(&ar->data_lock);
-	} else if (arvif->vdev_type == WMI_VDEV_TYPE_STA) {
+	else if (arvif->vdev_type == WMI_VDEV_TYPE_STA)
 		peer_addr = vif->bss_conf.bssid;
-	} else {
+	else
 		peer_addr = vif->addr;
-	}
 
 	key->hw_key_idx = key->keyidx;
 

@@ -221,7 +221,8 @@ static struct vector_fds *user_init_tap_fds(struct arglist *ifspec)
 	return result;
 tap_cleanup:
 	printk(UM_KERN_ERR "user_init_tap: init failed, error %d", fd);
-	kfree(result);
+	if (result != NULL)
+		kfree(result);
 	return NULL;
 }
 
@@ -265,7 +266,8 @@ static struct vector_fds *user_init_hybrid_fds(struct arglist *ifspec)
 	return result;
 hybrid_cleanup:
 	printk(UM_KERN_ERR "user_init_hybrid: init failed");
-	kfree(result);
+	if (result != NULL)
+		kfree(result);
 	return NULL;
 }
 
@@ -342,8 +344,10 @@ static struct vector_fds *user_init_unix_fds(struct arglist *ifspec, int id)
 unix_cleanup:
 	if (fd >= 0)
 		os_close_file(fd);
-	kfree(remote_addr);
-	kfree(result);
+	if (remote_addr != NULL)
+		kfree(remote_addr);
+	if (result != NULL)
+		kfree(result);
 	return NULL;
 }
 
@@ -378,7 +382,8 @@ static struct vector_fds *user_init_raw_fds(struct arglist *ifspec)
 	return result;
 raw_cleanup:
 	printk(UM_KERN_ERR "user_init_raw: init failed, error %d", err);
-	kfree(result);
+	if (result != NULL)
+		kfree(result);
 	return NULL;
 }
 

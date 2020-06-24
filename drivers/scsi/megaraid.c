@@ -2795,9 +2795,11 @@ megaraid_biosparam(struct scsi_device *sdev, struct block_device *bdev,
 		    sector_t capacity, int geom[])
 {
 	adapter_t	*adapter;
+	unsigned char	*bh;
 	int	heads;
 	int	sectors;
 	int	cylinders;
+	int	rval;
 
 	/* Get pointer to host config structure */
 	adapter = (adapter_t *)sdev->host->hostdata;
@@ -2824,8 +2826,15 @@ megaraid_biosparam(struct scsi_device *sdev, struct block_device *bdev,
 			geom[2] = cylinders;
 	}
 	else {
-		if (scsi_partsize(bdev, capacity, geom))
-			return 0;
+		bh = scsi_bios_ptable(bdev);
+
+		if( bh ) {
+			rval = scsi_partsize(bh, capacity,
+					    &geom[2], &geom[0], &geom[1]);
+			kfree(bh);
+			if( rval != -1 )
+				return rval;
+		}
 
 		dev_info(&adapter->dev->dev,
 			 "invalid partition on this disk on channel %d\n",

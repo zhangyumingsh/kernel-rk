@@ -21,7 +21,6 @@
 #define LOAD_OFFSET __START_KERNEL_map
 #endif
 
-#define RUNTIME_DISCARD_EXIT
 #define EMITS_PT_NOTE
 #define RO_EXCEPTION_TABLE_ALIGN	16
 
@@ -314,8 +313,8 @@ SECTIONS
 
 	. = ALIGN(8);
 	/*
-	 * .exit.text is discarded at runtime, not link time, to deal with
-	 *  references from .altinstructions
+	 * .exit.text is discard at runtime, not link time, to deal with
+	 *  references from .altinstructions and .eh_frame
 	 */
 	.exit.text : AT(ADDR(.exit.text) - LOAD_OFFSET) {
 		EXIT_TEXT
@@ -413,6 +412,9 @@ SECTIONS
 	DWARF_DEBUG
 
 	DISCARDS
+	/DISCARD/ : {
+		*(.eh_frame)
+	}
 }
 
 

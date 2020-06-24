@@ -254,15 +254,6 @@ static inline u64 get_phys_addr(struct hl_ctx *ctx, u64 shadow_addr)
 	return phys_hop_addr + pte_offset;
 }
 
-static bool is_dram_va(struct hl_device *hdev, u64 virt_addr)
-{
-	struct asic_fixed_properties *prop = &hdev->asic_prop;
-
-	return hl_mem_area_inside_range(virt_addr, prop->dmmu.page_size,
-					prop->dmmu.start_addr,
-					prop->dmmu.end_addr);
-}
-
 static int dram_default_mapping_init(struct hl_ctx *ctx)
 {
 	struct hl_device *hdev = ctx->hdev;
@@ -557,7 +548,6 @@ static int _hl_mmu_unmap(struct hl_ctx *ctx, u64 virt_addr, bool is_dram_addr)
 		curr_pte;
 	bool is_huge, clear_hop3 = true;
 
-	/* shifts and masks are the same in PMMU and HPMMU, use one of them */
 	mmu_prop = is_dram_addr ? &prop->dmmu : &prop->pmmu;
 
 	hop0_addr = get_hop0_addr(ctx);
@@ -647,27 +637,29 @@ static int _hl_mmu_unmap(struct hl_ctx *ctx, u64 virt_addr, bool is_dram_addr)
 			clear_hop3 = true;
 
 		if (!clear_hop3)
-			goto mapped;
+			goto flush;
 
 		clear_pte(ctx, hop3_pte_addr);
 
 		if (put_pte(ctx, hop3_addr))
-			goto mapped;
+			goto flush;
 
 		clear_pte(ctx, hop2_pte_addr);
 
 		if (put_pte(ctx, hop2_addr))
-			goto mapped;
+			goto flush;
 
 		clear_pte(ctx, hop1_pte_addr);
 
 		if (put_pte(ctx, hop1_addr))
-			goto mapped;
+			goto flush;
 
 		clear_pte(ctx, hop0_pte_addr);
 	}
 
-mapped:
+flush:
+	flush(ctx);
+
 	return 0;
 
 not_mapped:
@@ -683,7 +675,6 @@ not_mapped:
  * @ctx: pointer to the context structure
  * @virt_addr: virt addr to map from
  * @page_size: size of the page to unmap
- * @flush_pte: whether to do a PCI flush
  *
  * This function does the following:
  * - Check that the virt addr is mapped
@@ -694,43 +685,40 @@ not_mapped:
  * changes the MMU hash, it must be protected by a lock.
  * However, because it maps only a single page, the lock should be implemented
  * in a higher level in order to protect the entire mapping of the memory area
- *
- * For optimization reasons PCI flush may be requested once after unmapping of
- * large area.
  */
-int hl_mmu_unmap(struct hl_ctx *ctx, u64 virt_addr, u32 page_size,
-		bool flush_pte)
+int hl_mmu_unmap(struct hl_ctx *ctx, u64 virt_addr, u32 page_size)
 {
 	struct hl_device *hdev = ctx->hdev;
 	struct asic_fixed_properties *prop = &hdev->asic_prop;
 	struct hl_mmu_properties *mmu_prop;
 	u64 real_virt_addr;
 	u32 real_page_size, npages;
-	int i, rc = 0;
+	int i, rc;
 	bool is_dram_addr;
 
 	if (!hdev->mmu_enable)
 		return 0;
 
-	is_dram_addr = is_dram_va(hdev, virt_addr);
+	is_dram_addr = hl_mem_area_inside_range(virt_addr, prop->dmmu.page_size,
+				prop->va_space_dram_start_address,
+				prop->va_space_dram_end_address);
 
-	if (is_dram_addr)
-		mmu_prop = &prop->dmmu;
-	else if ((page_size % prop->pmmu_huge.page_size) == 0)
-		mmu_prop = &prop->pmmu_huge;
-	else
-		mmu_prop = &prop->pmmu;
+	mmu_prop = is_dram_addr ? &prop->dmmu : &prop->pmmu;
 
 	/*
 	 * The H/W handles mapping of specific page sizes. Hence if the page
 	 * size is bigger, we break it to sub-pages and unmap them separately.
 	 */
-	if ((page_size % mmu_prop->page_size) == 0) {
+	if ((page_size % mmu_prop->huge_page_size) == 0) {
+		real_page_size = mmu_prop->huge_page_size;
+	} else if ((page_size % mmu_prop->page_size) == 0) {
 		real_page_size = mmu_prop->page_size;
 	} else {
 		dev_err(hdev->dev,
-			"page size of %u is not %uKB aligned, can't unmap\n",
-			page_size, mmu_prop->page_size >> 10);
+			"page size of %u is not %uKB nor %uMB aligned, can't unmap\n",
+			page_size,
+			mmu_prop->page_size >> 10,
+			mmu_prop->huge_page_size >> 20);
 
 		return -EFAULT;
 	}
@@ -741,15 +729,12 @@ int hl_mmu_unmap(struct hl_ctx *ctx, u64 virt_addr, u32 page_size,
 	for (i = 0 ; i < npages ; i++) {
 		rc = _hl_mmu_unmap(ctx, real_virt_addr, is_dram_addr);
 		if (rc)
-			break;
+			return rc;
 
 		real_virt_addr += real_page_size;
 	}
 
-	if (flush_pte)
-		flush(ctx);
-
-	return rc;
+	return 0;
 }
 
 static int _hl_mmu_map(struct hl_ctx *ctx, u64 virt_addr, u64 phys_addr,
@@ -768,6 +753,8 @@ static int _hl_mmu_map(struct hl_ctx *ctx, u64 virt_addr, u64 phys_addr,
 		hop4_new = false, is_huge;
 	int rc = -ENOMEM;
 
+	mmu_prop = is_dram_addr ? &prop->dmmu : &prop->pmmu;
+
 	/*
 	 * This mapping function can map a page or a huge page. For huge page
 	 * there are only 3 hops rather than 4. Currently the DRAM allocation
@@ -775,15 +762,11 @@ static int _hl_mmu_map(struct hl_ctx *ctx, u64 virt_addr, u64 phys_addr,
 	 * one of the two page sizes. Since this is a common code for all the
 	 * three cases, we need this hugs page check.
 	 */
-	if (is_dram_addr) {
-		mmu_prop = &prop->dmmu;
-		is_huge = true;
-	} else if (page_size == prop->pmmu_huge.page_size) {
-		mmu_prop = &prop->pmmu_huge;
-		is_huge = true;
-	} else {
-		mmu_prop = &prop->pmmu;
-		is_huge = false;
+	is_huge = page_size == mmu_prop->huge_page_size;
+
+	if (is_dram_addr && !is_huge) {
+		dev_err(hdev->dev, "DRAM mapping should use huge pages only\n");
+		return -EFAULT;
 	}
 
 	hop0_addr = get_hop0_addr(ctx);
@@ -902,6 +885,8 @@ static int _hl_mmu_map(struct hl_ctx *ctx, u64 virt_addr, u64 phys_addr,
 		get_pte(ctx, hop3_addr);
 	}
 
+	flush(ctx);
+
 	return 0;
 
 err:
@@ -924,7 +909,6 @@ err:
  * @virt_addr: virt addr to map from
  * @phys_addr: phys addr to map to
  * @page_size: physical page size
- * @flush_pte: whether to do a PCI flush
  *
  * This function does the following:
  * - Check that the virt addr is not mapped
@@ -935,12 +919,8 @@ err:
  * changes the MMU hash, it must be protected by a lock.
  * However, because it maps only a single page, the lock should be implemented
  * in a higher level in order to protect the entire mapping of the memory area
- *
- * For optimization reasons PCI flush may be requested once after mapping of
- * large area.
  */
-int hl_mmu_map(struct hl_ctx *ctx, u64 virt_addr, u64 phys_addr, u32 page_size,
-		bool flush_pte)
+int hl_mmu_map(struct hl_ctx *ctx, u64 virt_addr, u64 phys_addr, u32 page_size)
 {
 	struct hl_device *hdev = ctx->hdev;
 	struct asic_fixed_properties *prop = &hdev->asic_prop;
@@ -953,25 +933,26 @@ int hl_mmu_map(struct hl_ctx *ctx, u64 virt_addr, u64 phys_addr, u32 page_size,
 	if (!hdev->mmu_enable)
 		return 0;
 
-	is_dram_addr = is_dram_va(hdev, virt_addr);
+	is_dram_addr = hl_mem_area_inside_range(virt_addr, prop->dmmu.page_size,
+				prop->va_space_dram_start_address,
+				prop->va_space_dram_end_address);
 
-	if (is_dram_addr)
-		mmu_prop = &prop->dmmu;
-	else if ((page_size % prop->pmmu_huge.page_size) == 0)
-		mmu_prop = &prop->pmmu_huge;
-	else
-		mmu_prop = &prop->pmmu;
+	mmu_prop = is_dram_addr ? &prop->dmmu : &prop->pmmu;
 
 	/*
 	 * The H/W handles mapping of specific page sizes. Hence if the page
 	 * size is bigger, we break it to sub-pages and map them separately.
 	 */
-	if ((page_size % mmu_prop->page_size) == 0) {
+	if ((page_size % mmu_prop->huge_page_size) == 0) {
+		real_page_size = mmu_prop->huge_page_size;
+	} else if ((page_size % mmu_prop->page_size) == 0) {
 		real_page_size = mmu_prop->page_size;
 	} else {
 		dev_err(hdev->dev,
-			"page size of %u is not %uKB aligned, can't unmap\n",
-			page_size, mmu_prop->page_size >> 10);
+			"page size of %u is not %dKB nor %dMB aligned, can't unmap\n",
+			page_size,
+			mmu_prop->page_size >> 10,
+			mmu_prop->huge_page_size >> 20);
 
 		return -EFAULT;
 	}
@@ -995,9 +976,6 @@ int hl_mmu_map(struct hl_ctx *ctx, u64 virt_addr, u64 phys_addr, u32 page_size,
 		mapped_cnt++;
 	}
 
-	if (flush_pte)
-		flush(ctx);
-
 	return 0;
 
 err:
@@ -1009,8 +987,6 @@ err:
 
 		real_virt_addr += real_page_size;
 	}
-
-	flush(ctx);
 
 	return rc;
 }

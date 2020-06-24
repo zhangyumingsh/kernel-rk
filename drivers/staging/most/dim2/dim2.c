@@ -20,7 +20,8 @@
 #include <linux/dma-mapping.h>
 #include <linux/sched.h>
 #include <linux/kthread.h>
-#include <linux/most.h>
+
+#include "../most.h"
 #include "hal.h"
 #include "errors.h"
 #include "sysfs.h"

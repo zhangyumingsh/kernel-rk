@@ -25,10 +25,8 @@
 #ifndef __DISPLAY_MODE_LIB_H__
 #define __DISPLAY_MODE_LIB_H__
 
-#include "dm_services.h"
-#include "dc_features.h"
-#include "display_mode_structs.h"
-#include "display_mode_enums.h"
+
+#include "dml_common_defs.h"
 #include "display_mode_vba.h"
 
 enum dml_project {

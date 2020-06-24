@@ -629,30 +629,30 @@ static char *snprint_line(char *buf, size_t count,
 	int out, i, j, l;
 	char c;
 
-	out = scnprintf(buf, count, "%08X", ofs);
+	out = snprintf(buf, count, "%08X", ofs);
 
 	for (l = 0, i = 0; i < 2; i++) {
-		out += scnprintf(buf + out, count - out, " ");
+		out += snprintf(buf + out, count - out, " ");
 		for (j = 0; j < 8 && l < len; j++, l++)
-			out += scnprintf(buf + out, count - out, "%02X ",
+			out += snprintf(buf + out, count - out, "%02X ",
 					data[(i * 8 + j)]);
 		for (; j < 8; j++)
-			out += scnprintf(buf + out, count - out, "   ");
+			out += snprintf(buf + out, count - out, "   ");
 	}
 
-	out += scnprintf(buf + out, count - out, " ");
+	out += snprintf(buf + out, count - out, " ");
 	for (l = 0, i = 0; i < 2; i++) {
-		out += scnprintf(buf + out, count - out, " ");
+		out += snprintf(buf + out, count - out, " ");
 		for (j = 0; j < 8 && l < len; j++, l++) {
 			c = data[(i * 8 + j)];
 			if (!isascii(c) || !isprint(c))
 				c = '.';
 
-			out += scnprintf(buf + out, count - out, "%c", c);
+			out += snprintf(buf + out, count - out, "%c", c);
 		}
 
 		for (; j < 8; j++)
-			out += scnprintf(buf + out, count - out, " ");
+			out += snprintf(buf + out, count - out, " ");
 	}
 
 	return buf;
@@ -1730,7 +1730,7 @@ static int ipw2100_up(struct ipw2100_priv *priv, int deferred)
 	/* the ipw2100 hardware really doesn't want power management delays
 	 * longer than 175usec
 	 */
-	cpu_latency_qos_update_request(&ipw2100_pm_qos_req, 175);
+	pm_qos_update_request(&ipw2100_pm_qos_req, 175);
 
 	/* If the interrupt is enabled, turn it off... */
 	spin_lock_irqsave(&priv->low_lock, flags);
@@ -1875,8 +1875,7 @@ static void ipw2100_down(struct ipw2100_priv *priv)
 	ipw2100_disable_interrupts(priv);
 	spin_unlock_irqrestore(&priv->low_lock, flags);
 
-	cpu_latency_qos_update_request(&ipw2100_pm_qos_req,
-				       PM_QOS_DEFAULT_VALUE);
+	pm_qos_update_request(&ipw2100_pm_qos_req, PM_QOS_DEFAULT_VALUE);
 
 	/* We have to signal any supplicant if we are disassociating */
 	if (associated)
@@ -6567,7 +6566,8 @@ static int __init ipw2100_init(void)
 	printk(KERN_INFO DRV_NAME ": %s, %s\n", DRV_DESCRIPTION, DRV_VERSION);
 	printk(KERN_INFO DRV_NAME ": %s\n", DRV_COPYRIGHT);
 
-	cpu_latency_qos_add_request(&ipw2100_pm_qos_req, PM_QOS_DEFAULT_VALUE);
+	pm_qos_add_request(&ipw2100_pm_qos_req, PM_QOS_CPU_DMA_LATENCY,
+			   PM_QOS_DEFAULT_VALUE);
 
 	ret = pci_register_driver(&ipw2100_pci_driver);
 	if (ret)
@@ -6594,7 +6594,7 @@ static void __exit ipw2100_exit(void)
 			   &driver_attr_debug_level);
 #endif
 	pci_unregister_driver(&ipw2100_pci_driver);
-	cpu_latency_qos_remove_request(&ipw2100_pm_qos_req);
+	pm_qos_remove_request(&ipw2100_pm_qos_req);
 }
 
 module_init(ipw2100_init);

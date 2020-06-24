@@ -24,7 +24,7 @@ struct alias_prop {
 	const char *alias;
 	struct device_node *np;
 	int id;
-	char stem[];
+	char stem[0];
 };
 
 #if defined(CONFIG_SPARC)

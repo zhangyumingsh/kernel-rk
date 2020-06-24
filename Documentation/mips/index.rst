@@ -10,6 +10,8 @@ MIPS-specific Documentation
 
    ingenic-tcu
 
+   au1xxx_ide
+
 .. only::  subproject and html
 
    Indices

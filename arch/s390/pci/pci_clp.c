@@ -24,7 +24,7 @@
 
 bool zpci_unique_uid;
 
-void update_uid_checking(bool new)
+static void update_uid_checking(bool new)
 {
 	if (zpci_unique_uid != new)
 		zpci_dbg(1, "uid checking:%d\n", new);

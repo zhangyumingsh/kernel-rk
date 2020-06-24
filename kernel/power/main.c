@@ -95,7 +95,7 @@ int pm_notifier_call_chain(unsigned long val)
 }
 
 /* If set, devices may be suspended and resumed asynchronously. */
-int pm_async_enabled = 0;
+int pm_async_enabled = 1;
 
 static ssize_t pm_async_show(struct kobject *kobj, struct kobj_attribute *attr,
 			     char *buf)
@@ -534,13 +534,6 @@ static ssize_t pm_debug_messages_store(struct kobject *kobj,
 }
 
 power_attr(pm_debug_messages);
-
-static int __init pm_debug_messages_setup(char *str)
-{
-	pm_debug_messages_on = true;
-	return 1;
-}
-__setup("pm_debug_messages", pm_debug_messages_setup);
 
 /**
  * __pm_pr_dbg - Print a suspend debug message to the kernel log.

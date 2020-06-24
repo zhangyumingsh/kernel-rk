@@ -451,7 +451,7 @@ static int enetc_refill_rx_ring(struct enetc_bdr *rx_ring, const int buff_cnt)
 
 	i = rx_ring->next_to_use;
 	rx_swbd = &rx_ring->rx_swbd[i];
-	rxbd = enetc_rxbd(rx_ring, i);
+	rxbd = ENETC_RXBD(*rx_ring, i);
 
 	for (j = 0; j < buff_cnt; j++) {
 		/* try reuse page */
@@ -468,12 +468,13 @@ static int enetc_refill_rx_ring(struct enetc_bdr *rx_ring, const int buff_cnt)
 		/* clear 'R" as well */
 		rxbd->r.lstatus = 0;
 
-		rxbd = enetc_rxbd_next(rx_ring, rxbd, i);
 		rx_swbd++;
+		rxbd++;
 		i++;
 		if (unlikely(i == rx_ring->bd_count)) {
 			i = 0;
 			rx_swbd = rx_ring->rx_swbd;
+			rxbd = ENETC_RXBD(*rx_ring, 0);
 		}
 	}
 
@@ -487,7 +488,7 @@ static int enetc_refill_rx_ring(struct enetc_bdr *rx_ring, const int buff_cnt)
 	return j;
 }
 
-#ifdef CONFIG_FSL_ENETC_PTP_CLOCK
+#ifdef CONFIG_FSL_ENETC_HW_TIMESTAMPING
 static void enetc_get_rx_tstamp(struct net_device *ndev,
 				union enetc_rx_bd *rxbd,
 				struct sk_buff *skb)
@@ -501,8 +502,7 @@ static void enetc_get_rx_tstamp(struct net_device *ndev,
 	if (le16_to_cpu(rxbd->r.flags) & ENETC_RXBD_FLAG_TSTMP) {
 		lo = enetc_rd(hw, ENETC_SICTR0);
 		hi = enetc_rd(hw, ENETC_SICTR1);
-		rxbd = enetc_rxbd_ext(rxbd);
-		tstamp_lo = le32_to_cpu(rxbd->ext.tstamp);
+		tstamp_lo = le32_to_cpu(rxbd->r.tstamp);
 		if (lo <= tstamp_lo)
 			hi -= 1;
 
@@ -516,7 +516,7 @@ static void enetc_get_rx_tstamp(struct net_device *ndev,
 static void enetc_get_offloads(struct enetc_bdr *rx_ring,
 			       union enetc_rx_bd *rxbd, struct sk_buff *skb)
 {
-#ifdef CONFIG_FSL_ENETC_PTP_CLOCK
+#ifdef CONFIG_FSL_ENETC_HW_TIMESTAMPING
 	struct enetc_ndev_priv *priv = netdev_priv(rx_ring->ndev);
 #endif
 	/* TODO: hashing */
@@ -533,7 +533,7 @@ static void enetc_get_offloads(struct enetc_bdr *rx_ring,
 	if (le16_to_cpu(rxbd->r.flags) & ENETC_RXBD_FLAG_VLAN)
 		__vlan_hwaccel_put_tag(skb, htons(ETH_P_8021Q),
 				       le16_to_cpu(rxbd->r.vlan_opt));
-#ifdef CONFIG_FSL_ENETC_PTP_CLOCK
+#ifdef CONFIG_FSL_ENETC_HW_TIMESTAMPING
 	if (priv->active_offloads & ENETC_F_RX_TSTAMP)
 		enetc_get_rx_tstamp(rx_ring->ndev, rxbd, skb);
 #endif
@@ -655,7 +655,7 @@ static int enetc_clean_rx_ring(struct enetc_bdr *rx_ring,
 			cleaned_cnt -= count;
 		}
 
-		rxbd = enetc_rxbd(rx_ring, i);
+		rxbd = ENETC_RXBD(*rx_ring, i);
 		bd_status = le32_to_cpu(rxbd->r.lstatus);
 		if (!bd_status)
 			break;
@@ -670,10 +670,12 @@ static int enetc_clean_rx_ring(struct enetc_bdr *rx_ring,
 		enetc_get_offloads(rx_ring, rxbd, skb);
 
 		cleaned_cnt++;
-
-		rxbd = enetc_rxbd_next(rx_ring, rxbd, i);
-		if (unlikely(++i == rx_ring->bd_count))
+		rxbd++;
+		i++;
+		if (unlikely(i == rx_ring->bd_count)) {
 			i = 0;
+			rxbd = ENETC_RXBD(*rx_ring, 0);
+		}
 
 		if (unlikely(bd_status &
 			     ENETC_RXBD_LSTATUS(ENETC_RXBD_ERR_MASK))) {
@@ -681,10 +683,12 @@ static int enetc_clean_rx_ring(struct enetc_bdr *rx_ring,
 			while (!(bd_status & ENETC_RXBD_LSTATUS_F)) {
 				dma_rmb();
 				bd_status = le32_to_cpu(rxbd->r.lstatus);
-
-				rxbd = enetc_rxbd_next(rx_ring, rxbd, i);
-				if (unlikely(++i == rx_ring->bd_count))
+				rxbd++;
+				i++;
+				if (unlikely(i == rx_ring->bd_count)) {
 					i = 0;
+					rxbd = ENETC_RXBD(*rx_ring, 0);
+				}
 			}
 
 			rx_ring->ndev->stats.rx_dropped++;
@@ -706,10 +710,12 @@ static int enetc_clean_rx_ring(struct enetc_bdr *rx_ring,
 			enetc_add_rx_buff_to_skb(rx_ring, i, size, skb);
 
 			cleaned_cnt++;
-
-			rxbd = enetc_rxbd_next(rx_ring, rxbd, i);
-			if (unlikely(++i == rx_ring->bd_count))
+			rxbd++;
+			i++;
+			if (unlikely(i == rx_ring->bd_count)) {
 				i = 0;
+				rxbd = ENETC_RXBD(*rx_ring, 0);
+			}
 		}
 
 		rx_byte_cnt += skb->len;
@@ -839,19 +845,15 @@ static void enetc_free_tx_resources(struct enetc_ndev_priv *priv)
 		enetc_free_txbdr(priv->tx_ring[i]);
 }
 
-static int enetc_alloc_rxbdr(struct enetc_bdr *rxr, bool extended)
+static int enetc_alloc_rxbdr(struct enetc_bdr *rxr)
 {
-	size_t size = sizeof(union enetc_rx_bd);
 	int err;
 
 	rxr->rx_swbd = vzalloc(rxr->bd_count * sizeof(struct enetc_rx_swbd));
 	if (!rxr->rx_swbd)
 		return -ENOMEM;
 
-	if (extended)
-		size *= 2;
-
-	err = enetc_dma_alloc_bdr(rxr, size);
+	err = enetc_dma_alloc_bdr(rxr, sizeof(union enetc_rx_bd));
 	if (err) {
 		vfree(rxr->rx_swbd);
 		return err;
@@ -860,7 +862,6 @@ static int enetc_alloc_rxbdr(struct enetc_bdr *rxr, bool extended)
 	rxr->next_to_clean = 0;
 	rxr->next_to_use = 0;
 	rxr->next_to_alloc = 0;
-	rxr->ext_en = extended;
 
 	return 0;
 }
@@ -880,11 +881,10 @@ static void enetc_free_rxbdr(struct enetc_bdr *rxr)
 
 static int enetc_alloc_rx_resources(struct enetc_ndev_priv *priv)
 {
-	bool extended = !!(priv->active_offloads & ENETC_F_RX_TSTAMP);
 	int i, err;
 
 	for (i = 0; i < priv->num_rx_rings; i++) {
-		err = enetc_alloc_rxbdr(priv->rx_ring[i], extended);
+		err = enetc_alloc_rxbdr(priv->rx_ring[i]);
 
 		if (err)
 			goto fail;
@@ -1174,10 +1174,9 @@ static void enetc_setup_rxbdr(struct enetc_hw *hw, struct enetc_bdr *rx_ring)
 	enetc_rxbdr_wr(hw, idx, ENETC_RBICIR0, ENETC_RBICIR0_ICEN | 0x1);
 
 	rbmr = ENETC_RBMR_EN;
-
-	if (rx_ring->ext_en)
-		rbmr |= ENETC_RBMR_BDS;
-
+#ifdef CONFIG_FSL_ENETC_HW_TIMESTAMPING
+	rbmr |= ENETC_RBMR_BDS;
+#endif
 	if (rx_ring->ndev->features & NETIF_F_HW_VLAN_CTAG_RX)
 		rbmr |= ENETC_RBMR_VTE;
 
@@ -1578,12 +1577,11 @@ int enetc_set_features(struct net_device *ndev,
 	return 0;
 }
 
-#ifdef CONFIG_FSL_ENETC_PTP_CLOCK
+#ifdef CONFIG_FSL_ENETC_HW_TIMESTAMPING
 static int enetc_hwtstamp_set(struct net_device *ndev, struct ifreq *ifr)
 {
 	struct enetc_ndev_priv *priv = netdev_priv(ndev);
 	struct hwtstamp_config config;
-	int ao;
 
 	if (copy_from_user(&config, ifr->ifr_data, sizeof(config)))
 		return -EFAULT;
@@ -1599,7 +1597,6 @@ static int enetc_hwtstamp_set(struct net_device *ndev, struct ifreq *ifr)
 		return -ERANGE;
 	}
 
-	ao = priv->active_offloads;
 	switch (config.rx_filter) {
 	case HWTSTAMP_FILTER_NONE:
 		priv->active_offloads &= ~ENETC_F_RX_TSTAMP;
@@ -1607,11 +1604,6 @@ static int enetc_hwtstamp_set(struct net_device *ndev, struct ifreq *ifr)
 	default:
 		priv->active_offloads |= ENETC_F_RX_TSTAMP;
 		config.rx_filter = HWTSTAMP_FILTER_ALL;
-	}
-
-	if (netif_running(ndev) && ao != priv->active_offloads) {
-		enetc_close(ndev);
-		enetc_open(ndev);
 	}
 
 	return copy_to_user(ifr->ifr_data, &config, sizeof(config)) ?
@@ -1640,7 +1632,7 @@ static int enetc_hwtstamp_get(struct net_device *ndev, struct ifreq *ifr)
 
 int enetc_ioctl(struct net_device *ndev, struct ifreq *rq, int cmd)
 {
-#ifdef CONFIG_FSL_ENETC_PTP_CLOCK
+#ifdef CONFIG_FSL_ENETC_HW_TIMESTAMPING
 	if (cmd == SIOCSHWTSTAMP)
 		return enetc_hwtstamp_set(ndev, rq);
 	if (cmd == SIOCGHWTSTAMP)

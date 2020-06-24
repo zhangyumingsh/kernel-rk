@@ -986,8 +986,7 @@ static void mcde_dsi_bridge_disable(struct drm_bridge *bridge)
 	clk_disable_unprepare(d->lp_clk);
 }
 
-static int mcde_dsi_bridge_attach(struct drm_bridge *bridge,
-				  enum drm_bridge_attach_flags flags)
+static int mcde_dsi_bridge_attach(struct drm_bridge *bridge)
 {
 	struct mcde_dsi *d = bridge_to_mcde_dsi(bridge);
 	struct drm_device *drm = bridge->dev;
@@ -999,7 +998,7 @@ static int mcde_dsi_bridge_attach(struct drm_bridge *bridge,
 	}
 
 	/* Attach the DSI bridge to the output (panel etc) bridge */
-	ret = drm_bridge_attach(bridge->encoder, d->bridge_out, bridge, flags);
+	ret = drm_bridge_attach(bridge->encoder, d->bridge_out, bridge);
 	if (ret) {
 		dev_err(d->dev, "failed to attach the DSI bridge\n");
 		return ret;

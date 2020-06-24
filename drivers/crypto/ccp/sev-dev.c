@@ -283,11 +283,11 @@ static int sev_get_platform_state(int *state, int *error)
 	return rc;
 }
 
-static int sev_ioctl_do_reset(struct sev_issue_cmd *argp, bool writable)
+static int sev_ioctl_do_reset(struct sev_issue_cmd *argp)
 {
 	int state, rc;
 
-	if (!writable)
+	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
 
 	/*
@@ -331,12 +331,12 @@ static int sev_ioctl_do_platform_status(struct sev_issue_cmd *argp)
 	return ret;
 }
 
-static int sev_ioctl_do_pek_pdh_gen(int cmd, struct sev_issue_cmd *argp, bool writable)
+static int sev_ioctl_do_pek_pdh_gen(int cmd, struct sev_issue_cmd *argp)
 {
 	struct sev_device *sev = psp_master->sev_data;
 	int rc;
 
-	if (!writable)
+	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
 
 	if (sev->state == SEV_STATE_UNINIT) {
@@ -348,7 +348,7 @@ static int sev_ioctl_do_pek_pdh_gen(int cmd, struct sev_issue_cmd *argp, bool wr
 	return __sev_do_cmd_locked(cmd, NULL, &argp->error);
 }
 
-static int sev_ioctl_do_pek_csr(struct sev_issue_cmd *argp, bool writable)
+static int sev_ioctl_do_pek_csr(struct sev_issue_cmd *argp)
 {
 	struct sev_device *sev = psp_master->sev_data;
 	struct sev_user_data_pek_csr input;
@@ -356,7 +356,7 @@ static int sev_ioctl_do_pek_csr(struct sev_issue_cmd *argp, bool writable)
 	void *blob = NULL;
 	int ret;
 
-	if (!writable)
+	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
 
 	if (copy_from_user(&input, (void __user *)argp->data, sizeof(input)))
@@ -539,7 +539,7 @@ fw_err:
 	return ret;
 }
 
-static int sev_ioctl_do_pek_import(struct sev_issue_cmd *argp, bool writable)
+static int sev_ioctl_do_pek_import(struct sev_issue_cmd *argp)
 {
 	struct sev_device *sev = psp_master->sev_data;
 	struct sev_user_data_pek_cert_import input;
@@ -547,7 +547,7 @@ static int sev_ioctl_do_pek_import(struct sev_issue_cmd *argp, bool writable)
 	void *pek_blob, *oca_blob;
 	int ret;
 
-	if (!writable)
+	if (!capable(CAP_SYS_ADMIN))
 		return -EPERM;
 
 	if (copy_from_user(&input, (void __user *)argp->data, sizeof(input)))
@@ -698,7 +698,7 @@ static int sev_ioctl_do_get_id(struct sev_issue_cmd *argp)
 	return ret;
 }
 
-static int sev_ioctl_do_pdh_export(struct sev_issue_cmd *argp, bool writable)
+static int sev_ioctl_do_pdh_export(struct sev_issue_cmd *argp)
 {
 	struct sev_device *sev = psp_master->sev_data;
 	struct sev_user_data_pdh_cert_export input;
@@ -708,7 +708,7 @@ static int sev_ioctl_do_pdh_export(struct sev_issue_cmd *argp, bool writable)
 
 	/* If platform is not in INIT state then transition it to INIT. */
 	if (sev->state != SEV_STATE_INIT) {
-		if (!writable)
+		if (!capable(CAP_SYS_ADMIN))
 			return -EPERM;
 
 		ret = __sev_platform_init_locked(&argp->error);
@@ -801,7 +801,6 @@ static long sev_ioctl(struct file *file, unsigned int ioctl, unsigned long arg)
 	void __user *argp = (void __user *)arg;
 	struct sev_issue_cmd input;
 	int ret = -EFAULT;
-	bool writable = file->f_mode & FMODE_WRITE;
 
 	if (!psp_master || !psp_master->sev_data)
 		return -ENODEV;
@@ -820,25 +819,25 @@ static long sev_ioctl(struct file *file, unsigned int ioctl, unsigned long arg)
 	switch (input.cmd) {
 
 	case SEV_FACTORY_RESET:
-		ret = sev_ioctl_do_reset(&input, writable);
+		ret = sev_ioctl_do_reset(&input);
 		break;
 	case SEV_PLATFORM_STATUS:
 		ret = sev_ioctl_do_platform_status(&input);
 		break;
 	case SEV_PEK_GEN:
-		ret = sev_ioctl_do_pek_pdh_gen(SEV_CMD_PEK_GEN, &input, writable);
+		ret = sev_ioctl_do_pek_pdh_gen(SEV_CMD_PEK_GEN, &input);
 		break;
 	case SEV_PDH_GEN:
-		ret = sev_ioctl_do_pek_pdh_gen(SEV_CMD_PDH_GEN, &input, writable);
+		ret = sev_ioctl_do_pek_pdh_gen(SEV_CMD_PDH_GEN, &input);
 		break;
 	case SEV_PEK_CSR:
-		ret = sev_ioctl_do_pek_csr(&input, writable);
+		ret = sev_ioctl_do_pek_csr(&input);
 		break;
 	case SEV_PEK_CERT_IMPORT:
-		ret = sev_ioctl_do_pek_import(&input, writable);
+		ret = sev_ioctl_do_pek_import(&input);
 		break;
 	case SEV_PDH_CERT_EXPORT:
-		ret = sev_ioctl_do_pdh_export(&input, writable);
+		ret = sev_ioctl_do_pdh_export(&input);
 		break;
 	case SEV_GET_ID:
 		pr_warn_once("SEV_GET_ID command is deprecated, use SEV_GET_ID2\n");
@@ -897,9 +896,9 @@ EXPORT_SYMBOL_GPL(sev_guest_df_flush);
 
 static void sev_exit(struct kref *ref)
 {
+	struct sev_misc_dev *misc_dev = container_of(ref, struct sev_misc_dev, refcount);
+
 	misc_deregister(&misc_dev->misc);
-	kfree(misc_dev);
-	misc_dev = NULL;
 }
 
 static int sev_misc_init(struct sev_device *sev)
@@ -917,7 +916,7 @@ static int sev_misc_init(struct sev_device *sev)
 	if (!misc_dev) {
 		struct miscdevice *misc;
 
-		misc_dev = kzalloc(sizeof(*misc_dev), GFP_KERNEL);
+		misc_dev = devm_kzalloc(dev, sizeof(*misc_dev), GFP_KERNEL);
 		if (!misc_dev)
 			return -ENOMEM;
 

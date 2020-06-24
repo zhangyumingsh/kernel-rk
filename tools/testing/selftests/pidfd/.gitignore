@@ -1,4 +1,3 @@
-# SPDX-License-Identifier: GPL-2.0-only
 pidfd_open_test
 pidfd_poll_test
 pidfd_test

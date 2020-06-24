@@ -87,9 +87,9 @@ static ssize_t aoedisk_show_netif(struct device *dev,
 	if (*nd == NULL)
 		return snprintf(page, PAGE_SIZE, "none\n");
 	for (p = page; nd < ne; nd++)
-		p += scnprintf(p, PAGE_SIZE - (p-page), "%s%s",
+		p += snprintf(p, PAGE_SIZE - (p-page), "%s%s",
 			p == page ? "" : ",", (*nd)->name);
-	p += scnprintf(p, PAGE_SIZE - (p-page), "\n");
+	p += snprintf(p, PAGE_SIZE - (p-page), "\n");
 	return p-page;
 }
 /* firmware version */

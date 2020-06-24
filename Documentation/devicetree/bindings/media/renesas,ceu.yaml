@@ -59,8 +59,6 @@ required:
   - interrupts
   - port
 
-additionalProperties: false
-
 examples:
   - |
     #include <dt-bindings/interrupt-controller/arm-gic.h>

@@ -90,7 +90,9 @@ exit:
 
 int ql_soft_reset_mpi_risc(struct ql_adapter *qdev)
 {
-	return ql_write_mpi_reg(qdev, 0x00001010, 1);
+	int status;
+	status = ql_write_mpi_reg(qdev, 0x00001010, 1);
+	return status;
 }
 
 /* Determine if we are in charge of the firwmare. If
@@ -235,7 +237,6 @@ static int ql_idc_cmplt_aen(struct ql_adapter *qdev)
 {
 	int status;
 	struct mbox_params *mbcp = &qdev->idc_mbc;
-
 	mbcp->out_count = 4;
 	status = ql_get_mb_sts(qdev, mbcp);
 	if (status) {
@@ -254,7 +255,6 @@ static int ql_idc_cmplt_aen(struct ql_adapter *qdev)
 static void ql_link_up(struct ql_adapter *qdev, struct mbox_params *mbcp)
 {
 	int status;
-
 	mbcp->out_count = 2;
 
 	status = ql_get_mb_sts(qdev, mbcp);
@@ -353,7 +353,6 @@ static int ql_aen_lost(struct ql_adapter *qdev, struct mbox_params *mbcp)
 		netif_err(qdev, drv, qdev->ndev, "Lost AEN broken!\n");
 	else {
 		int i;
-
 		netif_err(qdev, drv, qdev->ndev, "Lost AEN detected.\n");
 		for (i = 0; i < mbcp->out_count; i++)
 			netif_err(qdev, drv, qdev->ndev, "mbox_out[%d] = 0x%.08x.\n",
@@ -913,7 +912,6 @@ static int ql_idc_wait(struct ql_adapter *qdev)
 	int status = -ETIMEDOUT;
 	long wait_time = 1 * HZ;
 	struct mbox_params *mbcp = &qdev->idc_mbc;
-
 	do {
 		/* Wait here for the command to complete
 		 * via the IDC process.
@@ -1098,7 +1096,6 @@ int ql_wait_fifo_empty(struct ql_adapter *qdev)
 static int ql_set_port_cfg(struct ql_adapter *qdev)
 {
 	int status;
-
 	status = ql_mb_set_port_cfg(qdev);
 	if (status)
 		return status;

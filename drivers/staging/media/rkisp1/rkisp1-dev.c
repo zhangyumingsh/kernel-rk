@@ -128,7 +128,7 @@ static int rkisp1_create_links(struct rkisp1_device *rkisp1)
 
 		ret = media_entity_get_fwnode_pad(&sd->entity, sd->fwnode,
 						  MEDIA_PAD_FL_SOURCE);
-		if (ret < 0) {
+		if (ret) {
 			dev_err(sd->dev, "failed to find src pad for %s\n",
 				sd->name);
 			return ret;
@@ -145,15 +145,14 @@ static int rkisp1_create_links(struct rkisp1_device *rkisp1)
 		flags = 0;
 	}
 
-	flags = MEDIA_LNK_FL_ENABLED | MEDIA_LNK_FL_IMMUTABLE;
+	flags = MEDIA_LNK_FL_ENABLED;
 
 	/* create ISP->RSZ->CAP links */
 	for (i = 0; i < 2; i++) {
 		source = &rkisp1->isp.sd.entity;
 		sink = &rkisp1->resizer_devs[i].sd.entity;
 		ret = media_create_pad_link(source, RKISP1_ISP_PAD_SOURCE_VIDEO,
-					    sink, RKISP1_RSZ_PAD_SINK,
-					    MEDIA_LNK_FL_ENABLED);
+					    sink, RKISP1_RSZ_PAD_SINK, flags);
 		if (ret)
 			return ret;
 
@@ -220,17 +219,19 @@ static int rkisp1_subdev_notifier_complete(struct v4l2_async_notifier *notifier)
 		container_of(notifier, struct rkisp1_device, notifier);
 	int ret;
 
+	mutex_lock(&rkisp1->media_dev.graph_mutex);
 	ret = rkisp1_create_links(rkisp1);
 	if (ret)
-		return ret;
-
+		goto unlock;
 	ret = v4l2_device_register_subdev_nodes(&rkisp1->v4l2_dev);
 	if (ret)
-		return ret;
+		goto unlock;
 
 	dev_dbg(rkisp1->dev, "Async subdev notifier completed\n");
 
-	return 0;
+unlock:
+	mutex_unlock(&rkisp1->media_dev.graph_mutex);
+	return ret;
 }
 
 static int rkisp1_fwnode_parse(struct device *dev,

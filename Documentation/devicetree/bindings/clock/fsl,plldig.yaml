@@ -21,9 +21,6 @@ properties:
   reg:
     maxItems: 1
 
-  clocks:
-    maxItems: 1
-
   '#clock-cells':
     const: 0
 
@@ -43,8 +40,6 @@ required:
   - reg
   - clocks
   - '#clock-cells'
-
-additionalProperties: false
 
 examples:
   # Display PIXEL Clock node:

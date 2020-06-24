@@ -35,6 +35,9 @@
  *		Paul E. McKenney <paulmck@us.ibm.com>
  *		Patrick McHardy <kaber@trash.net>
  */
+
+#define VERSION "0.409"
+
 #include <linux/cache.h>
 #include <linux/uaccess.h>
 #include <linux/bitops.h>
@@ -301,6 +304,8 @@ static inline void alias_free_mem_rcu(struct fib_alias *fa)
 	call_rcu(&fa->rcu, __alias_free_mem);
 }
 
+#define TNODE_KMALLOC_MAX \
+	ilog2((PAGE_SIZE - TNODE_SIZE(0)) / sizeof(struct key_vector *))
 #define TNODE_VMALLOC_MAX \
 	ilog2((SIZE_MAX - TNODE_SIZE(0)) / sizeof(struct key_vector *))
 
@@ -1371,26 +1376,6 @@ static inline t_key prefix_mismatch(t_key key, struct key_vector *n)
 	return (key ^ prefix) & (prefix | -prefix);
 }
 
-bool fib_lookup_good_nhc(const struct fib_nh_common *nhc, int fib_flags,
-			 const struct flowi4 *flp)
-{
-	if (nhc->nhc_flags & RTNH_F_DEAD)
-		return false;
-
-	if (ip_ignore_linkdown(nhc->nhc_dev) &&
-	    nhc->nhc_flags & RTNH_F_LINKDOWN &&
-	    !(fib_flags & FIB_LOOKUP_IGNORE_LINKSTATE))
-		return false;
-
-	if (!(flp->flowi4_flags & FLOWI_FLAG_SKIP_NH_OIF)) {
-		if (flp->flowi4_oif &&
-		    flp->flowi4_oif != nhc->nhc_oif)
-			return false;
-	}
-
-	return true;
-}
-
 /* should be called with rcu_read_lock */
 int fib_table_lookup(struct fib_table *tb, const struct flowi4 *flp,
 		     struct fib_result *res, int fib_flags)
@@ -1523,7 +1508,6 @@ found:
 	/* Step 3: Process the leaf, if that fails fall back to backtracing */
 	hlist_for_each_entry_rcu(fa, &n->leaf, fa_list) {
 		struct fib_info *fi = fa->fa_info;
-		struct fib_nh_common *nhc;
 		int nhsel, err;
 
 		if ((BITS_PER_LONG > KEYLENGTH) || (fa->fa_slen < KEYLENGTH)) {
@@ -1549,25 +1533,26 @@ out_reject:
 		if (fi->fib_flags & RTNH_F_DEAD)
 			continue;
 
-		if (unlikely(fi->nh)) {
-			if (nexthop_is_blackhole(fi->nh)) {
-				err = fib_props[RTN_BLACKHOLE].error;
-				goto out_reject;
-			}
-
-			nhc = nexthop_get_nhc_lookup(fi->nh, fib_flags, flp,
-						     &nhsel);
-			if (nhc)
-				goto set_result;
-			goto miss;
+		if (unlikely(fi->nh && nexthop_is_blackhole(fi->nh))) {
+			err = fib_props[RTN_BLACKHOLE].error;
+			goto out_reject;
 		}
 
 		for (nhsel = 0; nhsel < fib_info_num_path(fi); nhsel++) {
-			nhc = fib_info_nhc(fi, nhsel);
+			struct fib_nh_common *nhc = fib_info_nhc(fi, nhsel);
 
-			if (!fib_lookup_good_nhc(nhc, fib_flags, flp))
+			if (nhc->nhc_flags & RTNH_F_DEAD)
 				continue;
-set_result:
+			if (ip_ignore_linkdown(nhc->nhc_dev) &&
+			    nhc->nhc_flags & RTNH_F_LINKDOWN &&
+			    !(fib_flags & FIB_LOOKUP_IGNORE_LINKSTATE))
+				continue;
+			if (!(flp->flowi4_flags & FLOWI_FLAG_SKIP_NH_OIF)) {
+				if (flp->flowi4_oif &&
+				    flp->flowi4_oif != nhc->nhc_oif)
+					continue;
+			}
+
 			if (!(fib_flags & FIB_LOOKUP_NOREF))
 				refcount_inc(&fi->fib_clntref);
 
@@ -1588,7 +1573,6 @@ set_result:
 			return err;
 		}
 	}
-miss:
 #ifdef CONFIG_IP_FIB_TRIE_STATS
 	this_cpu_inc(stats->semantic_match_miss);
 #endif
@@ -1700,7 +1684,7 @@ int fib_table_delete(struct net *net, struct fib_table *tb,
 		     fi->fib_prefsrc == cfg->fc_prefsrc) &&
 		    (!cfg->fc_protocol ||
 		     fi->fib_protocol == cfg->fc_protocol) &&
-		    fib_nh_match(net, cfg, fi, extack) == 0 &&
+		    fib_nh_match(cfg, fi, extack) == 0 &&
 		    fib_metrics_match(cfg, fi)) {
 			fa_to_delete = fa;
 			break;

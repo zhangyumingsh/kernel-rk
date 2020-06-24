@@ -40,7 +40,7 @@ void arch_dma_prep_coherent(struct page *page, size_t size)
 #define UNCACHED_SHADOW_MASK 0
 #endif /* CONFIG_XILINX_UNCACHED_SHADOW */
 
-void *arch_dma_set_uncached(void *ptr, size_t size)
+void *uncached_kernel_address(void *ptr)
 {
 	unsigned long addr = (unsigned long)ptr;
 
@@ -48,5 +48,12 @@ void *arch_dma_set_uncached(void *ptr, size_t size)
 	if (addr > cpuinfo.dcache_base && addr < cpuinfo.dcache_high)
 		pr_warn("ERROR: Your cache coherent area is CACHED!!!\n");
 	return (void *)addr;
+}
+
+void *cached_kernel_address(void *ptr)
+{
+	unsigned long addr = (unsigned long)ptr;
+
+	return (void *)(addr & ~UNCACHED_SHADOW_MASK);
 }
 #endif /* CONFIG_MMU */

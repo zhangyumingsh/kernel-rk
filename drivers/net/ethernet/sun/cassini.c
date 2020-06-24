@@ -1716,26 +1716,34 @@ static int cas_pci_interrupt(struct net_device *dev, struct cas *cp,
 	pr_cont("\n");
 
 	if (stat & PCI_ERR_OTHER) {
-		int pci_errs;
+		u16 cfg;
 
 		/* Interrogate PCI config space for the
 		 * true cause.
 		 */
-		pci_errs = pci_status_get_and_clear_errors(cp->pdev);
-
-		netdev_err(dev, "PCI status errors[%04x]\n", pci_errs);
-		if (pci_errs & PCI_STATUS_PARITY)
+		pci_read_config_word(cp->pdev, PCI_STATUS, &cfg);
+		netdev_err(dev, "Read PCI cfg space status [%04x]\n", cfg);
+		if (cfg & PCI_STATUS_PARITY)
 			netdev_err(dev, "PCI parity error detected\n");
-		if (pci_errs & PCI_STATUS_SIG_TARGET_ABORT)
+		if (cfg & PCI_STATUS_SIG_TARGET_ABORT)
 			netdev_err(dev, "PCI target abort\n");
-		if (pci_errs & PCI_STATUS_REC_TARGET_ABORT)
+		if (cfg & PCI_STATUS_REC_TARGET_ABORT)
 			netdev_err(dev, "PCI master acks target abort\n");
-		if (pci_errs & PCI_STATUS_REC_MASTER_ABORT)
+		if (cfg & PCI_STATUS_REC_MASTER_ABORT)
 			netdev_err(dev, "PCI master abort\n");
-		if (pci_errs & PCI_STATUS_SIG_SYSTEM_ERROR)
+		if (cfg & PCI_STATUS_SIG_SYSTEM_ERROR)
 			netdev_err(dev, "PCI system error SERR#\n");
-		if (pci_errs & PCI_STATUS_DETECTED_PARITY)
+		if (cfg & PCI_STATUS_DETECTED_PARITY)
 			netdev_err(dev, "PCI parity error\n");
+
+		/* Write the error bits back to clear them. */
+		cfg &= (PCI_STATUS_PARITY |
+			PCI_STATUS_SIG_TARGET_ABORT |
+			PCI_STATUS_REC_TARGET_ABORT |
+			PCI_STATUS_REC_MASTER_ABORT |
+			PCI_STATUS_SIG_SYSTEM_ERROR |
+			PCI_STATUS_DETECTED_PARITY);
+		pci_write_config_word(cp->pdev, PCI_STATUS, cfg);
 	}
 
 	/* For all PCI errors, we should reset the chip. */
@@ -4963,7 +4971,7 @@ static int cas_init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 					  cas_cacheline_size)) {
 			dev_err(&pdev->dev, "Could not set PCI cache "
 			       "line size\n");
-			goto err_out_free_res;
+			goto err_write_cacheline;
 		}
 	}
 #endif
@@ -5136,6 +5144,7 @@ err_out_iounmap:
 err_out_free_res:
 	pci_release_regions(pdev);
 
+err_write_cacheline:
 	/* Try to restore it in case the error occurred after we
 	 * set it.
 	 */

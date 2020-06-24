@@ -298,12 +298,10 @@ static void igt_mm_config(u64 *size, u64 *chunk_size)
 static int igt_buddy_alloc_smoke(void *arg)
 {
 	struct i915_buddy_mm mm;
-	IGT_TIMEOUT(end_time);
-	I915_RND_STATE(prng);
+	int max_order;
 	u64 chunk_size;
 	u64 mm_size;
-	int *order;
-	int err, i;
+	int err;
 
 	igt_mm_config(&mm_size, &chunk_size);
 
@@ -315,16 +313,10 @@ static int igt_buddy_alloc_smoke(void *arg)
 		return err;
 	}
 
-	order = i915_random_order(mm.max_order + 1, &prng);
-	if (!order)
-		goto out_fini;
-
-	for (i = 0; i <= mm.max_order; ++i) {
+	for (max_order = mm.max_order; max_order >= 0; max_order--) {
 		struct i915_buddy_block *block;
-		int max_order = order[i];
-		bool timeout = false;
-		LIST_HEAD(blocks);
 		int order;
+		LIST_HEAD(blocks);
 		u64 total;
 
 		err = igt_check_mm(&mm);
@@ -368,11 +360,6 @@ retry:
 			}
 
 			total += i915_buddy_block_size(&mm, block);
-
-			if (__igt_timeout(end_time, NULL)) {
-				timeout = true;
-				break;
-			}
 		} while (total < mm.size);
 
 		if (!err)
@@ -386,7 +373,7 @@ retry:
 				pr_err("post-mm check failed\n");
 		}
 
-		if (err || timeout)
+		if (err)
 			break;
 
 		cond_resched();
@@ -395,8 +382,6 @@ retry:
 	if (err == -ENOMEM)
 		err = 0;
 
-	kfree(order);
-out_fini:
 	i915_buddy_fini(&mm);
 
 	return err;

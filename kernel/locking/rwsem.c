@@ -28,6 +28,7 @@
 #include <linux/rwsem.h>
 #include <linux/atomic.h>
 
+#include "rwsem.h"
 #include "lock_events.h"
 
 /*
@@ -328,7 +329,7 @@ void __init_rwsem(struct rw_semaphore *sem, const char *name,
 	 * Make sure we are not reinitializing a held semaphore:
 	 */
 	debug_check_no_locks_freed((void *)sem, sizeof(*sem));
-	lockdep_init_map_wait(&sem->dep_map, name, key, 0, LD_WAIT_SLEEP);
+	lockdep_init_map(&sem->dep_map, name, key, 0);
 #endif
 #ifdef CONFIG_DEBUG_RWSEMS
 	sem->magic = sem;
@@ -658,6 +659,8 @@ static inline bool rwsem_can_spin_on_owner(struct rw_semaphore *sem,
 	struct task_struct *owner;
 	unsigned long flags;
 	bool ret = true;
+
+	BUILD_BUG_ON(!(RWSEM_OWNER_UNKNOWN & RWSEM_NONSPINNABLE));
 
 	if (need_resched()) {
 		lockevent_inc(rwsem_opt_fail);
@@ -1335,7 +1338,7 @@ static struct rw_semaphore *rwsem_downgrade_wake(struct rw_semaphore *sem)
 /*
  * lock for reading
  */
-static inline void __down_read(struct rw_semaphore *sem)
+inline void __down_read(struct rw_semaphore *sem)
 {
 	if (!rwsem_read_trylock(sem)) {
 		rwsem_down_read_slowpath(sem, TASK_UNINTERRUPTIBLE);
@@ -1423,7 +1426,7 @@ static inline int __down_write_trylock(struct rw_semaphore *sem)
 /*
  * unlock after reading
  */
-static inline void __up_read(struct rw_semaphore *sem)
+inline void __up_read(struct rw_semaphore *sem)
 {
 	long tmp;
 

@@ -36,7 +36,7 @@ struct em_cap_state {
 struct em_perf_domain {
 	struct em_cap_state *table;
 	int nr_cap_states;
-	unsigned long cpus[];
+	unsigned long cpus[0];
 };
 
 #ifdef CONFIG_ENERGY_MODEL

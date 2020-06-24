@@ -1872,9 +1872,7 @@ static const struct nla_policy ifla_port_policy[IFLA_PORT_MAX+1] = {
 };
 
 static const struct nla_policy ifla_xdp_policy[IFLA_XDP_MAX + 1] = {
-	[IFLA_XDP_UNSPEC]	= { .strict_start_type = IFLA_XDP_EXPECTED_FD },
 	[IFLA_XDP_FD]		= { .type = NLA_S32 },
-	[IFLA_XDP_EXPECTED_FD]	= { .type = NLA_S32 },
 	[IFLA_XDP_ATTACHED]	= { .type = NLA_U8 },
 	[IFLA_XDP_FLAGS]	= { .type = NLA_U32 },
 	[IFLA_XDP_PROG_ID]	= { .type = NLA_U32 },
@@ -2801,20 +2799,8 @@ static int do_setlink(const struct sk_buff *skb,
 		}
 
 		if (xdp[IFLA_XDP_FD]) {
-			int expected_fd = -1;
-
-			if (xdp_flags & XDP_FLAGS_REPLACE) {
-				if (!xdp[IFLA_XDP_EXPECTED_FD]) {
-					err = -EINVAL;
-					goto errout;
-				}
-				expected_fd =
-					nla_get_s32(xdp[IFLA_XDP_EXPECTED_FD]);
-			}
-
 			err = dev_change_xdp_fd(dev, extack,
 						nla_get_s32(xdp[IFLA_XDP_FD]),
-						expected_fd,
 						xdp_flags);
 			if (err)
 				goto errout;
@@ -3923,7 +3909,7 @@ static int rtnl_fdb_add(struct sk_buff *skb, struct nlmsghdr *nlh,
 
 	/* Support fdb on master device the net/bridge default case */
 	if ((!ndm->ndm_flags || ndm->ndm_flags & NTF_MASTER) &&
-	    netif_is_bridge_port(dev)) {
+	    (dev->priv_flags & IFF_BRIDGE_PORT)) {
 		struct net_device *br_dev = netdev_master_upper_dev_get(dev);
 		const struct net_device_ops *ops = br_dev->netdev_ops;
 
@@ -4034,7 +4020,7 @@ static int rtnl_fdb_del(struct sk_buff *skb, struct nlmsghdr *nlh,
 
 	/* Support fdb on master device the net/bridge default case */
 	if ((!ndm->ndm_flags || ndm->ndm_flags & NTF_MASTER) &&
-	    netif_is_bridge_port(dev)) {
+	    (dev->priv_flags & IFF_BRIDGE_PORT)) {
 		struct net_device *br_dev = netdev_master_upper_dev_get(dev);
 		const struct net_device_ops *ops = br_dev->netdev_ops;
 
@@ -4260,13 +4246,13 @@ static int rtnl_fdb_dump(struct sk_buff *skb, struct netlink_callback *cb)
 				continue;
 
 			if (!br_idx) { /* user did not specify a specific bridge */
-				if (netif_is_bridge_port(dev)) {
+				if (dev->priv_flags & IFF_BRIDGE_PORT) {
 					br_dev = netdev_master_upper_dev_get(dev);
 					cops = br_dev->netdev_ops;
 				}
 			} else {
 				if (dev != br_dev &&
-				    !netif_is_bridge_port(dev))
+				    !(dev->priv_flags & IFF_BRIDGE_PORT))
 					continue;
 
 				if (br_dev != netdev_master_upper_dev_get(dev) &&
@@ -4278,7 +4264,7 @@ static int rtnl_fdb_dump(struct sk_buff *skb, struct netlink_callback *cb)
 			if (idx < s_idx)
 				goto cont;
 
-			if (netif_is_bridge_port(dev)) {
+			if (dev->priv_flags & IFF_BRIDGE_PORT) {
 				if (cops && cops->ndo_fdb_dump) {
 					err = cops->ndo_fdb_dump(skb, cb,
 								br_dev, dev,
@@ -4428,7 +4414,7 @@ static int rtnl_fdb_get(struct sk_buff *in_skb, struct nlmsghdr *nlh,
 
 	if (dev) {
 		if (!ndm_flags || (ndm_flags & NTF_MASTER)) {
-			if (!netif_is_bridge_port(dev)) {
+			if (!(dev->priv_flags & IFF_BRIDGE_PORT)) {
 				NL_SET_ERR_MSG(extack, "Device is not a bridge port");
 				return -EINVAL;
 			}
@@ -4567,11 +4553,7 @@ int ndo_dflt_bridge_getlink(struct sk_buff *skb, u32 pid, u32 seq,
 	    brport_nla_put_flag(skb, flags, mask,
 				IFLA_BRPORT_UNICAST_FLOOD, BR_FLOOD) ||
 	    brport_nla_put_flag(skb, flags, mask,
-				IFLA_BRPORT_PROXYARP, BR_PROXYARP) ||
-	    brport_nla_put_flag(skb, flags, mask,
-				IFLA_BRPORT_MCAST_FLOOD, BR_MCAST_FLOOD) ||
-	    brport_nla_put_flag(skb, flags, mask,
-				IFLA_BRPORT_BCAST_FLOOD, BR_BCAST_FLOOD)) {
+				IFLA_BRPORT_PROXYARP, BR_PROXYARP)) {
 		nla_nest_cancel(skb, protinfo);
 		goto nla_put_failure;
 	}

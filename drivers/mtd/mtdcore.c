@@ -456,14 +456,13 @@ static int mtd_reboot_notifier(struct notifier_block *n, unsigned long state,
 int mtd_wunit_to_pairing_info(struct mtd_info *mtd, int wunit,
 			      struct mtd_pairing_info *info)
 {
-	struct mtd_info *master = mtd_get_master(mtd);
-	int npairs = mtd_wunit_per_eb(master) / mtd_pairing_groups(master);
+	int npairs = mtd_wunit_per_eb(mtd) / mtd_pairing_groups(mtd);
 
 	if (wunit < 0 || wunit >= npairs)
 		return -EINVAL;
 
-	if (master->pairing && master->pairing->get_info)
-		return master->pairing->get_info(master, wunit, info);
+	if (mtd->pairing && mtd->pairing->get_info)
+		return mtd->pairing->get_info(mtd, wunit, info);
 
 	info->group = 0;
 	info->pair = wunit;
@@ -499,16 +498,15 @@ EXPORT_SYMBOL_GPL(mtd_wunit_to_pairing_info);
 int mtd_pairing_info_to_wunit(struct mtd_info *mtd,
 			      const struct mtd_pairing_info *info)
 {
-	struct mtd_info *master = mtd_get_master(mtd);
-	int ngroups = mtd_pairing_groups(master);
-	int npairs = mtd_wunit_per_eb(master) / ngroups;
+	int ngroups = mtd_pairing_groups(mtd);
+	int npairs = mtd_wunit_per_eb(mtd) / ngroups;
 
 	if (!info || info->pair < 0 || info->pair >= npairs ||
 	    info->group < 0 || info->group >= ngroups)
 		return -EINVAL;
 
-	if (master->pairing && master->pairing->get_wunit)
-		return mtd->pairing->get_wunit(master, info);
+	if (mtd->pairing && mtd->pairing->get_wunit)
+		return mtd->pairing->get_wunit(mtd, info);
 
 	return info->pair;
 }
@@ -526,12 +524,10 @@ EXPORT_SYMBOL_GPL(mtd_pairing_info_to_wunit);
  */
 int mtd_pairing_groups(struct mtd_info *mtd)
 {
-	struct mtd_info *master = mtd_get_master(mtd);
-
-	if (!master->pairing || !master->pairing->ngroups)
+	if (!mtd->pairing || !mtd->pairing->ngroups)
 		return 1;
 
-	return master->pairing->ngroups;
+	return mtd->pairing->ngroups;
 }
 EXPORT_SYMBOL_GPL(mtd_pairing_groups);
 
@@ -555,7 +551,7 @@ static int mtd_nvmem_add(struct mtd_info *mtd)
 
 	config.id = -1;
 	config.dev = &mtd->dev;
-	config.name = dev_name(&mtd->dev);
+	config.name = mtd->name;
 	config.owner = THIS_MODULE;
 	config.reg_read = mtd_nvmem_reg_read;
 	config.size = mtd->size;
@@ -591,7 +587,6 @@ static int mtd_nvmem_add(struct mtd_info *mtd)
 
 int add_mtd_device(struct mtd_info *mtd)
 {
-	struct mtd_info *master = mtd_get_master(mtd);
 	struct mtd_notifier *not;
 	int i, error;
 
@@ -613,7 +608,7 @@ int add_mtd_device(struct mtd_info *mtd)
 		    (mtd->_read && mtd->_read_oob)))
 		return -EINVAL;
 
-	if (WARN_ON((!mtd->erasesize || !master->_erase) &&
+	if (WARN_ON((!mtd->erasesize || !mtd->_erase) &&
 		    !(mtd->flags & MTD_NO_ERASE)))
 		return -EINVAL;
 
@@ -770,8 +765,7 @@ static void mtd_set_dev_defaults(struct mtd_info *mtd)
 		pr_debug("mtd device won't show a device symlink in sysfs\n");
 	}
 
-	INIT_LIST_HEAD(&mtd->partitions);
-	mutex_init(&mtd->master.partitions_lock);
+	mtd->orig_flags = mtd->flags;
 }
 
 /**
@@ -977,26 +971,20 @@ EXPORT_SYMBOL_GPL(get_mtd_device);
 
 int __get_mtd_device(struct mtd_info *mtd)
 {
-	struct mtd_info *master = mtd_get_master(mtd);
 	int err;
 
-	if (!try_module_get(master->owner))
+	if (!try_module_get(mtd->owner))
 		return -ENODEV;
 
-	if (master->_get_device) {
-		err = master->_get_device(mtd);
+	if (mtd->_get_device) {
+		err = mtd->_get_device(mtd);
 
 		if (err) {
-			module_put(master->owner);
+			module_put(mtd->owner);
 			return err;
 		}
 	}
-
-	while (mtd->parent) {
-		mtd->usecount++;
-		mtd = mtd->parent;
-	}
-
+	mtd->usecount++;
 	return 0;
 }
 EXPORT_SYMBOL_GPL(__get_mtd_device);
@@ -1050,18 +1038,13 @@ EXPORT_SYMBOL_GPL(put_mtd_device);
 
 void __put_mtd_device(struct mtd_info *mtd)
 {
-	struct mtd_info *master = mtd_get_master(mtd);
+	--mtd->usecount;
+	BUG_ON(mtd->usecount < 0);
 
-	while (mtd->parent) {
-		--mtd->usecount;
-		BUG_ON(mtd->usecount < 0);
-		mtd = mtd->parent;
-	}
+	if (mtd->_put_device)
+		mtd->_put_device(mtd);
 
-	if (master->_put_device)
-		master->_put_device(master);
-
-	module_put(master->owner);
+	module_put(mtd->owner);
 }
 EXPORT_SYMBOL_GPL(__put_mtd_device);
 
@@ -1072,13 +1055,9 @@ EXPORT_SYMBOL_GPL(__put_mtd_device);
  */
 int mtd_erase(struct mtd_info *mtd, struct erase_info *instr)
 {
-	struct mtd_info *master = mtd_get_master(mtd);
-	u64 mst_ofs = mtd_get_master_ofs(mtd, 0);
-	int ret;
-
 	instr->fail_addr = MTD_FAIL_ADDR_UNKNOWN;
 
-	if (!mtd->erasesize || !master->_erase)
+	if (!mtd->erasesize || !mtd->_erase)
 		return -ENOTSUPP;
 
 	if (instr->addr >= mtd->size || instr->len > mtd->size - instr->addr)
@@ -1090,14 +1069,7 @@ int mtd_erase(struct mtd_info *mtd, struct erase_info *instr)
 		return 0;
 
 	ledtrig_mtd_activity();
-
-	instr->addr += mst_ofs;
-	ret = master->_erase(master, instr);
-	if (instr->fail_addr != MTD_FAIL_ADDR_UNKNOWN)
-		instr->fail_addr -= mst_ofs;
-
-	instr->addr -= mst_ofs;
-	return ret;
+	return mtd->_erase(mtd, instr);
 }
 EXPORT_SYMBOL_GPL(mtd_erase);
 
@@ -1107,36 +1079,30 @@ EXPORT_SYMBOL_GPL(mtd_erase);
 int mtd_point(struct mtd_info *mtd, loff_t from, size_t len, size_t *retlen,
 	      void **virt, resource_size_t *phys)
 {
-	struct mtd_info *master = mtd_get_master(mtd);
-
 	*retlen = 0;
 	*virt = NULL;
 	if (phys)
 		*phys = 0;
-	if (!master->_point)
+	if (!mtd->_point)
 		return -EOPNOTSUPP;
 	if (from < 0 || from >= mtd->size || len > mtd->size - from)
 		return -EINVAL;
 	if (!len)
 		return 0;
-
-	from = mtd_get_master_ofs(mtd, from);
-	return master->_point(master, from, len, retlen, virt, phys);
+	return mtd->_point(mtd, from, len, retlen, virt, phys);
 }
 EXPORT_SYMBOL_GPL(mtd_point);
 
 /* We probably shouldn't allow XIP if the unpoint isn't a NULL */
 int mtd_unpoint(struct mtd_info *mtd, loff_t from, size_t len)
 {
-	struct mtd_info *master = mtd_get_master(mtd);
-
-	if (!master->_unpoint)
+	if (!mtd->_unpoint)
 		return -EOPNOTSUPP;
 	if (from < 0 || from >= mtd->size || len > mtd->size - from)
 		return -EINVAL;
 	if (!len)
 		return 0;
-	return master->_unpoint(master, mtd_get_master_ofs(mtd, from), len);
+	return mtd->_unpoint(mtd, from, len);
 }
 EXPORT_SYMBOL_GPL(mtd_unpoint);
 
@@ -1162,25 +1128,6 @@ unsigned long mtd_get_unmapped_area(struct mtd_info *mtd, unsigned long len,
 	return (unsigned long)virt;
 }
 EXPORT_SYMBOL_GPL(mtd_get_unmapped_area);
-
-static void mtd_update_ecc_stats(struct mtd_info *mtd, struct mtd_info *master,
-				 const struct mtd_ecc_stats *old_stats)
-{
-	struct mtd_ecc_stats diff;
-
-	if (master == mtd)
-		return;
-
-	diff = master->ecc_stats;
-	diff.failed -= old_stats->failed;
-	diff.corrected -= old_stats->corrected;
-
-	while (mtd->parent) {
-		mtd->ecc_stats.failed += diff.failed;
-		mtd->ecc_stats.corrected += diff.corrected;
-		mtd = mtd->parent;
-	}
-}
 
 int mtd_read(struct mtd_info *mtd, loff_t from, size_t len, size_t *retlen,
 	     u_char *buf)
@@ -1224,10 +1171,8 @@ EXPORT_SYMBOL_GPL(mtd_write);
 int mtd_panic_write(struct mtd_info *mtd, loff_t to, size_t len, size_t *retlen,
 		    const u_char *buf)
 {
-	struct mtd_info *master = mtd_get_master(mtd);
-
 	*retlen = 0;
-	if (!master->_panic_write)
+	if (!mtd->_panic_write)
 		return -EOPNOTSUPP;
 	if (to < 0 || to >= mtd->size || len > mtd->size - to)
 		return -EINVAL;
@@ -1238,8 +1183,7 @@ int mtd_panic_write(struct mtd_info *mtd, loff_t to, size_t len, size_t *retlen,
 	if (!mtd->oops_panic_write)
 		mtd->oops_panic_write = true;
 
-	return master->_panic_write(master, mtd_get_master_ofs(mtd, to), len,
-				    retlen, buf);
+	return mtd->_panic_write(mtd, to, len, retlen, buf);
 }
 EXPORT_SYMBOL_GPL(mtd_panic_write);
 
@@ -1278,10 +1222,7 @@ static int mtd_check_oob_ops(struct mtd_info *mtd, loff_t offs,
 
 int mtd_read_oob(struct mtd_info *mtd, loff_t from, struct mtd_oob_ops *ops)
 {
-	struct mtd_info *master = mtd_get_master(mtd);
-	struct mtd_ecc_stats old_stats = master->ecc_stats;
 	int ret_code;
-
 	ops->retlen = ops->oobretlen = 0;
 
 	ret_code = mtd_check_oob_ops(mtd, from, ops);
@@ -1291,17 +1232,14 @@ int mtd_read_oob(struct mtd_info *mtd, loff_t from, struct mtd_oob_ops *ops)
 	ledtrig_mtd_activity();
 
 	/* Check the validity of a potential fallback on mtd->_read */
-	if (!master->_read_oob && (!master->_read || ops->oobbuf))
+	if (!mtd->_read_oob && (!mtd->_read || ops->oobbuf))
 		return -EOPNOTSUPP;
 
-	from = mtd_get_master_ofs(mtd, from);
-	if (master->_read_oob)
-		ret_code = master->_read_oob(master, from, ops);
+	if (mtd->_read_oob)
+		ret_code = mtd->_read_oob(mtd, from, ops);
 	else
-		ret_code = master->_read(master, from, ops->len, &ops->retlen,
-					 ops->datbuf);
-
-	mtd_update_ecc_stats(mtd, master, &old_stats);
+		ret_code = mtd->_read(mtd, from, ops->len, &ops->retlen,
+				      ops->datbuf);
 
 	/*
 	 * In cases where ops->datbuf != NULL, mtd->_read_oob() has semantics
@@ -1320,7 +1258,6 @@ EXPORT_SYMBOL_GPL(mtd_read_oob);
 int mtd_write_oob(struct mtd_info *mtd, loff_t to,
 				struct mtd_oob_ops *ops)
 {
-	struct mtd_info *master = mtd_get_master(mtd);
 	int ret;
 
 	ops->retlen = ops->oobretlen = 0;
@@ -1335,16 +1272,14 @@ int mtd_write_oob(struct mtd_info *mtd, loff_t to,
 	ledtrig_mtd_activity();
 
 	/* Check the validity of a potential fallback on mtd->_write */
-	if (!master->_write_oob && (!master->_write || ops->oobbuf))
+	if (!mtd->_write_oob && (!mtd->_write || ops->oobbuf))
 		return -EOPNOTSUPP;
 
-	to = mtd_get_master_ofs(mtd, to);
-
-	if (master->_write_oob)
-		return master->_write_oob(master, to, ops);
+	if (mtd->_write_oob)
+		return mtd->_write_oob(mtd, to, ops);
 	else
-		return master->_write(master, to, ops->len, &ops->retlen,
-				      ops->datbuf);
+		return mtd->_write(mtd, to, ops->len, &ops->retlen,
+				   ops->datbuf);
 }
 EXPORT_SYMBOL_GPL(mtd_write_oob);
 
@@ -1367,17 +1302,15 @@ EXPORT_SYMBOL_GPL(mtd_write_oob);
 int mtd_ooblayout_ecc(struct mtd_info *mtd, int section,
 		      struct mtd_oob_region *oobecc)
 {
-	struct mtd_info *master = mtd_get_master(mtd);
-
 	memset(oobecc, 0, sizeof(*oobecc));
 
-	if (!master || section < 0)
+	if (!mtd || section < 0)
 		return -EINVAL;
 
-	if (!master->ooblayout || !master->ooblayout->ecc)
+	if (!mtd->ooblayout || !mtd->ooblayout->ecc)
 		return -ENOTSUPP;
 
-	return master->ooblayout->ecc(master, section, oobecc);
+	return mtd->ooblayout->ecc(mtd, section, oobecc);
 }
 EXPORT_SYMBOL_GPL(mtd_ooblayout_ecc);
 
@@ -1401,17 +1334,15 @@ EXPORT_SYMBOL_GPL(mtd_ooblayout_ecc);
 int mtd_ooblayout_free(struct mtd_info *mtd, int section,
 		       struct mtd_oob_region *oobfree)
 {
-	struct mtd_info *master = mtd_get_master(mtd);
-
 	memset(oobfree, 0, sizeof(*oobfree));
 
-	if (!master || section < 0)
+	if (!mtd || section < 0)
 		return -EINVAL;
 
-	if (!master->ooblayout || !master->ooblayout->free)
+	if (!mtd->ooblayout || !mtd->ooblayout->free)
 		return -ENOTSUPP;
 
-	return master->ooblayout->free(master, section, oobfree);
+	return mtd->ooblayout->free(mtd, section, oobfree);
 }
 EXPORT_SYMBOL_GPL(mtd_ooblayout_free);
 
@@ -1720,69 +1651,60 @@ EXPORT_SYMBOL_GPL(mtd_ooblayout_count_eccbytes);
 int mtd_get_fact_prot_info(struct mtd_info *mtd, size_t len, size_t *retlen,
 			   struct otp_info *buf)
 {
-	struct mtd_info *master = mtd_get_master(mtd);
-
-	if (!master->_get_fact_prot_info)
+	if (!mtd->_get_fact_prot_info)
 		return -EOPNOTSUPP;
 	if (!len)
 		return 0;
-	return master->_get_fact_prot_info(master, len, retlen, buf);
+	return mtd->_get_fact_prot_info(mtd, len, retlen, buf);
 }
 EXPORT_SYMBOL_GPL(mtd_get_fact_prot_info);
 
 int mtd_read_fact_prot_reg(struct mtd_info *mtd, loff_t from, size_t len,
 			   size_t *retlen, u_char *buf)
 {
-	struct mtd_info *master = mtd_get_master(mtd);
-
 	*retlen = 0;
-	if (!master->_read_fact_prot_reg)
+	if (!mtd->_read_fact_prot_reg)
 		return -EOPNOTSUPP;
 	if (!len)
 		return 0;
-	return master->_read_fact_prot_reg(master, from, len, retlen, buf);
+	return mtd->_read_fact_prot_reg(mtd, from, len, retlen, buf);
 }
 EXPORT_SYMBOL_GPL(mtd_read_fact_prot_reg);
 
 int mtd_get_user_prot_info(struct mtd_info *mtd, size_t len, size_t *retlen,
 			   struct otp_info *buf)
 {
-	struct mtd_info *master = mtd_get_master(mtd);
-
-	if (!master->_get_user_prot_info)
+	if (!mtd->_get_user_prot_info)
 		return -EOPNOTSUPP;
 	if (!len)
 		return 0;
-	return master->_get_user_prot_info(master, len, retlen, buf);
+	return mtd->_get_user_prot_info(mtd, len, retlen, buf);
 }
 EXPORT_SYMBOL_GPL(mtd_get_user_prot_info);
 
 int mtd_read_user_prot_reg(struct mtd_info *mtd, loff_t from, size_t len,
 			   size_t *retlen, u_char *buf)
 {
-	struct mtd_info *master = mtd_get_master(mtd);
-
 	*retlen = 0;
-	if (!master->_read_user_prot_reg)
+	if (!mtd->_read_user_prot_reg)
 		return -EOPNOTSUPP;
 	if (!len)
 		return 0;
-	return master->_read_user_prot_reg(master, from, len, retlen, buf);
+	return mtd->_read_user_prot_reg(mtd, from, len, retlen, buf);
 }
 EXPORT_SYMBOL_GPL(mtd_read_user_prot_reg);
 
 int mtd_write_user_prot_reg(struct mtd_info *mtd, loff_t to, size_t len,
 			    size_t *retlen, u_char *buf)
 {
-	struct mtd_info *master = mtd_get_master(mtd);
 	int ret;
 
 	*retlen = 0;
-	if (!master->_write_user_prot_reg)
+	if (!mtd->_write_user_prot_reg)
 		return -EOPNOTSUPP;
 	if (!len)
 		return 0;
-	ret = master->_write_user_prot_reg(master, to, len, retlen, buf);
+	ret = mtd->_write_user_prot_reg(mtd, to, len, retlen, buf);
 	if (ret)
 		return ret;
 
@@ -1796,105 +1718,80 @@ EXPORT_SYMBOL_GPL(mtd_write_user_prot_reg);
 
 int mtd_lock_user_prot_reg(struct mtd_info *mtd, loff_t from, size_t len)
 {
-	struct mtd_info *master = mtd_get_master(mtd);
-
-	if (!master->_lock_user_prot_reg)
+	if (!mtd->_lock_user_prot_reg)
 		return -EOPNOTSUPP;
 	if (!len)
 		return 0;
-	return master->_lock_user_prot_reg(master, from, len);
+	return mtd->_lock_user_prot_reg(mtd, from, len);
 }
 EXPORT_SYMBOL_GPL(mtd_lock_user_prot_reg);
 
 /* Chip-supported device locking */
 int mtd_lock(struct mtd_info *mtd, loff_t ofs, uint64_t len)
 {
-	struct mtd_info *master = mtd_get_master(mtd);
-
-	if (!master->_lock)
+	if (!mtd->_lock)
 		return -EOPNOTSUPP;
 	if (ofs < 0 || ofs >= mtd->size || len > mtd->size - ofs)
 		return -EINVAL;
 	if (!len)
 		return 0;
-	return master->_lock(master, mtd_get_master_ofs(mtd, ofs), len);
+	return mtd->_lock(mtd, ofs, len);
 }
 EXPORT_SYMBOL_GPL(mtd_lock);
 
 int mtd_unlock(struct mtd_info *mtd, loff_t ofs, uint64_t len)
 {
-	struct mtd_info *master = mtd_get_master(mtd);
-
-	if (!master->_unlock)
+	if (!mtd->_unlock)
 		return -EOPNOTSUPP;
 	if (ofs < 0 || ofs >= mtd->size || len > mtd->size - ofs)
 		return -EINVAL;
 	if (!len)
 		return 0;
-	return master->_unlock(master, mtd_get_master_ofs(mtd, ofs), len);
+	return mtd->_unlock(mtd, ofs, len);
 }
 EXPORT_SYMBOL_GPL(mtd_unlock);
 
 int mtd_is_locked(struct mtd_info *mtd, loff_t ofs, uint64_t len)
 {
-	struct mtd_info *master = mtd_get_master(mtd);
-
-	if (!master->_is_locked)
+	if (!mtd->_is_locked)
 		return -EOPNOTSUPP;
 	if (ofs < 0 || ofs >= mtd->size || len > mtd->size - ofs)
 		return -EINVAL;
 	if (!len)
 		return 0;
-	return master->_is_locked(master, mtd_get_master_ofs(mtd, ofs), len);
+	return mtd->_is_locked(mtd, ofs, len);
 }
 EXPORT_SYMBOL_GPL(mtd_is_locked);
 
 int mtd_block_isreserved(struct mtd_info *mtd, loff_t ofs)
 {
-	struct mtd_info *master = mtd_get_master(mtd);
-
 	if (ofs < 0 || ofs >= mtd->size)
 		return -EINVAL;
-	if (!master->_block_isreserved)
+	if (!mtd->_block_isreserved)
 		return 0;
-	return master->_block_isreserved(master, mtd_get_master_ofs(mtd, ofs));
+	return mtd->_block_isreserved(mtd, ofs);
 }
 EXPORT_SYMBOL_GPL(mtd_block_isreserved);
 
 int mtd_block_isbad(struct mtd_info *mtd, loff_t ofs)
 {
-	struct mtd_info *master = mtd_get_master(mtd);
-
 	if (ofs < 0 || ofs >= mtd->size)
 		return -EINVAL;
-	if (!master->_block_isbad)
+	if (!mtd->_block_isbad)
 		return 0;
-	return master->_block_isbad(master, mtd_get_master_ofs(mtd, ofs));
+	return mtd->_block_isbad(mtd, ofs);
 }
 EXPORT_SYMBOL_GPL(mtd_block_isbad);
 
 int mtd_block_markbad(struct mtd_info *mtd, loff_t ofs)
 {
-	struct mtd_info *master = mtd_get_master(mtd);
-	int ret;
-
-	if (!master->_block_markbad)
+	if (!mtd->_block_markbad)
 		return -EOPNOTSUPP;
 	if (ofs < 0 || ofs >= mtd->size)
 		return -EINVAL;
 	if (!(mtd->flags & MTD_WRITEABLE))
 		return -EROFS;
-
-	ret = master->_block_markbad(master, mtd_get_master_ofs(mtd, ofs));
-	if (ret)
-		return ret;
-
-	while (mtd->parent) {
-		mtd->ecc_stats.badblocks++;
-		mtd = mtd->parent;
-	}
-
-	return 0;
+	return mtd->_block_markbad(mtd, ofs);
 }
 EXPORT_SYMBOL_GPL(mtd_block_markbad);
 
@@ -1944,17 +1841,12 @@ static int default_mtd_writev(struct mtd_info *mtd, const struct kvec *vecs,
 int mtd_writev(struct mtd_info *mtd, const struct kvec *vecs,
 	       unsigned long count, loff_t to, size_t *retlen)
 {
-	struct mtd_info *master = mtd_get_master(mtd);
-
 	*retlen = 0;
 	if (!(mtd->flags & MTD_WRITEABLE))
 		return -EROFS;
-
-	if (!master->_writev)
+	if (!mtd->_writev)
 		return default_mtd_writev(mtd, vecs, count, to, retlen);
-
-	return master->_writev(master, vecs, count,
-			       mtd_get_master_ofs(mtd, to), retlen);
+	return mtd->_writev(mtd, vecs, count, to, retlen);
 }
 EXPORT_SYMBOL_GPL(mtd_writev);
 

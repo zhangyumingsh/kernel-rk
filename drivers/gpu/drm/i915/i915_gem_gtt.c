@@ -15,6 +15,8 @@
 #include <asm/set_memory.h>
 #include <asm/smp.h>
 
+#include <drm/i915_drm.h>
+
 #include "display/intel_frontbuffer.h"
 #include "gt/intel_gt.h"
 #include "gt/intel_gt_requests.h"
@@ -61,8 +63,7 @@ void i915_gem_gtt_finish_pages(struct drm_i915_gem_object *obj,
 		/* XXX This does not prevent more requests being submitted! */
 		if (intel_gt_retire_requests_timeout(ggtt->vm.gt,
 						     -MAX_SCHEDULE_TIMEOUT)) {
-			drm_err(&dev_priv->drm,
-				"Failed to wait for idle; VT'd may hang.\n");
+			DRM_ERROR("Failed to wait for idle; VT'd may hang.\n");
 			/* Wait a bit, in hopes it avoids the hang */
 			udelay(10);
 		}

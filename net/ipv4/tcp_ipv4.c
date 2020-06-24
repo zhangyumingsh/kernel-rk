@@ -1019,8 +1019,7 @@ struct tcp_md5sig_key *__tcp_md5_do_lookup(const struct sock *sk, int l3index,
 	if (!md5sig)
 		return NULL;
 
-	hlist_for_each_entry_rcu(key, &md5sig->head, node,
-				 lockdep_sock_is_held(sk)) {
+	hlist_for_each_entry_rcu(key, &md5sig->head, node) {
 		if (key->family != family)
 			continue;
 		if (key->l3index && key->l3index != l3index)
@@ -1065,8 +1064,7 @@ static struct tcp_md5sig_key *tcp_md5_do_lookup_exact(const struct sock *sk,
 	if (family == AF_INET6)
 		size = sizeof(struct in6_addr);
 #endif
-	hlist_for_each_entry_rcu(key, &md5sig->head, node,
-				 lockdep_sock_is_held(sk)) {
+	hlist_for_each_entry_rcu(key, &md5sig->head, node) {
 		if (key->family != family)
 			continue;
 		if (key->l3index && key->l3index != l3index)
@@ -2072,7 +2070,7 @@ do_time_wait:
 		}
 	}
 		/* to ACK */
-		fallthrough;
+		/* fall through */
 	case TCP_TW_ACK:
 		tcp_v4_timewait_ack(sk, skb);
 		break;
@@ -2368,7 +2366,7 @@ static void *tcp_seek_last_pos(struct seq_file *seq)
 			break;
 		st->bucket = 0;
 		st->state = TCP_SEQ_STATE_ESTABLISHED;
-		fallthrough;
+		/* Fallthrough */
 	case TCP_SEQ_STATE_ESTABLISHED:
 		if (st->bucket > tcp_hashinfo.ehash_mask)
 			break;

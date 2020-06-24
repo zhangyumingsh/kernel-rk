@@ -1704,7 +1704,7 @@ static void ffs_data_put(struct ffs_data *ffs)
 		pr_info("%s(): freeing\n", __func__);
 		ffs_data_clear(ffs);
 		BUG_ON(waitqueue_active(&ffs->ev.waitq) ||
-		       swait_active(&ffs->ep0req_completion.wait) ||
+		       waitqueue_active(&ffs->ep0req_completion.wait) ||
 		       waitqueue_active(&ffs->wait));
 		destroy_workqueue(ffs->io_completion_wq);
 		kfree(ffs->dev_name);
@@ -1813,10 +1813,6 @@ static void ffs_data_reset(struct ffs_data *ffs)
 	ffs->state = FFS_READ_DESCRIPTORS;
 	ffs->setup_state = FFS_NO_SETUP;
 	ffs->flags = 0;
-
-	ffs->ms_os_descs_ext_prop_count = 0;
-	ffs->ms_os_descs_ext_prop_name_len = 0;
-	ffs->ms_os_descs_ext_prop_data_len = 0;
 }
 
 

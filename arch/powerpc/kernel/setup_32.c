@@ -58,6 +58,7 @@ EXPORT_SYMBOL_GPL(boot_cpuid_phys);
 int smp_hw_index[NR_CPUS];
 EXPORT_SYMBOL(smp_hw_index);
 
+unsigned long ISA_DMA_THRESHOLD;
 unsigned int DMA_MODE_READ;
 unsigned int DMA_MODE_WRITE;
 

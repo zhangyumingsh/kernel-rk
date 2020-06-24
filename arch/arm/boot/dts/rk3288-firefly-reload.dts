@@ -45,20 +45,20 @@
 	leds {
 		compatible = "gpio-leds";
 
-		power_led: led-0 {
+		power {
 			gpios = <&gpio8 RK_PA2 GPIO_ACTIVE_LOW>;
 			label = "firefly:blue:power";
 			pinctrl-names = "default";
-			pinctrl-0 = <&power_led_pin>;
+			pinctrl-0 = <&power_led>;
 			panic-indicator;
 		};
 
-		work_led: led-1 {
+		work {
 			gpios = <&gpio8 RK_PA1 GPIO_ACTIVE_LOW>;
 			label = "firefly:blue:user";
 			linux,default-trigger = "rc-feedback";
 			pinctrl-names = "default";
-			pinctrl-0 = <&work_led_pin>;
+			pinctrl-0 = <&work_led>;
 		};
 	};
 
@@ -69,21 +69,6 @@
 		pinctrl-names = "default";
 		pinctrl-0 = <&wifi_enable>;
 		reset-gpios = <&gpio4 RK_PD4 GPIO_ACTIVE_LOW>;
-	};
-
-	soundcard-hdmi {
-		compatible = "simple-audio-card";
-		simple-audio-card,format = "i2s";
-		simple-audio-card,name = "DW-I2S-HDMI";
-		simple-audio-card,mclk-fs = <512>;
-
-		simple-audio-card,codec {
-			sound-dai = <&hdmi>;
-		};
-
-		simple-audio-card,cpu {
-			sound-dai = <&i2s>;
-		};
 	};
 
 	sound {
@@ -204,11 +189,6 @@
 	};
 };
 
-&gpu {
-	mali-supply = <&vdd_gpu>;
-	status = "okay";
-};
-
 &hdmi {
 	ddc-i2c-bus = <&i2c5>;
 	pinctrl-names = "default";
@@ -254,7 +234,6 @@
 };
 
 &saradc {
-	vref-supply = <&vcc_18>;
 	status = "okay";
 };
 
@@ -354,11 +333,11 @@
 	};
 
 	leds {
-		power_led_pin: power-led-pin {
+		power_led: power-led {
 			rockchip,pins = <8 RK_PA2 RK_FUNC_GPIO &pcfg_pull_none>;
 		};
 
-		work_led_pin: work-led-pin {
+		work_led: work-led {
 			rockchip,pins = <8 RK_PA1 RK_FUNC_GPIO &pcfg_pull_none>;
 		};
 	};

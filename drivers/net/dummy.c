@@ -42,6 +42,7 @@
 #include <linux/u64_stats_sync.h>
 
 #define DRV_NAME	"dummy"
+#define DRV_VERSION	"1.0"
 
 static int numdummies = 1;
 
@@ -103,6 +104,7 @@ static void dummy_get_drvinfo(struct net_device *dev,
 			      struct ethtool_drvinfo *info)
 {
 	strlcpy(info->driver, DRV_NAME, sizeof(info->driver));
+	strlcpy(info->version, DRV_VERSION, sizeof(info->version));
 }
 
 static const struct ethtool_ops dummy_ethtool_ops = {
@@ -210,3 +212,4 @@ module_init(dummy_init_module);
 module_exit(dummy_cleanup_module);
 MODULE_LICENSE("GPL");
 MODULE_ALIAS_RTNL_LINK(DRV_NAME);
+MODULE_VERSION(DRV_VERSION);

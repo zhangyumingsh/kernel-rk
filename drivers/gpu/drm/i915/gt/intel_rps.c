@@ -4,8 +4,6 @@
  * Copyright © 2019 Intel Corporation
  */
 
-#include <drm/i915_drm.h>
-
 #include "i915_drv.h"
 #include "intel_gt.h"
 #include "intel_gt_irq.h"
@@ -57,7 +55,7 @@ static u32 rps_pm_mask(struct intel_rps *rps, u8 val)
 	if (val < rps->max_freq_softlimit)
 		mask |= GEN6_PM_RP_UP_EI_EXPIRED | GEN6_PM_RP_UP_THRESHOLD;
 
-	mask &= READ_ONCE(rps->pm_events);
+	mask &= rps->pm_events;
 
 	return rps_pm_sanitize_mask(rps, ~mask);
 }
@@ -70,25 +68,22 @@ static void rps_reset_ei(struct intel_rps *rps)
 static void rps_enable_interrupts(struct intel_rps *rps)
 {
 	struct intel_gt *gt = rps_to_gt(rps);
-	u32 events;
 
 	rps_reset_ei(rps);
 
 	if (IS_VALLEYVIEW(gt->i915))
 		/* WaGsvRC0ResidencyMethod:vlv */
-		events = GEN6_PM_RP_UP_EI_EXPIRED;
+		rps->pm_events = GEN6_PM_RP_UP_EI_EXPIRED;
 	else
-		events = (GEN6_PM_RP_UP_THRESHOLD |
-			  GEN6_PM_RP_DOWN_THRESHOLD |
-			  GEN6_PM_RP_DOWN_TIMEOUT);
-	WRITE_ONCE(rps->pm_events, events);
+		rps->pm_events = (GEN6_PM_RP_UP_THRESHOLD |
+				  GEN6_PM_RP_DOWN_THRESHOLD |
+				  GEN6_PM_RP_DOWN_TIMEOUT);
 
 	spin_lock_irq(&gt->irq_lock);
 	gen6_gt_pm_enable_irq(gt, rps->pm_events);
 	spin_unlock_irq(&gt->irq_lock);
 
-	intel_uncore_write(gt->uncore,
-			   GEN6_PMINTRMSK, rps_pm_mask(rps, rps->last_freq));
+	set(gt->uncore, GEN6_PMINTRMSK, rps_pm_mask(rps, rps->cur_freq));
 }
 
 static void gen6_rps_reset_interrupts(struct intel_rps *rps)
@@ -120,10 +115,9 @@ static void rps_disable_interrupts(struct intel_rps *rps)
 {
 	struct intel_gt *gt = rps_to_gt(rps);
 
-	WRITE_ONCE(rps->pm_events, 0);
+	rps->pm_events = 0;
 
-	intel_uncore_write(gt->uncore,
-			   GEN6_PMINTRMSK, rps_pm_sanitize_mask(rps, ~0u));
+	set(gt->uncore, GEN6_PMINTRMSK, rps_pm_sanitize_mask(rps, ~0u));
 
 	spin_lock_irq(&gt->irq_lock);
 	gen6_gt_pm_disable_irq(gt, GEN6_PM_RPS_EVENTS);
@@ -648,7 +642,7 @@ void intel_rps_mark_interactive(struct intel_rps *rps, bool interactive)
 {
 	mutex_lock(&rps->power.mutex);
 	if (interactive) {
-		if (!rps->power.interactive++ && READ_ONCE(rps->active))
+		if (!rps->power.interactive++ && rps->active)
 			rps_set_power(rps, HIGH_POWER);
 	} else {
 		GEM_BUG_ON(!rps->power.interactive);
@@ -725,15 +719,11 @@ void intel_rps_unpark(struct intel_rps *rps)
 	 * performance, jump directly to RPe as our starting frequency.
 	 */
 	mutex_lock(&rps->lock);
-
-	WRITE_ONCE(rps->active, true);
-
+	rps->active = true;
 	freq = max(rps->cur_freq, rps->efficient_freq),
 	freq = clamp(freq, rps->min_freq_softlimit, rps->max_freq_softlimit);
 	intel_rps_set(rps, freq);
-
 	rps->last_adj = 0;
-
 	mutex_unlock(&rps->lock);
 
 	if (INTEL_GEN(rps_to_i915(rps)) >= 6)
@@ -753,7 +743,7 @@ void intel_rps_park(struct intel_rps *rps)
 	if (INTEL_GEN(i915) >= 6)
 		rps_disable_interrupts(rps);
 
-	WRITE_ONCE(rps->active, false);
+	rps->active = false;
 	if (rps->last_freq <= rps->idle_freq)
 		return;
 
@@ -790,10 +780,10 @@ void intel_rps_park(struct intel_rps *rps)
 
 void intel_rps_boost(struct i915_request *rq)
 {
-	struct intel_rps *rps = &READ_ONCE(rq->engine)->gt->rps;
+	struct intel_rps *rps = &rq->engine->gt->rps;
 	unsigned long flags;
 
-	if (i915_request_signaled(rq) || !READ_ONCE(rps->active))
+	if (i915_request_signaled(rq) || !rps->active)
 		return;
 
 	/* Serializes with i915_request_retire() */
@@ -1049,8 +1039,7 @@ static bool chv_rps_enable(struct intel_rps *rps)
 	vlv_punit_put(i915);
 
 	/* RPS code assumes GPLL is used */
-	drm_WARN_ONCE(&i915->drm, (val & GPLLENABLE) == 0,
-		      "GPLL not enabled\n");
+	WARN_ONCE((val & GPLLENABLE) == 0, "GPLL not enabled\n");
 
 	DRM_DEBUG_DRIVER("GPLL enabled? %s\n", yesno(val & GPLLENABLE));
 	DRM_DEBUG_DRIVER("GPU status: 0x%08x\n", val);
@@ -1147,8 +1136,7 @@ static bool vlv_rps_enable(struct intel_rps *rps)
 	vlv_punit_put(i915);
 
 	/* RPS code assumes GPLL is used */
-	drm_WARN_ONCE(&i915->drm, (val & GPLLENABLE) == 0,
-		      "GPLL not enabled\n");
+	WARN_ONCE((val & GPLLENABLE) == 0, "GPLL not enabled\n");
 
 	DRM_DEBUG_DRIVER("GPLL enabled? %s\n", yesno(val & GPLLENABLE));
 	DRM_DEBUG_DRIVER("GPU status: 0x%08x\n", val);
@@ -1216,11 +1204,11 @@ void intel_rps_enable(struct intel_rps *rps)
 	if (!rps->enabled)
 		return;
 
-	drm_WARN_ON(&i915->drm, rps->max_freq < rps->min_freq);
-	drm_WARN_ON(&i915->drm, rps->idle_freq > rps->max_freq);
+	WARN_ON(rps->max_freq < rps->min_freq);
+	WARN_ON(rps->idle_freq > rps->max_freq);
 
-	drm_WARN_ON(&i915->drm, rps->efficient_freq < rps->min_freq);
-	drm_WARN_ON(&i915->drm, rps->efficient_freq > rps->max_freq);
+	WARN_ON(rps->efficient_freq < rps->min_freq);
+	WARN_ON(rps->efficient_freq > rps->max_freq);
 }
 
 static void gen6_rps_disable(struct intel_rps *rps)
@@ -1415,9 +1403,9 @@ static void chv_rps_init(struct intel_rps *rps)
 			BIT(VLV_IOSF_SB_NC) |
 			BIT(VLV_IOSF_SB_CCK));
 
-	drm_WARN_ONCE(&i915->drm, (rps->max_freq | rps->efficient_freq |
-				   rps->rp1_freq | rps->min_freq) & 1,
-		      "Odd GPU freq values\n");
+	WARN_ONCE((rps->max_freq | rps->efficient_freq | rps->rp1_freq |
+		   rps->min_freq) & 1,
+		  "Odd GPU freq values\n");
 }
 
 static void vlv_c0_read(struct intel_uncore *uncore, struct intel_rps_ei *ei)
@@ -1476,12 +1464,12 @@ static void rps_work(struct work_struct *work)
 	u32 pm_iir = 0;
 
 	spin_lock_irq(&gt->irq_lock);
-	pm_iir = fetch_and_zero(&rps->pm_iir) & READ_ONCE(rps->pm_events);
+	pm_iir = fetch_and_zero(&rps->pm_iir);
 	client_boost = atomic_read(&rps->num_waiters);
 	spin_unlock_irq(&gt->irq_lock);
 
 	/* Make sure we didn't queue anything we're not going to process. */
-	if (!pm_iir && !client_boost)
+	if ((pm_iir & rps->pm_events) == 0 && !client_boost)
 		goto out;
 
 	mutex_lock(&rps->lock);
@@ -1577,15 +1565,11 @@ void gen11_rps_irq_handler(struct intel_rps *rps, u32 pm_iir)
 void gen6_rps_irq_handler(struct intel_rps *rps, u32 pm_iir)
 {
 	struct intel_gt *gt = rps_to_gt(rps);
-	u32 events;
 
-	events = pm_iir & READ_ONCE(rps->pm_events);
-	if (events) {
+	if (pm_iir & rps->pm_events) {
 		spin_lock(&gt->irq_lock);
-
-		gen6_gt_pm_mask_irq(gt, events);
-		rps->pm_iir |= events;
-
+		gen6_gt_pm_mask_irq(gt, pm_iir & rps->pm_events);
+		rps->pm_iir |= pm_iir & rps->pm_events;
 		schedule_work(&rps->work);
 		spin_unlock(&gt->irq_lock);
 	}

@@ -963,6 +963,7 @@ static void __init ramoops_register_dummy(void)
 		pr_info("could not create platform device: %ld\n",
 			PTR_ERR(dummy));
 		dummy = NULL;
+		ramoops_unregister_dummy();
 	}
 }
 

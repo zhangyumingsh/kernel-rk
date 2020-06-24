@@ -849,10 +849,8 @@ static void io_subchannel_register(struct ccw_device *cdev)
 	 * Now we know this subchannel will stay, we can throw
 	 * our delayed uevent.
 	 */
-	if (dev_get_uevent_suppress(&sch->dev)) {
-		dev_set_uevent_suppress(&sch->dev, 0);
-		kobject_uevent(&sch->dev.kobj, KOBJ_ADD);
-	}
+	dev_set_uevent_suppress(&sch->dev, 0);
+	kobject_uevent(&sch->dev.kobj, KOBJ_ADD);
 	/* make it known to the system */
 	ret = ccw_device_add(cdev);
 	if (ret) {
@@ -1060,11 +1058,8 @@ static int io_subchannel_probe(struct subchannel *sch)
 		 * Throw the delayed uevent for the subchannel, register
 		 * the ccw_device and exit.
 		 */
-		if (dev_get_uevent_suppress(&sch->dev)) {
-			/* should always be the case for the console */
-			dev_set_uevent_suppress(&sch->dev, 0);
-			kobject_uevent(&sch->dev.kobj, KOBJ_ADD);
-		}
+		dev_set_uevent_suppress(&sch->dev, 0);
+		kobject_uevent(&sch->dev.kobj, KOBJ_ADD);
 		cdev = sch_get_cdev(sch);
 		rc = ccw_device_add(cdev);
 		if (rc) {
@@ -1267,7 +1262,7 @@ static int recovery_check(struct device *dev, void *data)
 		sch = to_subchannel(cdev->dev.parent);
 		if ((sch->schib.pmcw.pam & sch->opm) == sch->vpm)
 			break;
-		fallthrough;
+		/* fall through */
 	case DEV_STATE_DISCONNECTED:
 		CIO_MSG_EVENT(3, "recovery: trigger 0.%x.%04x\n",
 			      cdev->private->dev_id.ssid,
@@ -2096,7 +2091,7 @@ static void ccw_device_todo(struct work_struct *work)
 	case CDEV_TODO_UNREG_EVAL:
 		if (!sch_is_pseudo_sch(sch))
 			css_schedule_eval(sch->schid);
-		fallthrough;
+		/* fall-through */
 	case CDEV_TODO_UNREG:
 		if (sch_is_pseudo_sch(sch))
 			ccw_device_unregister(cdev);

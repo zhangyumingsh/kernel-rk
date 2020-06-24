@@ -22,6 +22,7 @@
 static void btrfs_read_root_item(struct extent_buffer *eb, int slot,
 				struct btrfs_root_item *item)
 {
+	uuid_le uuid;
 	u32 len;
 	int need_reset = 0;
 
@@ -43,7 +44,8 @@ static void btrfs_read_root_item(struct extent_buffer *eb, int slot,
 			sizeof(*item) - offsetof(struct btrfs_root_item,
 					generation_v2));
 
-		generate_random_guid(item->uuid);
+		uuid_le_gen(&uuid);
+		memcpy(item->uuid, uuid.b, BTRFS_UUID_SIZE);
 	}
 }
 
@@ -253,7 +255,25 @@ int btrfs_find_orphan_roots(struct btrfs_fs_info *fs_info)
 		root_key.objectid = key.offset;
 		key.offset++;
 
-		root = btrfs_get_fs_root(fs_info, &root_key, false);
+		/*
+		 * The root might have been inserted already, as before we look
+		 * for orphan roots, log replay might have happened, which
+		 * triggers a transaction commit and qgroup accounting, which
+		 * in turn reads and inserts fs roots while doing backref
+		 * walking.
+		 */
+		root = btrfs_lookup_fs_root(fs_info, root_key.objectid);
+		if (root) {
+			WARN_ON(!test_bit(BTRFS_ROOT_ORPHAN_ITEM_INSERTED,
+					  &root->state));
+			if (btrfs_root_refs(&root->root_item) == 0) {
+				set_bit(BTRFS_ROOT_DEAD_TREE, &root->state);
+				btrfs_add_dead_root(root);
+			}
+			continue;
+		}
+
+		root = btrfs_read_fs_root(tree_root, &root_key);
 		err = PTR_ERR_OR_ZERO(root);
 		if (err && err != -ENOENT) {
 			break;
@@ -280,12 +300,25 @@ int btrfs_find_orphan_roots(struct btrfs_fs_info *fs_info)
 			continue;
 		}
 
-		WARN_ON(!test_bit(BTRFS_ROOT_ORPHAN_ITEM_INSERTED, &root->state));
+		err = btrfs_init_fs_root(root);
+		if (err) {
+			btrfs_free_fs_root(root);
+			break;
+		}
+
+		set_bit(BTRFS_ROOT_ORPHAN_ITEM_INSERTED, &root->state);
+
+		err = btrfs_insert_fs_root(fs_info, root);
+		if (err) {
+			BUG_ON(err == -EEXIST);
+			btrfs_free_fs_root(root);
+			break;
+		}
+
 		if (btrfs_root_refs(&root->root_item) == 0) {
 			set_bit(BTRFS_ROOT_DEAD_TREE, &root->state);
 			btrfs_add_dead_root(root);
 		}
-		btrfs_put_root(root);
 	}
 
 	btrfs_free_path(path);
@@ -520,5 +553,5 @@ int btrfs_subvolume_reserve_metadata(struct btrfs_root *root,
 void btrfs_subvolume_release_metadata(struct btrfs_fs_info *fs_info,
 				      struct btrfs_block_rsv *rsv)
 {
-	btrfs_block_rsv_release(fs_info, rsv, (u64)-1, NULL);
+	btrfs_block_rsv_release(fs_info, rsv, (u64)-1);
 }

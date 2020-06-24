@@ -154,7 +154,7 @@ void nested_svm_check_supported(void)
 		kvm_get_supported_cpuid_entry(0x80000001);
 
 	if (!(entry->ecx & CPUID_SVM)) {
-		print_skip("nested SVM not enabled");
+		fprintf(stderr, "nested SVM not enabled, skipping test\n");
 		exit(KSFT_SKIP);
 	}
 }

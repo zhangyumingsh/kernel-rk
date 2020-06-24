@@ -96,8 +96,7 @@ struct stack_frame_user {
 };
 
 static int
-copy_stack_frame(const struct stack_frame_user __user *fp,
-		 struct stack_frame_user *frame)
+copy_stack_frame(const void __user *fp, struct stack_frame_user *frame)
 {
 	int ret;
 
@@ -106,8 +105,7 @@ copy_stack_frame(const struct stack_frame_user __user *fp,
 
 	ret = 1;
 	pagefault_disable();
-	if (__get_user(frame->next_fp, &fp->next_fp) ||
-	    __get_user(frame->ret_addr, &fp->ret_addr))
+	if (__copy_from_user_inatomic(frame, fp, sizeof(*frame)))
 		ret = 0;
 	pagefault_enable();
 

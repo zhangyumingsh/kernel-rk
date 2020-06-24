@@ -1555,7 +1555,7 @@ int gspca_dev_probe2(struct usb_interface *intf,
 
 	/* init video stuff */
 	ret = video_register_device(&gspca_dev->vdev,
-				  VFL_TYPE_VIDEO,
+				  VFL_TYPE_GRABBER,
 				  -1);
 	if (ret < 0) {
 		pr_err("video_register_device err %d\n", ret);

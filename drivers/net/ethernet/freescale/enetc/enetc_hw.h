@@ -418,6 +418,9 @@ union enetc_rx_bd {
 	struct {
 		__le64 addr;
 		u8 reserved[8];
+#ifdef CONFIG_FSL_ENETC_HW_TIMESTAMPING
+		u8 reserved1[16];
+#endif
 	} w;
 	struct {
 		__le16 inet_csum;
@@ -432,11 +435,11 @@ union enetc_rx_bd {
 			};
 			__le32 lstatus;
 		};
-	} r;
-	struct {
+#ifdef CONFIG_FSL_ENETC_HW_TIMESTAMPING
 		__le32 tstamp;
 		u8 reserved[12];
-	} ext;
+#endif
+	} r;
 };
 
 #define ENETC_RXBD_LSTATUS_R	BIT(30)
@@ -585,7 +588,7 @@ struct tgs_gcl_data {
 	__le32		bth;
 	__le32		ct;
 	__le32		cte;
-	struct gce	entry[];
+	struct gce	entry[0];
 };
 
 struct enetc_cbd {

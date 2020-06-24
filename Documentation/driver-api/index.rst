@@ -17,7 +17,6 @@ available subsections can be seen below.
    driver-model/index
    basics
    infrastructure
-   ioctl
    early-userspace/index
    pm/index
    clk
@@ -75,12 +74,11 @@ available subsections can be seen below.
    connector
    console
    dcdbas
+   edid
    eisa
    ipmb
    isa
    isapnp
-   io-mapping
-   io_ordering
    generic-counter
    lightnvm-pblk
    memory-devices/index

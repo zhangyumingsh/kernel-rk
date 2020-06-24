@@ -510,7 +510,6 @@ struct spi_device *spi_alloc_device(struct spi_controller *ctlr)
 	spi->dev.bus = &spi_bus_type;
 	spi->dev.release = spidev_release;
 	spi->cs_gpio = -ENOENT;
-	spi->mode = ctlr->buswidth_override_bits;
 
 	spin_lock_init(&spi->statistics.lock);
 
@@ -1515,14 +1514,16 @@ void spi_take_timestamp_pre(struct spi_controller *ctlr,
 	if (!xfer->ptp_sts)
 		return;
 
-	if (xfer->timestamped)
+	if (xfer->timestamped_pre)
 		return;
 
-	if (progress > xfer->ptp_sts_word_pre)
+	if (progress < xfer->ptp_sts_word_pre)
 		return;
 
 	/* Capture the resolution of the timestamp */
 	xfer->ptp_sts_word_pre = progress;
+
+	xfer->timestamped_pre = true;
 
 	if (irqs_off) {
 		local_irq_save(ctlr->irq_flags);
@@ -1552,7 +1553,7 @@ void spi_take_timestamp_post(struct spi_controller *ctlr,
 	if (!xfer->ptp_sts)
 		return;
 
-	if (xfer->timestamped)
+	if (xfer->timestamped_post)
 		return;
 
 	if (progress < xfer->ptp_sts_word_post)
@@ -1568,7 +1569,7 @@ void spi_take_timestamp_post(struct spi_controller *ctlr,
 	/* Capture the resolution of the timestamp */
 	xfer->ptp_sts_word_post = progress;
 
-	xfer->timestamped = true;
+	xfer->timestamped_post = true;
 }
 EXPORT_SYMBOL_GPL(spi_take_timestamp_post);
 
@@ -1673,9 +1674,12 @@ void spi_finalize_current_message(struct spi_controller *ctlr)
 		}
 	}
 
-	if (unlikely(ctlr->ptp_sts_supported))
-		list_for_each_entry(xfer, &mesg->transfers, transfer_list)
-			WARN_ON_ONCE(xfer->ptp_sts && !xfer->timestamped);
+	if (unlikely(ctlr->ptp_sts_supported)) {
+		list_for_each_entry(xfer, &mesg->transfers, transfer_list) {
+			WARN_ON_ONCE(xfer->ptp_sts && !xfer->timestamped_pre);
+			WARN_ON_ONCE(xfer->ptp_sts && !xfer->timestamped_post);
+		}
+	}
 
 	spi_unmap_msg(ctlr, mesg);
 
@@ -1951,8 +1955,13 @@ static int of_spi_parse_dt(struct spi_controller *ctlr, struct spi_device *spi,
 		spi->mode |= SPI_CS_HIGH;
 
 	/* Device speed */
-	if (!of_property_read_u32(nc, "spi-max-frequency", &value))
-		spi->max_speed_hz = value;
+	rc = of_property_read_u32(nc, "spi-max-frequency", &value);
+	if (rc) {
+		dev_err(&ctlr->dev,
+			"%pOF has no valid 'spi-max-frequency' property (%d)\n", nc, rc);
+		return rc;
+	}
+	spi->max_speed_hz = value;
 
 	return 0;
 }
@@ -2172,10 +2181,9 @@ static acpi_status acpi_register_spi_device(struct spi_controller *ctlr,
 		return AE_NO_MEMORY;
 	}
 
-
 	ACPI_COMPANION_SET(&spi->dev, adev);
 	spi->max_speed_hz	= lookup.max_speed_hz;
-	spi->mode		|= lookup.mode;
+	spi->mode		= lookup.mode;
 	spi->irq		= lookup.irq;
 	spi->bits_per_word	= lookup.bits_per_word;
 	spi->chip_select	= lookup.chip_select;
@@ -4026,7 +4034,7 @@ static struct spi_device *acpi_spi_find_device_by_adev(struct acpi_device *adev)
 	struct device *dev;
 
 	dev = bus_find_device_by_acpi_dev(&spi_bus_type, adev);
-	return to_spi_device(dev);
+	return dev ? to_spi_device(dev) : NULL;
 }
 
 static int acpi_spi_notify(struct notifier_block *nb, unsigned long value,

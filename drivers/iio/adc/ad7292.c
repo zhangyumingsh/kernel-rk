@@ -122,10 +122,7 @@ static int ad7292_single_conversion(struct ad7292_state *st,
 		{
 			.tx_buf = &st->d8,
 			.len = 4,
-			.delay = {
-				.value = 6,
-				.unit = SPI_DELAY_UNIT_USECS
-			},
+			.delay_usecs = 6,
 		}, {
 			.rx_buf = &st->d16,
 			.len = 2,

@@ -14,7 +14,6 @@
 #include <asm/alternative.h>
 #include <asm/assembler.h>
 #include <asm/asm-offsets.h>
-#include <asm/asm_pointer_auth.h>
 #include <asm/cpufeature.h>
 #include <asm/errno.h>
 #include <asm/esr.h>
@@ -178,7 +177,6 @@ alternative_cb_end
 
 	apply_ssbd 1, x22, x23
 
-	ptrauth_keys_install_kernel tsk, 1, x20, x22, x23
 	.else
 	add	x21, sp, #S_FRAME_SIZE
 	get_current_task tsk
@@ -343,9 +341,6 @@ alternative_else_nop_endif
 	msr	cntkctl_el1, x1
 4:
 #endif
-	/* No kernel C function calls after this as user keys are set. */
-	ptrauth_keys_install_user tsk, x0, x1, x2
-
 	apply_ssbd 0, x0, x1
 	.endif
 
@@ -470,7 +465,7 @@ alternative_endif
 	.pushsection ".entry.text", "ax"
 
 	.align	11
-SYM_CODE_START(vectors)
+ENTRY(vectors)
 	kernel_ventry	1, sync_invalid			// Synchronous EL1t
 	kernel_ventry	1, irq_invalid			// IRQ EL1t
 	kernel_ventry	1, fiq_invalid			// FIQ EL1t
@@ -497,7 +492,7 @@ SYM_CODE_START(vectors)
 	kernel_ventry	0, fiq_invalid, 32		// FIQ 32-bit EL0
 	kernel_ventry	0, error_invalid, 32		// Error 32-bit EL0
 #endif
-SYM_CODE_END(vectors)
+END(vectors)
 
 #ifdef CONFIG_VMAP_STACK
 	/*
@@ -539,57 +534,57 @@ __bad_stack:
 	ASM_BUG()
 	.endm
 
-SYM_CODE_START_LOCAL(el0_sync_invalid)
+el0_sync_invalid:
 	inv_entry 0, BAD_SYNC
-SYM_CODE_END(el0_sync_invalid)
+ENDPROC(el0_sync_invalid)
 
-SYM_CODE_START_LOCAL(el0_irq_invalid)
+el0_irq_invalid:
 	inv_entry 0, BAD_IRQ
-SYM_CODE_END(el0_irq_invalid)
+ENDPROC(el0_irq_invalid)
 
-SYM_CODE_START_LOCAL(el0_fiq_invalid)
+el0_fiq_invalid:
 	inv_entry 0, BAD_FIQ
-SYM_CODE_END(el0_fiq_invalid)
+ENDPROC(el0_fiq_invalid)
 
-SYM_CODE_START_LOCAL(el0_error_invalid)
+el0_error_invalid:
 	inv_entry 0, BAD_ERROR
-SYM_CODE_END(el0_error_invalid)
+ENDPROC(el0_error_invalid)
 
 #ifdef CONFIG_COMPAT
-SYM_CODE_START_LOCAL(el0_fiq_invalid_compat)
+el0_fiq_invalid_compat:
 	inv_entry 0, BAD_FIQ, 32
-SYM_CODE_END(el0_fiq_invalid_compat)
+ENDPROC(el0_fiq_invalid_compat)
 #endif
 
-SYM_CODE_START_LOCAL(el1_sync_invalid)
+el1_sync_invalid:
 	inv_entry 1, BAD_SYNC
-SYM_CODE_END(el1_sync_invalid)
+ENDPROC(el1_sync_invalid)
 
-SYM_CODE_START_LOCAL(el1_irq_invalid)
+el1_irq_invalid:
 	inv_entry 1, BAD_IRQ
-SYM_CODE_END(el1_irq_invalid)
+ENDPROC(el1_irq_invalid)
 
-SYM_CODE_START_LOCAL(el1_fiq_invalid)
+el1_fiq_invalid:
 	inv_entry 1, BAD_FIQ
-SYM_CODE_END(el1_fiq_invalid)
+ENDPROC(el1_fiq_invalid)
 
-SYM_CODE_START_LOCAL(el1_error_invalid)
+el1_error_invalid:
 	inv_entry 1, BAD_ERROR
-SYM_CODE_END(el1_error_invalid)
+ENDPROC(el1_error_invalid)
 
 /*
  * EL1 mode handlers.
  */
 	.align	6
-SYM_CODE_START_LOCAL_NOALIGN(el1_sync)
+el1_sync:
 	kernel_entry 1
 	mov	x0, sp
 	bl	el1_sync_handler
 	kernel_exit 1
-SYM_CODE_END(el1_sync)
+ENDPROC(el1_sync)
 
 	.align	6
-SYM_CODE_START_LOCAL_NOALIGN(el1_irq)
+el1_irq:
 	kernel_entry 1
 	gic_prio_irq_setup pmr=x20, tmp=x1
 	enable_da_f
@@ -644,42 +639,42 @@ alternative_else_nop_endif
 #endif
 
 	kernel_exit 1
-SYM_CODE_END(el1_irq)
+ENDPROC(el1_irq)
 
 /*
  * EL0 mode handlers.
  */
 	.align	6
-SYM_CODE_START_LOCAL_NOALIGN(el0_sync)
+el0_sync:
 	kernel_entry 0
 	mov	x0, sp
 	bl	el0_sync_handler
 	b	ret_to_user
-SYM_CODE_END(el0_sync)
+ENDPROC(el0_sync)
 
 #ifdef CONFIG_COMPAT
 	.align	6
-SYM_CODE_START_LOCAL_NOALIGN(el0_sync_compat)
+el0_sync_compat:
 	kernel_entry 0, 32
 	mov	x0, sp
 	bl	el0_sync_compat_handler
 	b	ret_to_user
-SYM_CODE_END(el0_sync_compat)
+ENDPROC(el0_sync_compat)
 
 	.align	6
-SYM_CODE_START_LOCAL_NOALIGN(el0_irq_compat)
+el0_irq_compat:
 	kernel_entry 0, 32
 	b	el0_irq_naked
-SYM_CODE_END(el0_irq_compat)
+ENDPROC(el0_irq_compat)
 
-SYM_CODE_START_LOCAL_NOALIGN(el0_error_compat)
+el0_error_compat:
 	kernel_entry 0, 32
 	b	el0_error_naked
-SYM_CODE_END(el0_error_compat)
+ENDPROC(el0_error_compat)
 #endif
 
 	.align	6
-SYM_CODE_START_LOCAL_NOALIGN(el0_irq)
+el0_irq:
 	kernel_entry 0
 el0_irq_naked:
 	gic_prio_irq_setup pmr=x20, tmp=x0
@@ -701,9 +696,9 @@ el0_irq_naked:
 	bl	trace_hardirqs_on
 #endif
 	b	ret_to_user
-SYM_CODE_END(el0_irq)
+ENDPROC(el0_irq)
 
-SYM_CODE_START_LOCAL(el1_error)
+el1_error:
 	kernel_entry 1
 	mrs	x1, esr_el1
 	gic_prio_kentry_setup tmp=x2
@@ -711,9 +706,9 @@ SYM_CODE_START_LOCAL(el1_error)
 	mov	x0, sp
 	bl	do_serror
 	kernel_exit 1
-SYM_CODE_END(el1_error)
+ENDPROC(el1_error)
 
-SYM_CODE_START_LOCAL(el0_error)
+el0_error:
 	kernel_entry 0
 el0_error_naked:
 	mrs	x25, esr_el1
@@ -725,7 +720,7 @@ el0_error_naked:
 	bl	do_serror
 	enable_da_f
 	b	ret_to_user
-SYM_CODE_END(el0_error)
+ENDPROC(el0_error)
 
 /*
  * Ok, we need to do extra processing, enter the slow path.
@@ -837,7 +832,7 @@ alternative_else_nop_endif
 	.endm
 
 	.align	11
-SYM_CODE_START_NOALIGN(tramp_vectors)
+ENTRY(tramp_vectors)
 	.space	0x400
 
 	tramp_ventry
@@ -849,24 +844,24 @@ SYM_CODE_START_NOALIGN(tramp_vectors)
 	tramp_ventry	32
 	tramp_ventry	32
 	tramp_ventry	32
-SYM_CODE_END(tramp_vectors)
+END(tramp_vectors)
 
-SYM_CODE_START(tramp_exit_native)
+ENTRY(tramp_exit_native)
 	tramp_exit
-SYM_CODE_END(tramp_exit_native)
+END(tramp_exit_native)
 
-SYM_CODE_START(tramp_exit_compat)
+ENTRY(tramp_exit_compat)
 	tramp_exit	32
-SYM_CODE_END(tramp_exit_compat)
+END(tramp_exit_compat)
 
 	.ltorg
 	.popsection				// .entry.tramp.text
 #ifdef CONFIG_RANDOMIZE_BASE
 	.pushsection ".rodata", "a"
 	.align PAGE_SHIFT
-SYM_DATA_START(__entry_tramp_data_start)
+	.globl	__entry_tramp_data_start
+__entry_tramp_data_start:
 	.quad	vectors
-SYM_DATA_END(__entry_tramp_data_start)
 	.popsection				// .rodata
 #endif /* CONFIG_RANDOMIZE_BASE */
 #endif /* CONFIG_UNMAP_KERNEL_AT_EL0 */
@@ -879,7 +874,7 @@ SYM_DATA_END(__entry_tramp_data_start)
  * Previous and next are guaranteed not to be the same.
  *
  */
-SYM_FUNC_START(cpu_switch_to)
+ENTRY(cpu_switch_to)
 	mov	x10, #THREAD_CPU_CONTEXT
 	add	x8, x0, x10
 	mov	x9, sp
@@ -900,22 +895,21 @@ SYM_FUNC_START(cpu_switch_to)
 	ldr	lr, [x8]
 	mov	sp, x9
 	msr	sp_el0, x1
-	ptrauth_keys_install_kernel x1, 1, x8, x9, x10
 	ret
-SYM_FUNC_END(cpu_switch_to)
+ENDPROC(cpu_switch_to)
 NOKPROBE(cpu_switch_to)
 
 /*
  * This is how we return from a fork.
  */
-SYM_CODE_START(ret_from_fork)
+ENTRY(ret_from_fork)
 	bl	schedule_tail
 	cbz	x19, 1f				// not a kernel thread
 	mov	x0, x20
 	blr	x19
 1:	get_current_task tsk
 	b	ret_to_user
-SYM_CODE_END(ret_from_fork)
+ENDPROC(ret_from_fork)
 NOKPROBE(ret_from_fork)
 
 #ifdef CONFIG_ARM_SDE_INTERFACE
@@ -944,7 +938,7 @@ NOKPROBE(ret_from_fork)
  */
 .ltorg
 .pushsection ".entry.tramp.text", "ax"
-SYM_CODE_START(__sdei_asm_entry_trampoline)
+ENTRY(__sdei_asm_entry_trampoline)
 	mrs	x4, ttbr1_el1
 	tbz	x4, #USER_ASID_BIT, 1f
 
@@ -966,7 +960,7 @@ SYM_CODE_START(__sdei_asm_entry_trampoline)
 	ldr	x4, =__sdei_asm_handler
 #endif
 	br	x4
-SYM_CODE_END(__sdei_asm_entry_trampoline)
+ENDPROC(__sdei_asm_entry_trampoline)
 NOKPROBE(__sdei_asm_entry_trampoline)
 
 /*
@@ -976,22 +970,21 @@ NOKPROBE(__sdei_asm_entry_trampoline)
  * x2: exit_mode
  * x4: struct sdei_registered_event argument from registration time.
  */
-SYM_CODE_START(__sdei_asm_exit_trampoline)
+ENTRY(__sdei_asm_exit_trampoline)
 	ldr	x4, [x4, #(SDEI_EVENT_INTREGS + S_ORIG_ADDR_LIMIT)]
 	cbnz	x4, 1f
 
 	tramp_unmap_kernel	tmp=x4
 
 1:	sdei_handler_exit exit_mode=x2
-SYM_CODE_END(__sdei_asm_exit_trampoline)
+ENDPROC(__sdei_asm_exit_trampoline)
 NOKPROBE(__sdei_asm_exit_trampoline)
 	.ltorg
 .popsection		// .entry.tramp.text
 #ifdef CONFIG_RANDOMIZE_BASE
 .pushsection ".rodata", "a"
-SYM_DATA_START(__sdei_asm_trampoline_next_handler)
+__sdei_asm_trampoline_next_handler:
 	.quad	__sdei_asm_handler
-SYM_DATA_END(__sdei_asm_trampoline_next_handler)
 .popsection		// .rodata
 #endif /* CONFIG_RANDOMIZE_BASE */
 #endif /* CONFIG_UNMAP_KERNEL_AT_EL0 */
@@ -1009,7 +1002,7 @@ SYM_DATA_END(__sdei_asm_trampoline_next_handler)
  * follow SMC-CC. We save (or retrieve) all the registers as the handler may
  * want them.
  */
-SYM_CODE_START(__sdei_asm_handler)
+ENTRY(__sdei_asm_handler)
 	stp     x2, x3, [x1, #SDEI_EVENT_INTREGS + S_PC]
 	stp     x4, x5, [x1, #SDEI_EVENT_INTREGS + 16 * 2]
 	stp     x6, x7, [x1, #SDEI_EVENT_INTREGS + 16 * 3]
@@ -1092,6 +1085,6 @@ alternative_else_nop_endif
 	tramp_alias	dst=x5, sym=__sdei_asm_exit_trampoline
 	br	x5
 #endif
-SYM_CODE_END(__sdei_asm_handler)
+ENDPROC(__sdei_asm_handler)
 NOKPROBE(__sdei_asm_handler)
 #endif /* CONFIG_ARM_SDE_INTERFACE */

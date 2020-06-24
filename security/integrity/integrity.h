@@ -6,12 +6,6 @@
  * Mimi Zohar <zohar@us.ibm.com>
  */
 
-#ifdef pr_fmt
-#undef pr_fmt
-#endif
-
-#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
-
 #include <linux/types.h>
 #include <linux/integrity.h>
 #include <crypto/sha.h>

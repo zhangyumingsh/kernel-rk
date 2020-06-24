@@ -164,7 +164,7 @@ static inline void destroy_timer_on_stack(struct timer_list *timer) { }
  */
 static inline int timer_pending(const struct timer_list * timer)
 {
-	return !hlist_unhashed_lockless(&timer->entry);
+	return timer->entry.pprev != NULL;
 }
 
 extern void add_timer_on(struct timer_list *timer, int cpu);

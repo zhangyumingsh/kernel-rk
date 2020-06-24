@@ -52,12 +52,6 @@ properties:
     description:
       The SPI controller acts as a slave, instead of a master.
 
-oneOf:
-  - required:
-      - "#address-cells"
-  - required:
-      - spi-slave
-
 patternProperties:
   "^slave$":
     type: object
@@ -120,7 +114,7 @@ patternProperties:
           - enum: [ 1, 2, 4, 8 ]
           - default: 1
         description:
-          Bus width to the SPI bus used for read transfers.
+          Bus width to the SPI bus used for MISO.
 
       spi-rx-delay-us:
         description:
@@ -132,7 +126,7 @@ patternProperties:
           - enum: [ 1, 2, 4, 8 ]
           - default: 1
         description:
-          Bus width to the SPI bus used for write transfers.
+          Bus width to the SPI bus used for MOSI.
 
       spi-tx-delay-us:
         description:

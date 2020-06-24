@@ -77,6 +77,12 @@ struct vop_common {
 	struct vop_reg mmu_en;
 	struct vop_reg out_mode;
 	struct vop_reg standby;
+
+	struct vop_reg overlay_mode;
+	struct vop_reg dclk_ddr;
+	struct vop_reg dsp_data_swap;
+	struct vop_reg dsp_out_yuv;
+	struct vop_reg dsp_background;
 };
 
 struct vop_misc {
@@ -138,6 +144,7 @@ struct vop_win_phy {
 	struct vop_reg enable;
 	struct vop_reg gate;
 	struct vop_reg format;
+	struct vop_reg fmt_10;
 	struct vop_reg rb_swap;
 	struct vop_reg act_info;
 	struct vop_reg dsp_info;
@@ -152,6 +159,8 @@ struct vop_win_phy {
 	struct vop_reg dst_alpha_ctl;
 	struct vop_reg src_alpha_ctl;
 	struct vop_reg channel;
+	struct vop_reg alpha_mode;
+	struct vop_reg alpha_en;
 };
 
 struct vop_win_yuv2yuv_data {
@@ -225,11 +234,12 @@ struct vop_data {
 /*
  * display output interface supported by rockchip lcdc
  */
-#define ROCKCHIP_OUT_MODE_P888	0
-#define ROCKCHIP_OUT_MODE_P666	1
-#define ROCKCHIP_OUT_MODE_P565	2
+#define ROCKCHIP_OUT_MODE_P888		0
+#define ROCKCHIP_OUT_MODE_P666		1
+#define ROCKCHIP_OUT_MODE_P565		2
+#define ROCKCHIP_OUT_MODE_YUV420	14
 /* for use special outface */
-#define ROCKCHIP_OUT_MODE_AAAA	15
+#define ROCKCHIP_OUT_MODE_AAAA		15
 
 /* output flags */
 #define ROCKCHIP_OUTPUT_DSI_DUAL	BIT(0)
@@ -328,7 +338,7 @@ static inline uint16_t scl_get_bili_dn_vskip(int src_h, int dst_h,
 {
 	int act_height;
 
-	act_height = DIV_ROUND_UP(src_h, vskiplines);
+	act_height = (src_h + vskiplines - 1) / vskiplines;
 
 	if (act_height == dst_h)
 		return GET_SCL_FT_BILI_DN(src_h, dst_h) / vskiplines;

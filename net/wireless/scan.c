@@ -556,8 +556,9 @@ cfg80211_find_sched_scan_req(struct cfg80211_registered_device *rdev, u64 reqid)
 {
 	struct cfg80211_sched_scan_request *pos;
 
-	list_for_each_entry_rcu(pos, &rdev->sched_scan_req_list, list,
-				lockdep_rtnl_is_held()) {
+	WARN_ON_ONCE(!rcu_read_lock_held() && !lockdep_rtnl_is_held());
+
+	list_for_each_entry_rcu(pos, &rdev->sched_scan_req_list, list) {
 		if (pos->reqid == reqid)
 			return pos;
 	}
@@ -1433,7 +1434,8 @@ cfg80211_inform_single_bss_data(struct wiphy *wiphy,
 	}
 	rcu_assign_pointer(tmp.pub.ies, ies);
 
-	signal_valid = data->chan == channel;
+	signal_valid = abs(data->chan->center_freq - channel->center_freq) <=
+		wiphy->max_adj_channel_rssi_comp;
 	res = cfg80211_bss_update(wiphy_to_rdev(wiphy), &tmp, signal_valid, ts);
 	if (!res)
 		return NULL;
@@ -1850,7 +1852,8 @@ cfg80211_inform_single_bss_frame_data(struct wiphy *wiphy,
 	memcpy(tmp.pub.chain_signal, data->chain_signal, IEEE80211_MAX_CHAINS);
 	ether_addr_copy(tmp.parent_bssid, data->parent_bssid);
 
-	signal_valid = data->chan == channel;
+	signal_valid = abs(data->chan->center_freq - channel->center_freq) <=
+		wiphy->max_adj_channel_rssi_comp;
 	res = cfg80211_bss_update(wiphy_to_rdev(wiphy), &tmp, signal_valid,
 				  jiffies);
 	if (!res)

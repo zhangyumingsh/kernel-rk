@@ -38,7 +38,10 @@ static bool cgroup_no_v1_named;
  */
 static struct workqueue_struct *cgroup_pidlist_destroy_wq;
 
-/* protects cgroup_subsys->release_agent_path */
+/*
+ * Protects cgroup_subsys->release_agent_path.  Modifying it also requires
+ * cgroup_mutex.  Reading requires either cgroup_mutex or this spinlock.
+ */
 static DEFINE_SPINLOCK(release_agent_path_lock);
 
 bool cgroup1_ssid_disabled(int ssid)
@@ -772,29 +775,22 @@ void cgroup1_release_agent(struct work_struct *work)
 {
 	struct cgroup *cgrp =
 		container_of(work, struct cgroup, release_agent_work);
-	char *pathbuf, *agentbuf;
+	char *pathbuf = NULL, *agentbuf = NULL;
 	char *argv[3], *envp[3];
 	int ret;
 
-	/* snoop agent path and exit early if empty */
-	if (!cgrp->root->release_agent_path[0])
-		return;
+	mutex_lock(&cgroup_mutex);
 
-	/* prepare argument buffers */
 	pathbuf = kmalloc(PATH_MAX, GFP_KERNEL);
-	agentbuf = kmalloc(PATH_MAX, GFP_KERNEL);
-	if (!pathbuf || !agentbuf)
-		goto out_free;
+	agentbuf = kstrdup(cgrp->root->release_agent_path, GFP_KERNEL);
+	if (!pathbuf || !agentbuf || !strlen(agentbuf))
+		goto out;
 
-	spin_lock(&release_agent_path_lock);
-	strlcpy(agentbuf, cgrp->root->release_agent_path, PATH_MAX);
-	spin_unlock(&release_agent_path_lock);
-	if (!agentbuf[0])
-		goto out_free;
-
-	ret = cgroup_path_ns(cgrp, pathbuf, PATH_MAX, &init_cgroup_ns);
+	spin_lock_irq(&css_set_lock);
+	ret = cgroup_path_ns_locked(cgrp, pathbuf, PATH_MAX, &init_cgroup_ns);
+	spin_unlock_irq(&css_set_lock);
 	if (ret < 0 || ret >= PATH_MAX)
-		goto out_free;
+		goto out;
 
 	argv[0] = agentbuf;
 	argv[1] = pathbuf;
@@ -805,7 +801,11 @@ void cgroup1_release_agent(struct work_struct *work)
 	envp[1] = "PATH=/sbin:/bin:/usr/sbin:/usr/bin";
 	envp[2] = NULL;
 
+	mutex_unlock(&cgroup_mutex);
 	call_usermodehelper(argv[0], argv, envp, UMH_WAIT_EXEC);
+	goto out_free;
+out:
+	mutex_unlock(&cgroup_mutex);
 out_free:
 	kfree(agentbuf);
 	kfree(pathbuf);

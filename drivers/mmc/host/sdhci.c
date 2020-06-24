@@ -9,7 +9,6 @@
  *     - JMicron (hardware and technical support)
  */
 
-#include <linux/bitfield.h>
 #include <linux/delay.h>
 #include <linux/dmaengine.h>
 #include <linux/ktime.h>
@@ -154,7 +153,7 @@ static void sdhci_set_card_detection(struct sdhci_host *host, bool enable)
 	u32 present;
 
 	if ((host->quirks & SDHCI_QUIRK_BROKEN_CARD_DETECTION) ||
-	    !mmc_card_is_removable(host->mmc) || mmc_can_gpio_cd(host->mmc))
+	    !mmc_card_is_removable(host->mmc))
 		return;
 
 	if (enable) {
@@ -1767,9 +1766,10 @@ u16 sdhci_calc_clk(struct sdhci_host *host, unsigned int clock,
 
 			clk = sdhci_readw(host, SDHCI_CLOCK_CONTROL);
 			pre_val = sdhci_get_preset_value(host);
-			div = FIELD_GET(SDHCI_PRESET_SDCLK_FREQ_MASK, pre_val);
+			div = (pre_val & SDHCI_PRESET_SDCLK_FREQ_MASK)
+				>> SDHCI_PRESET_SDCLK_FREQ_SHIFT;
 			if (host->clk_mul &&
-				(pre_val & SDHCI_PRESET_CLKGEN_SEL)) {
+				(pre_val & SDHCI_PRESET_CLKGEN_SEL_MASK)) {
 				clk = SDHCI_PROG_CLOCK_MODE;
 				real_div = div + 1;
 				clk_mul = host->clk_mul;
@@ -2010,25 +2010,6 @@ void sdhci_set_power(struct sdhci_host *host, unsigned char mode,
 }
 EXPORT_SYMBOL_GPL(sdhci_set_power);
 
-/*
- * Some controllers need to configure a valid bus voltage on their power
- * register regardless of whether an external regulator is taking care of power
- * supply. This helper function takes care of it if set as the controller's
- * sdhci_ops.set_power callback.
- */
-void sdhci_set_power_and_bus_voltage(struct sdhci_host *host,
-				     unsigned char mode,
-				     unsigned short vdd)
-{
-	if (!IS_ERR(host->mmc->supply.vmmc)) {
-		struct mmc_host *mmc = host->mmc;
-
-		mmc_regulator_set_ocr(mmc, mmc->supply.vmmc, vdd);
-	}
-	sdhci_set_power_noreg(host, mode, vdd);
-}
-EXPORT_SYMBOL_GPL(sdhci_set_power_and_bus_voltage);
-
 /*****************************************************************************\
  *                                                                           *
  * MMC callbacks                                                             *
@@ -2246,8 +2227,8 @@ void sdhci_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
 
 			sdhci_enable_preset_value(host, true);
 			preset = sdhci_get_preset_value(host);
-			ios->drv_type = FIELD_GET(SDHCI_PRESET_DRV_MASK,
-						  preset);
+			ios->drv_type = (preset & SDHCI_PRESET_DRV_MASK)
+				>> SDHCI_PRESET_DRV_SHIFT;
 		}
 
 		/* Re-enable SD Clock */
@@ -2963,10 +2944,7 @@ static bool sdhci_request_done(struct sdhci_host *host)
 
 	spin_unlock_irqrestore(&host->lock, flags);
 
-	if (host->ops->request_done)
-		host->ops->request_done(host, mrq);
-	else
-		mmc_request_done(host->mmc, mrq);
+	mmc_request_done(host->mmc, mrq);
 
 	return false;
 }
@@ -3269,7 +3247,7 @@ static inline bool sdhci_defer_done(struct sdhci_host *host,
 {
 	struct mmc_data *data = mrq->data;
 
-	return host->pending_reset || host->always_defer_done ||
+	return host->pending_reset ||
 	       ((host->flags & SDHCI_REQ_USE_DMA) && data &&
 		data->host_cookie == COOKIE_MAPPED);
 }
@@ -3394,12 +3372,7 @@ out:
 
 	/* Process mrqs ready for immediate completion */
 	for (i = 0; i < SDHCI_MAX_MRQS; i++) {
-		if (!mrqs_done[i])
-			continue;
-
-		if (host->ops->request_done)
-			host->ops->request_done(host, mrqs_done[i]);
-		else
+		if (mrqs_done[i])
 			mmc_request_done(host->mmc, mrqs_done[i]);
 	}
 
@@ -4000,6 +3973,9 @@ int sdhci_setup_host(struct sdhci_host *host)
 		       mmc_hostname(mmc), host->version);
 	}
 
+	if (host->quirks & SDHCI_QUIRK_BROKEN_CQE)
+		mmc->caps2 &= ~MMC_CAP2_CQE;
+
 	if (host->quirks & SDHCI_QUIRK_FORCE_DMA)
 		host->flags |= SDHCI_USE_SDMA;
 	else if (!(host->caps & SDHCI_CAN_DO_SDMA))
@@ -4535,12 +4511,6 @@ int __sdhci_add_host(struct sdhci_host *host)
 	unsigned int flags = WQ_UNBOUND | WQ_MEM_RECLAIM | WQ_HIGHPRI;
 	struct mmc_host *mmc = host->mmc;
 	int ret;
-
-	if ((mmc->caps2 & MMC_CAP2_CQE) &&
-	    (host->quirks & SDHCI_QUIRK_BROKEN_CQE)) {
-		mmc->caps2 &= ~MMC_CAP2_CQE;
-		mmc->cqe_ops = NULL;
-	}
 
 	host->complete_wq = alloc_workqueue("sdhci", flags, 0);
 	if (!host->complete_wq)

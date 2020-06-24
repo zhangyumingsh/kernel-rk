@@ -46,10 +46,7 @@ static int amd_gpio_get_direction(struct gpio_chip *gc, unsigned offset)
 	pin_reg = readl(gpio_dev->base + offset * 4);
 	raw_spin_unlock_irqrestore(&gpio_dev->lock, flags);
 
-	if (pin_reg & BIT(OUTPUT_ENABLE_OFF))
-		return GPIO_LINE_DIRECTION_OUT;
-
-	return GPIO_LINE_DIRECTION_IN;
+	return !(pin_reg & BIT(OUTPUT_ENABLE_OFF));
 }
 
 static int amd_gpio_direction_input(struct gpio_chip *gc, unsigned offset)

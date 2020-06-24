@@ -270,15 +270,8 @@ static int ucsi_register_altmode(struct ucsi_connector *con,
 
 		switch (desc->svid) {
 		case USB_TYPEC_DP_SID:
-			alt = ucsi_register_displayport(con, override, i, desc);
-			break;
 		case USB_TYPEC_NVIDIA_VLINK_SID:
-			if (desc->vdo == USB_TYPEC_NVIDIA_VLINK_DBG_VDO)
-				alt = typec_port_register_altmode(con->port,
-								  desc);
-			else
-				alt = ucsi_register_displayport(con, override,
-								i, desc);
+			alt = ucsi_register_displayport(con, override, i, desc);
 			break;
 		default:
 			alt = typec_port_register_altmode(con->port, desc);
@@ -407,7 +400,7 @@ static int ucsi_register_altmodes(struct ucsi_connector *con, u8 recipient)
 	struct typec_altmode_desc desc;
 	struct ucsi_altmode alt[2];
 	u64 command;
-	int num;
+	int num = 1;
 	int ret;
 	int len;
 	int j;
@@ -482,8 +475,7 @@ static void ucsi_unregister_altmodes(struct ucsi_connector *con, u8 recipient)
 	while (adev[i]) {
 		if (recipient == UCSI_RECIPIENT_SOP &&
 		    (adev[i]->svid == USB_TYPEC_DP_SID ||
-			(adev[i]->svid == USB_TYPEC_NVIDIA_VLINK_SID &&
-			adev[i]->vdo != USB_TYPEC_NVIDIA_VLINK_DBG_VDO))) {
+			adev[i]->svid == USB_TYPEC_NVIDIA_VLINK_SID)) {
 			pdev = typec_altmode_get_partner(adev[i]);
 			ucsi_displayport_remove_partner((void *)pdev);
 		}

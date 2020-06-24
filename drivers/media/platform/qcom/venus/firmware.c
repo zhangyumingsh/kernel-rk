@@ -106,7 +106,8 @@ static int venus_load_fw(struct venus_core *core, const char *fwname,
 
 	mem_va = memremap(r.start, *mem_size, MEMREMAP_WC);
 	if (!mem_va) {
-		dev_err(dev, "unable to map memory region: %pR\n", &r);
+		dev_err(dev, "unable to map memory region: %pa+%zx\n",
+			&r.start, *mem_size);
 		ret = -ENOMEM;
 		goto err_release_fw;
 	}

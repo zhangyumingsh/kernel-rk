@@ -205,11 +205,14 @@ static int gpio_pin_to_irq(struct gpio_chip *gc, unsigned offset)
 
 		for (k = 0; gpios[k] >= 0; k++) {
 			if (gpios[k] == offset)
-				return pfc->irqs[i];
+				goto found;
 		}
 	}
 
 	return 0;
+
+found:
+	return pfc->irqs[i];
 }
 
 static int gpio_pin_setup(struct sh_pfc_chip *chip)

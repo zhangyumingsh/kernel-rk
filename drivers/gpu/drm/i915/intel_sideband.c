@@ -60,7 +60,7 @@ static void __vlv_punit_get(struct drm_i915_private *i915)
 	 * to the Valleyview P-unit and not all sideband communications.
 	 */
 	if (IS_VALLEYVIEW(i915)) {
-		cpu_latency_qos_update_request(&i915->sb_qos, 0);
+		pm_qos_update_request(&i915->sb_qos, 0);
 		on_each_cpu(ping, NULL, 1);
 	}
 }
@@ -68,8 +68,7 @@ static void __vlv_punit_get(struct drm_i915_private *i915)
 static void __vlv_punit_put(struct drm_i915_private *i915)
 {
 	if (IS_VALLEYVIEW(i915))
-		cpu_latency_qos_update_request(&i915->sb_qos,
-					       PM_QOS_DEFAULT_VALUE);
+		pm_qos_update_request(&i915->sb_qos, PM_QOS_DEFAULT_VALUE);
 
 	iosf_mbi_punit_release();
 }
@@ -242,9 +241,8 @@ u32 vlv_dpio_read(struct drm_i915_private *i915, enum pipe pipe, int reg)
 	 * FIXME: There might be some registers where all 1's is a valid value,
 	 * so ideally we should check the register offset instead...
 	 */
-	drm_WARN(&i915->drm, val == 0xffffffff,
-		 "DPIO read pipe %c reg 0x%x == 0x%x\n",
-		 pipe_name(pipe), reg, val);
+	WARN(val == 0xffffffff, "DPIO read pipe %c reg 0x%x == 0x%x\n",
+	     pipe_name(pipe), reg, val);
 
 	return val;
 }
@@ -367,10 +365,6 @@ static inline int gen7_check_mailbox_status(u32 mbox)
 		return -ETIMEDOUT;
 	case GEN7_PCODE_ILLEGAL_DATA:
 		return -EINVAL;
-	case GEN11_PCODE_ILLEGAL_SUBCOMMAND:
-		return -ENXIO;
-	case GEN11_PCODE_LOCKED:
-		return -EBUSY;
 	case GEN7_PCODE_MIN_FREQ_TABLE_GT_RATIO_OUT_OF_RANGE:
 		return -EOVERFLOW;
 	default:
@@ -531,7 +525,7 @@ int skl_pcode_request(struct drm_i915_private *i915, u32 mbox, u32 request,
 	 */
 	drm_dbg_kms(&i915->drm,
 		    "PCODE timeout, retrying with preemption disabled\n");
-	drm_WARN_ON_ONCE(&i915->drm, timeout_base_ms > 3);
+	WARN_ON_ONCE(timeout_base_ms > 3);
 	preempt_disable();
 	ret = wait_for_atomic(COND, 50);
 	preempt_enable();

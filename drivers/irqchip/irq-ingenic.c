@@ -58,6 +58,11 @@ static irqreturn_t intc_cascade(int irq, void *data)
 	return IRQ_HANDLED;
 }
 
+static struct irqaction intc_cascade_action = {
+	.handler = intc_cascade,
+	.name = "SoC intc cascade interrupt",
+};
+
 static int __init ingenic_intc_of_init(struct device_node *node,
 				       unsigned num_chips)
 {
@@ -125,9 +130,7 @@ static int __init ingenic_intc_of_init(struct device_node *node,
 		irq_reg_writel(gc, IRQ_MSK(32), JZ_REG_INTC_SET_MASK);
 	}
 
-	if (request_irq(parent_irq, intc_cascade, 0,
-			"SoC intc cascade interrupt", NULL))
-		pr_err("Failed to register SoC intc cascade interrupt\n");
+	setup_irq(parent_irq, &intc_cascade_action);
 	return 0;
 
 out_domain_remove:

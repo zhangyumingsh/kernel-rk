@@ -74,8 +74,6 @@ required:
   - '#reset-cells'
   - '#power-domain-cells'
 
-additionalProperties: false
-
 if:
   properties:
     compatible:

@@ -89,8 +89,6 @@ required:
   - clock-names
   - clocks
 
-additionalProperties: false
-
 examples:
   - |
     #include <dt-bindings/clock/exynos5250.h>

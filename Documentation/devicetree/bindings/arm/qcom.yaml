@@ -28,7 +28,6 @@ description: |
         apq8074
         apq8084
         apq8096
-        ipq6018
         ipq8074
         mdm9615
         msm8916
@@ -42,7 +41,6 @@ description: |
   The 'board' element must be one of the following strings:
 
         cdp
-        cp01-c1
         dragonboard
         hk01
         idp
@@ -152,10 +150,4 @@ properties:
           - enum:
               - qcom,sc7180-idp
           - const: qcom,sc7180
-
-      - items:
-          - enum:
-              - qcom,ipq6018-cp01-c1
-          - const: qcom,ipq6018
-
 ...

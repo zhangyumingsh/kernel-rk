@@ -631,9 +631,10 @@ static struct ad5755_platform_data *ad5755_parse_dt(struct device *dev)
 			}
 		}
 
-		if (i == ARRAY_SIZE(ad5755_dcdc_freq_table))
+		if (i == ARRAY_SIZE(ad5755_dcdc_freq_table)) {
 			dev_err(dev,
-				"adi,dc-dc-freq out of range selecting 410kHz\n");
+				"adi,dc-dc-freq out of range selecting 410kHz");
+		}
 	}
 
 	pdata->dc_dc_maxv = AD5755_DC_DC_MAXV_23V;
@@ -644,16 +645,17 @@ static struct ad5755_platform_data *ad5755_parse_dt(struct device *dev)
 				break;
 			}
 		}
-		if (i == ARRAY_SIZE(ad5755_dcdc_maxv_table))
+		if (i == ARRAY_SIZE(ad5755_dcdc_maxv_table)) {
 				dev_err(dev,
-					"adi,dc-dc-maxv out of range selecting 23V\n");
+					"adi,dc-dc-maxv out of range selecting 23V");
+		}
 	}
 
 	devnr = 0;
 	for_each_child_of_node(np, pp) {
 		if (devnr >= AD5755_NUM_CHANNELS) {
 			dev_err(dev,
-				"There are too many channels defined in DT\n");
+				"There is to many channels defined in DT\n");
 			goto error_out;
 		}
 
@@ -679,10 +681,11 @@ static struct ad5755_platform_data *ad5755_parse_dt(struct device *dev)
 					break;
 				}
 			}
-			if (i == ARRAY_SIZE(ad5755_slew_rate_table))
+			if (i == ARRAY_SIZE(ad5755_slew_rate_table)) {
 				dev_err(dev,
-					"channel %d slew rate out of range selecting 64kHz\n",
+					"channel %d slew rate out of range selecting 64kHz",
 					devnr);
+			}
 
 			pdata->dac[devnr].slew.step_size = AD5755_SLEW_STEP_SIZE_1;
 			for (i = 0; i < ARRAY_SIZE(ad5755_slew_step_table); i++) {
@@ -692,10 +695,11 @@ static struct ad5755_platform_data *ad5755_parse_dt(struct device *dev)
 					break;
 				}
 			}
-			if (i == ARRAY_SIZE(ad5755_slew_step_table))
+			if (i == ARRAY_SIZE(ad5755_slew_step_table)) {
 				dev_err(dev,
-					"channel %d slew step size out of range selecting 1 LSB\n",
+					"channel %d slew step size out of range selecting 1 LSB",
 					devnr);
+			}
 		} else {
 			pdata->dac[devnr].slew.enable = false;
 			pdata->dac[devnr].slew.rate = AD5755_SLEW_RATE_64k;

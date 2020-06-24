@@ -1099,8 +1099,7 @@ static int amdgpu_uvd_send_msg(struct amdgpu_ring *ring, struct amdgpu_bo *bo,
 			goto err_free;
 	} else {
 		r = amdgpu_sync_resv(adev, &job->sync, bo->tbo.base.resv,
-				     AMDGPU_SYNC_ALWAYS,
-				     AMDGPU_FENCE_OWNER_UNDEFINED);
+				     AMDGPU_FENCE_OWNER_UNDEFINED, false);
 		if (r)
 			goto err_free;
 

@@ -6874,8 +6874,7 @@ int bnx2x_link_update(struct link_params *params, struct link_vars *vars)
 			case PORT_HW_CFG_PHY_SELECTION_FIRST_PHY_PRIORITY:
 			/* In this option, the first PHY makes sure to pass the
 			 * traffic through itself only.
-			 * It's not clear how to reset the link on the second
-			 * phy.
+			 * Its not clear how to reset the link on the second phy
 			 */
 				active_external_phy = EXT_PHY1;
 				break;

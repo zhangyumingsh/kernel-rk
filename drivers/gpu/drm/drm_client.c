@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: GPL-2.0 or MIT
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright 2018 Noralf Trønnes
  */

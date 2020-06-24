@@ -11,7 +11,6 @@
 static const unsigned int total_bytes = 10 * 1024 * 1024;
 static const struct timeval timeo_sec = { .tv_sec = 10 };
 static const size_t timeo_optlen = sizeof(timeo_sec);
-static int expected_stg = 0xeB9F;
 static int stop, duration;
 
 static int settimeo(int fd)
@@ -89,7 +88,7 @@ done:
 	return NULL;
 }
 
-static void do_test(const char *tcp_ca, const struct bpf_map *sk_stg_map)
+static void do_test(const char *tcp_ca)
 {
 	struct sockaddr_in6 sa6 = {};
 	ssize_t nr_recv = 0, bytes = 0;
@@ -127,34 +126,14 @@ static void do_test(const char *tcp_ca, const struct bpf_map *sk_stg_map)
 	err = listen(lfd, 1);
 	if (CHECK(err == -1, "listen", "errno:%d\n", errno))
 		goto done;
-
-	if (sk_stg_map) {
-		err = bpf_map_update_elem(bpf_map__fd(sk_stg_map), &fd,
-					  &expected_stg, BPF_NOEXIST);
-		if (CHECK(err, "bpf_map_update_elem(sk_stg_map)",
-			  "err:%d errno:%d\n", err, errno))
-			goto done;
-	}
+	err = pthread_create(&srv_thread, NULL, server, (void *)(long)lfd);
+	if (CHECK(err != 0, "pthread_create", "err:%d\n", err))
+		goto done;
 
 	/* connect to server */
 	err = connect(fd, (struct sockaddr *)&sa6, addrlen);
 	if (CHECK(err == -1, "connect", "errno:%d\n", errno))
-		goto done;
-
-	if (sk_stg_map) {
-		int tmp_stg;
-
-		err = bpf_map_lookup_elem(bpf_map__fd(sk_stg_map), &fd,
-					  &tmp_stg);
-		if (CHECK(!err || errno != ENOENT,
-			  "bpf_map_lookup_elem(sk_stg_map)",
-			  "err:%d errno:%d\n", err, errno))
-			goto done;
-	}
-
-	err = pthread_create(&srv_thread, NULL, server, (void *)(long)lfd);
-	if (CHECK(err != 0, "pthread_create", "err:%d errno:%d\n", err, errno))
-		goto done;
+		goto wait_thread;
 
 	/* recv total_bytes */
 	while (bytes < total_bytes && !READ_ONCE(stop)) {
@@ -170,6 +149,7 @@ static void do_test(const char *tcp_ca, const struct bpf_map *sk_stg_map)
 	CHECK(bytes != total_bytes, "recv", "%zd != %u nr_recv:%zd errno:%d\n",
 	      bytes, total_bytes, nr_recv, errno);
 
+wait_thread:
 	WRITE_ONCE(stop, 1);
 	pthread_join(srv_thread, &thread_ret);
 	CHECK(IS_ERR(thread_ret), "pthread_join", "thread_ret:%ld",
@@ -195,7 +175,7 @@ static void test_cubic(void)
 		return;
 	}
 
-	do_test("bpf_cubic", NULL);
+	do_test("bpf_cubic");
 
 	bpf_link__destroy(link);
 	bpf_cubic__destroy(cubic_skel);
@@ -217,10 +197,7 @@ static void test_dctcp(void)
 		return;
 	}
 
-	do_test("bpf_dctcp", dctcp_skel->maps.sk_stg_map);
-	CHECK(dctcp_skel->bss->stg_result != expected_stg,
-	      "Unexpected stg_result", "stg_result (%x) != expected_stg (%x)\n",
-	      dctcp_skel->bss->stg_result, expected_stg);
+	do_test("bpf_dctcp");
 
 	bpf_link__destroy(link);
 	bpf_dctcp__destroy(dctcp_skel);

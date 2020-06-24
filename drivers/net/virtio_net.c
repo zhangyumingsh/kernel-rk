@@ -371,7 +371,7 @@ static struct sk_buff *page_to_skb(struct virtnet_info *vi,
 				   struct receive_queue *rq,
 				   struct page *page, unsigned int offset,
 				   unsigned int len, unsigned int truesize,
-				   bool hdr_valid, unsigned int metasize)
+				   bool hdr_valid)
 {
 	struct sk_buff *skb;
 	struct virtio_net_hdr_mrg_rxbuf *hdr;
@@ -393,7 +393,6 @@ static struct sk_buff *page_to_skb(struct virtnet_info *vi,
 	else
 		hdr_padded_len = sizeof(struct padded_vnet_hdr);
 
-	/* hdr_valid means no XDP, so we can copy the vnet header */
 	if (hdr_valid)
 		memcpy(hdr, p, hdr_len);
 
@@ -405,11 +404,6 @@ static struct sk_buff *page_to_skb(struct virtnet_info *vi,
 	if (copy > skb_tailroom(skb))
 		copy = skb_tailroom(skb);
 	skb_put_data(skb, p, copy);
-
-	if (metasize) {
-		__skb_pull(skb, metasize);
-		skb_metadata_set(skb, metasize);
-	}
 
 	len -= copy;
 	offset += copy;
@@ -455,6 +449,10 @@ static int __virtnet_xdp_xmit_one(struct virtnet_info *vi,
 {
 	struct virtio_net_hdr_mrg_rxbuf *hdr;
 	int err;
+
+	/* virtqueue want to use data area in-front of packet */
+	if (unlikely(xdpf->metasize > 0))
+		return -EOPNOTSUPP;
 
 	if (unlikely(xdpf->headroom < vi->hdr_len))
 		return -EOVERFLOW;
@@ -646,7 +644,6 @@ static struct sk_buff *receive_small(struct net_device *dev,
 	unsigned int delta = 0;
 	struct page *xdp_page;
 	int err;
-	unsigned int metasize = 0;
 
 	len -= vi->hdr_len;
 	stats->bytes += len;
@@ -686,8 +683,8 @@ static struct sk_buff *receive_small(struct net_device *dev,
 
 		xdp.data_hard_start = buf + VIRTNET_RX_PAD + vi->hdr_len;
 		xdp.data = xdp.data_hard_start + xdp_headroom;
+		xdp_set_data_meta_invalid(&xdp);
 		xdp.data_end = xdp.data + len;
-		xdp.data_meta = xdp.data;
 		xdp.rxq = &rq->xdp_rxq;
 		orig_data = xdp.data;
 		act = bpf_prog_run_xdp(xdp_prog, &xdp);
@@ -698,7 +695,6 @@ static struct sk_buff *receive_small(struct net_device *dev,
 			/* Recalculate length in case bpf program changed it */
 			delta = orig_data - xdp.data;
 			len = xdp.data_end - xdp.data;
-			metasize = xdp.data - xdp.data_meta;
 			break;
 		case XDP_TX:
 			stats->xdp_tx++;
@@ -739,13 +735,10 @@ static struct sk_buff *receive_small(struct net_device *dev,
 	}
 	skb_reserve(skb, headroom - delta);
 	skb_put(skb, len);
-	if (!xdp_prog) {
+	if (!delta) {
 		buf += header_offset;
 		memcpy(skb_vnet_hdr(skb), buf, vi->hdr_len);
-	} /* keep zeroed vnet hdr since XDP is loaded */
-
-	if (metasize)
-		skb_metadata_set(skb, metasize);
+	} /* keep zeroed vnet hdr since packet was changed by bpf */
 
 err:
 	return skb;
@@ -767,8 +760,8 @@ static struct sk_buff *receive_big(struct net_device *dev,
 				   struct virtnet_rq_stats *stats)
 {
 	struct page *page = buf;
-	struct sk_buff *skb =
-		page_to_skb(vi, rq, page, 0, len, PAGE_SIZE, true, 0);
+	struct sk_buff *skb = page_to_skb(vi, rq, page, 0, len,
+					  PAGE_SIZE, true);
 
 	stats->bytes += len - vi->hdr_len;
 	if (unlikely(!skb))
@@ -800,7 +793,6 @@ static struct sk_buff *receive_mergeable(struct net_device *dev,
 	unsigned int truesize;
 	unsigned int headroom = mergeable_ctx_to_headroom(ctx);
 	int err;
-	unsigned int metasize = 0;
 
 	head_skb = NULL;
 	stats->bytes += len - vi->hdr_len;
@@ -847,8 +839,8 @@ static struct sk_buff *receive_mergeable(struct net_device *dev,
 		data = page_address(xdp_page) + offset;
 		xdp.data_hard_start = data - VIRTIO_XDP_HEADROOM + vi->hdr_len;
 		xdp.data = data + vi->hdr_len;
+		xdp_set_data_meta_invalid(&xdp);
 		xdp.data_end = xdp.data + (len - vi->hdr_len);
-		xdp.data_meta = xdp.data;
 		xdp.rxq = &rq->xdp_rxq;
 
 		act = bpf_prog_run_xdp(xdp_prog, &xdp);
@@ -856,27 +848,24 @@ static struct sk_buff *receive_mergeable(struct net_device *dev,
 
 		switch (act) {
 		case XDP_PASS:
-			metasize = xdp.data - xdp.data_meta;
-
 			/* recalculate offset to account for any header
-			 * adjustments and minus the metasize to copy the
-			 * metadata in page_to_skb(). Note other cases do not
-			 * build an skb and avoid using offset
+			 * adjustments. Note other cases do not build an
+			 * skb and avoid using offset
 			 */
-			offset = xdp.data - page_address(xdp_page) -
-				 vi->hdr_len - metasize;
+			offset = xdp.data -
+					page_address(xdp_page) - vi->hdr_len;
 
-			/* recalculate len if xdp.data, xdp.data_end or
-			 * xdp.data_meta were adjusted
+			/* recalculate len if xdp.data or xdp.data_end were
+			 * adjusted
 			 */
-			len = xdp.data_end - xdp.data + vi->hdr_len + metasize;
+			len = xdp.data_end - xdp.data + vi->hdr_len;
 			/* We can only create skb based on xdp_page. */
 			if (unlikely(xdp_page != page)) {
 				rcu_read_unlock();
 				put_page(page);
-				head_skb = page_to_skb(vi, rq, xdp_page, offset,
-						       len, PAGE_SIZE, false,
-						       metasize);
+				head_skb = page_to_skb(vi, rq, xdp_page,
+						       offset, len,
+						       PAGE_SIZE, false);
 				return head_skb;
 			}
 			break;
@@ -932,8 +921,7 @@ static struct sk_buff *receive_mergeable(struct net_device *dev,
 		goto err_skb;
 	}
 
-	head_skb = page_to_skb(vi, rq, page, offset, len, truesize, !xdp_prog,
-			       metasize);
+	head_skb = page_to_skb(vi, rq, page, offset, len, truesize, !xdp_prog);
 	curr_skb = head_skb;
 
 	if (unlikely(!curr_skb))
@@ -1243,11 +1231,9 @@ static bool try_fill_recv(struct virtnet_info *vi, struct receive_queue *rq,
 			break;
 	} while (rq->vq->num_free);
 	if (virtqueue_kick_prepare(rq->vq) && virtqueue_notify(rq->vq)) {
-		unsigned long flags;
-
-		flags = u64_stats_update_begin_irqsave(&rq->stats.syncp);
+		u64_stats_update_begin(&rq->stats.syncp);
 		rq->stats.kicks++;
-		u64_stats_update_end_irqrestore(&rq->stats.syncp, flags);
+		u64_stats_update_end(&rq->stats.syncp);
 	}
 
 	return !oom;
@@ -2180,13 +2166,48 @@ static void virtnet_get_channels(struct net_device *dev,
 	channels->other_count = 0;
 }
 
+/* Check if the user is trying to change anything besides speed/duplex */
+static bool
+virtnet_validate_ethtool_cmd(const struct ethtool_link_ksettings *cmd)
+{
+	struct ethtool_link_ksettings diff1 = *cmd;
+	struct ethtool_link_ksettings diff2 = {};
+
+	/* cmd is always set so we need to clear it, validate the port type
+	 * and also without autonegotiation we can ignore advertising
+	 */
+	diff1.base.speed = 0;
+	diff2.base.port = PORT_OTHER;
+	ethtool_link_ksettings_zero_link_mode(&diff1, advertising);
+	diff1.base.duplex = 0;
+	diff1.base.cmd = 0;
+	diff1.base.link_mode_masks_nwords = 0;
+
+	return !memcmp(&diff1.base, &diff2.base, sizeof(diff1.base)) &&
+		bitmap_empty(diff1.link_modes.supported,
+			     __ETHTOOL_LINK_MODE_MASK_NBITS) &&
+		bitmap_empty(diff1.link_modes.advertising,
+			     __ETHTOOL_LINK_MODE_MASK_NBITS) &&
+		bitmap_empty(diff1.link_modes.lp_advertising,
+			     __ETHTOOL_LINK_MODE_MASK_NBITS);
+}
+
 static int virtnet_set_link_ksettings(struct net_device *dev,
 				      const struct ethtool_link_ksettings *cmd)
 {
 	struct virtnet_info *vi = netdev_priv(dev);
+	u32 speed;
 
-	return ethtool_virtdev_set_link_ksettings(dev, cmd,
-						  &vi->speed, &vi->duplex);
+	speed = cmd->base.speed;
+	/* don't allow custom speed and duplex */
+	if (!ethtool_validate_speed(speed) ||
+	    !ethtool_validate_duplex(cmd->base.duplex) ||
+	    !virtnet_validate_ethtool_cmd(cmd))
+		return -EINVAL;
+	vi->speed = speed;
+	vi->duplex = cmd->base.duplex;
+
+	return 0;
 }
 
 static int virtnet_get_link_ksettings(struct net_device *dev,
@@ -2204,14 +2225,23 @@ static int virtnet_get_link_ksettings(struct net_device *dev,
 static int virtnet_set_coalesce(struct net_device *dev,
 				struct ethtool_coalesce *ec)
 {
+	struct ethtool_coalesce ec_default = {
+		.cmd = ETHTOOL_SCOALESCE,
+		.rx_max_coalesced_frames = 1,
+	};
 	struct virtnet_info *vi = netdev_priv(dev);
 	int i, napi_weight;
 
-	if (ec->tx_max_coalesced_frames > 1 ||
-	    ec->rx_max_coalesced_frames != 1)
+	if (ec->tx_max_coalesced_frames > 1)
 		return -EINVAL;
 
+	ec_default.tx_max_coalesced_frames = ec->tx_max_coalesced_frames;
 	napi_weight = ec->tx_max_coalesced_frames ? NAPI_POLL_WEIGHT : 0;
+
+	/* disallow changes to fields not explicitly tested above */
+	if (memcmp(ec, &ec_default, sizeof(ec_default)))
+		return -EINVAL;
+
 	if (napi_weight ^ vi->sq[0].napi.weight) {
 		if (dev->flags & IFF_UP)
 			return -EBUSY;
@@ -2266,7 +2296,6 @@ static void virtnet_update_settings(struct virtnet_info *vi)
 }
 
 static const struct ethtool_ops virtnet_ethtool_ops = {
-	.supported_coalesce_params = ETHTOOL_COALESCE_MAX_FRAMES,
 	.get_drvinfo = virtnet_get_drvinfo,
 	.get_link = ethtool_op_get_link,
 	.get_ringparam = virtnet_get_ringparam,

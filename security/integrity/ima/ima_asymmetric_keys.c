@@ -9,6 +9,8 @@
  *       create or update.
  */
 
+#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+
 #include <keys/asymmetric-type.h>
 #include "ima.h"
 

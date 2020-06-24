@@ -12,6 +12,7 @@
 #include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
+#include <time.h>
 
 #include "log.h"
 #include "timens.h"

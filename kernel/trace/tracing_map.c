@@ -283,7 +283,7 @@ int tracing_map_add_key_field(struct tracing_map *map,
 	return idx;
 }
 
-static void tracing_map_array_clear(struct tracing_map_array *a)
+void tracing_map_array_clear(struct tracing_map_array *a)
 {
 	unsigned int i;
 
@@ -294,7 +294,7 @@ static void tracing_map_array_clear(struct tracing_map_array *a)
 		memset(a->pages[i], 0, PAGE_SIZE);
 }
 
-static void tracing_map_array_free(struct tracing_map_array *a)
+void tracing_map_array_free(struct tracing_map_array *a)
 {
 	unsigned int i;
 
@@ -316,7 +316,7 @@ static void tracing_map_array_free(struct tracing_map_array *a)
 	kfree(a);
 }
 
-static struct tracing_map_array *tracing_map_array_alloc(unsigned int n_elts,
+struct tracing_map_array *tracing_map_array_alloc(unsigned int n_elts,
 						  unsigned int entry_size)
 {
 	struct tracing_map_array *a;

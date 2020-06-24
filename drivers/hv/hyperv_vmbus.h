@@ -292,7 +292,7 @@ struct vmbus_msginfo {
 	struct list_head msglist_entry;
 
 	/* The message itself */
-	unsigned char msg[];
+	unsigned char msg[0];
 };
 
 

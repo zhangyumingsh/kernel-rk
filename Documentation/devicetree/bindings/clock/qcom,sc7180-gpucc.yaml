@@ -52,8 +52,6 @@ required:
   - '#reset-cells'
   - '#power-domain-cells'
 
-additionalProperties: false
-
 examples:
   - |
     #include <dt-bindings/clock/qcom,gcc-sc7180.h>

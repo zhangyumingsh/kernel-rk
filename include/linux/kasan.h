@@ -190,7 +190,7 @@ void kasan_init_tags(void);
 
 void *kasan_reset_tag(const void *addr);
 
-bool kasan_report(unsigned long addr, size_t size,
+void kasan_report(unsigned long addr, size_t size,
 		bool is_write, unsigned long ip);
 
 #else /* CONFIG_KASAN_SW_TAGS */

@@ -42,9 +42,6 @@
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Paul E. McKenney <paulmck@linux.ibm.com>");
 
-static bool disable_onoff_at_boot;
-module_param(disable_onoff_at_boot, bool, 0444);
-
 static char *torture_type;
 static int verbose;
 
@@ -87,7 +84,6 @@ bool torture_offline(int cpu, long *n_offl_attempts, long *n_offl_successes,
 {
 	unsigned long delta;
 	int ret;
-	char *s;
 	unsigned long starttime;
 
 	if (!cpu_online(cpu) || !cpu_is_hotpluggable(cpu))
@@ -101,18 +97,12 @@ bool torture_offline(int cpu, long *n_offl_attempts, long *n_offl_successes,
 			 torture_type, cpu);
 	starttime = jiffies;
 	(*n_offl_attempts)++;
-	ret = remove_cpu(cpu);
+	ret = cpu_down(cpu);
 	if (ret) {
-		s = "";
-		if (!rcu_inkernel_boot_has_ended() && ret == -EBUSY) {
-			// PCI probe frequently disables hotplug during boot.
-			(*n_offl_attempts)--;
-			s = " (-EBUSY forgiven during boot)";
-		}
 		if (verbose)
 			pr_alert("%s" TORTURE_FLAG
-				 "torture_onoff task: offline %d failed%s: errno %d\n",
-				 torture_type, cpu, s, ret);
+				 "torture_onoff task: offline %d failed: errno %d\n",
+				 torture_type, cpu, ret);
 	} else {
 		if (verbose > 1)
 			pr_alert("%s" TORTURE_FLAG
@@ -147,7 +137,6 @@ bool torture_online(int cpu, long *n_onl_attempts, long *n_onl_successes,
 {
 	unsigned long delta;
 	int ret;
-	char *s;
 	unsigned long starttime;
 
 	if (cpu_online(cpu) || !cpu_is_hotpluggable(cpu))
@@ -159,18 +148,12 @@ bool torture_online(int cpu, long *n_onl_attempts, long *n_onl_successes,
 			 torture_type, cpu);
 	starttime = jiffies;
 	(*n_onl_attempts)++;
-	ret = add_cpu(cpu);
+	ret = cpu_up(cpu);
 	if (ret) {
-		s = "";
-		if (!rcu_inkernel_boot_has_ended() && ret == -EBUSY) {
-			// PCI probe frequently disables hotplug during boot.
-			(*n_onl_attempts)--;
-			s = " (-EBUSY forgiven during boot)";
-		}
 		if (verbose)
 			pr_alert("%s" TORTURE_FLAG
-				 "torture_onoff task: online %d failed%s: errno %d\n",
-				 torture_type, cpu, s, ret);
+				 "torture_onoff task: online %d failed: errno %d\n",
+				 torture_type, cpu, ret);
 	} else {
 		if (verbose > 1)
 			pr_alert("%s" TORTURE_FLAG
@@ -209,18 +192,17 @@ torture_onoff(void *arg)
 	for_each_online_cpu(cpu)
 		maxcpu = cpu;
 	WARN_ON(maxcpu < 0);
-	if (!IS_MODULE(CONFIG_TORTURE_TEST)) {
+	if (!IS_MODULE(CONFIG_TORTURE_TEST))
 		for_each_possible_cpu(cpu) {
 			if (cpu_online(cpu))
 				continue;
-			ret = add_cpu(cpu);
+			ret = cpu_up(cpu);
 			if (ret && verbose) {
 				pr_alert("%s" TORTURE_FLAG
 					 "%s: Initial online %d: errno %d\n",
 					 __func__, torture_type, cpu, ret);
 			}
 		}
-	}
 
 	if (maxcpu == 0) {
 		VERBOSE_TOROUT_STRING("Only one CPU, so CPU-hotplug testing is disabled");
@@ -233,10 +215,6 @@ torture_onoff(void *arg)
 		VERBOSE_TOROUT_STRING("torture_onoff end holdoff");
 	}
 	while (!torture_must_stop()) {
-		if (disable_onoff_at_boot && !rcu_inkernel_boot_has_ended()) {
-			schedule_timeout_interruptible(HZ / 10);
-			continue;
-		}
 		cpu = (torture_random(&rand) >> 4) % (maxcpu + 1);
 		if (!torture_offline(cpu,
 				     &n_offline_attempts, &n_offline_successes,

@@ -684,7 +684,7 @@ nvmet_fc_delete_target_queue(struct nvmet_fc_tgt_queue *queue)
 	disconnect = atomic_xchg(&queue->connected, 0);
 
 	spin_lock_irqsave(&queue->qlock, flags);
-	/* abort outstanding io's */
+	/* about outstanding io's */
 	for (i = 0; i < queue->sqsize; fod++, i++) {
 		if (fod->active) {
 			spin_lock(&fod->flock);

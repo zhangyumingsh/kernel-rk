@@ -68,8 +68,6 @@ required:
   - "#power-domain-cells"
   - amlogic,ao-sysctrl
 
-additionalProperties: false
-
 examples:
   - |
     pwrc: power-controller {

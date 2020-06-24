@@ -2251,10 +2251,10 @@ static int __init ns_init_module(void)
 	switch (bbt) {
 	case 2:
 		chip->bbt_options |= NAND_BBT_NO_OOB;
-		fallthrough;
+		/* fall through */
 	case 1:
 		chip->bbt_options |= NAND_BBT_USE_FLASH;
-		fallthrough;
+		/* fall through */
 	case 0:
 		break;
 	default:

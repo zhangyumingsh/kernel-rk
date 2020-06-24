@@ -433,6 +433,13 @@ config MTD_NAND_MESON
 	  Enables support for NAND controller on Amlogic's Meson SoCs.
 	  This controller is found on Meson SoCs.
 
+config MTD_NAND_ROCKCHIP
+	tristate "Rockchip NAND controller"
+	depends on ARCH_ROCKCHIP || COMPILE_TEST
+	depends on HAS_IOMEM
+	help
+	  Enables support for NAND controller on Rockchip SoCs.
+
 config MTD_NAND_GPIO
 	tristate "GPIO assisted NAND controller"
 	depends on GPIOLIB || COMPILE_TEST

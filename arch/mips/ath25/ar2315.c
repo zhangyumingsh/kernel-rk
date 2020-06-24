@@ -64,6 +64,11 @@ static irqreturn_t ar2315_ahb_err_handler(int cpl, void *dev_id)
 	return IRQ_HANDLED;
 }
 
+static struct irqaction ar2315_ahb_err_interrupt  = {
+	.handler	= ar2315_ahb_err_handler,
+	.name		= "ar2315-ahb-error",
+};
+
 static void ar2315_misc_irq_handler(struct irq_desc *desc)
 {
 	u32 pending = ar2315_rst_reg_read(AR2315_ISR) &
@@ -154,9 +159,7 @@ void __init ar2315_arch_init_irq(void)
 		panic("Failed to add IRQ domain");
 
 	irq = irq_create_mapping(domain, AR2315_MISC_IRQ_AHB);
-	if (request_irq(irq, ar2315_ahb_err_handler, 0, "ar2315-ahb-error",
-			NULL))
-		pr_err("Failed to register ar2315-ahb-error interrupt\n");
+	setup_irq(irq, &ar2315_ahb_err_interrupt);
 
 	irq_set_chained_handler_and_data(AR2315_IRQ_MISC,
 					 ar2315_misc_irq_handler, domain);

@@ -69,8 +69,6 @@ required:
   - cpu
   - codec
 
-additionalProperties: false
-
 examples:
   - |
     sound {

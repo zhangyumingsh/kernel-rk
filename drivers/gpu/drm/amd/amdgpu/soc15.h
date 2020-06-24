@@ -42,13 +42,6 @@ struct soc15_reg_golden {
 	u32	or_mask;
 };
 
-struct soc15_reg_rlcg {
-	u32	hwip;
-	u32	instance;
-	u32	segment;
-	u32	reg;
-};
-
 struct soc15_reg_entry {
 	uint32_t hwip;
 	uint32_t inst;

@@ -324,7 +324,7 @@ static int __init split_nodes_size_interleave(struct numa_meminfo *ei,
 			0, NULL, NUMA_NO_NODE);
 }
 
-static int __init setup_emu2phys_nid(int *dfl_phys_nid)
+int __init setup_emu2phys_nid(int *dfl_phys_nid)
 {
 	int i, max_emu_nid = 0;
 

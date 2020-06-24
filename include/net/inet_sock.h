@@ -52,7 +52,7 @@ struct ip_options {
 	unsigned char	router_alert;
 	unsigned char	cipso;
 	unsigned char	__pad2;
-	unsigned char	__data[];
+	unsigned char	__data[0];
 };
 
 struct ip_options_rcu {

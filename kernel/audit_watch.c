@@ -302,6 +302,8 @@ static void audit_update_watch(struct audit_parent *parent,
 			if (oentry->rule.exe)
 				audit_remove_mark(oentry->rule.exe);
 
+			audit_watch_log_rule_change(r, owatch, "updated_rules");
+
 			call_rcu(&oentry->rcu, audit_free_rule_rcu);
 		}
 
@@ -471,13 +473,25 @@ static int audit_watch_handle_event(struct fsnotify_group *group,
 				    struct fsnotify_iter_info *iter_info)
 {
 	struct fsnotify_mark *inode_mark = fsnotify_iter_inode_mark(iter_info);
-	const struct inode *inode = fsnotify_data_inode(data, data_type);
+	const struct inode *inode;
 	struct audit_parent *parent;
 
 	parent = container_of(inode_mark, struct audit_parent, mark);
 
 	BUG_ON(group != audit_watch_group);
-	WARN_ON(!inode);
+
+	switch (data_type) {
+	case (FSNOTIFY_EVENT_PATH):
+		inode = d_backing_inode(((const struct path *)data)->dentry);
+		break;
+	case (FSNOTIFY_EVENT_INODE):
+		inode = (const struct inode *)data;
+		break;
+	default:
+		BUG();
+		inode = NULL;
+		break;
+	}
 
 	if (mask & (FS_CREATE|FS_MOVED_TO) && inode)
 		audit_update_watch(parent, dname, inode->i_sb->s_dev, inode->i_ino, 0);

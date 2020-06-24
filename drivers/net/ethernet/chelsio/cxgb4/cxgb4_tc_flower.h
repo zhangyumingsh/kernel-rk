@@ -112,8 +112,7 @@ void cxgb4_process_flow_actions(struct net_device *in,
 				struct flow_action *actions,
 				struct ch_filter_specification *fs);
 int cxgb4_validate_flow_actions(struct net_device *dev,
-				struct flow_action *actions,
-				struct netlink_ext_ack *extack);
+				struct flow_action *actions);
 
 int cxgb4_tc_flower_replace(struct net_device *dev,
 			    struct flow_cls_offload *cls);

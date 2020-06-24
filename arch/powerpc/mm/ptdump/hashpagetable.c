@@ -527,10 +527,13 @@ static const struct file_operations ptdump_fops = {
 
 static int ptdump_init(void)
 {
+	struct dentry *debugfs_file;
+
 	if (!radix_enabled()) {
 		populate_markers();
-		debugfs_create_file("kernel_hash_pagetable", 0400, NULL, NULL,
-				    &ptdump_fops);
+		debugfs_file = debugfs_create_file("kernel_hash_pagetable",
+				0400, NULL, NULL, &ptdump_fops);
+		return debugfs_file ? 0 : -ENOMEM;
 	}
 	return 0;
 }

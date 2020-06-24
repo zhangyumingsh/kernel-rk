@@ -324,7 +324,8 @@ static void fsl_elbc_cmdfunc(struct nand_chip *chip, unsigned int command,
 	/* READ0 and READ1 read the entire buffer to use hardware ECC. */
 	case NAND_CMD_READ1:
 		column += 256;
-		fallthrough;
+
+	/* fall-through */
 	case NAND_CMD_READ0:
 		dev_dbg(priv->dev,
 		        "fsl_elbc_cmdfunc: NAND_CMD_READ0, page_addr:"

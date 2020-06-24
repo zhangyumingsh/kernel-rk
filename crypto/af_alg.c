@@ -821,8 +821,8 @@ int af_alg_sendmsg(struct socket *sock, struct msghdr *msg, size_t size,
 	struct af_alg_tsgl *sgl;
 	struct af_alg_control con = {};
 	long copied = 0;
-	bool enc = false;
-	bool init = false;
+	bool enc = 0;
+	bool init = 0;
 	int err = 0;
 
 	if (msg->msg_controllen) {
@@ -830,13 +830,13 @@ int af_alg_sendmsg(struct socket *sock, struct msghdr *msg, size_t size,
 		if (err)
 			return err;
 
-		init = true;
+		init = 1;
 		switch (con.op) {
 		case ALG_OP_ENCRYPT:
-			enc = true;
+			enc = 1;
 			break;
 		case ALG_OP_DECRYPT:
-			enc = false;
+			enc = 0;
 			break;
 		default:
 			return -EINVAL;

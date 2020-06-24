@@ -22,8 +22,6 @@
  *
  */
 
-#include <linux/bits.h>
-#include <linux/kernel.h>
 #include "mac.h"
 #include "baseband.h"
 #include "rf.h"
@@ -134,6 +132,7 @@ unsigned int vnt_get_frame_time(u8 preamble_type, u8 pkt_type,
 {
 	unsigned int frame_time;
 	unsigned int preamble;
+	unsigned int tmp;
 	unsigned int rate = 0;
 
 	if (tx_rate > RATE_54M)
@@ -147,11 +146,20 @@ unsigned int vnt_get_frame_time(u8 preamble_type, u8 pkt_type,
 		else
 			preamble = 192;
 
-		frame_time = DIV_ROUND_UP(frame_length * 80, rate);
+		frame_time = (frame_length * 80) / rate;
+		tmp = (frame_time * rate) / 80;
+
+		if (frame_length != tmp)
+			frame_time++;
+
 		return preamble + frame_time;
 	}
+	frame_time = (frame_length * 8 + 22) / rate;
+	tmp = ((frame_time * rate) - 22) / 8;
 
-	frame_time = DIV_ROUND_UP(frame_length * 8 + 22, rate);
+	if (frame_length != tmp)
+		frame_time++;
+
 	frame_time = frame_time * 4;
 
 	if (pkt_type != PK_TYPE_11A)
@@ -205,7 +213,11 @@ void vnt_get_phy_field(struct vnt_private *priv, u32 frame_length,
 
 		break;
 	case RATE_5M:
-		count = DIV_ROUND_UP(bit_count * 10, 55);
+		count = (bit_count * 10) / 55;
+		tmp = (count * 55) / 10;
+
+		if (tmp != bit_count)
+			count++;
 
 		if (preamble_type == 1)
 			phy->signal = 0x0a;
@@ -355,6 +367,9 @@ int vnt_vt3184_init(struct vnt_private *priv)
 	int ret = 0;
 	u16 length;
 	u8 *addr;
+	u8 *agc;
+	u16 length_agc;
+	u8 array[256];
 	u8 data;
 
 	ret = vnt_control_in(priv, MESSAGE_TYPE_READ, 0, MESSAGE_REQUEST_EEPROM,
@@ -371,6 +386,8 @@ int vnt_vt3184_init(struct vnt_private *priv)
 		priv->bb_rx_conf = vnt_vt3184_al2230[10];
 		length = sizeof(vnt_vt3184_al2230);
 		addr = vnt_vt3184_al2230;
+		agc = vnt_vt3184_agc;
+		length_agc = sizeof(vnt_vt3184_agc);
 
 		priv->bb_vga[0] = 0x1C;
 		priv->bb_vga[1] = 0x10;
@@ -381,6 +398,8 @@ int vnt_vt3184_init(struct vnt_private *priv)
 		priv->bb_rx_conf = vnt_vt3184_al2230[10];
 		length = sizeof(vnt_vt3184_al2230);
 		addr = vnt_vt3184_al2230;
+		agc = vnt_vt3184_agc;
+		length_agc = sizeof(vnt_vt3184_agc);
 
 		addr[0xd7] = 0x06;
 
@@ -394,6 +413,8 @@ int vnt_vt3184_init(struct vnt_private *priv)
 		priv->bb_rx_conf = vnt_vt3184_vt3226d0[10];
 		length = sizeof(vnt_vt3184_vt3226d0);
 		addr = vnt_vt3184_vt3226d0;
+		agc = vnt_vt3184_agc;
+		length_agc = sizeof(vnt_vt3184_agc);
 
 		priv->bb_vga[0] = 0x20;
 		priv->bb_vga[1] = 0x10;
@@ -409,6 +430,8 @@ int vnt_vt3184_init(struct vnt_private *priv)
 		priv->bb_rx_conf = vnt_vt3184_vt3226d0[10];
 		length = sizeof(vnt_vt3184_vt3226d0);
 		addr = vnt_vt3184_vt3226d0;
+		agc = vnt_vt3184_agc;
+		length_agc = sizeof(vnt_vt3184_agc);
 
 		priv->bb_vga[0] = 0x20;
 		priv->bb_vga[1] = 0x10;
@@ -424,14 +447,17 @@ int vnt_vt3184_init(struct vnt_private *priv)
 		goto end;
 	}
 
+	memcpy(array, addr, length);
+
 	ret = vnt_control_out_blocks(priv, VNT_REG_BLOCK_SIZE,
-				     MESSAGE_REQUEST_BBREG, length, addr);
+				     MESSAGE_REQUEST_BBREG, length, array);
 	if (ret)
 		goto end;
 
+	memcpy(array, agc, length_agc);
+
 	ret = vnt_control_out(priv, MESSAGE_TYPE_WRITE, 0,
-			      MESSAGE_REQUEST_BBAGC,
-			      sizeof(vnt_vt3184_agc), vnt_vt3184_agc);
+			      MESSAGE_REQUEST_BBAGC, length_agc, array);
 	if (ret)
 		goto end;
 
@@ -442,7 +468,7 @@ int vnt_vt3184_init(struct vnt_private *priv)
 		if (ret)
 			goto end;
 
-		ret = vnt_mac_reg_bits_on(priv, MAC_REG_PAPEDELAY, BIT(0));
+		ret = vnt_mac_reg_bits_on(priv, MAC_REG_PAPEDELAY, 0x01);
 		if (ret)
 			goto end;
 	} else if (priv->rf_type == RF_VT3226D0) {
@@ -451,7 +477,7 @@ int vnt_vt3184_init(struct vnt_private *priv)
 		if (ret)
 			goto end;
 
-		ret = vnt_mac_reg_bits_on(priv, MAC_REG_PAPEDELAY, BIT(0));
+		ret = vnt_mac_reg_bits_on(priv, MAC_REG_PAPEDELAY, 0x01);
 		if (ret)
 			goto end;
 	}

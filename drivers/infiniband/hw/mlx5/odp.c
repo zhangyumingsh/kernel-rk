@@ -197,7 +197,7 @@ static void dma_fence_odp_mr(struct mlx5_ib_mr *mr)
 	odp->private = NULL;
 	mutex_unlock(&odp->umem_mutex);
 
-	if (!mr->cache_ent) {
+	if (!mr->allocated_from_cache) {
 		mlx5_core_destroy_mkey(mr->dev->mdev, &mr->mmkey);
 		WARN_ON(mr->descs);
 	}

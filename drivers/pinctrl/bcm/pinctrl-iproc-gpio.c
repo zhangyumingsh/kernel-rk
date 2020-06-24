@@ -363,10 +363,7 @@ static int iproc_gpio_get_direction(struct gpio_chip *gc, unsigned int gpio)
 	unsigned int offset = IPROC_GPIO_REG(gpio, IPROC_GPIO_OUT_EN_OFFSET);
 	unsigned int shift = IPROC_GPIO_SHIFT(gpio);
 
-	if (readl(chip->base + offset) & BIT(shift))
-		return GPIO_LINE_DIRECTION_OUT;
-
-	return GPIO_LINE_DIRECTION_IN;
+	return !(readl(chip->base + offset) & BIT(shift));
 }
 
 static void iproc_gpio_set(struct gpio_chip *gc, unsigned gpio, int val)

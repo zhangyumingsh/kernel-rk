@@ -825,10 +825,8 @@ static void npc_load_mkex_profile(struct rvu *rvu, int blkaddr)
 	if (!strncmp(mkex_profile, "default", MKEX_NAME_LEN))
 		goto load_default;
 
-	if (!rvu->fwdata)
+	if (cgx_get_mkex_prfl_info(&prfl_addr, &prfl_sz))
 		goto load_default;
-	prfl_addr = rvu->fwdata->mcam_addr;
-	prfl_sz = rvu->fwdata->mcam_sz;
 
 	if (!prfl_addr || !prfl_sz)
 		goto load_default;

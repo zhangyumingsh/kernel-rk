@@ -73,10 +73,6 @@ static struct test generic_tests[] = {
 		.func = test__pmu,
 	},
 	{
-		.desc = "PMU events",
-		.func = test__pmu_events,
-	},
-	{
 		.desc = "DSO data read",
 		.func = test__dso_data,
 	},
@@ -547,11 +543,8 @@ static int run_shell_tests(int argc, const char *argv[], int i, int width)
 		return -1;
 
 	dir = opendir(st.dir);
-	if (!dir) {
-		pr_err("failed to open shell test directory: %s\n",
-			st.dir);
+	if (!dir)
 		return -1;
-	}
 
 	for_each_shell_test(dir, st.dir, ent) {
 		int curr = i++;

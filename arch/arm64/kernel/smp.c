@@ -93,10 +93,8 @@ static inline int op_cpu_kill(unsigned int cpu)
  */
 static int boot_secondary(unsigned int cpu, struct task_struct *idle)
 {
-	const struct cpu_operations *ops = get_cpu_ops(cpu);
-
-	if (ops->cpu_boot)
-		return ops->cpu_boot(cpu);
+	if (cpu_ops[cpu]->cpu_boot)
+		return cpu_ops[cpu]->cpu_boot(cpu);
 
 	return -EOPNOTSUPP;
 }
@@ -114,69 +112,66 @@ int __cpu_up(unsigned int cpu, struct task_struct *idle)
 	 */
 	secondary_data.task = idle;
 	secondary_data.stack = task_stack_page(idle) + THREAD_SIZE;
-#if defined(CONFIG_ARM64_PTR_AUTH)
-	secondary_data.ptrauth_key.apia.lo = idle->thread.keys_kernel.apia.lo;
-	secondary_data.ptrauth_key.apia.hi = idle->thread.keys_kernel.apia.hi;
-#endif
 	update_cpu_boot_status(CPU_MMU_OFF);
 	__flush_dcache_area(&secondary_data, sizeof(secondary_data));
 
-	/* Now bring the CPU into our world */
+	/*
+	 * Now bring the CPU into our world.
+	 */
 	ret = boot_secondary(cpu, idle);
-	if (ret) {
+	if (ret == 0) {
+		/*
+		 * CPU was successfully started, wait for it to come online or
+		 * time out.
+		 */
+		wait_for_completion_timeout(&cpu_running,
+					    msecs_to_jiffies(5000));
+
+		if (!cpu_online(cpu)) {
+			pr_crit("CPU%u: failed to come online\n", cpu);
+			ret = -EIO;
+		}
+	} else {
 		pr_err("CPU%u: failed to boot: %d\n", cpu, ret);
 		return ret;
 	}
 
-	/*
-	 * CPU was successfully started, wait for it to come online or
-	 * time out.
-	 */
-	wait_for_completion_timeout(&cpu_running,
-				    msecs_to_jiffies(5000));
-	if (cpu_online(cpu))
-		return 0;
-
-	pr_crit("CPU%u: failed to come online\n", cpu);
 	secondary_data.task = NULL;
 	secondary_data.stack = NULL;
-#if defined(CONFIG_ARM64_PTR_AUTH)
-	secondary_data.ptrauth_key.apia.lo = 0;
-	secondary_data.ptrauth_key.apia.hi = 0;
-#endif
 	__flush_dcache_area(&secondary_data, sizeof(secondary_data));
 	status = READ_ONCE(secondary_data.status);
-	if (status == CPU_MMU_OFF)
-		status = READ_ONCE(__early_cpu_boot_status);
+	if (ret && status) {
 
-	switch (status & CPU_BOOT_STATUS_MASK) {
-	default:
-		pr_err("CPU%u: failed in unknown state : 0x%lx\n",
-		       cpu, status);
-		cpus_stuck_in_kernel++;
-		break;
-	case CPU_KILL_ME:
-		if (!op_cpu_kill(cpu)) {
-			pr_crit("CPU%u: died during early boot\n", cpu);
+		if (status == CPU_MMU_OFF)
+			status = READ_ONCE(__early_cpu_boot_status);
+
+		switch (status & CPU_BOOT_STATUS_MASK) {
+		default:
+			pr_err("CPU%u: failed in unknown state : 0x%lx\n",
+					cpu, status);
+			cpus_stuck_in_kernel++;
 			break;
+		case CPU_KILL_ME:
+			if (!op_cpu_kill(cpu)) {
+				pr_crit("CPU%u: died during early boot\n", cpu);
+				break;
+			}
+			pr_crit("CPU%u: may not have shut down cleanly\n", cpu);
+			/* Fall through */
+		case CPU_STUCK_IN_KERNEL:
+			pr_crit("CPU%u: is stuck in kernel\n", cpu);
+			if (status & CPU_STUCK_REASON_52_BIT_VA)
+				pr_crit("CPU%u: does not support 52-bit VAs\n", cpu);
+			if (status & CPU_STUCK_REASON_NO_GRAN)
+				pr_crit("CPU%u: does not support %luK granule \n", cpu, PAGE_SIZE / SZ_1K);
+			cpus_stuck_in_kernel++;
+			break;
+		case CPU_PANIC_KERNEL:
+			panic("CPU%u detected unsupported configuration\n", cpu);
 		}
-		pr_crit("CPU%u: may not have shut down cleanly\n", cpu);
-		/* Fall through */
-	case CPU_STUCK_IN_KERNEL:
-		pr_crit("CPU%u: is stuck in kernel\n", cpu);
-		if (status & CPU_STUCK_REASON_52_BIT_VA)
-			pr_crit("CPU%u: does not support 52-bit VAs\n", cpu);
-		if (status & CPU_STUCK_REASON_NO_GRAN) {
-			pr_crit("CPU%u: does not support %luK granule\n",
-				cpu, PAGE_SIZE / SZ_1K);
-		}
-		cpus_stuck_in_kernel++;
-		break;
-	case CPU_PANIC_KERNEL:
-		panic("CPU%u detected unsupported configuration\n", cpu);
 	}
 
-	return -EIO;
+	return ret;
 }
 
 static void init_gic_priority_masking(void)
@@ -201,7 +196,6 @@ asmlinkage notrace void secondary_start_kernel(void)
 {
 	u64 mpidr = read_cpuid_mpidr() & MPIDR_HWID_BITMASK;
 	struct mm_struct *mm = &init_mm;
-	const struct cpu_operations *ops;
 	unsigned int cpu;
 
 	cpu = task_cpu(current);
@@ -233,9 +227,8 @@ asmlinkage notrace void secondary_start_kernel(void)
 	 */
 	check_local_cpu_capabilities();
 
-	ops = get_cpu_ops(cpu);
-	if (ops->cpu_postboot)
-		ops->cpu_postboot();
+	if (cpu_ops[cpu]->cpu_postboot)
+		cpu_ops[cpu]->cpu_postboot();
 
 	/*
 	 * Log the CPU info before it is marked online and might get read.
@@ -273,21 +266,19 @@ asmlinkage notrace void secondary_start_kernel(void)
 #ifdef CONFIG_HOTPLUG_CPU
 static int op_cpu_disable(unsigned int cpu)
 {
-	const struct cpu_operations *ops = get_cpu_ops(cpu);
-
 	/*
 	 * If we don't have a cpu_die method, abort before we reach the point
 	 * of no return. CPU0 may not have an cpu_ops, so test for it.
 	 */
-	if (!ops || !ops->cpu_die)
+	if (!cpu_ops[cpu] || !cpu_ops[cpu]->cpu_die)
 		return -EOPNOTSUPP;
 
 	/*
 	 * We may need to abort a hot unplug for some other mechanism-specific
 	 * reason.
 	 */
-	if (ops->cpu_disable)
-		return ops->cpu_disable(cpu);
+	if (cpu_ops[cpu]->cpu_disable)
+		return cpu_ops[cpu]->cpu_disable(cpu);
 
 	return 0;
 }
@@ -323,17 +314,15 @@ int __cpu_disable(void)
 
 static int op_cpu_kill(unsigned int cpu)
 {
-	const struct cpu_operations *ops = get_cpu_ops(cpu);
-
 	/*
 	 * If we have no means of synchronising with the dying CPU, then assume
 	 * that it is really dead. We can only wait for an arbitrary length of
 	 * time and hope that it's dead, so let's skip the wait and just hope.
 	 */
-	if (!ops->cpu_kill)
+	if (!cpu_ops[cpu]->cpu_kill)
 		return 0;
 
-	return ops->cpu_kill(cpu);
+	return cpu_ops[cpu]->cpu_kill(cpu);
 }
 
 /*
@@ -368,7 +357,6 @@ void __cpu_die(unsigned int cpu)
 void cpu_die(void)
 {
 	unsigned int cpu = smp_processor_id();
-	const struct cpu_operations *ops = get_cpu_ops(cpu);
 
 	idle_task_exit();
 
@@ -382,21 +370,11 @@ void cpu_die(void)
 	 * mechanism must perform all required cache maintenance to ensure that
 	 * no dirty lines are lost in the process of shutting down the CPU.
 	 */
-	ops->cpu_die(cpu);
+	cpu_ops[cpu]->cpu_die(cpu);
 
 	BUG();
 }
 #endif
-
-static void __cpu_try_die(int cpu)
-{
-#ifdef CONFIG_HOTPLUG_CPU
-	const struct cpu_operations *ops = get_cpu_ops(cpu);
-
-	if (ops && ops->cpu_die)
-		ops->cpu_die(cpu);
-#endif
-}
 
 /*
  * Kill the calling secondary CPU, early in bringup before it is turned
@@ -411,11 +389,12 @@ void cpu_die_early(void)
 	/* Mark this CPU absent */
 	set_cpu_present(cpu, 0);
 
-	if (IS_ENABLED(CONFIG_HOTPLUG_CPU)) {
-		update_cpu_boot_status(CPU_KILL_ME);
-		__cpu_try_die(cpu);
-	}
-
+#ifdef CONFIG_HOTPLUG_CPU
+	update_cpu_boot_status(CPU_KILL_ME);
+	/* Check if we can park ourselves */
+	if (cpu_ops[cpu] && cpu_ops[cpu]->cpu_die)
+		cpu_ops[cpu]->cpu_die(cpu);
+#endif
 	update_cpu_boot_status(CPU_STUCK_IN_KERNEL);
 
 	cpu_park_loop();
@@ -509,13 +488,10 @@ static bool __init is_mpidr_duplicate(unsigned int cpu, u64 hwid)
  */
 static int __init smp_cpu_setup(int cpu)
 {
-	const struct cpu_operations *ops;
-
-	if (init_cpu_ops(cpu))
+	if (cpu_read_ops(cpu))
 		return -ENODEV;
 
-	ops = get_cpu_ops(cpu);
-	if (ops->cpu_init(cpu))
+	if (cpu_ops[cpu]->cpu_init(cpu))
 		return -ENODEV;
 
 	set_cpu_possible(cpu, true);
@@ -738,7 +714,6 @@ void __init smp_init_cpus(void)
 
 void __init smp_prepare_cpus(unsigned int max_cpus)
 {
-	const struct cpu_operations *ops;
 	int err;
 	unsigned int cpu;
 	unsigned int this_cpu;
@@ -769,11 +744,10 @@ void __init smp_prepare_cpus(unsigned int max_cpus)
 		if (cpu == smp_processor_id())
 			continue;
 
-		ops = get_cpu_ops(cpu);
-		if (!ops)
+		if (!cpu_ops[cpu])
 			continue;
 
-		err = ops->cpu_prepare(cpu);
+		err = cpu_ops[cpu]->cpu_prepare(cpu);
 		if (err)
 			continue;
 
@@ -889,8 +863,10 @@ static void ipi_cpu_crash_stop(unsigned int cpu, struct pt_regs *regs)
 	local_irq_disable();
 	sdei_mask_local_cpu();
 
-	if (IS_ENABLED(CONFIG_HOTPLUG_CPU))
-		__cpu_try_die(cpu);
+#ifdef CONFIG_HOTPLUG_CPU
+	if (cpu_ops[cpu]->cpu_die)
+		cpu_ops[cpu]->cpu_die(cpu);
+#endif
 
 	/* just in case */
 	cpu_park_loop();
@@ -1083,9 +1059,8 @@ static bool have_cpu_die(void)
 {
 #ifdef CONFIG_HOTPLUG_CPU
 	int any_cpu = raw_smp_processor_id();
-	const struct cpu_operations *ops = get_cpu_ops(any_cpu);
 
-	if (ops && ops->cpu_die)
+	if (cpu_ops[any_cpu] && cpu_ops[any_cpu]->cpu_die)
 		return true;
 #endif
 	return false;

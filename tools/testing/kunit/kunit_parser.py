@@ -46,26 +46,23 @@ class TestStatus(Enum):
 	TEST_CRASHED = auto()
 	NO_TESTS = auto()
 
-kunit_start_re = re.compile(r'TAP version [0-9]+$')
-kunit_end_re = re.compile('(List of all partitions:|'
-			  'Kernel panic - not syncing: VFS:|reboot: System halted)')
+kunit_start_re = re.compile(r'^TAP version [0-9]+$')
+kunit_end_re = re.compile('List of all partitions:')
 
 def isolate_kunit_output(kernel_output):
 	started = False
 	for line in kernel_output:
-		if kunit_start_re.search(line):
-			prefix_len = len(line.split('TAP version')[0])
+		if kunit_start_re.match(line):
 			started = True
-			yield line[prefix_len:] if prefix_len > 0 else line
-		elif kunit_end_re.search(line):
+			yield line
+		elif kunit_end_re.match(line):
 			break
 		elif started:
-			yield line[prefix_len:] if prefix_len > 0 else line
+			yield line
 
 def raw_output(kernel_output):
 	for line in kernel_output:
 		print(line)
-		yield line
 
 DIVIDER = '=' * 60
 
@@ -94,7 +91,7 @@ def print_log(log):
 	for m in log:
 		print_with_timestamp(m)
 
-TAP_ENTRIES = re.compile(r'^(TAP|[\s]*ok|[\s]*not ok|[\s]*[0-9]+\.\.[0-9]+|[\s]*#).*$')
+TAP_ENTRIES = re.compile(r'^(TAP|\t?ok|\t?not ok|\t?[0-9]+\.\.[0-9]+|\t?#).*$')
 
 def consume_non_diagnositic(lines: List[str]) -> None:
 	while lines and not TAP_ENTRIES.match(lines[0]):
@@ -107,20 +104,22 @@ def save_non_diagnositic(lines: List[str], test_case: TestCase) -> None:
 
 OkNotOkResult = namedtuple('OkNotOkResult', ['is_ok','description', 'text'])
 
-OK_NOT_OK_SUBTEST = re.compile(r'^[\s]+(ok|not ok) [0-9]+ - (.*)$')
+OK_NOT_OK_SUBTEST = re.compile(r'^\t(ok|not ok) [0-9]+ - (.*)$')
 
 OK_NOT_OK_MODULE = re.compile(r'^(ok|not ok) [0-9]+ - (.*)$')
 
-def parse_ok_not_ok_test_case(lines: List[str], test_case: TestCase) -> bool:
+def parse_ok_not_ok_test_case(lines: List[str],
+			      test_case: TestCase,
+			      expecting_test_case: bool) -> bool:
 	save_non_diagnositic(lines, test_case)
 	if not lines:
-		test_case.status = TestStatus.TEST_CRASHED
-		return True
+		if expecting_test_case:
+			test_case.status = TestStatus.TEST_CRASHED
+			return True
+		else:
+			return False
 	line = lines[0]
 	match = OK_NOT_OK_SUBTEST.match(line)
-	while not match and lines:
-		line = lines.pop(0)
-		match = OK_NOT_OK_SUBTEST.match(line)
 	if match:
 		test_case.log.append(lines.pop(0))
 		test_case.name = match.group(2)
@@ -134,7 +133,7 @@ def parse_ok_not_ok_test_case(lines: List[str], test_case: TestCase) -> bool:
 	else:
 		return False
 
-SUBTEST_DIAGNOSTIC = re.compile(r'^[\s]+# .*?: (.*)$')
+SUBTEST_DIAGNOSTIC = re.compile(r'^\t# .*?: (.*)$')
 DIAGNOSTIC_CRASH_MESSAGE = 'kunit test case crashed!'
 
 def parse_diagnostic(lines: List[str], test_case: TestCase) -> bool:
@@ -151,17 +150,17 @@ def parse_diagnostic(lines: List[str], test_case: TestCase) -> bool:
 	else:
 		return False
 
-def parse_test_case(lines: List[str]) -> TestCase:
+def parse_test_case(lines: List[str], expecting_test_case: bool) -> TestCase:
 	test_case = TestCase()
 	save_non_diagnositic(lines, test_case)
 	while parse_diagnostic(lines, test_case):
 		pass
-	if parse_ok_not_ok_test_case(lines, test_case):
+	if parse_ok_not_ok_test_case(lines, test_case, expecting_test_case):
 		return test_case
 	else:
 		return None
 
-SUBTEST_HEADER = re.compile(r'^[\s]+# Subtest: (.*)$')
+SUBTEST_HEADER = re.compile(r'^\t# Subtest: (.*)$')
 
 def parse_subtest_header(lines: List[str]) -> str:
 	consume_non_diagnositic(lines)
@@ -174,7 +173,7 @@ def parse_subtest_header(lines: List[str]) -> str:
 	else:
 		return None
 
-SUBTEST_PLAN = re.compile(r'[\s]+[0-9]+\.\.([0-9]+)')
+SUBTEST_PLAN = re.compile(r'\t[0-9]+\.\.([0-9]+)')
 
 def parse_subtest_plan(lines: List[str]) -> int:
 	consume_non_diagnositic(lines)
@@ -235,11 +234,11 @@ def parse_test_suite(lines: List[str]) -> TestSuite:
 	expected_test_case_num = parse_subtest_plan(lines)
 	if not expected_test_case_num:
 		return None
-	while expected_test_case_num > 0:
-		test_case = parse_test_case(lines)
-		if not test_case:
-			break
+	test_case = parse_test_case(lines, expected_test_case_num > 0)
+	expected_test_case_num -= 1
+	while test_case:
 		test_suite.cases.append(test_case)
+		test_case = parse_test_case(lines, expected_test_case_num > 0)
 		expected_test_case_num -= 1
 	if parse_ok_not_ok_test_suite(lines, test_suite):
 		test_suite.status = bubble_up_test_case_errors(test_suite)

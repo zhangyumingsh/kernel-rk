@@ -27,8 +27,6 @@ required:
   - compatible
   - reg
 
-additionalProperties: false
-
 examples:
   - |
     prr: chipid@ff000044 {

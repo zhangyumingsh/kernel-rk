@@ -85,11 +85,11 @@
 /**
  * struct rc_map_table - represents a scancode/keycode pair
  *
- * @scancode: scan code (u64)
+ * @scancode: scan code (u32)
  * @keycode: Linux input keycode
  */
 struct rc_map_table {
-	u64	scancode;
+	u32	scancode;
 	u32	keycode;
 };
 
@@ -233,6 +233,7 @@ struct rc_map *rc_map_get(const char *name);
 #define RC_MAP_NPGTECH                   "rc-npgtech"
 #define RC_MAP_ODROID                    "rc-odroid"
 #define RC_MAP_PCTV_SEDNA                "rc-pctv-sedna"
+#define RC_MAP_PINE64                    "rc-pine64"
 #define RC_MAP_PINNACLE_COLOR            "rc-pinnacle-color"
 #define RC_MAP_PINNACLE_GREY             "rc-pinnacle-grey"
 #define RC_MAP_PINNACLE_PCTV_HD          "rc-pinnacle-pctv-hd"

@@ -317,15 +317,15 @@ void rtw_get_channel_params(struct cfg80211_chan_def *chandef,
 	case NL80211_CHAN_WIDTH_20_NOHT:
 	case NL80211_CHAN_WIDTH_20:
 		bandwidth = RTW_CHANNEL_WIDTH_20;
-		primary_chan_idx = RTW_SC_DONT_CARE;
+		primary_chan_idx = 0;
 		break;
 	case NL80211_CHAN_WIDTH_40:
 		bandwidth = RTW_CHANNEL_WIDTH_40;
 		if (primary_freq > center_freq) {
-			primary_chan_idx = RTW_SC_20_UPPER;
+			primary_chan_idx = 1;
 			center_chan -= 2;
 		} else {
-			primary_chan_idx = RTW_SC_20_LOWER;
+			primary_chan_idx = 2;
 			center_chan += 2;
 		}
 		break;
@@ -333,10 +333,10 @@ void rtw_get_channel_params(struct cfg80211_chan_def *chandef,
 		bandwidth = RTW_CHANNEL_WIDTH_80;
 		if (primary_freq > center_freq) {
 			if (primary_freq - center_freq == 10) {
-				primary_chan_idx = RTW_SC_20_UPPER;
+				primary_chan_idx = 1;
 				center_chan -= 2;
 			} else {
-				primary_chan_idx = RTW_SC_20_UPMOST;
+				primary_chan_idx = 3;
 				center_chan -= 6;
 			}
 			/* assign the center channel used
@@ -345,10 +345,10 @@ void rtw_get_channel_params(struct cfg80211_chan_def *chandef,
 			cch_by_bw[RTW_CHANNEL_WIDTH_40] = center_chan + 4;
 		} else {
 			if (center_freq - primary_freq == 10) {
-				primary_chan_idx = RTW_SC_20_LOWER;
+				primary_chan_idx = 2;
 				center_chan += 2;
 			} else {
-				primary_chan_idx = RTW_SC_20_LOWEST;
+				primary_chan_idx = 4;
 				center_chan += 6;
 			}
 			/* assign the center channel used
@@ -909,15 +909,10 @@ void rtw_core_stop(struct rtw_dev *rtwdev)
 	clear_bit(RTW_FLAG_RUNNING, rtwdev->flags);
 	clear_bit(RTW_FLAG_FW_RUNNING, rtwdev->flags);
 
-	mutex_unlock(&rtwdev->mutex);
-
-	cancel_work_sync(&rtwdev->c2h_work);
 	cancel_delayed_work_sync(&rtwdev->watch_dog_work);
 	cancel_delayed_work_sync(&coex->bt_relink_work);
 	cancel_delayed_work_sync(&coex->bt_reenable_work);
 	cancel_delayed_work_sync(&coex->defreeze_work);
-
-	mutex_lock(&rtwdev->mutex);
 
 	rtw_power_off(rtwdev);
 }
@@ -1118,6 +1113,7 @@ static int rtw_chip_parameter_setup(struct rtw_dev *rtwdev)
 	}
 
 	hal->chip_version = rtw_read32(rtwdev, REG_SYS_CFG1);
+	hal->fab_version = BIT_GET_VENDOR_ID(hal->chip_version) >> 2;
 	hal->cut_version = BIT_GET_CHIP_VER(hal->chip_version);
 	hal->mp_chip = (hal->chip_version & BIT_RTL_ID) ? 0 : 1;
 	if (hal->chip_version & BIT_RF_TYPE_ID) {
@@ -1131,6 +1127,11 @@ static int rtw_chip_parameter_setup(struct rtw_dev *rtwdev)
 		hal->antenna_tx = BB_PATH_A;
 		hal->antenna_rx = BB_PATH_A;
 	}
+
+	if (hal->fab_version == 2)
+		hal->fab_version = 1;
+	else if (hal->fab_version == 1)
+		hal->fab_version = 2;
 
 	efuse->physical_size = chip->phy_efuse_size;
 	efuse->logical_size = chip->log_efuse_size;
@@ -1394,6 +1395,10 @@ int rtw_core_init(struct rtw_dev *rtwdev)
 	else
 		rtwdev->lps_conf.deep_mode = rtw_fw_lps_deep_mode;
 
+	mutex_lock(&rtwdev->mutex);
+	rtw_add_rsvd_page(rtwdev, RSVD_BEACON, false);
+	mutex_unlock(&rtwdev->mutex);
+
 	rtw_stats_init(rtwdev);
 
 	/* default rx filter setting */
@@ -1436,9 +1441,8 @@ void rtw_core_deinit(struct rtw_dev *rtwdev)
 	skb_queue_purge(&rtwdev->tx_report.queue);
 	spin_unlock_irqrestore(&rtwdev->tx_report.q_lock, flags);
 
-	list_for_each_entry_safe(rsvd_pkt, tmp, &rtwdev->rsvd_page_list,
-				 build_list) {
-		list_del(&rsvd_pkt->build_list);
+	list_for_each_entry_safe(rsvd_pkt, tmp, &rtwdev->rsvd_page_list, list) {
+		list_del(&rsvd_pkt->list);
 		kfree(rsvd_pkt);
 	}
 

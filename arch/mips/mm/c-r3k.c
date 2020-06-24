@@ -316,9 +316,9 @@ void r3k_cache_init(void)
 	_dma_cache_wback = r3k_dma_cache_wback_inv;
 	_dma_cache_inv = r3k_dma_cache_wback_inv;
 
-	pr_info("Primary instruction cache %ldkB, linesize %ld bytes.\n",
+	printk("Primary instruction cache %ldkB, linesize %ld bytes.\n",
 		icache_size >> 10, icache_lsize);
-	pr_info("Primary data cache %ldkB, linesize %ld bytes.\n",
+	printk("Primary data cache %ldkB, linesize %ld bytes.\n",
 		dcache_size >> 10, dcache_lsize);
 
 	build_clear_page();

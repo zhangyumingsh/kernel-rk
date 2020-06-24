@@ -29,7 +29,6 @@
 #include <linux/dma-mapping.h>
 #include <linux/module.h>
 #include <linux/pci.h>
-#include <linux/mem_encrypt.h>
 
 #include <drm/drm_drv.h>
 #include <drm/drm_ioctl.h>
@@ -290,8 +289,6 @@ static void vmw_print_capabilities2(uint32_t capabilities2)
 		DRM_INFO("  Grow oTable.\n");
 	if (capabilities2 & SVGA_CAP2_INTRA_SURFACE_COPY)
 		DRM_INFO("  IntraSurface copy.\n");
-	if (capabilities2 & SVGA_CAP2_DX3)
-		DRM_INFO("  DX3.\n");
 }
 
 static void vmw_print_capabilities(uint32_t capabilities)
@@ -451,7 +448,7 @@ static int vmw_request_device(struct vmw_private *dev_priv)
 	dev_priv->cman = vmw_cmdbuf_man_create(dev_priv);
 	if (IS_ERR(dev_priv->cman)) {
 		dev_priv->cman = NULL;
-		dev_priv->sm_type = VMW_SM_LEGACY;
+		dev_priv->has_dx = false;
 	}
 
 	ret = vmw_request_device_late(dev_priv);
@@ -578,10 +575,6 @@ static int vmw_dma_select_mode(struct vmw_private *dev_priv)
 		[vmw_dma_map_populate] = "Caching DMA mappings.",
 		[vmw_dma_map_bind] = "Giving up DMA mappings early."};
 
-	/* TTM currently doesn't fully support SEV encryption. */
-	if (mem_encrypt_active())
-		return -EINVAL;
-
 	if (vmw_force_coherent)
 		dev_priv->map_mode = vmw_dma_alloc_coherent;
 	else if (vmw_restrict_iommu)
@@ -689,10 +682,8 @@ static int vmw_driver_load(struct drm_device *dev, unsigned long chipset)
 
 	ret = vmw_dma_select_mode(dev_priv);
 	if (unlikely(ret != 0)) {
-		DRM_INFO("Restricting capabilities since DMA not available.\n");
+		DRM_INFO("Restricting capabilities due to IOMMU setup.\n");
 		refuse_dma = true;
-		if (dev_priv->capabilities & SVGA_CAP_GBOBJECTS)
-			DRM_INFO("Disabling 3D acceleration.\n");
 	}
 
 	dev_priv->vram_size = vmw_read(dev_priv, SVGA_REG_VRAM_SIZE);
@@ -720,15 +711,9 @@ static int vmw_driver_load(struct drm_device *dev, unsigned long chipset)
 	dev_priv->max_mob_pages = 0;
 	dev_priv->max_mob_size = 0;
 	if (dev_priv->capabilities & SVGA_CAP_GBOBJECTS) {
-		uint64_t mem_size;
-
-		if (dev_priv->capabilities2 & SVGA_CAP2_GB_MEMSIZE_2)
-			mem_size = vmw_read(dev_priv,
-					    SVGA_REG_GBOBJECT_MEM_SIZE_KB);
-		else
-			mem_size =
-				vmw_read(dev_priv,
-					 SVGA_REG_SUGGESTED_GBOBJECT_MEM_SIZE_KB);
+		uint64_t mem_size =
+			vmw_read(dev_priv,
+				 SVGA_REG_SUGGESTED_GBOBJECT_MEM_SIZE_KB);
 
 		/*
 		 * Workaround for low memory 2D VMs to compensate for the
@@ -881,7 +866,7 @@ static int vmw_driver_load(struct drm_device *dev, unsigned long chipset)
 		dev_priv->has_gmr = false;
 	}
 
-	if (dev_priv->capabilities & SVGA_CAP_GBOBJECTS && !refuse_dma) {
+	if (dev_priv->capabilities & SVGA_CAP_GBOBJECTS) {
 		dev_priv->has_mob = true;
 		if (ttm_bo_init_mm(&dev_priv->bdev, VMW_PL_MOB,
 				   VMW_PL_MOB) != 0) {
@@ -891,32 +876,14 @@ static int vmw_driver_load(struct drm_device *dev, unsigned long chipset)
 		}
 	}
 
-	if (dev_priv->has_mob && (dev_priv->capabilities & SVGA_CAP_DX)) {
+	if (dev_priv->has_mob) {
 		spin_lock(&dev_priv->cap_lock);
 		vmw_write(dev_priv, SVGA_REG_DEV_CAP, SVGA3D_DEVCAP_DXCONTEXT);
-		if (vmw_read(dev_priv, SVGA_REG_DEV_CAP))
-			dev_priv->sm_type = VMW_SM_4;
+		dev_priv->has_dx = !!vmw_read(dev_priv, SVGA_REG_DEV_CAP);
 		spin_unlock(&dev_priv->cap_lock);
 	}
 
 	vmw_validation_mem_init_ttm(dev_priv, VMWGFX_VALIDATION_MEM_GRAN);
-
-	/* SVGA_CAP2_DX2 (DefineGBSurface_v3) is needed for SM4_1 support */
-	if (has_sm4_context(dev_priv) &&
-	    (dev_priv->capabilities2 & SVGA_CAP2_DX2)) {
-		vmw_write(dev_priv, SVGA_REG_DEV_CAP, SVGA3D_DEVCAP_SM41);
-
-		if (vmw_read(dev_priv, SVGA_REG_DEV_CAP))
-			dev_priv->sm_type = VMW_SM_4_1;
-
-		if (has_sm4_1_context(dev_priv) &&
-		    (dev_priv->capabilities2 & SVGA_CAP2_DX3)) {
-			vmw_write(dev_priv, SVGA_REG_DEV_CAP, SVGA3D_DEVCAP_SM5);
-			if (vmw_read(dev_priv, SVGA_REG_DEV_CAP))
-				dev_priv->sm_type = VMW_SM_5;
-		}
-	}
-
 	ret = vmw_kms_init(dev_priv);
 	if (unlikely(ret != 0))
 		goto out_no_kms;
@@ -926,14 +893,23 @@ static int vmw_driver_load(struct drm_device *dev, unsigned long chipset)
 	if (ret)
 		goto out_no_fifo;
 
+	if (dev_priv->has_dx) {
+		/*
+		 * SVGA_CAP2_DX2 (DefineGBSurface_v3) is needed for SM4_1
+		 * support
+		 */
+		if ((dev_priv->capabilities2 & SVGA_CAP2_DX2) != 0) {
+			vmw_write(dev_priv, SVGA_REG_DEV_CAP,
+					SVGA3D_DEVCAP_SM41);
+			dev_priv->has_sm4_1 = vmw_read(dev_priv,
+							SVGA_REG_DEV_CAP);
+		}
+	}
+
+	DRM_INFO("DX: %s\n", dev_priv->has_dx ? "yes." : "no.");
 	DRM_INFO("Atomic: %s\n", (dev->driver->driver_features & DRIVER_ATOMIC)
 		 ? "yes." : "no.");
-	if (dev_priv->sm_type == VMW_SM_5)
-		DRM_INFO("SM5 support available.\n");
-	if (dev_priv->sm_type == VMW_SM_4_1)
-		DRM_INFO("SM4_1 support available.\n");
-	if (dev_priv->sm_type == VMW_SM_4)
-		DRM_INFO("SM4 support available.\n");
+	DRM_INFO("SM4_1: %s\n", dev_priv->has_sm4_1 ? "yes." : "no.");
 
 	snprintf(host_log, sizeof(host_log), "vmwgfx: %s-%s",
 		VMWGFX_REPO, VMWGFX_GIT_VERSION);
@@ -1247,18 +1223,6 @@ static void vmw_remove(struct pci_dev *pdev)
 	pci_disable_device(pdev);
 }
 
-static unsigned long
-vmw_get_unmapped_area(struct file *file, unsigned long uaddr,
-		      unsigned long len, unsigned long pgoff,
-		      unsigned long flags)
-{
-	struct drm_file *file_priv = file->private_data;
-	struct vmw_private *dev_priv = vmw_priv(file_priv->minor->dev);
-
-	return drm_get_unmapped_area(file, uaddr, len, pgoff, flags,
-				     &dev_priv->vma_manager);
-}
-
 static int vmwgfx_pm_notifier(struct notifier_block *nb, unsigned long val,
 			      void *ptr)
 {
@@ -1430,12 +1394,14 @@ static const struct file_operations vmwgfx_driver_fops = {
 	.compat_ioctl = vmw_compat_ioctl,
 #endif
 	.llseek = noop_llseek,
-	.get_unmapped_area = vmw_get_unmapped_area,
 };
 
 static struct drm_driver driver = {
 	.driver_features =
 	DRIVER_MODESET | DRIVER_RENDER | DRIVER_ATOMIC,
+	.get_vblank_counter = vmw_get_vblank_counter,
+	.enable_vblank = vmw_enable_vblank,
+	.disable_vblank = vmw_disable_vblank,
 	.ioctls = vmw_ioctls,
 	.num_ioctls = ARRAY_SIZE(vmw_ioctls),
 	.master_set = vmw_master_set,

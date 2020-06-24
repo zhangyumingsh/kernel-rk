@@ -4,12 +4,14 @@
 
 int pud_huge(pud_t pud)
 {
-	return pud_leaf(pud);
+	return pud_present(pud) &&
+		(pud_val(pud) & (_PAGE_READ | _PAGE_WRITE | _PAGE_EXEC));
 }
 
 int pmd_huge(pmd_t pmd)
 {
-	return pmd_leaf(pmd);
+	return pmd_present(pmd) &&
+		(pmd_val(pmd) & (_PAGE_READ | _PAGE_WRITE | _PAGE_EXEC));
 }
 
 static __init int setup_hugepagesz(char *opt)

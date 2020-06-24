@@ -134,6 +134,7 @@ struct clk;
 #define RK3308_EMMC_CON0		0x490
 #define RK3308_EMMC_CON1		0x494
 
+#define RK3228_MODE_CON		0x40
 #define RK3328_PLL_CON(x)		RK2928_PLL_CON(x)
 #define RK3328_CLKSEL_CON(x)		((x) * 0x4 + 0x100)
 #define RK3328_CLKGATE_CON(x)		((x) * 0x4 + 0x200)

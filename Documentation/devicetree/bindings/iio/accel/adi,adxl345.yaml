@@ -17,13 +17,9 @@ description: |
 
 properties:
   compatible:
-    oneOf:
-      - items:
-          - const: adi,adxl346
-          - const: adi,adxl345
-      - enum:
-          - adi,adxl345
-          - adi,adxl375
+    enum:
+      - adi,adxl345
+      - adi,adxl375
 
   reg:
     maxItems: 1

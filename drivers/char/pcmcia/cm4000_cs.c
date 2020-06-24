@@ -731,9 +731,8 @@ static void monitor_card(struct timer_list *t)
 	}
 
 	switch (dev->mstate) {
-	case M_CARDOFF: {
 		unsigned char flags0;
-
+	case M_CARDOFF:
 		DEBUGP(4, dev, "M_CARDOFF\n");
 		flags0 = inb(REG_FLAGS0(iobase));
 		if (flags0 & 0x02) {
@@ -756,7 +755,6 @@ static void monitor_card(struct timer_list *t)
 			dev->mdelay = T_50MSEC;
 		}
 		break;
-	}
 	case M_FETCH_ATR:
 		DEBUGP(4, dev, "M_FETCH_ATR\n");
 		xoutb(0x80, REG_FLAGS0(iobase));

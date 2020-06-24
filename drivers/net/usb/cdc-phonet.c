@@ -36,7 +36,7 @@ struct usbpn_dev {
 
 	spinlock_t		rx_lock;
 	struct sk_buff		*rx_skb;
-	struct urb		*urbs[];
+	struct urb		*urbs[0];
 };
 
 static void tx_complete(struct urb *req);

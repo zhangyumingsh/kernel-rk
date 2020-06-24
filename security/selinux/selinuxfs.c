@@ -668,14 +668,6 @@ static ssize_t sel_write_checkreqprot(struct file *file, const char __user *buf,
 	if (sscanf(page, "%u", &new_value) != 1)
 		goto out;
 
-	if (new_value) {
-		char comm[sizeof(current->comm)];
-
-		memcpy(comm, current->comm, sizeof(comm));
-		pr_warn_once("SELinux: %s (%d) set checkreqprot to 1. This is deprecated and will be rejected in a future kernel release.\n",
-			     comm, current->pid);
-	}
-
 	fsi->state->checkreqprot = new_value ? 1 : 0;
 	length = count;
 out:
@@ -1335,14 +1327,14 @@ static void sel_remove_entries(struct dentry *de)
 
 static int sel_make_bools(struct selinux_fs_info *fsi)
 {
-	int ret;
+	int i, ret;
 	ssize_t len;
 	struct dentry *dentry = NULL;
 	struct dentry *dir = fsi->bool_dir;
 	struct inode *inode = NULL;
 	struct inode_security_struct *isec;
 	char **names = NULL, *page;
-	u32 i, num;
+	int num;
 	int *values = NULL;
 	u32 sid;
 
@@ -1544,7 +1536,6 @@ static struct avc_cache_stats *sel_avc_get_stat_idx(loff_t *idx)
 		*idx = cpu + 1;
 		return &per_cpu(avc_cache_stats, cpu);
 	}
-	(*idx)++;
 	return NULL;
 }
 
@@ -1701,11 +1692,7 @@ static int sel_make_initcon_files(struct dentry *dir)
 	for (i = 1; i <= SECINITSID_NUM; i++) {
 		struct inode *inode;
 		struct dentry *dentry;
-		const char *s = security_get_initial_sid_context(i);
-
-		if (!s)
-			continue;
-		dentry = d_alloc_name(dir, s);
+		dentry = d_alloc_name(dir, security_get_initial_sid_context(i));
 		if (!dentry)
 			return -ENOMEM;
 

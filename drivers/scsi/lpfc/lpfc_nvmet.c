@@ -707,7 +707,7 @@ lpfc_nvmet_xmt_fcp_op_cmp(struct lpfc_hba *phba, struct lpfc_iocbq *cmdwqe,
 	struct lpfc_nvmet_rcv_ctx *ctxp;
 	uint32_t status, result, op, start_clean, logerr;
 #ifdef CONFIG_SCSI_LPFC_DEBUG_FS
-	int id;
+	uint32_t id;
 #endif
 
 	ctxp = cmdwqe->context2;
@@ -814,14 +814,16 @@ lpfc_nvmet_xmt_fcp_op_cmp(struct lpfc_hba *phba, struct lpfc_iocbq *cmdwqe,
 		rsp->done(rsp);
 	}
 #ifdef CONFIG_SCSI_LPFC_DEBUG_FS
-	if (phba->hdwqstat_on & LPFC_CHECK_NVMET_IO) {
+	if (phba->cpucheck_on & LPFC_CHECK_NVMET_IO) {
 		id = raw_smp_processor_id();
-		this_cpu_inc(phba->sli4_hba.c_stat->cmpl_io);
-		if (ctxp->cpu != id)
-			lpfc_printf_log(phba, KERN_INFO, LOG_NVME_IOERR,
-					"6704 CPU Check cmdcmpl: "
-					"cpu %d expect %d\n",
-					id, ctxp->cpu);
+		if (id < LPFC_CHECK_CPU_CNT) {
+			if (ctxp->cpu != id)
+				lpfc_printf_log(phba, KERN_INFO, LOG_NVME_IOERR,
+						"6704 CPU Check cmdcmpl: "
+						"cpu %d expect %d\n",
+						id, ctxp->cpu);
+			phba->sli4_hba.hdwq[rsp->hwqid].cpucheck_cmpl_io[id]++;
+		}
 	}
 #endif
 }
@@ -929,9 +931,6 @@ lpfc_nvmet_xmt_fcp_op(struct nvmet_fc_target_port *tgtport,
 	struct lpfc_sli_ring *pring;
 	unsigned long iflags;
 	int rc;
-#ifdef CONFIG_SCSI_LPFC_DEBUG_FS
-	int id;
-#endif
 
 	if (phba->pport->load_flag & FC_UNLOADING) {
 		rc = -ENODEV;
@@ -955,14 +954,16 @@ lpfc_nvmet_xmt_fcp_op(struct nvmet_fc_target_port *tgtport,
 	if (!ctxp->hdwq)
 		ctxp->hdwq = &phba->sli4_hba.hdwq[rsp->hwqid];
 
-	if (phba->hdwqstat_on & LPFC_CHECK_NVMET_IO) {
-		id = raw_smp_processor_id();
-		this_cpu_inc(phba->sli4_hba.c_stat->xmt_io);
-		if (rsp->hwqid != id)
-			lpfc_printf_log(phba, KERN_INFO, LOG_NVME_IOERR,
-					"6705 CPU Check OP: "
-					"cpu %d expect %d\n",
-					id, rsp->hwqid);
+	if (phba->cpucheck_on & LPFC_CHECK_NVMET_IO) {
+		int id = raw_smp_processor_id();
+		if (id < LPFC_CHECK_CPU_CNT) {
+			if (rsp->hwqid != id)
+				lpfc_printf_log(phba, KERN_INFO, LOG_NVME_IOERR,
+						"6705 CPU Check OP: "
+						"cpu %d expect %d\n",
+						id, rsp->hwqid);
+			phba->sli4_hba.hdwq[rsp->hwqid].cpucheck_xmt_io[id]++;
+		}
 		ctxp->cpu = id; /* Setup cpu for cmpl check */
 	}
 #endif
@@ -2269,13 +2270,15 @@ lpfc_nvmet_unsol_fcp_buffer(struct lpfc_hba *phba,
 	size = nvmebuf->bytes_recv;
 
 #ifdef CONFIG_SCSI_LPFC_DEBUG_FS
-	if (phba->hdwqstat_on & LPFC_CHECK_NVMET_IO) {
-		this_cpu_inc(phba->sli4_hba.c_stat->rcv_io);
-		if (idx != current_cpu)
-			lpfc_printf_log(phba, KERN_INFO, LOG_NVME_IOERR,
-					"6703 CPU Check rcv: "
-					"cpu %d expect %d\n",
-					current_cpu, idx);
+	if (phba->cpucheck_on & LPFC_CHECK_NVMET_RCV) {
+		if (current_cpu < LPFC_CHECK_CPU_CNT) {
+			if (idx != current_cpu)
+				lpfc_printf_log(phba, KERN_INFO, LOG_NVME_IOERR,
+						"6703 CPU Check rcv: "
+						"cpu %d expect %d\n",
+						current_cpu, idx);
+			phba->sli4_hba.hdwq[idx].cpucheck_rcv_io[current_cpu]++;
+		}
 	}
 #endif
 
@@ -2595,7 +2598,7 @@ lpfc_nvmet_prep_fcp_wqe(struct lpfc_hba *phba,
 	union lpfc_wqe128 *wqe;
 	struct ulp_bde64 *bde;
 	dma_addr_t physaddr;
-	int i, cnt, nsegs;
+	int i, cnt;
 	int do_pbde;
 	int xc = 1;
 
@@ -2626,7 +2629,6 @@ lpfc_nvmet_prep_fcp_wqe(struct lpfc_hba *phba,
 				phba->cfg_nvme_seg_cnt);
 		return NULL;
 	}
-	nsegs = rsp->sg_cnt;
 
 	tgtp = (struct lpfc_nvmet_tgtport *)phba->targetport->private;
 	nvmewqe = ctxp->wqeq;
@@ -2866,7 +2868,7 @@ lpfc_nvmet_prep_fcp_wqe(struct lpfc_hba *phba,
 		wqe->fcp_trsp.rsvd_12_15[0] = 0;
 
 		/* Use rspbuf, NOT sg list */
-		nsegs = 0;
+		rsp->sg_cnt = 0;
 		sgl->word2 = 0;
 		atomic_inc(&tgtp->xmt_fcp_rsp);
 		break;
@@ -2883,7 +2885,7 @@ lpfc_nvmet_prep_fcp_wqe(struct lpfc_hba *phba,
 	nvmewqe->drvrTimeout = (phba->fc_ratov * 3) + LPFC_DRVR_TIMEOUT;
 	nvmewqe->context1 = ndlp;
 
-	for_each_sg(rsp->sg, sgel, nsegs, i) {
+	for_each_sg(rsp->sg, sgel, rsp->sg_cnt, i) {
 		physaddr = sg_dma_address(sgel);
 		cnt = sg_dma_len(sgel);
 		sgl->addr_hi = putPaddrHigh(physaddr);

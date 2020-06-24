@@ -22,6 +22,8 @@
 
 #include "charlcd.h"
 
+#define LCD_MINOR		156
+
 #define DEFAULT_LCD_BWIDTH      40
 #define DEFAULT_LCD_HWIDTH      64
 

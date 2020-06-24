@@ -324,9 +324,8 @@ static void __gen6_gt_wait_for_thread_c0(struct intel_uncore *uncore)
 	 * w/a for a sporadic read returning 0 by waiting for the GT
 	 * thread to wake up.
 	 */
-	drm_WARN_ONCE(&uncore->i915->drm,
-		      wait_for_atomic_us(gt_thread_status(uncore) == 0, 5000),
-		      "GT thread status wait timed out\n");
+	WARN_ONCE(wait_for_atomic_us(gt_thread_status(uncore) == 0, 5000),
+		  "GT thread status wait timed out\n");
 }
 
 static void fw_domains_get_with_thread_status(struct intel_uncore *uncore,
@@ -442,7 +441,7 @@ intel_uncore_forcewake_reset(struct intel_uncore *uncore)
 		cond_resched();
 	}
 
-	drm_WARN_ON(&uncore->i915->drm, active_domains);
+	WARN_ON(active_domains);
 
 	fw = uncore->fw_domains_active;
 	if (fw)
@@ -758,9 +757,9 @@ void assert_forcewakes_inactive(struct intel_uncore *uncore)
 	if (!uncore->funcs.force_wake_get)
 		return;
 
-	drm_WARN(&uncore->i915->drm, uncore->fw_domains_active,
-		 "Expected all fw_domains to be inactive, but %08x are still on\n",
-		 uncore->fw_domains_active);
+	WARN(uncore->fw_domains_active,
+	     "Expected all fw_domains to be inactive, but %08x are still on\n",
+	     uncore->fw_domains_active);
 }
 
 void assert_forcewakes_active(struct intel_uncore *uncore,
@@ -780,9 +779,9 @@ void assert_forcewakes_active(struct intel_uncore *uncore,
 	assert_rpm_wakelock_held(uncore->rpm);
 
 	fw_domains &= uncore->fw_domains;
-	drm_WARN(&uncore->i915->drm, fw_domains & ~uncore->fw_domains_active,
-		 "Expected %08x fw_domains to be active, but %08x are off\n",
-		 fw_domains, fw_domains & ~uncore->fw_domains_active);
+	WARN(fw_domains & ~uncore->fw_domains_active,
+	     "Expected %08x fw_domains to be active, but %08x are off\n",
+	     fw_domains, fw_domains & ~uncore->fw_domains_active);
 
 	/*
 	 * Check that the caller has an explicit wakeref and we don't mistake
@@ -795,9 +794,9 @@ void assert_forcewakes_active(struct intel_uncore *uncore,
 		if (uncore->fw_domains_timer & domain->mask)
 			expect++; /* pending automatic release */
 
-		if (drm_WARN(&uncore->i915->drm, actual < expect,
-			     "Expected domain %d to be held awake by caller, count=%d\n",
-			     domain->id, actual))
+		if (WARN(actual < expect,
+			 "Expected domain %d to be held awake by caller, count=%d\n",
+			 domain->id, actual))
 			break;
 	}
 
@@ -867,9 +866,9 @@ find_fw_domain(struct intel_uncore *uncore, u32 offset)
 	if (entry->domains == FORCEWAKE_ALL)
 		return uncore->fw_domains;
 
-	drm_WARN(&uncore->i915->drm, entry->domains & ~uncore->fw_domains,
-		 "Uninitialized forcewake domain(s) 0x%x accessed at 0x%x\n",
-		 entry->domains & ~uncore->fw_domains, offset);
+	WARN(entry->domains & ~uncore->fw_domains,
+	     "Uninitialized forcewake domain(s) 0x%x accessed at 0x%x\n",
+	     entry->domains & ~uncore->fw_domains, offset);
 
 	return entry->domains;
 }
@@ -1159,11 +1158,10 @@ __unclaimed_reg_debug(struct intel_uncore *uncore,
 		      const bool read,
 		      const bool before)
 {
-	if (drm_WARN(&uncore->i915->drm,
-		     check_for_unclaimed_mmio(uncore) && !before,
-		     "Unclaimed %s register 0x%x\n",
-		     read ? "read from" : "write to",
-		     i915_mmio_reg_offset(reg)))
+	if (WARN(check_for_unclaimed_mmio(uncore) && !before,
+		 "Unclaimed %s register 0x%x\n",
+		 read ? "read from" : "write to",
+		 i915_mmio_reg_offset(reg)))
 		/* Only report the first N failures */
 		i915_modparams.mmio_debug--;
 }
@@ -1438,8 +1436,8 @@ static int __fw_domain_init(struct intel_uncore *uncore,
 	if (!d)
 		return -ENOMEM;
 
-	drm_WARN_ON(&uncore->i915->drm, !i915_mmio_reg_valid(reg_set));
-	drm_WARN_ON(&uncore->i915->drm, !i915_mmio_reg_valid(reg_ack));
+	WARN_ON(!i915_mmio_reg_valid(reg_set));
+	WARN_ON(!i915_mmio_reg_valid(reg_ack));
 
 	d->uncore = uncore;
 	d->wake_count = 0;
@@ -1484,8 +1482,8 @@ static void fw_domain_fini(struct intel_uncore *uncore,
 		return;
 
 	uncore->fw_domains &= ~BIT(domain_id);
-	drm_WARN_ON(&uncore->i915->drm, d->wake_count);
-	drm_WARN_ON(&uncore->i915->drm, hrtimer_cancel(&d->timer));
+	WARN_ON(d->wake_count);
+	WARN_ON(hrtimer_cancel(&d->timer));
 	kfree(d);
 }
 
@@ -1615,7 +1613,7 @@ static int intel_uncore_fw_domains_init(struct intel_uncore *uncore)
 #undef fw_domain_init
 
 	/* All future platforms are expected to require complex power gating */
-	drm_WARN_ON(&i915->drm, !ret && uncore->fw_domains == 0);
+	WARN_ON(!ret && uncore->fw_domains == 0);
 
 out:
 	if (ret)
@@ -2110,7 +2108,7 @@ intel_uncore_forcewake_for_reg(struct intel_uncore *uncore,
 {
 	enum forcewake_domains fw_domains = 0;
 
-	drm_WARN_ON(&uncore->i915->drm, !op);
+	WARN_ON(!op);
 
 	if (!intel_uncore_has_forcewake(uncore))
 		return 0;
@@ -2121,7 +2119,7 @@ intel_uncore_forcewake_for_reg(struct intel_uncore *uncore,
 	if (op & FW_REG_WRITE)
 		fw_domains |= uncore->funcs.write_fw_domains(uncore, reg);
 
-	drm_WARN_ON(&uncore->i915->drm, fw_domains & ~uncore->fw_domains);
+	WARN_ON(fw_domains & ~uncore->fw_domains);
 
 	return fw_domains;
 }

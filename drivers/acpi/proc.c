@@ -22,13 +22,14 @@ ACPI_MODULE_NAME("sleep")
 static int
 acpi_system_wakeup_device_seq_show(struct seq_file *seq, void *offset)
 {
-	struct acpi_device *dev, *tmp;
+	struct list_head *node, *next;
 
 	seq_printf(seq, "Device\tS-state\t  Status   Sysfs node\n");
 
 	mutex_lock(&acpi_device_lock);
-	list_for_each_entry_safe(dev, tmp, &acpi_wakeup_device_list,
-				 wakeup_list) {
+	list_for_each_safe(node, next, &acpi_wakeup_device_list) {
+		struct acpi_device *dev =
+		    container_of(node, struct acpi_device, wakeup_list);
 		struct acpi_device_physical_node *entry;
 
 		if (!dev->wakeup.flags.valid)
@@ -95,7 +96,7 @@ acpi_system_write_wakeup_device(struct file *file,
 				const char __user * buffer,
 				size_t count, loff_t * ppos)
 {
-	struct acpi_device *dev, *tmp;
+	struct list_head *node, *next;
 	char strbuf[5];
 	char str[5] = "";
 
@@ -108,8 +109,9 @@ acpi_system_write_wakeup_device(struct file *file,
 	sscanf(strbuf, "%s", str);
 
 	mutex_lock(&acpi_device_lock);
-	list_for_each_entry_safe(dev, tmp, &acpi_wakeup_device_list,
-				 wakeup_list) {
+	list_for_each_safe(node, next, &acpi_wakeup_device_list) {
+		struct acpi_device *dev =
+		    container_of(node, struct acpi_device, wakeup_list);
 		if (!dev->wakeup.flags.valid)
 			continue;
 

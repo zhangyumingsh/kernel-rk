@@ -369,6 +369,7 @@ static int cryptd_create_skcipher(struct crypto_template *tmpl,
 	struct skcipherd_instance_ctx *ctx;
 	struct skcipher_instance *inst;
 	struct skcipher_alg *alg;
+	const char *name;
 	u32 type;
 	u32 mask;
 	int err;
@@ -378,6 +379,10 @@ static int cryptd_create_skcipher(struct crypto_template *tmpl,
 
 	cryptd_check_internal(tb, &type, &mask);
 
+	name = crypto_attr_alg_name(tb[1]);
+	if (IS_ERR(name))
+		return PTR_ERR(name);
+
 	inst = kzalloc(sizeof(*inst) + sizeof(*ctx), GFP_KERNEL);
 	if (!inst)
 		return -ENOMEM;
@@ -386,14 +391,14 @@ static int cryptd_create_skcipher(struct crypto_template *tmpl,
 	ctx->queue = queue;
 
 	err = crypto_grab_skcipher(&ctx->spawn, skcipher_crypto_instance(inst),
-				   crypto_attr_alg_name(tb[1]), type, mask);
+				   name, type, mask);
 	if (err)
-		goto err_free_inst;
+		goto out_free_inst;
 
 	alg = crypto_spawn_skcipher_alg(&ctx->spawn);
 	err = cryptd_init_instance(skcipher_crypto_instance(inst), &alg->base);
 	if (err)
-		goto err_free_inst;
+		goto out_drop_skcipher;
 
 	inst->alg.base.cra_flags = CRYPTO_ALG_ASYNC |
 				   (alg->base.cra_flags & CRYPTO_ALG_INTERNAL);
@@ -416,8 +421,10 @@ static int cryptd_create_skcipher(struct crypto_template *tmpl,
 
 	err = skcipher_register_instance(tmpl, inst);
 	if (err) {
-err_free_inst:
-		cryptd_skcipher_free(inst);
+out_drop_skcipher:
+		crypto_drop_skcipher(&ctx->spawn);
+out_free_inst:
+		kfree(inst);
 	}
 	return err;
 }
@@ -687,7 +694,8 @@ static int cryptd_create_hash(struct crypto_template *tmpl, struct rtattr **tb,
 	err = ahash_register_instance(tmpl, inst);
 	if (err) {
 err_free_inst:
-		cryptd_hash_free(inst);
+		crypto_drop_shash(&ctx->spawn);
+		kfree(inst);
 	}
 	return err;
 }
@@ -825,11 +833,16 @@ static int cryptd_create_aead(struct crypto_template *tmpl,
 	struct aead_instance_ctx *ctx;
 	struct aead_instance *inst;
 	struct aead_alg *alg;
+	const char *name;
 	u32 type = 0;
 	u32 mask = CRYPTO_ALG_ASYNC;
 	int err;
 
 	cryptd_check_internal(tb, &type, &mask);
+
+	name = crypto_attr_alg_name(tb[1]);
+	if (IS_ERR(name))
+		return PTR_ERR(name);
 
 	inst = kzalloc(sizeof(*inst) + sizeof(*ctx), GFP_KERNEL);
 	if (!inst)
@@ -839,14 +852,14 @@ static int cryptd_create_aead(struct crypto_template *tmpl,
 	ctx->queue = queue;
 
 	err = crypto_grab_aead(&ctx->aead_spawn, aead_crypto_instance(inst),
-			       crypto_attr_alg_name(tb[1]), type, mask);
+			       name, type, mask);
 	if (err)
-		goto err_free_inst;
+		goto out_free_inst;
 
 	alg = crypto_spawn_aead_alg(&ctx->aead_spawn);
 	err = cryptd_init_instance(aead_crypto_instance(inst), &alg->base);
 	if (err)
-		goto err_free_inst;
+		goto out_drop_aead;
 
 	inst->alg.base.cra_flags = CRYPTO_ALG_ASYNC |
 				   (alg->base.cra_flags & CRYPTO_ALG_INTERNAL);
@@ -866,8 +879,10 @@ static int cryptd_create_aead(struct crypto_template *tmpl,
 
 	err = aead_register_instance(tmpl, inst);
 	if (err) {
-err_free_inst:
-		cryptd_aead_free(inst);
+out_drop_aead:
+		crypto_drop_aead(&ctx->aead_spawn);
+out_free_inst:
+		kfree(inst);
 	}
 	return err;
 }

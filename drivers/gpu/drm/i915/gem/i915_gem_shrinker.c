@@ -12,6 +12,7 @@
 #include <linux/pci.h>
 #include <linux/dma-buf.h>
 #include <linux/vmalloc.h>
+#include <drm/i915_drm.h>
 
 #include "i915_trace.h"
 
@@ -400,22 +401,19 @@ void i915_gem_driver_register__shrinker(struct drm_i915_private *i915)
 	i915->mm.shrinker.count_objects = i915_gem_shrinker_count;
 	i915->mm.shrinker.seeks = DEFAULT_SEEKS;
 	i915->mm.shrinker.batch = 4096;
-	drm_WARN_ON(&i915->drm, register_shrinker(&i915->mm.shrinker));
+	WARN_ON(register_shrinker(&i915->mm.shrinker));
 
 	i915->mm.oom_notifier.notifier_call = i915_gem_shrinker_oom;
-	drm_WARN_ON(&i915->drm, register_oom_notifier(&i915->mm.oom_notifier));
+	WARN_ON(register_oom_notifier(&i915->mm.oom_notifier));
 
 	i915->mm.vmap_notifier.notifier_call = i915_gem_shrinker_vmap;
-	drm_WARN_ON(&i915->drm,
-		    register_vmap_purge_notifier(&i915->mm.vmap_notifier));
+	WARN_ON(register_vmap_purge_notifier(&i915->mm.vmap_notifier));
 }
 
 void i915_gem_driver_unregister__shrinker(struct drm_i915_private *i915)
 {
-	drm_WARN_ON(&i915->drm,
-		    unregister_vmap_purge_notifier(&i915->mm.vmap_notifier));
-	drm_WARN_ON(&i915->drm,
-		    unregister_oom_notifier(&i915->mm.oom_notifier));
+	WARN_ON(unregister_vmap_purge_notifier(&i915->mm.vmap_notifier));
+	WARN_ON(unregister_oom_notifier(&i915->mm.oom_notifier));
 	unregister_shrinker(&i915->mm.shrinker);
 }
 

@@ -38,8 +38,6 @@
 #define IOPERM        (IOUPTE_CACHE | IOUPTE_WRITE | IOUPTE_VALID)
 #define MKIOPTE(phys) __iopte((((phys)>>4) & IOUPTE_PAGE) | IOPERM)
 
-static const struct dma_map_ops iounit_dma_ops;
-
 static void __init iounit_iommu_init(struct platform_device *op)
 {
 	struct iounit_struct *iounit;
@@ -72,8 +70,6 @@ static void __init iounit_iommu_init(struct platform_device *op)
 	xptend = iounit->page_table + (16 * PAGE_SIZE) / sizeof(iopte_t);
 	for (; xpt < xptend; xpt++)
 		sbus_writel(0, xpt);
-
-	op->dev.dma_ops = &iounit_dma_ops;
 }
 
 static int __init iounit_init(void)
@@ -292,3 +288,8 @@ static const struct dma_map_ops iounit_dma_ops = {
 	.map_sg			= iounit_map_sg,
 	.unmap_sg		= iounit_unmap_sg,
 };
+
+void __init ld_mmu_iounit(void)
+{
+	dma_ops = &iounit_dma_ops;
+}

@@ -75,7 +75,6 @@ configure specific aspects of kernel behavior to your liking.
    cputopology
    dell_rbu
    device-mapper/index
-   edid
    efi-stub
    ext4
    nfs/index

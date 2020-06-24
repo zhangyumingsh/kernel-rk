@@ -1095,17 +1095,15 @@ out:
 }
 
 /**
- * drm_client_modeset_commit_locked() - Force commit CRTC configuration
+ * drm_client_modeset_commit_force() - Force commit CRTC configuration
  * @client: DRM client
  *
- * Commit modeset configuration to crtcs without checking if there is a DRM
- * master. The assumption is that the caller already holds an internal DRM
- * master reference acquired with drm_master_internal_acquire().
+ * Commit modeset configuration to crtcs without checking if there is a DRM master.
  *
  * Returns:
  * Zero on success or negative error code on failure.
  */
-int drm_client_modeset_commit_locked(struct drm_client_dev *client)
+int drm_client_modeset_commit_force(struct drm_client_dev *client)
 {
 	struct drm_device *dev = client->dev;
 	int ret;
@@ -1119,7 +1117,7 @@ int drm_client_modeset_commit_locked(struct drm_client_dev *client)
 
 	return ret;
 }
-EXPORT_SYMBOL(drm_client_modeset_commit_locked);
+EXPORT_SYMBOL(drm_client_modeset_commit_force);
 
 /**
  * drm_client_modeset_commit() - Commit CRTC configuration
@@ -1138,7 +1136,7 @@ int drm_client_modeset_commit(struct drm_client_dev *client)
 	if (!drm_master_internal_acquire(dev))
 		return -EBUSY;
 
-	ret = drm_client_modeset_commit_locked(client);
+	ret = drm_client_modeset_commit_force(client);
 
 	drm_master_internal_release(dev);
 

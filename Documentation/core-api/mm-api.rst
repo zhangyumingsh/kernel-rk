@@ -73,9 +73,6 @@ File Mapping and Page Cache
 .. kernel-doc:: mm/truncate.c
    :export:
 
-.. kernel-doc:: include/linux/pagemap.h
-   :internal:
-
 Memory pools
 ============
 

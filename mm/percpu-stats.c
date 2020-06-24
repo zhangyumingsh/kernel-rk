@@ -3,7 +3,7 @@
  * mm/percpu-debug.c
  *
  * Copyright (C) 2017		Facebook Inc.
- * Copyright (C) 2017		Dennis Zhou <dennis@kernel.org>
+ * Copyright (C) 2017		Dennis Zhou <dennisz@fb.com>
  *
  * Prints statistics about the percpu allocator and backing chunks.
  */

@@ -1134,7 +1134,7 @@ static struct platform_driver dummy_udc_driver = {
 	.suspend	= dummy_udc_suspend,
 	.resume		= dummy_udc_resume,
 	.driver		= {
-		.name	= gadget_name,
+		.name	= (char *) gadget_name,
 	},
 };
 
@@ -2720,7 +2720,7 @@ static struct platform_driver dummy_hcd_driver = {
 	.suspend	= dummy_hcd_suspend,
 	.resume		= dummy_hcd_resume,
 	.driver		= {
-		.name	= driver_name,
+		.name	= (char *) driver_name,
 	},
 };
 

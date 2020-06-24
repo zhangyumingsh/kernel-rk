@@ -8,9 +8,11 @@
 #ifndef __ASSEMBLY__
 
 #include <asm/unistd.h>
-#include <asm/errno.h>
+#include <uapi/linux/time.h>
 
 #include <asm/vdso/compat_barrier.h>
+
+#define __VDSO_USE_SYSCALL		ULLONG_MAX
 
 #define VDSO_HAS_CLOCK_GETRES		1
 
@@ -76,6 +78,10 @@ int clock_getres_fallback(clockid_t _clkid, struct __kernel_timespec *_ts)
 	register long ret asm ("r0");
 	register long nr asm("r7") = __NR_compat_clock_getres_time64;
 
+	/* The checks below are required for ABI consistency with arm */
+	if ((_clkid >= MAX_CLOCKS) && (_ts == NULL))
+		return -EINVAL;
+
 	asm volatile(
 	"       swi #0\n"
 	: "=r" (ret)
@@ -93,6 +99,10 @@ int clock_getres32_fallback(clockid_t _clkid, struct old_timespec32 *_ts)
 	register long ret asm ("r0");
 	register long nr asm("r7") = __NR_compat_clock_getres;
 
+	/* The checks below are required for ABI consistency with arm */
+	if ((_clkid >= MAX_CLOCKS) && (_ts == NULL))
+		return -EINVAL;
+
 	asm volatile(
 	"       swi #0\n"
 	: "=r" (ret)
@@ -107,12 +117,11 @@ static __always_inline u64 __arch_get_hw_counter(s32 clock_mode)
 	u64 res;
 
 	/*
-	 * Core checks for mode already, so this raced against a concurrent
-	 * update. Return something. Core will do another round and then
-	 * see the mode change and fallback to the syscall.
+	 * clock_mode == 0 implies that vDSO are enabled otherwise
+	 * fallback on syscall.
 	 */
-	if (clock_mode == VDSO_CLOCKMODE_NONE)
-		return 0;
+	if (clock_mode)
+		return __VDSO_USE_SYSCALL;
 
 	/*
 	 * This isb() is required to prevent that the counter value

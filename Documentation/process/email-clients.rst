@@ -237,9 +237,9 @@ using Mutt to send patches through Gmail::
 
 The Mutt docs have lots more information:
 
-    https://gitlab.com/muttmua/mutt/-/wikis/UseCases/Gmail
+    http://dev.mutt.org/trac/wiki/UseCases/Gmail
 
-    http://www.mutt.org/doc/manual/
+    http://dev.mutt.org/doc/manual.html
 
 Pine (TUI)
 **********

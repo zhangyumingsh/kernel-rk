@@ -41,7 +41,7 @@ struct svc_rdma_rw_ctxt {
 	struct rdma_rw_ctx	rw_ctx;
 	int			rw_nents;
 	struct sg_table		rw_sg_table;
-	struct scatterlist	rw_first_sgl[];
+	struct scatterlist	rw_first_sgl[0];
 };
 
 static inline struct svc_rdma_rw_ctxt *
@@ -323,6 +323,8 @@ static int svc_rdma_post_chunk_ctxt(struct svc_rdma_chunk_ctxt *cc)
 		if (atomic_sub_return(cc->cc_sqecount,
 				      &rdma->sc_sq_avail) > 0) {
 			ret = ib_post_send(rdma->sc_qp, first_wr, &bad_wr);
+			trace_svcrdma_post_rw(&cc->cc_cqe,
+					      cc->cc_sqecount, ret);
 			if (ret)
 				break;
 			return 0;
@@ -335,7 +337,6 @@ static int svc_rdma_post_chunk_ctxt(struct svc_rdma_chunk_ctxt *cc)
 		trace_svcrdma_sq_retry(rdma);
 	} while (1);
 
-	trace_svcrdma_sq_post_err(rdma, ret);
 	set_bit(XPT_CLOSE, &xprt->xpt_flags);
 
 	/* If even one was posted, there will be a completion. */
@@ -438,8 +439,7 @@ svc_rdma_build_writes(struct svc_rdma_write_info *info,
 		if (ret < 0)
 			goto out_initerr;
 
-		trace_svcrdma_send_wseg(seg_handle, write_len, seg_offset);
-
+		trace_svcrdma_encode_wseg(seg_handle, write_len, seg_offset);
 		list_add(&ctxt->rw_list, &cc->cc_rwctxts);
 		cc->cc_sqecount += ret;
 		if (write_len == seg_length - info->wi_seg_off) {
@@ -482,19 +482,18 @@ static int svc_rdma_send_xdr_kvec(struct svc_rdma_write_info *info,
 				     vec->iov_len);
 }
 
-/* Send an xdr_buf's page list by itself. A Write chunk is just
- * the page list. A Reply chunk is @xdr's head, page list, and
- * tail. This function is shared between the two types of chunk.
+/* Send an xdr_buf's page list by itself. A Write chunk is
+ * just the page list. a Reply chunk is the head, page list,
+ * and tail. This function is shared between the two types
+ * of chunk.
  */
 static int svc_rdma_send_xdr_pagelist(struct svc_rdma_write_info *info,
-				      struct xdr_buf *xdr,
-				      unsigned int offset,
-				      unsigned long length)
+				      struct xdr_buf *xdr)
 {
 	info->wi_xdr = xdr;
-	info->wi_next_off = offset - xdr->head[0].iov_len;
+	info->wi_next_off = 0;
 	return svc_rdma_build_writes(info, svc_rdma_pagelist_to_sg,
-				     length);
+				     xdr->page_len);
 }
 
 /**
@@ -502,8 +501,6 @@ static int svc_rdma_send_xdr_pagelist(struct svc_rdma_write_info *info,
  * @rdma: controlling RDMA transport
  * @wr_ch: Write chunk provided by client
  * @xdr: xdr_buf containing the data payload
- * @offset: payload's byte offset in @xdr
- * @length: size of payload, in bytes
  *
  * Returns a non-negative number of bytes the chunk consumed, or
  *	%-E2BIG if the payload was larger than the Write chunk,
@@ -513,20 +510,19 @@ static int svc_rdma_send_xdr_pagelist(struct svc_rdma_write_info *info,
  *	%-EIO if rdma_rw initialization failed (DMA mapping, etc).
  */
 int svc_rdma_send_write_chunk(struct svcxprt_rdma *rdma, __be32 *wr_ch,
-			      struct xdr_buf *xdr,
-			      unsigned int offset, unsigned long length)
+			      struct xdr_buf *xdr)
 {
 	struct svc_rdma_write_info *info;
 	int ret;
 
-	if (!length)
+	if (!xdr->page_len)
 		return 0;
 
 	info = svc_rdma_write_info_alloc(rdma, wr_ch);
 	if (!info)
 		return -ENOMEM;
 
-	ret = svc_rdma_send_xdr_pagelist(info, xdr, offset, length);
+	ret = svc_rdma_send_xdr_pagelist(info, xdr);
 	if (ret < 0)
 		goto out_err;
 
@@ -534,8 +530,8 @@ int svc_rdma_send_write_chunk(struct svcxprt_rdma *rdma, __be32 *wr_ch,
 	if (ret < 0)
 		goto out_err;
 
-	trace_svcrdma_send_write_chunk(xdr->page_len);
-	return length;
+	trace_svcrdma_encode_write(xdr->page_len);
+	return xdr->page_len;
 
 out_err:
 	svc_rdma_write_info_free(info);
@@ -545,7 +541,8 @@ out_err:
 /**
  * svc_rdma_send_reply_chunk - Write all segments in the Reply chunk
  * @rdma: controlling RDMA transport
- * @rctxt: Write and Reply chunks from client
+ * @rp_ch: Reply chunk provided by client
+ * @writelist: true if client provided a Write list
  * @xdr: xdr_buf containing an RPC Reply
  *
  * Returns a non-negative number of bytes the chunk consumed, or
@@ -555,14 +552,13 @@ out_err:
  *	%-ENOTCONN if posting failed (connection is lost),
  *	%-EIO if rdma_rw initialization failed (DMA mapping, etc).
  */
-int svc_rdma_send_reply_chunk(struct svcxprt_rdma *rdma,
-			      const struct svc_rdma_recv_ctxt *rctxt,
-			      struct xdr_buf *xdr)
+int svc_rdma_send_reply_chunk(struct svcxprt_rdma *rdma, __be32 *rp_ch,
+			      bool writelist, struct xdr_buf *xdr)
 {
 	struct svc_rdma_write_info *info;
 	int consumed, ret;
 
-	info = svc_rdma_write_info_alloc(rdma, rctxt->rc_reply_chunk);
+	info = svc_rdma_write_info_alloc(rdma, rp_ch);
 	if (!info)
 		return -ENOMEM;
 
@@ -574,10 +570,8 @@ int svc_rdma_send_reply_chunk(struct svcxprt_rdma *rdma,
 	/* Send the page list in the Reply chunk only if the
 	 * client did not provide Write chunks.
 	 */
-	if (!rctxt->rc_write_list && xdr->page_len) {
-		ret = svc_rdma_send_xdr_pagelist(info, xdr,
-						 xdr->head[0].iov_len,
-						 xdr->page_len);
+	if (!writelist && xdr->page_len) {
+		ret = svc_rdma_send_xdr_pagelist(info, xdr);
 		if (ret < 0)
 			goto out_err;
 		consumed += xdr->page_len;
@@ -594,7 +588,7 @@ int svc_rdma_send_reply_chunk(struct svcxprt_rdma *rdma,
 	if (ret < 0)
 		goto out_err;
 
-	trace_svcrdma_send_reply_chunk(consumed);
+	trace_svcrdma_encode_reply(consumed);
 	return consumed;
 
 out_err:
@@ -697,7 +691,7 @@ static int svc_rdma_build_read_chunk(struct svc_rqst *rqstp,
 		if (ret < 0)
 			break;
 
-		trace_svcrdma_send_rseg(rs_handle, rs_length, rs_offset);
+		trace_svcrdma_encode_rseg(rs_handle, rs_length, rs_offset);
 		info->ri_chunklen += rs_length;
 	}
 
@@ -728,7 +722,7 @@ static int svc_rdma_build_normal_read_chunk(struct svc_rqst *rqstp,
 	if (ret < 0)
 		goto out;
 
-	trace_svcrdma_send_read_chunk(info->ri_chunklen, info->ri_position);
+	trace_svcrdma_encode_read(info->ri_chunklen, info->ri_position);
 
 	head->rc_hdr_count = 0;
 
@@ -784,7 +778,7 @@ static int svc_rdma_build_pz_read_chunk(struct svc_rqst *rqstp,
 	if (ret < 0)
 		goto out;
 
-	trace_svcrdma_send_pzr(info->ri_chunklen);
+	trace_svcrdma_encode_pzr(info->ri_chunklen);
 
 	head->rc_arg.len += info->ri_chunklen;
 	head->rc_arg.buflen += info->ri_chunklen;

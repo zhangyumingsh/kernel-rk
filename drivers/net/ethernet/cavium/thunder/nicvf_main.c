@@ -126,7 +126,8 @@ static void nicvf_write_to_mbx(struct nicvf *nic, union nic_mbx *mbx)
 
 int nicvf_send_msg_to_pf(struct nicvf *nic, union nic_mbx *mbx)
 {
-	unsigned long timeout;
+	int timeout = NIC_MBOX_MSG_TIMEOUT;
+	int sleep = 10;
 	int ret = 0;
 
 	mutex_lock(&nic->rx_mode_mtx);
@@ -136,7 +137,6 @@ int nicvf_send_msg_to_pf(struct nicvf *nic, union nic_mbx *mbx)
 
 	nicvf_write_to_mbx(nic, mbx);
 
-	timeout = jiffies + msecs_to_jiffies(NIC_MBOX_MSG_TIMEOUT);
 	/* Wait for previous message to be acked, timeout 2sec */
 	while (!nic->pf_acked) {
 		if (nic->pf_nacked) {
@@ -146,10 +146,11 @@ int nicvf_send_msg_to_pf(struct nicvf *nic, union nic_mbx *mbx)
 			ret = -EINVAL;
 			break;
 		}
-		usleep_range(8000, 10000);
+		msleep(sleep);
 		if (nic->pf_acked)
 			break;
-		if (time_after(jiffies, timeout)) {
+		timeout -= sleep;
+		if (!timeout) {
 			netdev_err(nic->netdev,
 				   "PF didn't ACK to mbox msg 0x%02x from VF%d\n",
 				   (mbx->msg.msg & 0xFF), nic->vf_id);

@@ -15,7 +15,7 @@
 #include <linux/kernel.h>
 #include <linux/interrupt.h>
 #include <linux/clk.h>
-#include <linux/gpio/consumer.h>
+#include <linux/gpio.h>
 #include <linux/platform_device.h>
 #include <linux/err.h>
 #include <linux/types.h>
@@ -24,6 +24,7 @@
 #include <linux/of_device.h>
 #include <linux/of_platform.h>
 #include <linux/of_irq.h>
+#include <linux/of_gpio.h>
 #include <linux/io.h>
 
 #include "ti-bandgap.h"
@@ -742,13 +743,27 @@ exit:
 static int ti_bandgap_tshut_init(struct ti_bandgap *bgp,
 				 struct platform_device *pdev)
 {
+	int gpio_nr = bgp->tshut_gpio;
 	int status;
 
-	status = request_irq(gpiod_to_irq(bgp->tshut_gpiod),
-			     ti_bandgap_tshut_irq_handler,
+	/* Request for gpio_86 line */
+	status = gpio_request(gpio_nr, "tshut");
+	if (status < 0) {
+		dev_err(bgp->dev, "Could not request for TSHUT GPIO:%i\n", 86);
+		return status;
+	}
+	status = gpio_direction_input(gpio_nr);
+	if (status) {
+		dev_err(bgp->dev, "Cannot set input TSHUT GPIO %d\n", gpio_nr);
+		return status;
+	}
+
+	status = request_irq(gpio_to_irq(gpio_nr), ti_bandgap_tshut_irq_handler,
 			     IRQF_TRIGGER_RISING, "tshut", NULL);
-	if (status)
+	if (status) {
+		gpio_free(gpio_nr);
 		dev_err(bgp->dev, "request irq failed for TSHUT");
+	}
 
 	return 0;
 }
@@ -845,10 +860,11 @@ static struct ti_bandgap *ti_bandgap_build(struct platform_device *pdev)
 	} while (res);
 
 	if (TI_BANDGAP_HAS(bgp, TSHUT)) {
-		bgp->tshut_gpiod = devm_gpiod_get(&pdev->dev, NULL, GPIOD_IN);
-		if (IS_ERR(bgp->tshut_gpiod)) {
-			dev_err(&pdev->dev, "invalid gpio for tshut\n");
-			return ERR_CAST(bgp->tshut_gpiod);
+		bgp->tshut_gpio = of_get_gpio(node, 0);
+		if (!gpio_is_valid(bgp->tshut_gpio)) {
+			dev_err(&pdev->dev, "invalid gpio for tshut (%d)\n",
+				bgp->tshut_gpio);
+			return ERR_PTR(-EINVAL);
 		}
 	}
 
@@ -1030,8 +1046,10 @@ put_clks:
 put_fclock:
 	clk_put(bgp->fclock);
 free_irqs:
-	if (TI_BANDGAP_HAS(bgp, TSHUT))
-		free_irq(gpiod_to_irq(bgp->tshut_gpiod), NULL);
+	if (TI_BANDGAP_HAS(bgp, TSHUT)) {
+		free_irq(gpio_to_irq(bgp->tshut_gpio), NULL);
+		gpio_free(bgp->tshut_gpio);
+	}
 
 	return ret;
 }
@@ -1061,8 +1079,10 @@ int ti_bandgap_remove(struct platform_device *pdev)
 	if (TI_BANDGAP_HAS(bgp, TALERT))
 		free_irq(bgp->irq, bgp);
 
-	if (TI_BANDGAP_HAS(bgp, TSHUT))
-		free_irq(gpiod_to_irq(bgp->tshut_gpiod), NULL);
+	if (TI_BANDGAP_HAS(bgp, TSHUT)) {
+		free_irq(gpio_to_irq(bgp->tshut_gpio), NULL);
+		gpio_free(bgp->tshut_gpio);
+	}
 
 	return 0;
 }

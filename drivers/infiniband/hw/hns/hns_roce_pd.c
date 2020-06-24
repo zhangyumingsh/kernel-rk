@@ -60,12 +60,14 @@ void hns_roce_cleanup_pd_table(struct hns_roce_dev *hr_dev)
 int hns_roce_alloc_pd(struct ib_pd *ibpd, struct ib_udata *udata)
 {
 	struct ib_device *ib_dev = ibpd->device;
+	struct hns_roce_dev *hr_dev = to_hr_dev(ib_dev);
+	struct device *dev = hr_dev->dev;
 	struct hns_roce_pd *pd = to_hr_pd(ibpd);
 	int ret;
 
 	ret = hns_roce_pd_alloc(to_hr_dev(ib_dev), &pd->pdn);
 	if (ret) {
-		ibdev_err(ib_dev, "failed to alloc pd, ret = %d\n", ret);
+		dev_err(dev, "[alloc_pd]hns_roce_pd_alloc failed!\n");
 		return ret;
 	}
 
@@ -74,7 +76,7 @@ int hns_roce_alloc_pd(struct ib_pd *ibpd, struct ib_udata *udata)
 
 		if (ib_copy_to_udata(udata, &uresp, sizeof(uresp))) {
 			hns_roce_pd_free(to_hr_dev(ib_dev), pd->pdn);
-			ibdev_err(ib_dev, "failed to copy to udata\n");
+			dev_err(dev, "[alloc_pd]ib_copy_to_udata failed!\n");
 			return -EFAULT;
 		}
 	}

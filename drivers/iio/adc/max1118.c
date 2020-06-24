@@ -71,10 +71,7 @@ static int max1118_read(struct spi_device *spi, int channel)
 		 */
 		{
 			.len = 0,
-			.delay = {	/* > CNVST Low Time 100 ns */
-				.value = 1,
-				.unit = SPI_DELAY_UNIT_USECS
-			},
+			.delay_usecs = 1,	/* > CNVST Low Time 100 ns */
 			.cs_change = 1,
 		},
 		/*
@@ -84,10 +81,7 @@ static int max1118_read(struct spi_device *spi, int channel)
 		 */
 		{
 			.len = 0,
-			.delay = {
-				.value = 8,
-				.unit = SPI_DELAY_UNIT_USECS
-			},
+			.delay_usecs = 8,
 		},
 		{
 			.rx_buf = &adc->data,

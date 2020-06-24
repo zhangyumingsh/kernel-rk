@@ -446,10 +446,6 @@ dtb-$(CONFIG_SOC_IMX6Q) += \
 	imx6dl-nitrogen6x.dtb \
 	imx6dl-phytec-mira-rdk-nand.dtb \
 	imx6dl-phytec-pbab01.dtb \
-	imx6dl-pico-dwarf.dtb \
-	imx6dl-pico-hobbit.dtb \
-	imx6dl-pico-nymph.dtb \
-	imx6dl-pico-pi.dtb \
 	imx6dl-rex-basic.dtb \
 	imx6dl-riotboard.dtb \
 	imx6dl-sabreauto.dtb \
@@ -533,10 +529,6 @@ dtb-$(CONFIG_SOC_IMX6Q) += \
 	imx6q-phytec-mira-rdk-emmc.dtb \
 	imx6q-phytec-mira-rdk-nand.dtb \
 	imx6q-phytec-pbab01.dtb \
-	imx6q-pico-dwarf.dtb \
-	imx6q-pico-hobbit.dtb \
-	imx6q-pico-nymph.dtb \
-	imx6q-pico-pi.dtb \
 	imx6q-pistachio.dtb \
 	imx6q-rex-pro.dtb \
 	imx6q-sabreauto.dtb \
@@ -602,7 +594,6 @@ dtb-$(CONFIG_SOC_IMX6UL) += \
 	imx6ul-kontron-n6310-s-43.dtb \
 	imx6ul-liteboard.dtb \
 	imx6ul-opos6uldev.dtb \
-	imx6ul-pico-dwarf.dtb \
 	imx6ul-pico-hobbit.dtb \
 	imx6ul-pico-pi.dtb \
 	imx6ul-phytec-segin-ff-rdk-nand.dtb \
@@ -619,16 +610,12 @@ dtb-$(CONFIG_SOC_IMX6UL) += \
 	imx6ulz-14x14-evk.dtb
 dtb-$(CONFIG_SOC_IMX7D) += \
 	imx7d-cl-som-imx7.dtb \
-	imx7d-colibri-aster.dtb \
-	imx7d-colibri-emmc-aster.dtb \
 	imx7d-colibri-emmc-eval-v3.dtb \
 	imx7d-colibri-eval-v3.dtb \
 	imx7d-mba7.dtb \
 	imx7d-meerkat96.dtb \
 	imx7d-nitrogen7.dtb \
-	imx7d-pico-dwarf.dtb \
 	imx7d-pico-hobbit.dtb \
-	imx7d-pico-nymph.dtb \
 	imx7d-pico-pi.dtb \
 	imx7d-sbc-imx7.dtb \
 	imx7d-sdb.dtb \
@@ -636,7 +623,6 @@ dtb-$(CONFIG_SOC_IMX7D) += \
 	imx7d-sdb-sht11.dtb \
 	imx7d-zii-rmu2.dtb \
 	imx7d-zii-rpu2.dtb \
-	imx7s-colibri-aster.dtb \
 	imx7s-colibri-eval-v3.dtb \
 	imx7s-mba7.dtb \
 	imx7s-warp.dtb
@@ -949,9 +935,16 @@ dtb-$(CONFIG_ARCH_ROCKCHIP) += \
 	rk3066a-mk808.dtb \
 	rk3066a-rayeager.dtb \
 	rk3188-bqedison2qc.dtb \
+	rk3188-cs968.dtb \
 	rk3188-px3-evb.dtb \
 	rk3188-radxarock.dtb \
 	rk3228-evb.dtb \
+	rk3228a-box.dtb \
+	rk3228a-box-h96mini.dtb \
+	rk3228a-box-nand.dtb \
+	rk3229-box.dtb \
+	rk3229-box-a95xr1.dtb \
+	rk3229-box-nand.dtb \
 	rk3229-evb.dtb \
 	rk3229-xms6.dtb \
 	rk3288-evb-act8846.dtb \
@@ -1030,7 +1023,6 @@ dtb-$(CONFIG_ARCH_STM32) += \
 	stm32h743i-disco.dtb \
 	stm32mp157a-avenger96.dtb \
 	stm32mp157a-dk1.dtb \
-	stm32mp157c-dhcom-pdk2.dtb \
 	stm32mp157c-dk2.dtb \
 	stm32mp157c-ed1.dtb \
 	stm32mp157c-ev1.dtb
@@ -1071,7 +1063,6 @@ dtb-$(CONFIG_MACH_SUN5I) += \
 	sun5i-a13-licheepi-one.dtb \
 	sun5i-a13-olinuxino.dtb \
 	sun5i-a13-olinuxino-micro.dtb \
-	sun5i-a13-pocketbook-touch-lux-3.dtb \
 	sun5i-a13-q8-tablet.dtb \
 	sun5i-a13-utoo-p66.dtb \
 	sun5i-gr8-chip-pro.dtb \
@@ -1102,7 +1093,6 @@ dtb-$(CONFIG_MACH_SUN7I) += \
 	sun7i-a20-i12-tvbox.dtb \
 	sun7i-a20-icnova-swac.dtb \
 	sun7i-a20-lamobo-r1.dtb \
-	sun7i-a20-linutronix-testbox-v2.dtb \
 	sun7i-a20-m3.dtb \
 	sun7i-a20-mk808c.dtb \
 	sun7i-a20-olimex-som-evb.dtb \
@@ -1219,8 +1209,7 @@ dtb-$(CONFIG_ARCH_U8500) += \
 	ste-hrefv60plus-stuib.dtb \
 	ste-hrefv60plus-tvk.dtb \
 	ste-href520-tvk.dtb \
-	ste-ux500-samsung-golden.dtb \
-	ste-ux500-samsung-skomer.dtb
+	ste-ux500-samsung-golden.dtb
 dtb-$(CONFIG_ARCH_UNIPHIER) += \
 	uniphier-ld4-ref.dtb \
 	uniphier-ld6b-ref.dtb \

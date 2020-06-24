@@ -18,7 +18,6 @@ struct pmu_event {
 	const char *metric_name;
 	const char *metric_group;
 	const char *deprecated;
-	const char *metric_constraint;
 };
 
 /*

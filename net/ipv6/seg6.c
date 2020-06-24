@@ -27,9 +27,8 @@
 
 bool seg6_validate_srh(struct ipv6_sr_hdr *srh, int len)
 {
-	unsigned int tlv_offset;
-	int max_last_entry;
 	int trailing;
+	unsigned int tlv_offset;
 
 	if (srh->type != IPV6_SRCRT_TYPE_4)
 		return false;
@@ -37,12 +36,7 @@ bool seg6_validate_srh(struct ipv6_sr_hdr *srh, int len)
 	if (((srh->hdrlen + 1) << 3) != len)
 		return false;
 
-	max_last_entry = (srh->hdrlen / 2) - 1;
-
-	if (srh->first_segment > max_last_entry)
-		return false;
-
-	if (srh->segments_left > srh->first_segment + 1)
+	if (srh->segments_left > srh->first_segment)
 		return false;
 
 	tlv_offset = sizeof(*srh) + ((srh->first_segment + 1) << 4);
@@ -440,7 +434,7 @@ static struct genl_family seg6_genl_family __ro_after_init = {
 
 int __init seg6_init(void)
 {
-	int err;
+	int err = -ENOMEM;
 
 	err = genl_register_family(&seg6_genl_family);
 	if (err)

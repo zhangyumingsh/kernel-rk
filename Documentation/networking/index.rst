@@ -8,7 +8,6 @@ Contents:
 
    netdev-FAQ
    af_xdp
-   bareudp
    batman-adv
    can
    can_ucan_protocol
@@ -22,7 +21,6 @@ Contents:
    z8530book
    msg_zerocopy
    failover
-   net_dim
    net_failover
    phy
    sfp-phylink
@@ -35,7 +33,6 @@ Contents:
    tls
    tls-offload
    nfc
-   6lowpan
 
 .. only::  subproject and html
 

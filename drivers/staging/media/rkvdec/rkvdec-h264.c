@@ -18,10 +18,15 @@
 /* Size with u32 units. */
 #define RKV_CABAC_INIT_BUFFER_SIZE	(3680 + 128)
 #define RKV_RPS_SIZE			((128 + 128) / 4)
-#define RKV_SCALING_LIST_SIZE		(6 * 16 + 6 * 64 + 128)
 #define RKV_ERROR_INFO_SIZE		(256 * 144 * 4)
 
 #define RKVDEC_NUM_REFLIST		3
+
+struct rkvdec_scaling_list {
+	u8 scaling_list_4x4[6][16];
+	u8 scaling_list_8x8[6][64];
+	u8 padding[128];
+};
 
 struct rkvdec_sps_pps_packet {
 	u32 info[8];
@@ -86,7 +91,7 @@ struct rkvdec_ps_field {
 /* Data structure describing auxiliary buffer format. */
 struct rkvdec_h264_priv_tbl {
 	s8 cabac_table[4][464][2];
-	u8 scaling_list[RKV_SCALING_LIST_SIZE];
+	struct rkvdec_scaling_list scaling_list;
 	u32 rps[RKV_RPS_SIZE];
 	struct rkvdec_sps_pps_packet param_set[256];
 	u8 err_info[RKV_ERROR_INFO_SIZE];
@@ -657,8 +662,8 @@ static void assemble_hw_pps(struct rkvdec_ctx *ctx,
 	WRITE_PPS(0xff, PROFILE_IDC);
 	WRITE_PPS(1, CONSTRAINT_SET3_FLAG);
 	WRITE_PPS(sps->chroma_format_idc, CHROMA_FORMAT_IDC);
-	WRITE_PPS(sps->bit_depth_luma_minus8 + 8, BIT_DEPTH_LUMA);
-	WRITE_PPS(sps->bit_depth_chroma_minus8 + 8, BIT_DEPTH_CHROMA);
+	WRITE_PPS(sps->bit_depth_luma_minus8, BIT_DEPTH_LUMA);
+	WRITE_PPS(sps->bit_depth_chroma_minus8, BIT_DEPTH_CHROMA);
 	WRITE_PPS(0, QPPRIME_Y_ZERO_TRANSFORM_BYPASS_FLAG);
 	WRITE_PPS(sps->log2_max_frame_num_minus4, LOG2_MAX_FRAME_NUM_MINUS4);
 	WRITE_PPS(sps->max_num_ref_frames, MAX_NUM_REF_FRAMES);
@@ -667,8 +672,8 @@ static void assemble_hw_pps(struct rkvdec_ctx *ctx,
 		  LOG2_MAX_PIC_ORDER_CNT_LSB_MINUS4);
 	WRITE_PPS(!!(sps->flags & V4L2_H264_SPS_FLAG_DELTA_PIC_ORDER_ALWAYS_ZERO),
 		  DELTA_PIC_ORDER_ALWAYS_ZERO_FLAG);
-	WRITE_PPS(DIV_ROUND_UP(ctx->coded_fmt.fmt.pix_mp.width, 16), PIC_WIDTH_IN_MBS);
-	WRITE_PPS(DIV_ROUND_UP(ctx->coded_fmt.fmt.pix_mp.height, 16), PIC_HEIGHT_IN_MBS);
+	WRITE_PPS(sps->pic_width_in_mbs_minus1 + 1, PIC_WIDTH_IN_MBS);
+	WRITE_PPS(sps->pic_height_in_map_units_minus1 + 1, PIC_HEIGHT_IN_MBS);
 	WRITE_PPS(!!(sps->flags & V4L2_H264_SPS_FLAG_FRAME_MBS_ONLY),
 		  FRAME_MBS_ONLY_FLAG);
 	WRITE_PPS(!!(sps->flags & V4L2_H264_SPS_FLAG_MB_ADAPTIVE_FRAME_FIELD),
@@ -731,12 +736,16 @@ static void assemble_hw_rps(struct rkvdec_ctx *ctx,
 	const struct v4l2_ctrl_h264_sps *sps = run->sps;
 	struct rkvdec_h264_priv_tbl *priv_tbl = h264_ctx->priv_tbl.cpu;
 	u32 max_frame_num = 1 << (sps->log2_max_frame_num_minus4 + 4);
+	u8 *reflists[3] = { h264_ctx->reflists.p, h264_ctx->reflists.b0, h264_ctx->reflists.b1 };
 
 	u32 *hw_rps = priv_tbl->rps;
-	u32 i, j;
+	u32 i, j, k;
 	u16 *p = (u16 *)hw_rps;
 
 	memset(hw_rps, 0, sizeof(priv_tbl->rps));
+
+	if (!h264_ctx->reflists.num_valid)
+		return;
 
 	/*
 	 * Assign an invalid pic_num if DPB entry at that position is inactive.
@@ -749,7 +758,7 @@ static void assemble_hw_rps(struct rkvdec_ctx *ctx,
 			continue;
 
 		if (dpb[i].flags & V4L2_H264_DPB_ENTRY_FLAG_LONG_TERM ||
-		    dpb[i].frame_num < sl_params->frame_num) {
+		    dpb[i].frame_num <= sl_params->frame_num) {
 			p[i] = dpb[i].frame_num;
 			continue;
 		}
@@ -757,84 +766,92 @@ static void assemble_hw_rps(struct rkvdec_ctx *ctx,
 		p[i] = dpb[i].frame_num - max_frame_num;
 	}
 
-	for (j = 0; j < RKVDEC_NUM_REFLIST; j++) {
-		for (i = 0; i < h264_ctx->reflists.num_valid; i++) {
-			u8 dpb_valid = 0;
-			u8 idx = 0;
+	if (!(sl_params->flags & V4L2_H264_SLICE_FLAG_FIELD_PIC)) {
+		for (j = 0; j < RKVDEC_NUM_REFLIST; j++) {
+			for (i = 0; i < h264_ctx->reflists.num_valid; i++) {
+				u8 dpb_valid = 0;
+				u8 idx = reflists[j][i];
 
-			switch (j) {
-			case 0:
-				idx = h264_ctx->reflists.p[i];
-				break;
-			case 1:
-				idx = h264_ctx->reflists.b0[i];
-				break;
-			case 2:
-				idx = h264_ctx->reflists.b1[i];
-				break;
+				if (idx >= ARRAY_SIZE(dec_params->dpb))
+					continue;
+				dpb_valid = !!(dpb[idx].flags &
+					       V4L2_H264_DPB_ENTRY_FLAG_ACTIVE);
+
+				set_ps_field(hw_rps, DPB_INFO(i, j),
+					     idx | dpb_valid << 4);
 			}
+		}
+		return;
+	}
 
-			if (idx >= ARRAY_SIZE(dec_params->dpb))
-				continue;
-			dpb_valid = !!(dpb[idx].flags &
-				       V4L2_H264_DPB_ENTRY_FLAG_ACTIVE);
+	for (j = 0; j < RKVDEC_NUM_REFLIST; j++) {
+		u8 a_parity = (sl_params->flags & V4L2_H264_SLICE_FLAG_BOTTOM_FIELD)
+			? V4L2_H264_DPB_ENTRY_FLAG_BOTTOM_REF
+			: V4L2_H264_DPB_ENTRY_FLAG_TOP_REF;
+		u8 b_parity = (sl_params->flags & V4L2_H264_SLICE_FLAG_BOTTOM_FIELD)
+			? V4L2_H264_DPB_ENTRY_FLAG_TOP_REF
+			: V4L2_H264_DPB_ENTRY_FLAG_BOTTOM_REF;
+		u8 a_flags = a_parity | V4L2_H264_DPB_ENTRY_FLAG_LONG_TERM;
+		u8 b_flags = b_parity | V4L2_H264_DPB_ENTRY_FLAG_LONG_TERM;
+		i = 0;
 
-			set_ps_field(hw_rps, DPB_INFO(i, j),
-				     idx | dpb_valid << 4);
+		for (k = 0; k < 2; k++) {
+			u8 a = 0;
+			u8 b = 0;
+			a_parity |= k ? V4L2_H264_DPB_ENTRY_FLAG_LONG_TERM : 0;
+			b_parity |= k ? V4L2_H264_DPB_ENTRY_FLAG_LONG_TERM : 0;
+
+		while (a < h264_ctx->reflists.num_valid || b < h264_ctx->reflists.num_valid) {
+			for (; a < h264_ctx->reflists.num_valid; a++) {
+				u8 idx = reflists[j][a];
+				if (idx >= ARRAY_SIZE(dec_params->dpb))
+					continue;
+				if ((dpb[idx].flags & a_flags) == a_parity) {
+					set_ps_field(hw_rps, DPB_INFO(i, j),
+					             idx | (1 << 4));
+					set_ps_field(hw_rps, BOTTOM_FLAG(i, j),
+						!!(a_flags & V4L2_H264_SLICE_FLAG_BOTTOM_FIELD));
+					i++;
+					a++;
+					break;
+				}
+			}
+			for (; b < h264_ctx->reflists.num_valid; b++) {
+				u8 idx = reflists[j][b];
+				if (idx >= ARRAY_SIZE(dec_params->dpb))
+					continue;
+				if ((dpb[idx].flags & b_flags) == b_parity) {
+					set_ps_field(hw_rps, DPB_INFO(i, j),
+					             idx | (1 << 4));
+					set_ps_field(hw_rps, BOTTOM_FLAG(i, j),
+						!!(b_flags & V4L2_H264_SLICE_FLAG_BOTTOM_FIELD));
+					i++;
+					b++;
+					break;
+				}
+			}
+		}
 		}
 	}
 }
 
-/*
- * NOTE: The values in a scaling list are in zig-zag order, apply inverse
- * scanning process to get the values in matrix order.
- */
-static const u32 zig_zag_4x4[16] = {
-	0, 1, 4, 8, 5, 2, 3, 6, 9, 12, 13, 10, 7, 11, 14, 15
-};
-
-static const u32 zig_zag_8x8[64] = {
-	0,  1,  8, 16,  9,  2,  3, 10, 17, 24, 32, 25, 18, 11,  4,  5,
-	12, 19, 26, 33, 40, 48, 41, 34, 27, 20, 13,  6,  7, 14, 21, 28,
-	35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51,
-	58, 59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63
-};
-
-static void reorder_scaling_list(struct rkvdec_ctx *ctx,
-				 struct rkvdec_h264_run *run)
+static void assemble_hw_scaling_list(struct rkvdec_ctx *ctx,
+				     struct rkvdec_h264_run *run)
 {
 	const struct v4l2_ctrl_h264_scaling_matrix *scaling = run->scaling_matrix;
-	const size_t num_list_4x4 = ARRAY_SIZE(scaling->scaling_list_4x4);
-	const size_t list_len_4x4 = ARRAY_SIZE(scaling->scaling_list_4x4[0]);
-	const size_t num_list_8x8 = ARRAY_SIZE(scaling->scaling_list_8x8);
-	const size_t list_len_8x8 = ARRAY_SIZE(scaling->scaling_list_8x8[0]);
 	struct rkvdec_h264_ctx *h264_ctx = ctx->priv;
 	struct rkvdec_h264_priv_tbl *tbl = h264_ctx->priv_tbl.cpu;
-	u8 *dst = tbl->scaling_list;
-	const u8 *src;
-	int i, j;
 
-	BUILD_BUG_ON(ARRAY_SIZE(zig_zag_4x4) != list_len_4x4);
-	BUILD_BUG_ON(ARRAY_SIZE(zig_zag_8x8) != list_len_8x8);
-	BUILD_BUG_ON(ARRAY_SIZE(tbl->scaling_list) <
-		     num_list_4x4 * list_len_4x4 +
-		     num_list_8x8 * list_len_8x8);
+	BUILD_BUG_ON(sizeof(tbl->scaling_list.scaling_list_4x4) != sizeof(scaling->scaling_list_4x4));
+	BUILD_BUG_ON(sizeof(tbl->scaling_list.scaling_list_8x8) != sizeof(scaling->scaling_list_8x8));
 
-	src = &scaling->scaling_list_4x4[0][0];
-	for (i = 0; i < num_list_4x4; ++i) {
-		for (j = 0; j < list_len_4x4; ++j)
-			dst[zig_zag_4x4[j]] = src[j];
-		src += list_len_4x4;
-		dst += list_len_4x4;
-	}
+	memcpy(tbl->scaling_list.scaling_list_4x4,
+	       scaling->scaling_list_4x4,
+	       sizeof(scaling->scaling_list_4x4));
 
-	src = &scaling->scaling_list_8x8[0][0];
-	for (i = 0; i < num_list_8x8; ++i) {
-		for (j = 0; j < list_len_8x8; ++j)
-			dst[zig_zag_8x8[j]] = src[j];
-		src += list_len_8x8;
-		dst += list_len_8x8;
-	}
+	memcpy(tbl->scaling_list.scaling_list_8x8,
+	       scaling->scaling_list_8x8,
+	       sizeof(scaling->scaling_list_8x8));
 }
 
 /*
@@ -917,10 +934,11 @@ static void config_registers(struct rkvdec_ctx *ctx,
 	dma_addr_t rlc_addr;
 	dma_addr_t refer_addr;
 	u32 rlc_len;
-	u32 hor_virstride = 0;
-	u32 ver_virstride = 0;
-	u32 y_virstride = 0;
-	u32 yuv_virstride = 0;
+	u32 hor_virstride;
+	u32 ver_virstride;
+	u32 y_virstride;
+	u32 uv_virstride;
+	u32 yuv_virstride;
 	u32 offset;
 	dma_addr_t dst_addr;
 	u32 reg, i;
@@ -930,16 +948,20 @@ static void config_registers(struct rkvdec_ctx *ctx,
 
 	f = &ctx->decoded_fmt;
 	dst_fmt = &f->fmt.pix_mp;
-	hor_virstride = (sps->bit_depth_luma_minus8 + 8) * dst_fmt->width / 8;
-	ver_virstride = round_up(dst_fmt->height, 16);
+	hor_virstride = dst_fmt->plane_fmt[0].bytesperline;
+	ver_virstride = dst_fmt->height;
 	y_virstride = hor_virstride * ver_virstride;
 
-	if (sps->chroma_format_idc == 0)
-		yuv_virstride = y_virstride;
-	else if (sps->chroma_format_idc == 1)
-		yuv_virstride += y_virstride + y_virstride / 2;
+	if (sps->chroma_format_idc == 1)
+		uv_virstride = y_virstride / 2;
 	else if (sps->chroma_format_idc == 2)
-		yuv_virstride += 2 * y_virstride;
+		uv_virstride = y_virstride;
+	else if (sps->chroma_format_idc == 3)
+		uv_virstride = 2 * y_virstride;
+	else
+		uv_virstride = 0;
+
+	yuv_virstride = y_virstride + uv_virstride;
 
 	reg = RKVDEC_Y_HOR_VIRSTRIDE(hor_virstride / 16) |
 	      RKVDEC_UV_HOR_VIRSTRIDE(hor_virstride / 16) |
@@ -975,16 +997,16 @@ static void config_registers(struct rkvdec_ctx *ctx,
 	for (i = 0; i < ARRAY_SIZE(dec_params->dpb); i++) {
 		struct vb2_buffer *vb_buf = get_ref_buf(ctx, run, i);
 
-		refer_addr = vb2_dma_contig_plane_dma_addr(vb_buf, 0) |
-			     RKVDEC_COLMV_USED_FLAG_REF;
+		refer_addr = vb2_dma_contig_plane_dma_addr(vb_buf, 0);
 
-		if (!(dpb[i].flags & V4L2_H264_DPB_ENTRY_FLAG_FIELD))
-			refer_addr |= RKVDEC_TOPFIELD_USED_REF |
-				      RKVDEC_BOTFIELD_USED_REF;
-		else if (dpb[i].flags & V4L2_H264_DPB_ENTRY_FLAG_BOTTOM_FIELD)
-			refer_addr |= RKVDEC_BOTFIELD_USED_REF;
-		else
+		if (dpb[i].flags & V4L2_H264_DPB_ENTRY_FLAG_FIELD_PIC)
+			refer_addr |= RKVDEC_FIELD_REF;
+		if (dpb[i].flags & V4L2_H264_DPB_ENTRY_FLAG_TOP_REF)
 			refer_addr |= RKVDEC_TOPFIELD_USED_REF;
+		if (dpb[i].flags & V4L2_H264_DPB_ENTRY_FLAG_BOTTOM_REF)
+			refer_addr |= RKVDEC_BOTFIELD_USED_REF;
+		if (dpb[i].flags & V4L2_H264_DPB_ENTRY_FLAG_ACTIVE)
+			refer_addr |= RKVDEC_COLMV_USED_FLAG_REF;
 
 		writel_relaxed(dpb[i].top_field_order_cnt,
 			       rkvdec->regs +  poc_reg_tbl_top_field[i]);
@@ -999,10 +1021,6 @@ static void config_registers(struct rkvdec_ctx *ctx,
 				       rkvdec->regs + RKVDEC_REG_H264_BASE_REFER15);
 	}
 
-	/*
-	 * Since support frame mode only
-	 * top_field_order_cnt is the same as bottom_field_order_cnt
-	 */
 	reg = RKVDEC_CUR_POC(dec_params->top_field_order_cnt);
 	writel_relaxed(reg, rkvdec->regs + RKVDEC_REG_CUR_POC0);
 
@@ -1038,8 +1056,9 @@ static int rkvdec_h264_adjust_fmt(struct rkvdec_ctx *ctx,
 	struct v4l2_pix_format_mplane *fmt = &f->fmt.pix_mp;
 
 	fmt->num_planes = 1;
-	fmt->plane_fmt[0].sizeimage = fmt->width * fmt->height *
-				      RKVDEC_H264_MAX_DEPTH_IN_BYTES;
+	if (!fmt->plane_fmt[0].sizeimage)
+		fmt->plane_fmt[0].sizeimage = fmt->width * fmt->height *
+					      RKVDEC_H264_MAX_DEPTH_IN_BYTES;
 	return 0;
 }
 
@@ -1126,7 +1145,7 @@ static int rkvdec_h264_run(struct rkvdec_ctx *ctx)
 	v4l2_h264_build_b_ref_lists(&reflist_builder, h264_ctx->reflists.b0,
 				    h264_ctx->reflists.b1);
 
-	reorder_scaling_list(ctx, &run);
+	assemble_hw_scaling_list(ctx, &run);
 	assemble_hw_pps(ctx, &run);
 	assemble_hw_rps(ctx, &run);
 	config_registers(ctx, &run);

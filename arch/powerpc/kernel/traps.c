@@ -2278,20 +2278,35 @@ void ppc_warn_emulated_print(const char *type)
 
 static int __init ppc_warn_emulated_init(void)
 {
-	struct dentry *dir;
+	struct dentry *dir, *d;
 	unsigned int i;
 	struct ppc_emulated_entry *entries = (void *)&ppc_emulated;
 
+	if (!powerpc_debugfs_root)
+		return -ENODEV;
+
 	dir = debugfs_create_dir("emulated_instructions",
 				 powerpc_debugfs_root);
+	if (!dir)
+		return -ENOMEM;
 
-	debugfs_create_u32("do_warn", 0644, dir, &ppc_warn_emulated);
+	d = debugfs_create_u32("do_warn", 0644, dir,
+			       &ppc_warn_emulated);
+	if (!d)
+		goto fail;
 
-	for (i = 0; i < sizeof(ppc_emulated)/sizeof(*entries); i++)
-		debugfs_create_u32(entries[i].name, 0644, dir,
-				   (u32 *)&entries[i].val.counter);
+	for (i = 0; i < sizeof(ppc_emulated)/sizeof(*entries); i++) {
+		d = debugfs_create_u32(entries[i].name, 0644, dir,
+				       (u32 *)&entries[i].val.counter);
+		if (!d)
+			goto fail;
+	}
 
 	return 0;
+
+fail:
+	debugfs_remove_recursive(dir);
+	return -ENOMEM;
 }
 
 device_initcall(ppc_warn_emulated_init);

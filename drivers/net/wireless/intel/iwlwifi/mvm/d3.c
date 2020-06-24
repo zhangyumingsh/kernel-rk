@@ -1709,7 +1709,6 @@ iwl_mvm_netdetect_query_results(struct iwl_mvm *mvm,
 	};
 	int ret, len;
 	size_t query_len, matches_len;
-	int max_profiles = iwl_umac_scan_get_max_profiles(mvm->fw);
 
 	ret = iwl_mvm_send_cmd(mvm, &cmd);
 	if (ret) {
@@ -1721,11 +1720,11 @@ iwl_mvm_netdetect_query_results(struct iwl_mvm *mvm,
 		       IWL_UCODE_TLV_API_SCAN_OFFLOAD_CHANS)) {
 		query_len = sizeof(struct iwl_scan_offload_profiles_query);
 		matches_len = sizeof(struct iwl_scan_offload_profile_match) *
-			max_profiles;
+			IWL_SCAN_MAX_PROFILES;
 	} else {
 		query_len = sizeof(struct iwl_scan_offload_profiles_query_v1);
 		matches_len = sizeof(struct iwl_scan_offload_profile_match_v1) *
-			max_profiles;
+			IWL_SCAN_MAX_PROFILES;
 	}
 
 	len = iwl_rx_packet_payload_len(cmd.resp_pkt);

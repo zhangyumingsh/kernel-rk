@@ -282,7 +282,7 @@ done:
 struct dma_aligned_buffer {
 	void *kmalloc_ptr;
 	void *old_xfer_buffer;
-	u8 data[];
+	u8 data[0];
 };
 
 static void free_dma_aligned_buffer(struct urb *urb)

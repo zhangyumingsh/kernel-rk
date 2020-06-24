@@ -701,8 +701,7 @@ typedef struct {
   // APCC Settings
   uint16_t     PccThresholdLow;
   uint16_t     PccThresholdHigh;
-  uint32_t     MGpuFanBoostLimitRpm;
-  uint32_t     PaddingAPCC[5];
+  uint32_t     PaddingAPCC[6];  //FIXME pending SPEC
 
   // Temperature Dependent Vmin
   uint16_t     VDDGFX_TVmin;       //Celcius

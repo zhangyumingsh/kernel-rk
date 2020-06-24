@@ -117,12 +117,12 @@ void release_thread(struct task_struct *dead_task)
 extern asmlinkage void ret_from_fork(void);
 
 /*
- * copy_thread_tls
+ * copy_thread
  * @clone_flags: flags
  * @usp: user stack pointer or fn for kernel thread
  * @arg: arg to fn for kernel thread; always NULL for userspace thread
  * @p: the newly created task
- * @tls: the Thread Local Storage pointer for the new process
+ * @regs: CPU context to copy for userspace thread; always NULL for kthread
  *
  * At the top of a newly initialized kernel stack are two stacked pt_reg
  * structures.  The first (topmost) is the userspace context of the thread.
@@ -148,8 +148,8 @@ extern asmlinkage void ret_from_fork(void);
  */
 
 int
-copy_thread_tls(unsigned long clone_flags, unsigned long usp,
-		unsigned long arg, struct task_struct *p, unsigned long tls)
+copy_thread(unsigned long clone_flags, unsigned long usp,
+	    unsigned long arg, struct task_struct *p)
 {
 	struct pt_regs *userregs;
 	struct pt_regs *kregs;
@@ -179,10 +179,16 @@ copy_thread_tls(unsigned long clone_flags, unsigned long usp,
 			userregs->sp = usp;
 
 		/*
-		 * For CLONE_SETTLS set "tp" (r10) to the TLS pointer.
+		 * For CLONE_SETTLS set "tp" (r10) to the TLS pointer passed to sys_clone.
+		 *
+		 * The kernel entry is:
+		 *	int clone (long flags, void *child_stack, int *parent_tid,
+		 *		int *child_tid, struct void *tls)
+		 *
+		 * This makes the source r7 in the kernel registers.
 		 */
 		if (clone_flags & CLONE_SETTLS)
-			userregs->gpr[10] = tls;
+			userregs->gpr[10] = userregs->gpr[7];
 
 		userregs->gpr[11] = 0;	/* Result from fork() */
 

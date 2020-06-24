@@ -268,14 +268,16 @@ static u32 seccomp_run_filters(const struct seccomp_data *sd,
 	 * All filters in the list are evaluated and the lowest BPF return
 	 * value always takes priority (ignoring the DATA).
 	 */
+	preempt_disable();
 	for (; f; f = f->prev) {
-		u32 cur_ret = bpf_prog_run_pin_on_cpu(f->prog, sd);
+		u32 cur_ret = BPF_PROG_RUN(f->prog, sd);
 
 		if (ACTION_ONLY(cur_ret) < ACTION_ONLY(ret)) {
 			ret = cur_ret;
 			*match = f;
 		}
 	}
+	preempt_enable();
 	return ret;
 }
 #endif /* CONFIG_SECCOMP_FILTER */
@@ -526,12 +528,8 @@ static long seccomp_attach_filter(unsigned int flags,
 		int ret;
 
 		ret = seccomp_can_sync_threads();
-		if (ret) {
-			if (flags & SECCOMP_FILTER_FLAG_TSYNC_ESRCH)
-				return -ESRCH;
-			else
-				return ret;
-		}
+		if (ret)
+			return ret;
 	}
 
 	/* Set log flag, if present. */
@@ -1291,12 +1289,10 @@ static long seccomp_set_mode_filter(unsigned int flags,
 	 * In the successful case, NEW_LISTENER returns the new listener fd.
 	 * But in the failure case, TSYNC returns the thread that died. If you
 	 * combine these two flags, there's no way to tell whether something
-	 * succeeded or failed. So, let's disallow this combination if the user
-	 * has not explicitly requested no errors from TSYNC.
+	 * succeeded or failed. So, let's disallow this combination.
 	 */
 	if ((flags & SECCOMP_FILTER_FLAG_TSYNC) &&
-	    (flags & SECCOMP_FILTER_FLAG_NEW_LISTENER) &&
-	    ((flags & SECCOMP_FILTER_FLAG_TSYNC_ESRCH) == 0))
+	    (flags & SECCOMP_FILTER_FLAG_NEW_LISTENER))
 		return -EINVAL;
 
 	/* Prepare the new filter before holding any locks. */

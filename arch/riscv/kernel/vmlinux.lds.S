@@ -9,9 +9,7 @@
 #include <asm/page.h>
 #include <asm/cache.h>
 #include <asm/thread_info.h>
-#include <asm/set_memory.h>
 
-#include <linux/sizes.h>
 OUTPUT_ARCH(riscv)
 ENTRY(_start)
 
@@ -22,18 +20,10 @@ SECTIONS
 	/* Beginning of code and text segment */
 	. = LOAD_OFFSET;
 	_start = .;
-	HEAD_TEXT_SECTION
-	. = ALIGN(PAGE_SIZE);
-
 	__init_begin = .;
+	HEAD_TEXT_SECTION
 	INIT_TEXT_SECTION(PAGE_SIZE)
 	INIT_DATA_SECTION(16)
-	. = ALIGN(8);
-	__soc_early_init_table : {
-		__soc_early_init_table_start = .;
-		KEEP(*(__soc_early_init_table))
-		__soc_early_init_table_end = .;
-	}
 	/* we have to discard exit text and such at runtime, not link time */
 	.exit.text :
 	{
@@ -46,7 +36,6 @@ SECTIONS
 	PERCPU_SECTION(L1_CACHE_BYTES)
 	__init_end = .;
 
-	. = ALIGN(SECTION_ALIGN);
 	.text : {
 		_text = .;
 		_stext = .;
@@ -64,15 +53,10 @@ SECTIONS
 
 	/* Start of data section */
 	_sdata = .;
-	RO_DATA(SECTION_ALIGN)
+	RO_DATA(L1_CACHE_BYTES)
 	.srodata : {
 		*(.srodata*)
 	}
-
-	EXCEPTION_TABLE(0x10)
-
-	. = ALIGN(SECTION_ALIGN);
-	_data = .;
 
 	RW_DATA(L1_CACHE_BYTES, PAGE_SIZE, THREAD_SIZE)
 	.sdata : {
@@ -80,9 +64,12 @@ SECTIONS
 		*(.sdata*)
 		/* End of data section */
 		_edata = .;
+		*(.sbss*)
 	}
 
 	BSS_SECTION(PAGE_SIZE, PAGE_SIZE, 0)
+
+	EXCEPTION_TABLE(0x10)
 
 	.rel.dyn : {
 		*(.rel.dyn*)

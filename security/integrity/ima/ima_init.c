@@ -11,6 +11,8 @@
  *             initialization and cleanup functions
  */
 
+#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+
 #include <linux/init.h>
 #include <linux/scatterlist.h>
 #include <linux/slab.h>

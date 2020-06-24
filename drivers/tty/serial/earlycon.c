@@ -170,7 +170,6 @@ static int __init register_earlycon(char *buf, const struct earlycon_id *match)
 int __init setup_earlycon(char *buf)
 {
 	const struct earlycon_id **p_match;
-	bool empty_compatible = true;
 
 	if (!buf || !buf[0])
 		return -EINVAL;
@@ -178,17 +177,12 @@ int __init setup_earlycon(char *buf)
 	if (early_con.flags & CON_ENABLED)
 		return -EALREADY;
 
-again:
 	for (p_match = __earlycon_table; p_match < __earlycon_table_end;
 	     p_match++) {
 		const struct earlycon_id *match = *p_match;
 		size_t len = strlen(match->name);
 
 		if (strncmp(buf, match->name, len))
-			continue;
-
-		/* prefer entries with empty compatible */
-		if (empty_compatible && *match->compatible)
 			continue;
 
 		if (buf[len]) {
@@ -199,11 +193,6 @@ again:
 			buf = NULL;
 
 		return register_earlycon(buf, match);
-	}
-
-	if (empty_compatible) {
-		empty_compatible = false;
-		goto again;
 	}
 
 	return -ENOENT;

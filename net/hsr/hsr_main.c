@@ -85,8 +85,7 @@ static int hsr_netdev_notify(struct notifier_block *nb, unsigned long event,
 		master->dev->mtu = mtu_max;
 		break;
 	case NETDEV_UNREGISTER:
-		if (!is_hsr_master(dev))
-			hsr_del_port(port);
+		hsr_del_port(port);
 		break;
 	case NETDEV_PRE_TYPE_CHANGE:
 		/* HSR works only on Ethernet devices. Refuse slave to change

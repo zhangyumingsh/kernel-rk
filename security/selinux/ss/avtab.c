@@ -299,11 +299,12 @@ void avtab_destroy(struct avtab *h)
 	h->mask = 0;
 }
 
-void avtab_init(struct avtab *h)
+int avtab_init(struct avtab *h)
 {
 	kvfree(h->htable);
 	h->htable = NULL;
 	h->nel = 0;
+	return 0;
 }
 
 int avtab_alloc(struct avtab *h, u32 nrules)

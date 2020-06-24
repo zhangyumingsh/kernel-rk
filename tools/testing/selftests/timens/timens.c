@@ -10,6 +10,7 @@
 #include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
+#include <time.h>
 #include <string.h>
 
 #include "log.h"

@@ -3927,21 +3927,14 @@ normal:
 			goto perform_csum_check;
 
 		if (!sg) {
-			if (!csum) {
-				if (!nskb->remcsum_offload)
-					nskb->ip_summed = CHECKSUM_NONE;
-				SKB_GSO_CB(nskb)->csum =
-					skb_copy_and_csum_bits(head_skb, offset,
-							       skb_put(nskb,
-								       len),
-							       len, 0);
-				SKB_GSO_CB(nskb)->csum_start =
-					skb_headroom(nskb) + doffset;
-			} else {
-				skb_copy_bits(head_skb, offset,
-					      skb_put(nskb, len),
-					      len);
-			}
+			if (!nskb->remcsum_offload)
+				nskb->ip_summed = CHECKSUM_NONE;
+			SKB_GSO_CB(nskb)->csum =
+				skb_copy_and_csum_bits(head_skb, offset,
+						       skb_put(nskb, len),
+						       len, 0);
+			SKB_GSO_CB(nskb)->csum_start =
+				skb_headroom(nskb) + doffset;
 			continue;
 		}
 

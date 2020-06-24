@@ -228,7 +228,9 @@ il3945_set_dynamic_key(struct il_priv *il, struct ieee80211_key_conf *keyconf,
 static int
 il3945_remove_static_key(struct il_priv *il)
 {
-	return -EOPNOTSUPP;
+	int ret = -EOPNOTSUPP;
+
+	return ret;
 }
 
 static int

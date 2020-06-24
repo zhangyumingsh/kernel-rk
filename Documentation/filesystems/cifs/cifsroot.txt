@@ -13,7 +13,7 @@ network by utilizing SMB or CIFS protocol.
 
 In order to mount, the network stack will also need to be set up by
 using 'ip=' config option. For more details, see
-Documentation/admin-guide/nfs/nfsroot.rst.
+Documentation/filesystems/nfs/nfsroot.txt.
 
 A CIFS root mount currently requires the use of SMB1+UNIX Extensions
 which is only supported by the Samba server. SMB1 is the older

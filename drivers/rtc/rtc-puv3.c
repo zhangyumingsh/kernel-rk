@@ -85,7 +85,7 @@ static int puv3_rtc_setpie(struct device *dev, int enabled)
 /* Time read/write */
 static int puv3_rtc_gettime(struct device *dev, struct rtc_time *rtc_tm)
 {
-	rtc_time64_to_tm(readl(RTC_RCNR), rtc_tm);
+	rtc_time_to_tm(readl(RTC_RCNR), rtc_tm);
 
 	dev_dbg(dev, "read time %ptRr\n", rtc_tm);
 
@@ -94,9 +94,12 @@ static int puv3_rtc_gettime(struct device *dev, struct rtc_time *rtc_tm)
 
 static int puv3_rtc_settime(struct device *dev, struct rtc_time *tm)
 {
+	unsigned long rtc_count = 0;
+
 	dev_dbg(dev, "set time %ptRr\n", tm);
 
-	writel(rtc_tm_to_time64(tm), RTC_RCNR);
+	rtc_tm_to_time(tm, &rtc_count);
+	writel(rtc_count, RTC_RCNR);
 
 	return 0;
 }
@@ -105,7 +108,7 @@ static int puv3_rtc_getalarm(struct device *dev, struct rtc_wkalrm *alrm)
 {
 	struct rtc_time *alm_tm = &alrm->time;
 
-	rtc_time64_to_tm(readl(RTC_RTAR), alm_tm);
+	rtc_time_to_tm(readl(RTC_RTAR), alm_tm);
 
 	alrm->enabled = readl(RTC_RTSR) & RTC_RTSR_ALE;
 
@@ -117,10 +120,12 @@ static int puv3_rtc_getalarm(struct device *dev, struct rtc_wkalrm *alrm)
 static int puv3_rtc_setalarm(struct device *dev, struct rtc_wkalrm *alrm)
 {
 	struct rtc_time *tm = &alrm->time;
+	unsigned long rtcalarm_count = 0;
 
 	dev_dbg(dev, "set alarm: %d, %ptRr\n", alrm->enabled, tm);
 
-	writel(rtc_tm_to_time64(tm), RTC_RTAR);
+	rtc_tm_to_time(tm, &rtcalarm_count);
+	writel(rtcalarm_count, RTC_RTAR);
 
 	puv3_rtc_setaie(dev, alrm->enabled);
 
@@ -229,7 +234,6 @@ static int puv3_rtc_probe(struct platform_device *pdev)
 
 	/* register RTC and exit */
 	rtc->ops = &puv3_rtcops;
-	rtc->range_max = U32_MAX;
 	ret = rtc_register_device(rtc);
 	if (ret)
 		goto err_nortc;

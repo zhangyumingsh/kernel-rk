@@ -15,18 +15,17 @@
 #define MAX16064_MFR_VOUT_PEAK		0xd4
 #define MAX16064_MFR_TEMPERATURE_PEAK	0xd6
 
-static int max16064_read_word_data(struct i2c_client *client, int page,
-				   int phase, int reg)
+static int max16064_read_word_data(struct i2c_client *client, int page, int reg)
 {
 	int ret;
 
 	switch (reg) {
 	case PMBUS_VIRT_READ_VOUT_MAX:
-		ret = pmbus_read_word_data(client, page, phase,
+		ret = pmbus_read_word_data(client, page,
 					   MAX16064_MFR_VOUT_PEAK);
 		break;
 	case PMBUS_VIRT_READ_TEMP_MAX:
-		ret = pmbus_read_word_data(client, page, phase,
+		ret = pmbus_read_word_data(client, page,
 					   MAX16064_MFR_TEMPERATURE_PEAK);
 		break;
 	case PMBUS_VIRT_RESET_VOUT_HISTORY:

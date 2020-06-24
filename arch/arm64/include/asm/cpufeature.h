@@ -208,10 +208,6 @@ extern struct arm64_ftr_reg arm64_ftr_reg_ctrel0;
  *     In some non-typical cases either both (a) and (b), or neither,
  *     should be permitted. This can be described by including neither
  *     or both flags in the capability's type field.
- *
- *     In case of a conflict, the CPU is prevented from booting. If the
- *     ARM64_CPUCAP_PANIC_ON_CONFLICT flag is specified for the capability,
- *     then a kernel panic is triggered.
  */
 
 
@@ -244,8 +240,6 @@ extern struct arm64_ftr_reg arm64_ftr_reg_ctrel0;
 #define ARM64_CPUCAP_PERMITTED_FOR_LATE_CPU	((u16)BIT(4))
 /* Is it safe for a late CPU to miss this capability when system has it */
 #define ARM64_CPUCAP_OPTIONAL_FOR_LATE_CPU	((u16)BIT(5))
-/* Panic when a conflict is detected */
-#define ARM64_CPUCAP_PANIC_ON_CONFLICT		((u16)BIT(6))
 
 /*
  * CPU errata workarounds that need to be enabled at boot time if one or
@@ -285,20 +279,9 @@ extern struct arm64_ftr_reg arm64_ftr_reg_ctrel0;
 
 /*
  * CPU feature used early in the boot based on the boot CPU. All secondary
- * CPUs must match the state of the capability as detected by the boot CPU. In
- * case of a conflict, a kernel panic is triggered.
+ * CPUs must match the state of the capability as detected by the boot CPU.
  */
-#define ARM64_CPUCAP_STRICT_BOOT_CPU_FEATURE		\
-	(ARM64_CPUCAP_SCOPE_BOOT_CPU | ARM64_CPUCAP_PANIC_ON_CONFLICT)
-
-/*
- * CPU feature used early in the boot based on the boot CPU. It is safe for a
- * late CPU to have this feature even though the boot CPU hasn't enabled it,
- * although the feature will not be used by Linux in this case. If the boot CPU
- * has enabled this feature already, then every late CPU must have it.
- */
-#define ARM64_CPUCAP_BOOT_CPU_FEATURE                  \
-	(ARM64_CPUCAP_SCOPE_BOOT_CPU | ARM64_CPUCAP_PERMITTED_FOR_LATE_CPU)
+#define ARM64_CPUCAP_STRICT_BOOT_CPU_FEATURE ARM64_CPUCAP_SCOPE_BOOT_CPU
 
 struct arm64_cpu_capabilities {
 	const char *desc;
@@ -357,6 +340,18 @@ static inline int cpucap_default_scope(const struct arm64_cpu_capabilities *cap)
 	return cap->type & ARM64_CPUCAP_SCOPE_MASK;
 }
 
+static inline bool
+cpucap_late_cpu_optional(const struct arm64_cpu_capabilities *cap)
+{
+	return !!(cap->type & ARM64_CPUCAP_OPTIONAL_FOR_LATE_CPU);
+}
+
+static inline bool
+cpucap_late_cpu_permitted(const struct arm64_cpu_capabilities *cap)
+{
+	return !!(cap->type & ARM64_CPUCAP_PERMITTED_FOR_LATE_CPU);
+}
+
 /*
  * Generic helper for handling capabilties with multiple (match,enable) pairs
  * of call backs, sharing the same capability bit.
@@ -395,31 +390,7 @@ unsigned long cpu_get_elf_hwcap2(void);
 #define cpu_set_named_feature(name) cpu_set_feature(cpu_feature(name))
 #define cpu_have_named_feature(name) cpu_have_feature(cpu_feature(name))
 
-static __always_inline bool system_capabilities_finalized(void)
-{
-	return static_branch_likely(&arm64_const_caps_ready);
-}
-
-/*
- * Test for a capability with a runtime check.
- *
- * Before the capability is detected, this returns false.
- */
-static inline bool cpus_have_cap(unsigned int num)
-{
-	if (num >= ARM64_NCAPS)
-		return false;
-	return test_bit(num, cpu_hwcaps);
-}
-
-/*
- * Test for a capability without a runtime check.
- *
- * Before capabilities are finalized, this returns false.
- * After capabilities are finalized, this is patched to avoid a runtime check.
- *
- * @num must be a compile-time constant.
- */
+/* System capability check for constant caps */
 static __always_inline bool __cpus_have_const_cap(int num)
 {
 	if (num >= ARM64_NCAPS)
@@ -427,36 +398,19 @@ static __always_inline bool __cpus_have_const_cap(int num)
 	return static_branch_unlikely(&cpu_hwcap_keys[num]);
 }
 
-/*
- * Test for a capability, possibly with a runtime check.
- *
- * Before capabilities are finalized, this behaves as cpus_have_cap().
- * After capabilities are finalized, this is patched to avoid a runtime check.
- *
- * @num must be a compile-time constant.
- */
+static inline bool cpus_have_cap(unsigned int num)
+{
+	if (num >= ARM64_NCAPS)
+		return false;
+	return test_bit(num, cpu_hwcaps);
+}
+
 static __always_inline bool cpus_have_const_cap(int num)
 {
-	if (system_capabilities_finalized())
+	if (static_branch_likely(&arm64_const_caps_ready))
 		return __cpus_have_const_cap(num);
 	else
 		return cpus_have_cap(num);
-}
-
-/*
- * Test for a capability without a runtime check.
- *
- * Before capabilities are finalized, this will BUG().
- * After capabilities are finalized, this is patched to avoid a runtime check.
- *
- * @num must be a compile-time constant.
- */
-static __always_inline bool cpus_have_final_cap(int num)
-{
-	if (system_capabilities_finalized())
-		return __cpus_have_const_cap(num);
-	else
-		BUG();
 }
 
 static inline void cpus_set_cap(unsigned int num)
@@ -491,29 +445,6 @@ static __always_inline unsigned int __attribute_const__
 cpuid_feature_extract_unsigned_field(u64 features, int field)
 {
 	return cpuid_feature_extract_unsigned_field_width(features, field, 4);
-}
-
-/*
- * Fields that identify the version of the Performance Monitors Extension do
- * not follow the standard ID scheme. See ARM DDI 0487E.a page D13-2825,
- * "Alternative ID scheme used for the Performance Monitors Extension version".
- */
-static inline u64 __attribute_const__
-cpuid_feature_cap_perfmon_field(u64 features, int field, u64 cap)
-{
-	u64 val = cpuid_feature_extract_unsigned_field(features, field);
-	u64 mask = GENMASK_ULL(field + 3, field);
-
-	/* Treat IMPLEMENTATION DEFINED functionality as unimplemented */
-	if (val == 0xf)
-		val = 0;
-
-	if (val > cap) {
-		features &= ~mask;
-		features |= (cap << field) & mask;
-	}
-
-	return features;
 }
 
 static inline u64 arm64_ftr_mask(const struct arm64_ftr_bits *ftrp)
@@ -659,13 +590,15 @@ static __always_inline bool system_supports_cnp(void)
 static inline bool system_supports_address_auth(void)
 {
 	return IS_ENABLED(CONFIG_ARM64_PTR_AUTH) &&
-		cpus_have_const_cap(ARM64_HAS_ADDRESS_AUTH);
+		(cpus_have_const_cap(ARM64_HAS_ADDRESS_AUTH_ARCH) ||
+		 cpus_have_const_cap(ARM64_HAS_ADDRESS_AUTH_IMP_DEF));
 }
 
 static inline bool system_supports_generic_auth(void)
 {
 	return IS_ENABLED(CONFIG_ARM64_PTR_AUTH) &&
-		cpus_have_const_cap(ARM64_HAS_GENERIC_AUTH);
+		(cpus_have_const_cap(ARM64_HAS_GENERIC_AUTH_ARCH) ||
+		 cpus_have_const_cap(ARM64_HAS_GENERIC_AUTH_IMP_DEF));
 }
 
 static inline bool system_uses_irq_prio_masking(void)
@@ -678,6 +611,11 @@ static inline bool system_has_prio_mask_debugging(void)
 {
 	return IS_ENABLED(CONFIG_ARM64_DEBUG_PRIORITY_MASKING) &&
 	       system_uses_irq_prio_masking();
+}
+
+static inline bool system_capabilities_finalized(void)
+{
+	return static_branch_likely(&arm64_const_caps_ready);
 }
 
 #define ARM64_BP_HARDEN_UNKNOWN		-1
@@ -739,11 +677,6 @@ static inline bool cpu_has_hw_af(void)
 	return cpuid_feature_extract_unsigned_field(mmfr1,
 						ID_AA64MMFR1_HADBS_SHIFT);
 }
-
-#ifdef CONFIG_ARM64_AMU_EXTN
-/* Check whether the cpu supports the Activity Monitors Unit (AMU) */
-extern bool cpu_has_amu_feat(int cpu);
-#endif
 
 #endif /* __ASSEMBLY__ */
 

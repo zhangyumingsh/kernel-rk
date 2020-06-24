@@ -43,8 +43,6 @@ required:
   - interrupts
   - '#dma-cells'
 
-additionalProperties: false
-
 examples:
   - |
     dma@3000000 {

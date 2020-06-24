@@ -127,8 +127,6 @@ static int kfd_open(struct inode *inode, struct file *filep)
 		return PTR_ERR(process);
 
 	if (kfd_is_locked()) {
-		dev_dbg(kfd_device, "kfd is locked!\n"
-				"process %d unreferenced", process->pasid);
 		kfd_unref_process(process);
 		return -EAGAIN;
 	}
@@ -1169,7 +1167,7 @@ static int kfd_ioctl_get_tile_config(struct file *filep,
 	if (!dev)
 		return -EINVAL;
 
-	amdgpu_amdkfd_get_tile_config(dev->kgd, &config);
+	dev->kfd2kgd->get_tile_config(dev->kgd, &config);
 
 	args->gb_addr_config = config.gb_addr_config;
 	args->num_banks = config.num_banks;

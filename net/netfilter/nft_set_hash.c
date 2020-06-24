@@ -662,7 +662,8 @@ static bool nft_hash_fast_estimate(const struct nft_set_desc *desc, u32 features
 	return true;
 }
 
-const struct nft_set_type nft_set_rhash_type = {
+struct nft_set_type nft_set_rhash_type __read_mostly = {
+	.owner		= THIS_MODULE,
 	.features	= NFT_SET_MAP | NFT_SET_OBJECT |
 			  NFT_SET_TIMEOUT | NFT_SET_EVAL,
 	.ops		= {
@@ -685,7 +686,8 @@ const struct nft_set_type nft_set_rhash_type = {
 	},
 };
 
-const struct nft_set_type nft_set_hash_type = {
+struct nft_set_type nft_set_hash_type __read_mostly = {
+	.owner		= THIS_MODULE,
 	.features	= NFT_SET_MAP | NFT_SET_OBJECT,
 	.ops		= {
 		.privsize       = nft_hash_privsize,
@@ -704,7 +706,8 @@ const struct nft_set_type nft_set_hash_type = {
 	},
 };
 
-const struct nft_set_type nft_set_hash_fast_type = {
+struct nft_set_type nft_set_hash_fast_type __read_mostly = {
+	.owner		= THIS_MODULE,
 	.features	= NFT_SET_MAP | NFT_SET_OBJECT,
 	.ops		= {
 		.privsize       = nft_hash_privsize,

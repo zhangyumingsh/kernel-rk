@@ -361,13 +361,6 @@ qla2x00_do_dpc_vp(scsi_qla_host_t *vha)
 		}
 	}
 
-	if (test_bit(PROCESS_PUREX_IOCB, &vha->dpc_flags)) {
-		if (atomic_read(&vha->loop_state) == LOOP_READY) {
-			qla24xx_process_purex_list(&vha->purex_list);
-			clear_bit(PROCESS_PUREX_IOCB, &vha->dpc_flags);
-		}
-	}
-
 	if (test_bit(FCPORT_UPDATE_NEEDED, &vha->dpc_flags)) {
 		ql_dbg(ql_dbg_dpc, vha, 0x4016,
 		    "FCPort update scheduled.\n");
@@ -516,9 +509,6 @@ qla24xx_create_vhost(struct fc_vport *fc_vport)
 	vha->mgmt_svr_loop_id = qla2x00_reserve_mgmt_server_loop_id(vha);
 
 	vha->dpc_flags = 0L;
-	ha->dpc_active = 0;
-	set_bit(REGISTER_FDMI_NEEDED, &vha->dpc_flags);
-	set_bit(REGISTER_FC4_NEEDED, &vha->dpc_flags);
 
 	/*
 	 * To fix the issue of processing a parent's RSCN for the vport before
@@ -896,8 +886,7 @@ qla25xx_create_rsp_que(struct qla_hw_data *ha, uint16_t options,
 	    rsp->rsp_q_out);
 
 	ret = qla25xx_request_irq(ha, qpair, qpair->msix,
-		ha->flags.disable_msix_handshake ?
-		QLA_MSIX_QPAIR_MULTIQ_RSP_Q : QLA_MSIX_QPAIR_MULTIQ_RSP_Q_HS);
+	    QLA_MSIX_QPAIR_MULTIQ_RSP_Q);
 	if (ret)
 		goto que_failed;
 

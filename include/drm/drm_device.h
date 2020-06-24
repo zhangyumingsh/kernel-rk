@@ -144,7 +144,7 @@ struct drm_device {
 	 * Usage counter for outstanding files open,
 	 * protected by drm_global_mutex
 	 */
-	atomic_t open_count;
+	int open_count;
 
 	/** @filelist_mutex: Protects @filelist. */
 	struct mutex filelist_mutex;

@@ -1216,18 +1216,12 @@ static const struct drm_connector_funcs analogix_dp_connector_funcs = {
 	.atomic_destroy_state = drm_atomic_helper_connector_destroy_state,
 };
 
-static int analogix_dp_bridge_attach(struct drm_bridge *bridge,
-				     enum drm_bridge_attach_flags flags)
+static int analogix_dp_bridge_attach(struct drm_bridge *bridge)
 {
 	struct analogix_dp_device *dp = bridge->driver_private;
 	struct drm_encoder *encoder = dp->encoder;
 	struct drm_connector *connector = NULL;
 	int ret = 0;
-
-	if (flags & DRM_BRIDGE_ATTACH_NO_CONNECTOR) {
-		DRM_ERROR("Fix bridge driver to make connector optional!");
-		return -EINVAL;
-	}
 
 	if (!bridge->encoder) {
 		DRM_ERROR("Parent encoder object not found");
@@ -1576,9 +1570,6 @@ static void analogix_dp_bridge_mode_set(struct drm_bridge *bridge,
 }
 
 static const struct drm_bridge_funcs analogix_dp_bridge_funcs = {
-	.atomic_duplicate_state = drm_atomic_helper_bridge_duplicate_state,
-	.atomic_destroy_state = drm_atomic_helper_bridge_destroy_state,
-	.atomic_reset = drm_atomic_helper_bridge_reset,
 	.atomic_pre_enable = analogix_dp_bridge_atomic_pre_enable,
 	.atomic_enable = analogix_dp_bridge_atomic_enable,
 	.atomic_disable = analogix_dp_bridge_atomic_disable,
@@ -1604,7 +1595,7 @@ static int analogix_dp_create_bridge(struct drm_device *drm_dev,
 	bridge->driver_private = dp;
 	bridge->funcs = &analogix_dp_bridge_funcs;
 
-	ret = drm_bridge_attach(dp->encoder, bridge, NULL, 0);
+	ret = drm_bridge_attach(dp->encoder, bridge, NULL);
 	if (ret) {
 		DRM_ERROR("failed to attach drm bridge\n");
 		return -EINVAL;
@@ -1652,7 +1643,8 @@ static ssize_t analogix_dpaux_transfer(struct drm_dp_aux *aux,
 }
 
 struct analogix_dp_device *
-analogix_dp_probe(struct device *dev, struct analogix_dp_plat_data *plat_data)
+analogix_dp_bind(struct device *dev, struct drm_device *drm_dev,
+		 struct analogix_dp_plat_data *plat_data)
 {
 	struct platform_device *pdev = to_platform_device(dev);
 	struct analogix_dp_device *dp;
@@ -1755,30 +1747,22 @@ analogix_dp_probe(struct device *dev, struct analogix_dp_plat_data *plat_data)
 					irq_flags, "analogix-dp", dp);
 	if (ret) {
 		dev_err(&pdev->dev, "failed to request irq\n");
-		return ERR_PTR(ret);
+		goto err_disable_pm_runtime;
 	}
 	disable_irq(dp->irq);
-
-	return dp;
-}
-EXPORT_SYMBOL_GPL(analogix_dp_probe);
-
-int analogix_dp_bind(struct analogix_dp_device *dp, struct drm_device *drm_dev)
-{
-	int ret;
 
 	dp->drm_dev = drm_dev;
 	dp->encoder = dp->plat_data->encoder;
 
 	dp->aux.name = "DP-AUX";
 	dp->aux.transfer = analogix_dpaux_transfer;
-	dp->aux.dev = dp->dev;
+	dp->aux.dev = &pdev->dev;
 
 	ret = drm_dp_aux_register(&dp->aux);
 	if (ret)
-		return ret;
+		return ERR_PTR(ret);
 
-	pm_runtime_enable(dp->dev);
+	pm_runtime_enable(dev);
 
 	ret = analogix_dp_create_bridge(drm_dev, dp);
 	if (ret) {
@@ -1786,12 +1770,13 @@ int analogix_dp_bind(struct analogix_dp_device *dp, struct drm_device *drm_dev)
 		goto err_disable_pm_runtime;
 	}
 
-	return 0;
+	return dp;
 
 err_disable_pm_runtime:
-	pm_runtime_disable(dp->dev);
 
-	return ret;
+	pm_runtime_disable(dev);
+
+	return ERR_PTR(ret);
 }
 EXPORT_SYMBOL_GPL(analogix_dp_bind);
 
@@ -1808,14 +1793,9 @@ void analogix_dp_unbind(struct analogix_dp_device *dp)
 
 	drm_dp_aux_unregister(&dp->aux);
 	pm_runtime_disable(dp->dev);
-}
-EXPORT_SYMBOL_GPL(analogix_dp_unbind);
-
-void analogix_dp_remove(struct analogix_dp_device *dp)
-{
 	clk_disable_unprepare(dp->clock);
 }
-EXPORT_SYMBOL_GPL(analogix_dp_remove);
+EXPORT_SYMBOL_GPL(analogix_dp_unbind);
 
 #ifdef CONFIG_PM
 int analogix_dp_suspend(struct analogix_dp_device *dp)

@@ -652,7 +652,7 @@ static long gntdev_ioctl_notify(struct gntdev_priv *priv, void __user *u)
 	struct gntdev_grant_map *map;
 	int rc;
 	int out_flags;
-	evtchn_port_t out_event;
+	unsigned int out_event;
 
 	if (copy_from_user(&op, u, sizeof(op)))
 		return -EFAULT;

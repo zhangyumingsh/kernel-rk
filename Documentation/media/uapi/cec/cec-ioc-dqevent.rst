@@ -109,33 +109,35 @@ it is guaranteed that the state did change in between the two events.
 .. flat-table:: struct cec_event
     :header-rows:  0
     :stub-columns: 0
-    :widths:       1 1 8
+    :widths:       1 1 1 8
 
     * - __u64
       - ``ts``
-      - Timestamp of the event in ns.
+      - :cspan:`1`\ Timestamp of the event in ns.
 
 	The timestamp has been taken from the ``CLOCK_MONOTONIC`` clock.
 
 	To access the same clock from userspace use :c:func:`clock_gettime`.
     * - __u32
       - ``event``
-      - The CEC event type, see :ref:`cec-events`.
+      - :cspan:`1` The CEC event type, see :ref:`cec-events`.
     * - __u32
       - ``flags``
-      - Event flags, see :ref:`cec-event-flags`.
-    * - union {
+      - :cspan:`1` Event flags, see :ref:`cec-event-flags`.
+    * - union
       - (anonymous)
-    * - struct cec_event_state_change
+      -
+      -
+    * -
+      - struct cec_event_state_change
       - ``state_change``
       - The new adapter state as sent by the :ref:`CEC_EVENT_STATE_CHANGE <CEC-EVENT-STATE-CHANGE>`
 	event.
-    * - struct cec_event_lost_msgs
+    * -
+      - struct cec_event_lost_msgs
       - ``lost_msgs``
       - The number of lost messages as sent by the :ref:`CEC_EVENT_LOST_MSGS <CEC-EVENT-LOST-MSGS>`
 	event.
-    * - }
-      -
 
 
 .. tabularcolumns:: |p{5.6cm}|p{0.9cm}|p{11.0cm}|

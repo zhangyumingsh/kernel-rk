@@ -323,7 +323,7 @@ static int print_events_table_entry(void *data, char *name, char *event,
 				    char *pmu, char *unit, char *perpkg,
 				    char *metric_expr,
 				    char *metric_name, char *metric_group,
-				    char *deprecated, char *metric_constraint)
+				    char *deprecated)
 {
 	struct perf_entry_data *pd = data;
 	FILE *outfp = pd->outfp;
@@ -357,8 +357,6 @@ static int print_events_table_entry(void *data, char *name, char *event,
 		fprintf(outfp, "\t.metric_group = \"%s\",\n", metric_group);
 	if (deprecated)
 		fprintf(outfp, "\t.deprecated = \"%s\",\n", deprecated);
-	if (metric_constraint)
-		fprintf(outfp, "\t.metric_constraint = \"%s\",\n", metric_constraint);
 	fprintf(outfp, "},\n");
 
 	return 0;
@@ -377,7 +375,6 @@ struct event_struct {
 	char *metric_name;
 	char *metric_group;
 	char *deprecated;
-	char *metric_constraint;
 };
 
 #define ADD_EVENT_FIELD(field) do { if (field) {		\
@@ -425,7 +422,7 @@ static int save_arch_std_events(void *data, char *name, char *event,
 				char *desc, char *long_desc, char *pmu,
 				char *unit, char *perpkg, char *metric_expr,
 				char *metric_name, char *metric_group,
-				char *deprecated, char *metric_constraint)
+				char *deprecated)
 {
 	struct event_struct *es;
 
@@ -489,7 +486,7 @@ try_fixup(const char *fn, char *arch_std, char **event, char **desc,
 	  char **name, char **long_desc, char **pmu, char **filter,
 	  char **perpkg, char **unit, char **metric_expr, char **metric_name,
 	  char **metric_group, unsigned long long eventcode,
-	  char **deprecated, char **metric_constraint)
+	  char **deprecated)
 {
 	/* try to find matching event from arch standard values */
 	struct event_struct *es;
@@ -518,7 +515,7 @@ int json_events(const char *fn,
 		      char *pmu, char *unit, char *perpkg,
 		      char *metric_expr,
 		      char *metric_name, char *metric_group,
-		      char *deprecated, char *metric_constraint),
+		      char *deprecated),
 	  void *data)
 {
 	int err;
@@ -548,7 +545,6 @@ int json_events(const char *fn,
 		char *metric_name = NULL;
 		char *metric_group = NULL;
 		char *deprecated = NULL;
-		char *metric_constraint = NULL;
 		char *arch_std = NULL;
 		unsigned long long eventcode = 0;
 		struct msrmap *msr = NULL;
@@ -633,8 +629,6 @@ int json_events(const char *fn,
 				addfield(map, &metric_name, "", "", val);
 			} else if (json_streq(map, field, "MetricGroup")) {
 				addfield(map, &metric_group, "", "", val);
-			} else if (json_streq(map, field, "MetricConstraint")) {
-				addfield(map, &metric_constraint, "", "", val);
 			} else if (json_streq(map, field, "MetricExpr")) {
 				addfield(map, &metric_expr, "", "", val);
 				for (s = metric_expr; *s; s++)
@@ -676,13 +670,13 @@ int json_events(const char *fn,
 					&long_desc, &pmu, &filter, &perpkg,
 					&unit, &metric_expr, &metric_name,
 					&metric_group, eventcode,
-					&deprecated, &metric_constraint);
+					&deprecated);
 			if (err)
 				goto free_strings;
 		}
 		err = func(data, name, real_event(name, event), desc, long_desc,
 			   pmu, unit, perpkg, metric_expr, metric_name,
-			   metric_group, deprecated, metric_constraint);
+			   metric_group, deprecated);
 free_strings:
 		free(event);
 		free(desc);
@@ -697,7 +691,6 @@ free_strings:
 		free(metric_expr);
 		free(metric_name);
 		free(metric_group);
-		free(metric_constraint);
 		free(arch_std);
 
 		if (err)
@@ -769,19 +762,6 @@ static void print_mapping_table_suffix(FILE *outfp)
 
 	/* and finally, the closing curly bracket for the struct */
 	fprintf(outfp, "};\n");
-}
-
-static void print_mapping_test_table(FILE *outfp)
-{
-	/*
-	 * Print the terminating, NULL entry.
-	 */
-	fprintf(outfp, "{\n");
-	fprintf(outfp, "\t.cpuid = \"testcpu\",\n");
-	fprintf(outfp, "\t.version = \"v1\",\n");
-	fprintf(outfp, "\t.type = \"core\",\n");
-	fprintf(outfp, "\t.table = pme_test_cpu,\n");
-	fprintf(outfp, "},\n");
 }
 
 static int process_mapfile(FILE *outfp, char *fpath)
@@ -861,7 +841,6 @@ static int process_mapfile(FILE *outfp, char *fpath)
 	}
 
 out:
-	print_mapping_test_table(outfp);
 	print_mapping_table_suffix(outfp);
 	fclose(mapfp);
 	free(line);
@@ -1175,22 +1154,6 @@ int main(int argc, char *argv[])
 	} else if (rc < 0) {
 		/* Make build fail */
 		fclose(eventsfp);
-		free_arch_std_events();
-		ret = 1;
-		goto out_free_mapfile;
-	} else if (rc) {
-		goto empty_map;
-	}
-
-	sprintf(ldirname, "%s/test", start_dirname);
-
-	rc = nftw(ldirname, process_one_file, maxfds, 0);
-	if (rc && verbose) {
-		pr_info("%s: Error walking file tree %s rc=%d for test\n",
-			prog, ldirname, rc);
-		goto empty_map;
-	} else if (rc < 0) {
-		/* Make build fail */
 		free_arch_std_events();
 		ret = 1;
 		goto out_free_mapfile;

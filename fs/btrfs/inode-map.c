@@ -515,7 +515,7 @@ out_release:
 	trace_btrfs_space_reservation(fs_info, "ino_cache", trans->transid,
 				      trans->bytes_reserved, 0);
 	btrfs_block_rsv_release(fs_info, trans->block_rsv,
-				trans->bytes_reserved, NULL);
+				trans->bytes_reserved);
 out:
 	trans->block_rsv = rsv;
 	trans->bytes_reserved = num_bytes;

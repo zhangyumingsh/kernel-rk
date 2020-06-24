@@ -845,7 +845,7 @@ struct dentry *ovl_lookup(struct inode *dir, struct dentry *dentry,
 		if (err)
 			goto out;
 
-		if (upperdentry && upperdentry->d_flags & DCACHE_OP_REAL) {
+		if (upperdentry && unlikely(ovl_dentry_remote(upperdentry))) {
 			dput(upperdentry);
 			err = -EREMOTE;
 			goto out;
@@ -1075,9 +1075,6 @@ struct dentry *ovl_lookup(struct inode *dir, struct dentry *dentry,
 		if (IS_ERR(inode))
 			goto out_free_oe;
 	}
-
-	ovl_dentry_update_reval(dentry, upperdentry,
-			DCACHE_OP_REVALIDATE | DCACHE_OP_WEAK_REVALIDATE);
 
 	revert_creds(old_cred);
 	if (origin_path) {

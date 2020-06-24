@@ -14,8 +14,6 @@
 #include <linux/of.h>
 #include <linux/clk.h>
 #include <linux/of_address.h>
-#include <linux/of_device.h>
-#include <linux/pm_runtime.h>
 
 #include "cc_driver.h"
 #include "cc_request_mgr.h"
@@ -136,7 +134,7 @@ static irqreturn_t cc_isr(int irq, void *dev_id)
 
 	/* STAT_OP_TYPE_GENERIC STAT_PHASE_0: Interrupt */
 	/* if driver suspended return, probably shared interrupt */
-	if (pm_runtime_suspended(dev))
+	if (cc_pm_is_dev_suspended(dev))
 		return IRQ_NONE;
 
 	/* read the interrupt status */
@@ -271,6 +269,7 @@ static int init_cc_resources(struct platform_device *plat_dev)
 	u32 val, hw_rev_pidr, sig_cidr;
 	u64 dma_mask;
 	const struct cc_hw_data *hw_rev;
+	const struct of_device_id *dev_id;
 	struct clk *clk;
 	int irq;
 	int rc = 0;
@@ -279,7 +278,11 @@ static int init_cc_resources(struct platform_device *plat_dev)
 	if (!new_drvdata)
 		return -ENOMEM;
 
-	hw_rev = of_device_get_match_data(dev);
+	dev_id = of_match_node(arm_ccree_dev_of_match, np);
+	if (!dev_id)
+		return -ENODEV;
+
+	hw_rev = (struct cc_hw_data *)dev_id->data;
 	new_drvdata->hw_rev_name = hw_rev->name;
 	new_drvdata->hw_rev = hw_rev->rev;
 	new_drvdata->std_bodies = hw_rev->std_bodies;
@@ -299,12 +302,22 @@ static int init_cc_resources(struct platform_device *plat_dev)
 	platform_set_drvdata(plat_dev, new_drvdata);
 	new_drvdata->plat_dev = plat_dev;
 
-	clk = devm_clk_get_optional(dev, NULL);
-	if (IS_ERR(clk)) {
-		if (PTR_ERR(clk) != -EPROBE_DEFER)
-			dev_err(dev, "Error getting clock: %pe\n", clk);
-		return PTR_ERR(clk);
-	}
+	clk = devm_clk_get(dev, NULL);
+	if (IS_ERR(clk))
+		switch (PTR_ERR(clk)) {
+		/* Clock is optional so this might be fine */
+		case -ENOENT:
+			break;
+
+		/* Clock not available, let's try again soon */
+		case -EPROBE_DEFER:
+			return -EPROBE_DEFER;
+
+		default:
+			dev_err(dev, "Error getting clock: %ld\n",
+				PTR_ERR(clk));
+			return PTR_ERR(clk);
+		}
 	new_drvdata->clk = clk;
 
 	new_drvdata->coherent = of_dma_is_coherent(np);
@@ -331,13 +344,13 @@ static int init_cc_resources(struct platform_device *plat_dev)
 
 	init_completion(&new_drvdata->hw_queue_avail);
 
-	if (!dev->dma_mask)
-		dev->dma_mask = &dev->coherent_dma_mask;
+	if (!plat_dev->dev.dma_mask)
+		plat_dev->dev.dma_mask = &plat_dev->dev.coherent_dma_mask;
 
 	dma_mask = DMA_BIT_MASK(DMA_BIT_MASK_LEN);
 	while (dma_mask > 0x7fffffffUL) {
-		if (dma_supported(dev, dma_mask)) {
-			rc = dma_set_coherent_mask(dev, dma_mask);
+		if (dma_supported(&plat_dev->dev, dma_mask)) {
+			rc = dma_set_coherent_mask(&plat_dev->dev, dma_mask);
 			if (!rc)
 				break;
 		}
@@ -349,7 +362,7 @@ static int init_cc_resources(struct platform_device *plat_dev)
 		return rc;
 	}
 
-	rc = clk_prepare_enable(new_drvdata->clk);
+	rc = cc_clk_on(new_drvdata);
 	if (rc) {
 		dev_err(dev, "Failed to enable clock");
 		return rc;
@@ -357,17 +370,7 @@ static int init_cc_resources(struct platform_device *plat_dev)
 
 	new_drvdata->sec_disabled = cc_sec_disable;
 
-	pm_runtime_set_autosuspend_delay(dev, CC_SUSPEND_TIMEOUT);
-	pm_runtime_use_autosuspend(dev);
-	pm_runtime_set_active(dev);
-	pm_runtime_enable(dev);
-	rc = pm_runtime_get_sync(dev);
-	if (rc < 0) {
-		dev_err(dev, "pm_runtime_get_sync() failed: %d\n", rc);
-		goto post_pm_err;
-	}
-
-	/* Wait for Cryptocell reset completion */
+	/* wait for Crytpcell reset completion */
 	if (!cc_wait_for_reset_completion(new_drvdata)) {
 		dev_err(dev, "Cryptocell reset not completed");
 	}
@@ -379,7 +382,7 @@ static int init_cc_resources(struct platform_device *plat_dev)
 			dev_err(dev, "Invalid CC signature: SIGNATURE=0x%08X != expected=0x%08X\n",
 				val, hw_rev->sig);
 			rc = -EINVAL;
-			goto post_pm_err;
+			goto post_clk_err;
 		}
 		sig_cidr = val;
 		hw_rev_pidr = cc_ioread(new_drvdata, new_drvdata->ver_offset);
@@ -390,7 +393,7 @@ static int init_cc_resources(struct platform_device *plat_dev)
 			dev_err(dev, "Invalid CC PIDR: PIDR0124=0x%08X != expected=0x%08X\n",
 				val,  hw_rev->pidr_0124);
 			rc = -EINVAL;
-			goto post_pm_err;
+			goto post_clk_err;
 		}
 		hw_rev_pidr = val;
 
@@ -399,7 +402,7 @@ static int init_cc_resources(struct platform_device *plat_dev)
 			dev_err(dev, "Invalid CC CIDR: CIDR0123=0x%08X != expected=0x%08X\n",
 			val,  hw_rev->cidr_0123);
 			rc = -EINVAL;
-			goto post_pm_err;
+			goto post_clk_err;
 		}
 		sig_cidr = val;
 
@@ -418,7 +421,7 @@ static int init_cc_resources(struct platform_device *plat_dev)
 		default:
 			dev_err(dev, "Unsupported engines configuration.\n");
 			rc = -EINVAL;
-			goto post_pm_err;
+			goto post_clk_err;
 		}
 
 		/* Check security disable state */
@@ -444,14 +447,14 @@ static int init_cc_resources(struct platform_device *plat_dev)
 			      new_drvdata);
 	if (rc) {
 		dev_err(dev, "Could not register to interrupt %d\n", irq);
-		goto post_pm_err;
+		goto post_clk_err;
 	}
 	dev_dbg(dev, "Registered to IRQ: %d\n", irq);
 
 	rc = init_cc_regs(new_drvdata, true);
 	if (rc) {
 		dev_err(dev, "init_cc_regs failed\n");
-		goto post_pm_err;
+		goto post_clk_err;
 	}
 
 	rc = cc_debugfs_init(new_drvdata);
@@ -474,20 +477,27 @@ static int init_cc_resources(struct platform_device *plat_dev)
 	new_drvdata->mlli_sram_addr =
 		cc_sram_alloc(new_drvdata, MAX_MLLI_BUFF_SIZE);
 	if (new_drvdata->mlli_sram_addr == NULL_SRAM_ADDR) {
+		dev_err(dev, "Failed to alloc MLLI Sram buffer\n");
 		rc = -ENOMEM;
-		goto post_fips_init_err;
+		goto post_sram_mgr_err;
 	}
 
 	rc = cc_req_mgr_init(new_drvdata);
 	if (rc) {
 		dev_err(dev, "cc_req_mgr_init failed\n");
-		goto post_fips_init_err;
+		goto post_sram_mgr_err;
 	}
 
 	rc = cc_buffer_mgr_init(new_drvdata);
 	if (rc) {
 		dev_err(dev, "cc_buffer_mgr_init failed\n");
 		goto post_req_mgr_err;
+	}
+
+	rc = cc_pm_init(new_drvdata);
+	if (rc) {
+		dev_err(dev, "cc_pm_init failed\n");
+		goto post_buf_mgr_err;
 	}
 
 	/* Allocate crypto algs */
@@ -510,13 +520,15 @@ static int init_cc_resources(struct platform_device *plat_dev)
 		goto post_hash_err;
 	}
 
+	/* All set, we can allow autosuspend */
+	cc_pm_go(new_drvdata);
+
 	/* If we got here and FIPS mode is enabled
 	 * it means all FIPS test passed, so let TEE
 	 * know we're good.
 	 */
 	cc_set_ree_fips_status(new_drvdata, true);
 
-	pm_runtime_put(dev);
 	return 0;
 
 post_hash_err:
@@ -527,17 +539,16 @@ post_buf_mgr_err:
 	 cc_buffer_mgr_fini(new_drvdata);
 post_req_mgr_err:
 	cc_req_mgr_fini(new_drvdata);
+post_sram_mgr_err:
+	cc_sram_mgr_fini(new_drvdata);
 post_fips_init_err:
 	cc_fips_fini(new_drvdata);
 post_debugfs_err:
 	cc_debugfs_fini(new_drvdata);
 post_regs_err:
 	fini_cc_regs(new_drvdata);
-post_pm_err:
-	pm_runtime_put_noidle(dev);
-	pm_runtime_disable(dev);
-	pm_runtime_set_suspended(dev);
-	clk_disable_unprepare(new_drvdata->clk);
+post_clk_err:
+	cc_clk_off(new_drvdata);
 	return rc;
 }
 
@@ -549,22 +560,36 @@ void fini_cc_regs(struct cc_drvdata *drvdata)
 
 static void cleanup_cc_resources(struct platform_device *plat_dev)
 {
-	struct device *dev = &plat_dev->dev;
 	struct cc_drvdata *drvdata =
 		(struct cc_drvdata *)platform_get_drvdata(plat_dev);
 
 	cc_aead_free(drvdata);
 	cc_hash_free(drvdata);
 	cc_cipher_free(drvdata);
+	cc_pm_fini(drvdata);
 	cc_buffer_mgr_fini(drvdata);
 	cc_req_mgr_fini(drvdata);
+	cc_sram_mgr_fini(drvdata);
 	cc_fips_fini(drvdata);
 	cc_debugfs_fini(drvdata);
 	fini_cc_regs(drvdata);
-	pm_runtime_put_noidle(dev);
-	pm_runtime_disable(dev);
-	pm_runtime_set_suspended(dev);
-	clk_disable_unprepare(drvdata->clk);
+	cc_clk_off(drvdata);
+}
+
+int cc_clk_on(struct cc_drvdata *drvdata)
+{
+	struct clk *clk = drvdata->clk;
+	int rc;
+
+	if (IS_ERR(clk))
+		/* Not all devices have a clock associated with CCREE  */
+		return 0;
+
+	rc = clk_prepare_enable(clk);
+	if (rc)
+		return rc;
+
+	return 0;
 }
 
 unsigned int cc_get_default_hash_len(struct cc_drvdata *drvdata)
@@ -573,6 +598,17 @@ unsigned int cc_get_default_hash_len(struct cc_drvdata *drvdata)
 		return HASH_LEN_SIZE_712;
 	else
 		return HASH_LEN_SIZE_630;
+}
+
+void cc_clk_off(struct cc_drvdata *drvdata)
+{
+	struct clk *clk = drvdata->clk;
+
+	if (IS_ERR(clk))
+		/* Not all devices have a clock associated with CCREE */
+		return;
+
+	clk_disable_unprepare(clk);
 }
 
 static int ccree_probe(struct platform_device *plat_dev)
@@ -617,6 +653,7 @@ static struct platform_driver ccree_driver = {
 
 static int __init ccree_init(void)
 {
+	cc_hash_global_init();
 	cc_debugfs_global_init();
 
 	return platform_driver_register(&ccree_driver);

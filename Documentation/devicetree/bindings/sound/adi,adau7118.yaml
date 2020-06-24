@@ -59,8 +59,6 @@ required:
   - iovdd-supply
   - dvdd-supply
 
-additionalProperties: false
-
 examples:
   - |
     i2c {

@@ -99,16 +99,6 @@ enum rtw_bandwidth {
 	RTW_CHANNEL_WIDTH_10	= 6,
 };
 
-enum rtw_sc_offset {
-	RTW_SC_DONT_CARE	= 0,
-	RTW_SC_20_UPPER		= 1,
-	RTW_SC_20_LOWER		= 2,
-	RTW_SC_20_UPMOST	= 3,
-	RTW_SC_20_LOWEST	= 4,
-	RTW_SC_40_UPPER		= 9,
-	RTW_SC_40_LOWER		= 10,
-};
-
 enum rtw_net_type {
 	RTW_NET_NO_LINK		= 0,
 	RTW_NET_AD_HOC		= 1,
@@ -515,18 +505,6 @@ struct rtw_hw_reg {
 	u32 mask;
 };
 
-struct rtw_reg_domain {
-	u32 addr;
-	u32 mask;
-#define RTW_REG_DOMAIN_MAC32	0
-#define RTW_REG_DOMAIN_MAC16	1
-#define RTW_REG_DOMAIN_MAC8	2
-#define RTW_REG_DOMAIN_RF_A	3
-#define RTW_REG_DOMAIN_RF_B	4
-#define RTW_REG_DOMAIN_NL	0xFF
-	u8 domain;
-};
-
 struct rtw_backup_info {
 	u8 len;
 	u32 reg;
@@ -574,9 +552,6 @@ struct rtw_tx_pkt_info {
 	bool short_gi;
 	bool report;
 	bool rts;
-	bool dis_qselseq;
-	bool en_hwseq;
-	u8 hw_ssn_sel;
 };
 
 struct rtw_rx_pkt_stat {
@@ -767,7 +742,6 @@ struct rtw_vif {
 	u8 bssid[ETH_ALEN];
 	u8 port;
 	u8 bcn_ctrl;
-	struct list_head rsvd_page_list;
 	struct ieee80211_tx_queue_params tx_params[IEEE80211_NUM_ACS];
 	const struct rtw_vif_port *conf;
 
@@ -974,10 +948,10 @@ struct rtw_wow_param {
 };
 
 struct rtw_intf_phy_para_table {
-	const struct rtw_intf_phy_para *usb2_para;
-	const struct rtw_intf_phy_para *usb3_para;
-	const struct rtw_intf_phy_para *gen1_para;
-	const struct rtw_intf_phy_para *gen2_para;
+	struct rtw_intf_phy_para *usb2_para;
+	struct rtw_intf_phy_para *usb3_para;
+	struct rtw_intf_phy_para *gen1_para;
+	struct rtw_intf_phy_para *gen2_para;
 	u8 n_usb2_para;
 	u8 n_usb3_para;
 	u8 n_gen1_para;
@@ -1074,13 +1048,13 @@ struct rtw_chip_info {
 
 	/* init values */
 	u8 sys_func_en;
-	const struct rtw_pwr_seq_cmd **pwr_on_seq;
-	const struct rtw_pwr_seq_cmd **pwr_off_seq;
-	const struct rtw_rqpn *rqpn_table;
-	const struct rtw_page_table *page_table;
-	const struct rtw_intf_phy_para_table *intf_table;
+	struct rtw_pwr_seq_cmd **pwr_on_seq;
+	struct rtw_pwr_seq_cmd **pwr_off_seq;
+	struct rtw_rqpn *rqpn_table;
+	struct rtw_page_table *page_table;
+	struct rtw_intf_phy_para_table *intf_table;
 
-	const struct rtw_hw_reg *dig;
+	struct rtw_hw_reg *dig;
 	u32 rf_base_addr[2];
 	u32 rf_sipi_addr[2];
 
@@ -1122,7 +1096,6 @@ struct rtw_chip_info {
 	u8 bt_afh_span_bw40;
 	u8 afh_5g_num;
 	u8 wl_rf_para_num;
-	u8 coex_info_hw_regs_num;
 	const u8 *bt_rssi_step;
 	const u8 *wl_rssi_step;
 	const struct coex_table_para *table_nsant;
@@ -1132,7 +1105,6 @@ struct rtw_chip_info {
 	const struct coex_rf_para *wl_rf_para_tx;
 	const struct coex_rf_para *wl_rf_para_rx;
 	const struct coex_5g_afh_map *afh_5g;
-	const struct rtw_reg_domain *coex_info_hw_regs;
 };
 
 enum rtw_coex_bt_state_cnt {
@@ -1179,7 +1151,6 @@ struct rtw_coex_rfe {
 struct rtw_coex_dm {
 	bool cur_ps_tdma_on;
 	bool cur_wl_rx_low_gain_en;
-	bool ignore_wl_act;
 
 	u8 reason;
 	u8 bt_rssi_state[4];
@@ -1260,9 +1231,6 @@ struct rtw_coex_stat {
 
 	u32 bt_supported_version;
 	u32 bt_supported_feature;
-	u32 patch_ver;
-	u16 bt_reg_vendor_ae;
-	u16 bt_reg_vendor_ac;
 	s8 bt_rssi;
 	u8 kt_ver;
 	u8 gnt_workaround_state;
@@ -1532,7 +1500,7 @@ struct rtw_fifo_conf {
 	u16 rsvd_cpu_instr_addr;
 	u16 rsvd_fw_txbuf_addr;
 	u16 rsvd_csibuf_addr;
-	const struct rtw_rqpn *rqpn;
+	struct rtw_rqpn *rqpn;
 };
 
 struct rtw_fw_state {
@@ -1549,6 +1517,7 @@ struct rtw_hal {
 	u32 rcr;
 
 	u32 chip_version;
+	u8 fab_version;
 	u8 cut_version;
 	u8 mp_chip;
 	u8 oem_id;
@@ -1662,7 +1631,7 @@ struct rtw_dev {
 	struct rtw_wow_param wow;
 
 	/* hci related data, must be last */
-	u8 priv[] __aligned(sizeof(void *));
+	u8 priv[0] __aligned(sizeof(void *));
 };
 
 #include "hci.h"

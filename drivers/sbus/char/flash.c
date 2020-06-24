@@ -31,6 +31,8 @@ static struct {
 	unsigned long busy;		/* In use? */
 } flash;
 
+#define FLASH_MINOR	152
+
 static int
 flash_mmap(struct file *file, struct vm_area_struct *vma)
 {
@@ -155,7 +157,7 @@ static const struct file_operations flash_fops = {
 	.release =	flash_release,
 };
 
-static struct miscdevice flash_dev = { SBUS_FLASH_MINOR, "flash", &flash_fops };
+static struct miscdevice flash_dev = { FLASH_MINOR, "flash", &flash_fops };
 
 static int flash_probe(struct platform_device *op)
 {

@@ -488,7 +488,7 @@ unsigned long clk_hw_get_rate(const struct clk_hw *hw)
 }
 EXPORT_SYMBOL_GPL(clk_hw_get_rate);
 
-static unsigned long clk_core_get_accuracy_no_lock(struct clk_core *core)
+static unsigned long __clk_get_accuracy(struct clk_core *core)
 {
 	if (!core)
 		return 0;
@@ -774,7 +774,7 @@ static void clk_core_rate_restore_protect(struct clk_core *core, int count)
  * clk_rate_exclusive_get - get exclusivity over the clk rate control
  * @clk: the clk over which the exclusity of rate control is requested
  *
- * clk_rate_exclusive_get() begins a critical section during which a clock
+ * clk_rate_exlusive_get() begins a critical section during which a clock
  * consumer cannot tolerate any other consumer making any operation on the
  * clock which could result in a rate change or rate glitch. Exclusive clocks
  * cannot have their rate changed, either directly or indirectly due to changes
@@ -1517,12 +1517,18 @@ static void __clk_recalc_accuracies(struct clk_core *core)
 		__clk_recalc_accuracies(child);
 }
 
-static long clk_core_get_accuracy_recalc(struct clk_core *core)
+static long clk_core_get_accuracy(struct clk_core *core)
 {
+	unsigned long accuracy;
+
+	clk_prepare_lock();
 	if (core && (core->flags & CLK_GET_ACCURACY_NOCACHE))
 		__clk_recalc_accuracies(core);
 
-	return clk_core_get_accuracy_no_lock(core);
+	accuracy = __clk_get_accuracy(core);
+	clk_prepare_unlock();
+
+	return accuracy;
 }
 
 /**
@@ -1536,16 +1542,10 @@ static long clk_core_get_accuracy_recalc(struct clk_core *core)
  */
 long clk_get_accuracy(struct clk *clk)
 {
-	long accuracy;
-
 	if (!clk)
 		return 0;
 
-	clk_prepare_lock();
-	accuracy = clk_core_get_accuracy_recalc(clk->core);
-	clk_prepare_unlock();
-
-	return accuracy;
+	return clk_core_get_accuracy(clk->core);
 }
 EXPORT_SYMBOL_GPL(clk_get_accuracy);
 
@@ -1599,12 +1599,19 @@ static void __clk_recalc_rates(struct clk_core *core, unsigned long msg)
 		__clk_recalc_rates(child, msg);
 }
 
-static unsigned long clk_core_get_rate_recalc(struct clk_core *core)
+static unsigned long clk_core_get_rate(struct clk_core *core)
 {
+	unsigned long rate;
+
+	clk_prepare_lock();
+
 	if (core && (core->flags & CLK_GET_RATE_NOCACHE))
 		__clk_recalc_rates(core, 0);
 
-	return clk_core_get_rate_nolock(core);
+	rate = clk_core_get_rate_nolock(core);
+	clk_prepare_unlock();
+
+	return rate;
 }
 
 /**
@@ -1617,16 +1624,10 @@ static unsigned long clk_core_get_rate_recalc(struct clk_core *core)
  */
 unsigned long clk_get_rate(struct clk *clk)
 {
-	unsigned long rate;
-
 	if (!clk)
 		return 0;
 
-	clk_prepare_lock();
-	rate = clk_core_get_rate_recalc(clk->core);
-	clk_prepare_unlock();
-
-	return rate;
+	return clk_core_get_rate(clk->core);
 }
 EXPORT_SYMBOL_GPL(clk_get_rate);
 
@@ -2659,14 +2660,12 @@ static int clk_core_get_phase(struct clk_core *core)
 {
 	int ret;
 
-	lockdep_assert_held(&prepare_lock);
-	if (!core->ops->get_phase)
-		return 0;
-
+	clk_prepare_lock();
 	/* Always try to update cached phase if possible */
-	ret = core->ops->get_phase(core->hw);
-	if (ret >= 0)
-		core->phase = ret;
+	if (core->ops->get_phase)
+		core->phase = core->ops->get_phase(core->hw);
+	ret = core->phase;
+	clk_prepare_unlock();
 
 	return ret;
 }
@@ -2680,16 +2679,10 @@ static int clk_core_get_phase(struct clk_core *core)
  */
 int clk_get_phase(struct clk *clk)
 {
-	int ret;
-
 	if (!clk)
 		return 0;
 
-	clk_prepare_lock();
-	ret = clk_core_get_phase(clk->core);
-	clk_prepare_unlock();
-
-	return ret;
+	return clk_core_get_phase(clk->core);
 }
 EXPORT_SYMBOL_GPL(clk_get_phase);
 
@@ -2903,22 +2896,13 @@ static struct hlist_head *orphan_list[] = {
 static void clk_summary_show_one(struct seq_file *s, struct clk_core *c,
 				 int level)
 {
-	int phase;
-
-	seq_printf(s, "%*s%-*s %7d %8d %8d %11lu %10lu ",
+	seq_printf(s, "%*s%-*s %7d %8d %8d %11lu %10lu %5d %6d\n",
 		   level * 3 + 1, "",
 		   30 - level * 3, c->name,
 		   c->enable_count, c->prepare_count, c->protect_count,
-		   clk_core_get_rate_recalc(c),
-		   clk_core_get_accuracy_recalc(c));
-
-	phase = clk_core_get_phase(c);
-	if (phase >= 0)
-		seq_printf(s, "%5d", phase);
-	else
-		seq_puts(s, "-----");
-
-	seq_printf(s, " %6d\n", clk_core_get_scaled_duty_cycle(c, 100000));
+		   clk_core_get_rate(c), clk_core_get_accuracy(c),
+		   clk_core_get_phase(c),
+		   clk_core_get_scaled_duty_cycle(c, 100000));
 }
 
 static void clk_summary_show_subtree(struct seq_file *s, struct clk_core *c,
@@ -2955,7 +2939,6 @@ DEFINE_SHOW_ATTRIBUTE(clk_summary);
 
 static void clk_dump_one(struct seq_file *s, struct clk_core *c, int level)
 {
-	int phase;
 	unsigned long min_rate, max_rate;
 
 	clk_core_get_boundaries(c, &min_rate, &max_rate);
@@ -2965,13 +2948,11 @@ static void clk_dump_one(struct seq_file *s, struct clk_core *c, int level)
 	seq_printf(s, "\"enable_count\": %d,", c->enable_count);
 	seq_printf(s, "\"prepare_count\": %d,", c->prepare_count);
 	seq_printf(s, "\"protect_count\": %d,", c->protect_count);
-	seq_printf(s, "\"rate\": %lu,", clk_core_get_rate_recalc(c));
+	seq_printf(s, "\"rate\": %lu,", clk_core_get_rate(c));
 	seq_printf(s, "\"min_rate\": %lu,", min_rate);
 	seq_printf(s, "\"max_rate\": %lu,", max_rate);
-	seq_printf(s, "\"accuracy\": %lu,", clk_core_get_accuracy_recalc(c));
-	phase = clk_core_get_phase(c);
-	if (phase >= 0)
-		seq_printf(s, "\"phase\": %d,", phase);
+	seq_printf(s, "\"accuracy\": %lu,", clk_core_get_accuracy(c));
+	seq_printf(s, "\"phase\": %d,", clk_core_get_phase(c));
 	seq_printf(s, "\"duty_cycle\": %u",
 		   clk_core_get_scaled_duty_cycle(c, 100000));
 }
@@ -3342,9 +3323,7 @@ static void clk_core_reparent_orphans_nolock(void)
 static int __clk_core_init(struct clk_core *core)
 {
 	int ret;
-	struct clk_core *parent;
 	unsigned long rate;
-	int phase;
 
 	if (!core)
 		return -EINVAL;
@@ -3415,7 +3394,7 @@ static int __clk_core_init(struct clk_core *core)
 			goto out;
 	}
 
-	parent = core->parent = __clk_init_parent(core);
+	core->parent = __clk_init_parent(core);
 
 	/*
 	 * Populate core->parent if parent has already been clk_core_init'd. If
@@ -3427,9 +3406,10 @@ static int __clk_core_init(struct clk_core *core)
 	 * clocks and re-parent any that are children of the clock currently
 	 * being clk_init'd.
 	 */
-	if (parent) {
-		hlist_add_head(&core->child_node, &parent->children);
-		core->orphan = parent->orphan;
+	if (core->parent) {
+		hlist_add_head(&core->child_node,
+				&core->parent->children);
+		core->orphan = core->parent->orphan;
 	} else if (!core->num_parents) {
 		hlist_add_head(&core->child_node, &clk_root_list);
 		core->orphan = false;
@@ -3447,24 +3427,21 @@ static int __clk_core_init(struct clk_core *core)
 	 */
 	if (core->ops->recalc_accuracy)
 		core->accuracy = core->ops->recalc_accuracy(core->hw,
-					clk_core_get_accuracy_no_lock(parent));
-	else if (parent)
-		core->accuracy = parent->accuracy;
+					__clk_get_accuracy(core->parent));
+	else if (core->parent)
+		core->accuracy = core->parent->accuracy;
 	else
 		core->accuracy = 0;
 
 	/*
-	 * Set clk's phase by clk_core_get_phase() caching the phase.
+	 * Set clk's phase.
 	 * Since a phase is by definition relative to its parent, just
 	 * query the current clock phase, or just assume it's in phase.
 	 */
-	phase = clk_core_get_phase(core);
-	if (phase < 0) {
-		ret = phase;
-		pr_warn("%s: Failed to get phase for clk '%s'\n", __func__,
-			core->name);
-		goto out;
-	}
+	if (core->ops->get_phase)
+		core->phase = core->ops->get_phase(core->hw);
+	else
+		core->phase = 0;
 
 	/*
 	 * Set clk's duty cycle.
@@ -3479,9 +3456,9 @@ static int __clk_core_init(struct clk_core *core)
 	 */
 	if (core->ops->recalc_rate)
 		rate = core->ops->recalc_rate(core->hw,
-				clk_core_get_rate_nolock(parent));
-	else if (parent)
-		rate = parent->rate;
+				clk_core_get_rate_nolock(core->parent));
+	else if (core->parent)
+		rate = core->parent->rate;
 	else
 		rate = 0;
 	core->rate = core->req_rate = rate;
@@ -3519,9 +3496,6 @@ static int __clk_core_init(struct clk_core *core)
 out:
 	clk_pm_runtime_put(core);
 unlock:
-	if (ret)
-		hlist_del_init(&core->child_node);
-
 	clk_prepare_unlock();
 
 	if (!ret)
@@ -4891,8 +4865,8 @@ static int parent_ready(struct device_node *np)
  *
  * Return: error code or zero on success
  */
-int of_clk_detect_critical(struct device_node *np, int index,
-			   unsigned long *flags)
+int of_clk_detect_critical(struct device_node *np,
+					  int index, unsigned long *flags)
 {
 	struct property *prop;
 	const __be32 *cur;

@@ -71,7 +71,6 @@ public slots:
 signals:
 	void menuChanged(struct menu *menu);
 	void menuSelected(struct menu *menu);
-	void itemSelected(struct menu *menu);
 	void parentSelected(void);
 	void gotFocus(struct menu *);
 
@@ -299,7 +298,6 @@ public:
 	ConfigMainWindow(void);
 public slots:
 	void changeMenu(struct menu *);
-	void changeItens(struct menu *);
 	void setMenuLink(struct menu *);
 	void listFocusChanged(void);
 	void goBack(void);

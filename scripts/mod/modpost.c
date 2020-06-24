@@ -39,8 +39,6 @@ static int sec_mismatch_count = 0;
 static int sec_mismatch_fatal = 0;
 /* ignore missing files */
 static int ignore_missing_files;
-/* If set to 1, only warn (instead of error) about missing ns imports */
-static int allow_missing_ns_imports;
 
 enum export {
 	export_plain,      export_unused,     export_gpl,
@@ -53,33 +51,41 @@ enum export {
 
 #define MODULE_NAME_LEN (64 - sizeof(Elf_Addr))
 
-void __attribute__((format(printf, 2, 3)))
-modpost_log(enum loglevel loglevel, const char *fmt, ...)
+#define PRINTF __attribute__ ((format (printf, 1, 2)))
+
+PRINTF void fatal(const char *fmt, ...)
 {
 	va_list arglist;
 
-	switch (loglevel) {
-	case LOG_WARN:
-		fprintf(stderr, "WARNING: ");
-		break;
-	case LOG_ERROR:
-		fprintf(stderr, "ERROR: ");
-		break;
-	case LOG_FATAL:
-		fprintf(stderr, "FATAL: ");
-		break;
-	default: /* invalid loglevel, ignore */
-		break;
-	}
-
-	fprintf(stderr, "modpost: ");
+	fprintf(stderr, "FATAL: ");
 
 	va_start(arglist, fmt);
 	vfprintf(stderr, fmt, arglist);
 	va_end(arglist);
 
-	if (loglevel == LOG_FATAL)
-		exit(1);
+	exit(1);
+}
+
+PRINTF void warn(const char *fmt, ...)
+{
+	va_list arglist;
+
+	fprintf(stderr, "WARNING: ");
+
+	va_start(arglist, fmt);
+	vfprintf(stderr, fmt, arglist);
+	va_end(arglist);
+}
+
+PRINTF void merror(const char *fmt, ...)
+{
+	va_list arglist;
+
+	fprintf(stderr, "ERROR: ");
+
+	va_start(arglist, fmt);
+	vfprintf(stderr, fmt, arglist);
+	va_end(arglist);
 }
 
 static inline bool strends(const char *str, const char *postfix)
@@ -107,7 +113,7 @@ static int is_vmlinux(const char *modname)
 void *do_nofail(void *ptr, const char *expr)
 {
 	if (!ptr)
-		fatal("Memory allocation failure: %s.\n", expr);
+		fatal("modpost: Memory allocation failure: %s.\n", expr);
 
 	return ptr;
 }
@@ -2016,7 +2022,7 @@ static void read_symbols(const char *modname)
 
 	license = get_modinfo(&info, "license");
 	if (!license && !is_vmlinux(modname))
-		warn("missing MODULE_LICENSE() in %s\n"
+		warn("modpost: missing MODULE_LICENSE() in %s\n"
 		     "see include/linux/module.h for "
 		     "more information\n", modname);
 	while (license) {
@@ -2147,15 +2153,15 @@ static void check_for_gpl_usage(enum export exp, const char *m, const char *s)
 
 	switch (exp) {
 	case export_gpl:
-		fatal("GPL-incompatible module %s%s "
+		fatal("modpost: GPL-incompatible module %s%s "
 		      "uses GPL-only symbol '%s'\n", m, e, s);
 		break;
 	case export_unused_gpl:
-		fatal("GPL-incompatible module %s%s "
+		fatal("modpost: GPL-incompatible module %s%s "
 		      "uses GPL-only symbol marked UNUSED '%s'\n", m, e, s);
 		break;
 	case export_gpl_future:
-		warn("GPL-incompatible module %s%s "
+		warn("modpost: GPL-incompatible module %s%s "
 		      "uses future GPL-only symbol '%s'\n", m, e, s);
 		break;
 	case export_plain:
@@ -2173,7 +2179,7 @@ static void check_for_unused(enum export exp, const char *m, const char *s)
 	switch (exp) {
 	case export_unused:
 	case export_unused_gpl:
-		warn("module %s%s "
+		warn("modpost: module %s%s "
 		      "uses symbol '%s' marked UNUSED\n", m, e, s);
 		break;
 	default:
@@ -2192,11 +2198,14 @@ static int check_exports(struct module *mod)
 		exp = find_symbol(s->name);
 		if (!exp || exp->module == mod) {
 			if (have_vmlinux && !s->weak) {
-				modpost_log(warn_unresolved ? LOG_WARN : LOG_ERROR,
-					    "\"%s\" [%s.ko] undefined!\n",
-					    s->name, mod->name);
-				if (!warn_unresolved)
+				if (warn_unresolved) {
+					warn("\"%s\" [%s.ko] undefined!\n",
+					     s->name, mod->name);
+				} else {
+					merror("\"%s\" [%s.ko] undefined!\n",
+					       s->name, mod->name);
 					err = 1;
+				}
 			}
 			continue;
 		}
@@ -2208,11 +2217,8 @@ static int check_exports(struct module *mod)
 
 		if (exp->namespace &&
 		    !module_imports_namespace(mod, exp->namespace)) {
-			modpost_log(allow_missing_ns_imports ? LOG_WARN : LOG_ERROR,
-				    "module %s uses symbol %s from namespace %s, but does not import it.\n",
-				    basename, exp->name, exp->namespace);
-			if (!allow_missing_ns_imports)
-				err = 1;
+			warn("module %s uses symbol %s from namespace %s, but does not import it.\n",
+			     basename, exp->name, exp->namespace);
 			add_namespace(&mod->missing_namespaces, exp->namespace);
 		}
 
@@ -2246,12 +2252,8 @@ static int check_modname_len(struct module *mod)
  **/
 static void add_header(struct buffer *b, struct module *mod)
 {
-	buf_printf(b, "#include <linux/module.h>\n");
-	/*
-	 * Include build-salt.h after module.h in order to
-	 * inherit the definitions.
-	 */
 	buf_printf(b, "#include <linux/build-salt.h>\n");
+	buf_printf(b, "#include <linux/module.h>\n");
 	buf_printf(b, "#include <linux/vermagic.h>\n");
 	buf_printf(b, "#include <linux/compiler.h>\n");
 	buf_printf(b, "\n");
@@ -2559,7 +2561,7 @@ int main(int argc, char **argv)
 	struct ext_sym_list *extsym_iter;
 	struct ext_sym_list *extsym_start = NULL;
 
-	while ((opt = getopt(argc, argv, "i:e:mnsT:o:awENd:")) != -1) {
+	while ((opt = getopt(argc, argv, "i:e:mnsT:o:awEd:")) != -1) {
 		switch (opt) {
 		case 'i':
 			kernel_read = optarg;
@@ -2596,9 +2598,6 @@ int main(int argc, char **argv)
 			break;
 		case 'E':
 			sec_mismatch_fatal = 1;
-			break;
-		case 'N':
-			allow_missing_ns_imports = 1;
 			break;
 		case 'd':
 			missing_namespace_deps = optarg;
@@ -2655,7 +2654,7 @@ int main(int argc, char **argv)
 	if (dump_write)
 		write_dump(dump_write);
 	if (sec_mismatch_count && sec_mismatch_fatal)
-		fatal("Section mismatches detected.\n"
+		fatal("modpost: Section mismatches detected.\n"
 		      "Set CONFIG_SECTION_MISMATCH_WARN_ONLY=y to allow them.\n");
 	for (n = 0; n < SYMBOL_HASH_SIZE; n++) {
 		struct symbol *s;

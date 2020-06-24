@@ -125,8 +125,7 @@ static inline void zl6100_wait(const struct zl6100_data *data)
 	}
 }
 
-static int zl6100_read_word_data(struct i2c_client *client, int page,
-				 int phase, int reg)
+static int zl6100_read_word_data(struct i2c_client *client, int page, int reg)
 {
 	const struct pmbus_driver_info *info = pmbus_get_driver_info(client);
 	struct zl6100_data *data = to_zl6100_data(info);
@@ -168,7 +167,7 @@ static int zl6100_read_word_data(struct i2c_client *client, int page,
 	}
 
 	zl6100_wait(data);
-	ret = pmbus_read_word_data(client, page, phase, vreg);
+	ret = pmbus_read_word_data(client, page, vreg);
 	data->access = ktime_get();
 	if (ret < 0)
 		return ret;

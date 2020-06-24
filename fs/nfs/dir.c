@@ -141,9 +141,10 @@ struct nfs_cache_array {
 	int size;
 	int eof_index;
 	u64 last_cookie;
-	struct nfs_cache_array_entry array[];
+	struct nfs_cache_array_entry array[0];
 };
 
+typedef int (*decode_dirent_t)(struct xdr_stream *, struct nfs_entry *, bool);
 typedef struct {
 	struct file	*file;
 	struct page	*page;
@@ -152,7 +153,7 @@ typedef struct {
 	u64		*dir_cookie;
 	u64		last_cookie;
 	loff_t		current_index;
-	loff_t		prev_index;
+	decode_dirent_t	decode;
 
 	unsigned long	dir_verifier;
 	unsigned long	timestamp;
@@ -239,25 +240,6 @@ out:
 	return ret;
 }
 
-static inline
-int is_32bit_api(void)
-{
-#ifdef CONFIG_COMPAT
-	return in_compat_syscall();
-#else
-	return (BITS_PER_LONG == 32);
-#endif
-}
-
-static
-bool nfs_readdir_use_cookie(const struct file *filp)
-{
-	if ((filp->f_mode & FMODE_32BITHASH) ||
-	    (!(filp->f_mode & FMODE_64BITHASH) && is_32bit_api()))
-		return false;
-	return true;
-}
-
 static
 int nfs_readdir_search_for_pos(struct nfs_cache_array *array, nfs_readdir_descriptor_t *desc)
 {
@@ -307,7 +289,7 @@ int nfs_readdir_search_for_cookie(struct nfs_cache_array *array, nfs_readdir_des
 			    !nfs_readdir_inode_mapping_valid(nfsi)) {
 				ctx->duped = 0;
 				ctx->attr_gencount = nfsi->attr_gencount;
-			} else if (new_pos < desc->prev_index) {
+			} else if (new_pos < desc->ctx->pos) {
 				if (ctx->duped > 0
 				    && ctx->dup_cookie == *desc->dir_cookie) {
 					if (printk_ratelimit()) {
@@ -323,11 +305,7 @@ int nfs_readdir_search_for_cookie(struct nfs_cache_array *array, nfs_readdir_des
 				ctx->dup_cookie = *desc->dir_cookie;
 				ctx->duped = -1;
 			}
-			if (nfs_readdir_use_cookie(desc->file))
-				desc->ctx->pos = *desc->dir_cookie;
-			else
-				desc->ctx->pos = new_pos;
-			desc->prev_index = new_pos;
+			desc->ctx->pos = new_pos;
 			desc->cache_entry_index = i;
 			return 0;
 		}
@@ -398,10 +376,9 @@ error:
 static int xdr_decode(nfs_readdir_descriptor_t *desc,
 		      struct nfs_entry *entry, struct xdr_stream *xdr)
 {
-	struct inode *inode = file_inode(desc->file);
 	int error;
 
-	error = NFS_PROTO(inode)->decode_dirent(xdr, entry, desc->plus);
+	error = desc->decode(xdr, entry, desc->plus);
 	if (error)
 		return error;
 	entry->fattr->time_start = desc->timestamp;
@@ -779,7 +756,6 @@ int readdir_search_pagecache(nfs_readdir_descriptor_t *desc)
 
 	if (desc->page_index == 0) {
 		desc->current_index = 0;
-		desc->prev_index = 0;
 		desc->last_cookie = 0;
 	}
 	do {
@@ -810,14 +786,11 @@ int nfs_do_filldir(nfs_readdir_descriptor_t *desc)
 			desc->eof = true;
 			break;
 		}
+		desc->ctx->pos++;
 		if (i < (array->size-1))
 			*desc->dir_cookie = array->array[i+1].cookie;
 		else
 			*desc->dir_cookie = array->last_cookie;
-		if (nfs_readdir_use_cookie(file))
-			desc->ctx->pos = *desc->dir_cookie;
-		else
-			desc->ctx->pos++;
 		if (ctx->duped != 0)
 			ctx->duped = 1;
 	}
@@ -887,14 +860,9 @@ static int nfs_readdir(struct file *file, struct dir_context *ctx)
 {
 	struct dentry	*dentry = file_dentry(file);
 	struct inode	*inode = d_inode(dentry);
-	struct nfs_open_dir_context *dir_ctx = file->private_data;
-	nfs_readdir_descriptor_t my_desc = {
-		.file = file,
-		.ctx = ctx,
-		.dir_cookie = &dir_ctx->dir_cookie,
-		.plus = nfs_use_readdirplus(inode, ctx),
-	},
+	nfs_readdir_descriptor_t my_desc,
 			*desc = &my_desc;
+	struct nfs_open_dir_context *dir_ctx = file->private_data;
 	int res = 0;
 
 	dfprintk(FILE, "NFS: readdir(%pD2) starting at cookie %llu\n",
@@ -907,6 +875,14 @@ static int nfs_readdir(struct file *file, struct dir_context *ctx)
 	 * to either find the entry with the appropriate number or
 	 * revalidate the cookie.
 	 */
+	memset(desc, 0, sizeof(*desc));
+
+	desc->file = file;
+	desc->ctx = ctx;
+	desc->dir_cookie = &dir_ctx->dir_cookie;
+	desc->decode = NFS_PROTO(inode)->decode_dirent;
+	desc->plus = nfs_use_readdirplus(inode, ctx);
+
 	if (ctx->pos == 0 || nfs_attribute_cache_expired(inode))
 		res = nfs_revalidate_mapping(inode, file->f_mapping);
 	if (res < 0)
@@ -978,10 +954,7 @@ static loff_t nfs_llseek_dir(struct file *filp, loff_t offset, int whence)
 	}
 	if (offset != filp->f_pos) {
 		filp->f_pos = offset;
-		if (nfs_readdir_use_cookie(filp))
-			dir_ctx->dir_cookie = offset;
-		else
-			dir_ctx->dir_cookie = 0;
+		dir_ctx->dir_cookie = 0;
 		dir_ctx->duped = 0;
 	}
 	inode_unlock(inode);
@@ -2309,7 +2282,7 @@ static DEFINE_SPINLOCK(nfs_access_lru_lock);
 static LIST_HEAD(nfs_access_lru_list);
 static atomic_long_t nfs_access_nr_entries;
 
-static unsigned long nfs_access_max_cachesize = 4*1024*1024;
+static unsigned long nfs_access_max_cachesize = ULONG_MAX;
 module_param(nfs_access_max_cachesize, ulong, 0644);
 MODULE_PARM_DESC(nfs_access_max_cachesize, "NFS access maximum total cache length");
 
@@ -2516,7 +2489,7 @@ static int nfs_access_get_cached_rcu(struct inode *inode, const struct cred *cre
 	rcu_read_lock();
 	if (nfsi->cache_validity & NFS_INO_INVALID_ACCESS)
 		goto out;
-	lh = rcu_dereference(list_tail_rcu(&nfsi->access_cache_entry_lru));
+	lh = rcu_dereference(nfsi->access_cache_entry_lru.prev);
 	cache = list_entry(lh, struct nfs_access_entry, lru);
 	if (lh == &nfsi->access_cache_entry_lru ||
 	    cred_fscmp(cred, cache->cred) != 0)
@@ -2669,10 +2642,9 @@ static int nfs_do_access(struct inode *inode, const struct cred *cred, int mask)
 	status = NFS_PROTO(inode)->access(inode, &cache);
 	if (status != 0) {
 		if (status == -ESTALE) {
+			nfs_zap_caches(inode);
 			if (!S_ISDIR(inode->i_mode))
-				nfs_set_inode_stale(inode);
-			else
-				nfs_zap_caches(inode);
+				set_bit(NFS_INO_STALE, &NFS_I(inode)->flags);
 		}
 		goto out;
 	}
@@ -2760,7 +2732,14 @@ force_lookup:
 	if (!NFS_PROTO(inode)->access)
 		goto out_notsup;
 
-	res = nfs_do_access(inode, cred, mask);
+	/* Always try fast lookups first */
+	rcu_read_lock();
+	res = nfs_do_access(inode, cred, mask|MAY_NOT_BLOCK);
+	rcu_read_unlock();
+	if (res == -ECHILD && !(mask & MAY_NOT_BLOCK)) {
+		/* Fast lookup failed, try the slow way */
+		res = nfs_do_access(inode, cred, mask);
+	}
 out:
 	if (!res && (mask & MAY_EXEC))
 		res = nfs_execute_ok(inode, mask);

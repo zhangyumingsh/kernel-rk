@@ -75,7 +75,6 @@ struct nfs_fattr {
 	struct nfs4_string	*owner_name;
 	struct nfs4_string	*group_name;
 	struct nfs4_threshold	*mdsthreshold;	/* pNFS threshold hints */
-	struct nfs4_label	*label;
 };
 
 #define NFS_ATTR_FATTR_TYPE		(1U << 0)
@@ -1266,25 +1265,16 @@ struct nfstime4 {
 struct pnfs_commit_bucket {
 	struct list_head written;
 	struct list_head committing;
-	struct pnfs_layout_segment *lseg;
+	struct pnfs_layout_segment *wlseg;
+	struct pnfs_layout_segment *clseg;
 	struct nfs_writeverf direct_verf;
 };
 
-struct pnfs_commit_array {
-	struct list_head cinfo_list;
-	struct list_head lseg_list;
-	struct pnfs_layout_segment *lseg;
-	struct rcu_head rcu;
-	refcount_t refcount;
-	unsigned int nbuckets;
-	struct pnfs_commit_bucket buckets[];
-};
-
 struct pnfs_ds_commit_info {
-	struct list_head commits;
-	unsigned int nwritten;
-	unsigned int ncommitting;
-	const struct pnfs_commit_ops *ops;
+	int nwritten;
+	int ncommitting;
+	int nbuckets;
+	struct pnfs_commit_bucket *buckets;
 };
 
 struct nfs41_state_protection {
@@ -1317,13 +1307,11 @@ struct nfs41_impl_id {
 	struct nfstime4			date;
 };
 
-#define MAX_BIND_CONN_TO_SESSION_RETRIES 3
 struct nfs41_bind_conn_to_session_args {
 	struct nfs_client		*client;
 	struct nfs4_sessionid		sessionid;
 	u32				dir;
 	bool				use_conn_in_rdma_mode;
-	int				retries;
 };
 
 struct nfs41_bind_conn_to_session_res {
@@ -1397,10 +1385,21 @@ struct nfs41_free_stateid_res {
 	unsigned int			status;
 };
 
+static inline void
+nfs_free_pnfs_ds_cinfo(struct pnfs_ds_commit_info *cinfo)
+{
+	kfree(cinfo->buckets);
+}
+
 #else
 
 struct pnfs_ds_commit_info {
 };
+
+static inline void
+nfs_free_pnfs_ds_cinfo(struct pnfs_ds_commit_info *cinfo)
+{
+}
 
 #endif /* CONFIG_NFS_V4_1 */
 

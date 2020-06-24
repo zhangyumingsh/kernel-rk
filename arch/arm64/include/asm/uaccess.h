@@ -304,7 +304,7 @@ do {									\
 		__p = uaccess_mask_ptr(__p);				\
 		__raw_get_user((x), __p, (err));			\
 	} else {							\
-		(x) = (__force __typeof__(x))0; (err) = -EFAULT;	\
+		(x) = 0; (err) = -EFAULT;				\
 	}								\
 } while (0)
 

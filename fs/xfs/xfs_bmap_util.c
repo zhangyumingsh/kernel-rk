@@ -1062,6 +1062,7 @@ xfs_collapse_file_space(
 	int			error;
 	xfs_fileoff_t		next_fsb = XFS_B_TO_FSB(mp, offset + len);
 	xfs_fileoff_t		shift_fsb = XFS_B_TO_FSB(mp, len);
+	uint			resblks = XFS_DIOSTRAT_SPACE_RES(mp, 0);
 	bool			done = false;
 
 	ASSERT(xfs_isilocked(ip, XFS_IOLOCK_EXCL));
@@ -1077,34 +1078,32 @@ xfs_collapse_file_space(
 	if (error)
 		return error;
 
-	error = xfs_trans_alloc(mp, &M_RES(mp)->tr_write, 0, 0, 0, &tp);
-	if (error)
-		return error;
+	while (!error && !done) {
+		error = xfs_trans_alloc(mp, &M_RES(mp)->tr_write, resblks, 0, 0,
+					&tp);
+		if (error)
+			break;
 
-	xfs_ilock(ip, XFS_ILOCK_EXCL);
-	xfs_trans_ijoin(tp, ip, 0);
+		xfs_ilock(ip, XFS_ILOCK_EXCL);
+		error = xfs_trans_reserve_quota(tp, mp, ip->i_udquot,
+				ip->i_gdquot, ip->i_pdquot, resblks, 0,
+				XFS_QMOPT_RES_REGBLKS);
+		if (error)
+			goto out_trans_cancel;
+		xfs_trans_ijoin(tp, ip, XFS_ILOCK_EXCL);
 
-	while (!done) {
 		error = xfs_bmap_collapse_extents(tp, ip, &next_fsb, shift_fsb,
 				&done);
 		if (error)
 			goto out_trans_cancel;
-		if (done)
-			break;
 
-		/* finish any deferred frees and roll the transaction */
-		error = xfs_defer_finish(&tp);
-		if (error)
-			goto out_trans_cancel;
+		error = xfs_trans_commit(tp);
 	}
 
-	error = xfs_trans_commit(tp);
-	xfs_iunlock(ip, XFS_ILOCK_EXCL);
 	return error;
 
 out_trans_cancel:
 	xfs_trans_cancel(tp);
-	xfs_iunlock(ip, XFS_ILOCK_EXCL);
 	return error;
 }
 
@@ -1147,41 +1146,35 @@ xfs_insert_file_space(
 	if (error)
 		return error;
 
-	error = xfs_trans_alloc(mp, &M_RES(mp)->tr_write,
-			XFS_DIOSTRAT_SPACE_RES(mp, 0), 0, 0, &tp);
-	if (error)
-		return error;
-
-	xfs_ilock(ip, XFS_ILOCK_EXCL);
-	xfs_trans_ijoin(tp, ip, 0);
-
 	/*
 	 * The extent shifting code works on extent granularity. So, if stop_fsb
 	 * is not the starting block of extent, we need to split the extent at
 	 * stop_fsb.
 	 */
-	error = xfs_bmap_split_extent(tp, ip, stop_fsb);
+	error = xfs_bmap_split_extent(ip, stop_fsb);
 	if (error)
-		goto out_trans_cancel;
+		return error;
 
-	do {
-		error = xfs_trans_roll_inode(&tp, ip);
+	while (!error && !done) {
+		error = xfs_trans_alloc(mp, &M_RES(mp)->tr_write, 0, 0, 0,
+					&tp);
 		if (error)
-			goto out_trans_cancel;
+			break;
 
+		xfs_ilock(ip, XFS_ILOCK_EXCL);
+		xfs_trans_ijoin(tp, ip, XFS_ILOCK_EXCL);
 		error = xfs_bmap_insert_extents(tp, ip, &next_fsb, shift_fsb,
 				&done, stop_fsb);
 		if (error)
 			goto out_trans_cancel;
-	} while (!done);
 
-	error = xfs_trans_commit(tp);
-	xfs_iunlock(ip, XFS_ILOCK_EXCL);
+		error = xfs_trans_commit(tp);
+	}
+
 	return error;
 
 out_trans_cancel:
 	xfs_trans_cancel(tp);
-	xfs_iunlock(ip, XFS_ILOCK_EXCL);
 	return error;
 }
 
@@ -1449,12 +1442,12 @@ xfs_swap_extent_forks(
 	 * event of a crash. Set the owner change log flags now and leave the
 	 * bmbt scan as the last step.
 	 */
-	if (xfs_sb_version_has_v3inode(&ip->i_mount->m_sb)) {
-		if (ip->i_d.di_format == XFS_DINODE_FMT_BTREE)
-			(*target_log_flags) |= XFS_ILOG_DOWNER;
-		if (tip->i_d.di_format == XFS_DINODE_FMT_BTREE)
-			(*src_log_flags) |= XFS_ILOG_DOWNER;
-	}
+	if (ip->i_d.di_version == 3 &&
+	    ip->i_d.di_format == XFS_DINODE_FMT_BTREE)
+		(*target_log_flags) |= XFS_ILOG_DOWNER;
+	if (tip->i_d.di_version == 3 &&
+	    tip->i_d.di_format == XFS_DINODE_FMT_BTREE)
+		(*src_log_flags) |= XFS_ILOG_DOWNER;
 
 	/*
 	 * Swap the data forks of the inodes
@@ -1489,7 +1482,7 @@ xfs_swap_extent_forks(
 		(*src_log_flags) |= XFS_ILOG_DEXT;
 		break;
 	case XFS_DINODE_FMT_BTREE:
-		ASSERT(!xfs_sb_version_has_v3inode(&ip->i_mount->m_sb) ||
+		ASSERT(ip->i_d.di_version < 3 ||
 		       (*src_log_flags & XFS_ILOG_DOWNER));
 		(*src_log_flags) |= XFS_ILOG_DBROOT;
 		break;
@@ -1501,7 +1494,7 @@ xfs_swap_extent_forks(
 		break;
 	case XFS_DINODE_FMT_BTREE:
 		(*target_log_flags) |= XFS_ILOG_DBROOT;
-		ASSERT(!xfs_sb_version_has_v3inode(&ip->i_mount->m_sb) ||
+		ASSERT(tip->i_d.di_version < 3 ||
 		       (*target_log_flags & XFS_ILOG_DOWNER));
 		break;
 	}

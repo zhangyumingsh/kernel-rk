@@ -128,8 +128,8 @@ then when you can be absolutely certain that the outputs will never be
 transmitted out of the kernel. This is only remotely useful over `jhash` as a
 means of mitigating hashtable flooding denial of service attacks.
 
-Generating a HalfSipHash key
-============================
+Generating a key
+================
 
 Keys should always be generated from a cryptographically secure source of
 random numbers, either using get_random_bytes or get_random_once:
@@ -139,8 +139,8 @@ get_random_bytes(&key, sizeof(key));
 
 If you're not deriving your key from here, you're doing it wrong.
 
-Using the HalfSipHash functions
-===============================
+Using the functions
+===================
 
 There are two variants of the function, one that takes a list of integers, and
 one that takes a buffer::

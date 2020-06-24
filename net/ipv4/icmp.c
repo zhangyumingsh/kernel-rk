@@ -865,7 +865,7 @@ static bool icmp_unreach(struct sk_buff *skb)
 			case 3:
 				if (!icmp_tag_validation(iph->protocol))
 					goto out;
-				fallthrough;
+				/* fall through */
 			case 0:
 				info = ntohs(icmph->un.frag.mtu);
 			}

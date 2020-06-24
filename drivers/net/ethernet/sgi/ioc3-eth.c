@@ -582,23 +582,40 @@ static void ioc3_timer(struct timer_list *t)
 
 /* Try to find a PHY.  There is no apparent relation between the MII addresses
  * in the SGI documentation and what we find in reality, so we simply probe
- * for the PHY.
+ * for the PHY.  It seems IOC3 PHYs usually live on address 31.  One of my
+ * onboard IOC3s has the special oddity that probing doesn't seem to find it
+ * yet the interface seems to work fine, so if probing fails we for now will
+ * simply default to PHY 31 instead of bailing out.
  */
 static int ioc3_mii_init(struct ioc3_private *ip)
 {
+	int ioc3_phy_workaround = 1;
+	int i, found = 0, res = 0;
 	u16 word;
-	int i;
 
 	for (i = 0; i < 32; i++) {
 		word = ioc3_mdio_read(ip->mii.dev, i, MII_PHYSID1);
 
 		if (word != 0xffff && word != 0x0000) {
-			ip->mii.phy_id = i;
-			return 0;
+			found = 1;
+			break;			/* Found a PHY		*/
 		}
 	}
-	ip->mii.phy_id = -1;
-	return -ENODEV;
+
+	if (!found) {
+		if (ioc3_phy_workaround) {
+			i = 31;
+		} else {
+			ip->mii.phy_id = -1;
+			res = -ENODEV;
+			goto out;
+		}
+	}
+
+	ip->mii.phy_id = i;
+
+out:
+	return res;
 }
 
 static void ioc3_mii_start(struct ioc3_private *ip)
@@ -848,14 +865,14 @@ static int ioc3eth_probe(struct platform_device *pdev)
 	ip = netdev_priv(dev);
 	ip->dma_dev = pdev->dev.parent;
 	ip->regs = devm_platform_ioremap_resource(pdev, 0);
-	if (IS_ERR(ip->regs)) {
-		err = PTR_ERR(ip->regs);
+	if (!ip->regs) {
+		err = -ENOMEM;
 		goto out_free;
 	}
 
 	ip->ssram = devm_platform_ioremap_resource(pdev, 1);
-	if (IS_ERR(ip->ssram)) {
-		err = PTR_ERR(ip->ssram);
+	if (!ip->ssram) {
+		err = -ENOMEM;
 		goto out_free;
 	}
 

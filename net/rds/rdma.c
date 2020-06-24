@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007, 2020 Oracle and/or its affiliates.
+ * Copyright (c) 2007, 2017 Oracle and/or its affiliates. All rights reserved.
  *
  * This software is available to you under a choice of one of two
  * licenses.  You may choose to be licensed under the terms of the GNU
@@ -84,7 +84,7 @@ static struct rds_mr *rds_mr_tree_walk(struct rb_root *root, u64 key,
 	if (insert) {
 		rb_link_node(&insert->r_rb_node, parent, p);
 		rb_insert_color(&insert->r_rb_node, root);
-		kref_get(&insert->r_kref);
+		refcount_inc(&insert->r_refcount);
 	}
 	return NULL;
 }
@@ -99,7 +99,10 @@ static void rds_destroy_mr(struct rds_mr *mr)
 	unsigned long flags;
 
 	rdsdebug("RDS: destroy mr key is %x refcnt %u\n",
-		 mr->r_key, kref_read(&mr->r_kref));
+			mr->r_key, refcount_read(&mr->r_refcount));
+
+	if (test_and_set_bit(RDS_MR_DEAD, &mr->r_state))
+		return;
 
 	spin_lock_irqsave(&rs->rs_rdma_lock, flags);
 	if (!RB_EMPTY_NODE(&mr->r_rb_node))
@@ -112,10 +115,8 @@ static void rds_destroy_mr(struct rds_mr *mr)
 		mr->r_trans->free_mr(trans_private, mr->r_invalidate);
 }
 
-void __rds_put_mr_final(struct kref *kref)
+void __rds_put_mr_final(struct rds_mr *mr)
 {
-	struct rds_mr *mr = container_of(kref, struct rds_mr, r_kref);
-
 	rds_destroy_mr(mr);
 	kfree(mr);
 }
@@ -139,7 +140,8 @@ void rds_rdma_drop_keys(struct rds_sock *rs)
 		rb_erase(&mr->r_rb_node, &rs->rs_rdma_keys);
 		RB_CLEAR_NODE(&mr->r_rb_node);
 		spin_unlock_irqrestore(&rs->rs_rdma_lock, flags);
-		kref_put(&mr->r_kref, __rds_put_mr_final);
+		rds_destroy_mr(mr);
+		rds_mr_put(mr);
 		spin_lock_irqsave(&rs->rs_rdma_lock, flags);
 	}
 	spin_unlock_irqrestore(&rs->rs_rdma_lock, flags);
@@ -240,7 +242,7 @@ static int __rds_rdma_map(struct rds_sock *rs, struct rds_get_mr_args *args,
 		goto out;
 	}
 
-	kref_init(&mr->r_kref);
+	refcount_set(&mr->r_refcount, 1);
 	RB_CLEAR_NODE(&mr->r_rb_node);
 	mr->r_trans = rs->rs_transport;
 	mr->r_sock = rs;
@@ -341,7 +343,7 @@ static int __rds_rdma_map(struct rds_sock *rs, struct rds_get_mr_args *args,
 
 	rdsdebug("RDS: get_mr key is %x\n", mr->r_key);
 	if (mr_ret) {
-		kref_get(&mr->r_kref);
+		refcount_inc(&mr->r_refcount);
 		*mr_ret = mr;
 	}
 
@@ -349,7 +351,7 @@ static int __rds_rdma_map(struct rds_sock *rs, struct rds_get_mr_args *args,
 out:
 	kfree(pages);
 	if (mr)
-		kref_put(&mr->r_kref, __rds_put_mr_final);
+		rds_mr_put(mr);
 	return ret;
 }
 
@@ -432,7 +434,13 @@ int rds_free_mr(struct rds_sock *rs, char __user *optval, int optlen)
 	if (!mr)
 		return -EINVAL;
 
-	kref_put(&mr->r_kref, __rds_put_mr_final);
+	/*
+	 * call rds_destroy_mr() ourselves so that we're sure it's done by the time
+	 * we return.  If we let rds_mr_put() do it it might not happen until
+	 * someone else drops their ref.
+	 */
+	rds_destroy_mr(mr);
+	rds_mr_put(mr);
 	return 0;
 }
 
@@ -456,14 +464,6 @@ void rds_rdma_unuse(struct rds_sock *rs, u32 r_key, int force)
 		return;
 	}
 
-	/* Get a reference so that the MR won't go away before calling
-	 * sync_mr() below.
-	 */
-	kref_get(&mr->r_kref);
-
-	/* If it is going to be freed, remove it from the tree now so
-	 * that no other thread can find it and free it.
-	 */
 	if (mr->r_use_once || force) {
 		rb_erase(&mr->r_rb_node, &rs->rs_rdma_keys);
 		RB_CLEAR_NODE(&mr->r_rb_node);
@@ -477,13 +477,12 @@ void rds_rdma_unuse(struct rds_sock *rs, u32 r_key, int force)
 	if (mr->r_trans->sync_mr)
 		mr->r_trans->sync_mr(mr->r_trans_private, DMA_FROM_DEVICE);
 
-	/* Release the reference held above. */
-	kref_put(&mr->r_kref, __rds_put_mr_final);
-
 	/* If the MR was marked as invalidate, this will
 	 * trigger an async flush. */
-	if (zot_me)
-		kref_put(&mr->r_kref, __rds_put_mr_final);
+	if (zot_me) {
+		rds_destroy_mr(mr);
+		rds_mr_put(mr);
+	}
 }
 
 void rds_rdma_free_op(struct rm_rdma_op *ro)
@@ -491,7 +490,7 @@ void rds_rdma_free_op(struct rm_rdma_op *ro)
 	unsigned int i;
 
 	if (ro->op_odp_mr) {
-		kref_put(&ro->op_odp_mr->r_kref, __rds_put_mr_final);
+		rds_mr_put(ro->op_odp_mr);
 	} else {
 		for (i = 0; i < ro->op_nents; i++) {
 			struct page *page = sg_page(&ro->op_sg[i]);
@@ -665,11 +664,9 @@ int rds_cmsg_rdma_args(struct rds_sock *rs, struct rds_message *rm,
 	op->op_odp_mr = NULL;
 
 	WARN_ON(!nr_pages);
-	op->op_sg = rds_message_alloc_sgs(rm, nr_pages);
-	if (IS_ERR(op->op_sg)) {
-		ret = PTR_ERR(op->op_sg);
+	op->op_sg = rds_message_alloc_sgs(rm, nr_pages, &ret);
+	if (!op->op_sg)
 		goto out_pages;
-	}
 
 	if (op->op_notify || op->op_recverr) {
 		/* We allocate an uninitialized notifier here, because
@@ -733,7 +730,7 @@ int rds_cmsg_rdma_args(struct rds_sock *rs, struct rds_message *rm,
 				goto out_pages;
 			}
 			RB_CLEAR_NODE(&local_odp_mr->r_rb_node);
-			kref_init(&local_odp_mr->r_kref);
+			refcount_set(&local_odp_mr->r_refcount, 1);
 			local_odp_mr->r_trans = rs->rs_transport;
 			local_odp_mr->r_sock = rs;
 			local_odp_mr->r_trans_private =
@@ -830,7 +827,7 @@ int rds_cmsg_rdma_dest(struct rds_sock *rs, struct rds_message *rm,
 	if (!mr)
 		err = -EINVAL;	/* invalid r_key */
 	else
-		kref_get(&mr->r_kref);
+		refcount_inc(&mr->r_refcount);
 	spin_unlock_irqrestore(&rs->rs_rdma_lock, flags);
 
 	if (mr) {
@@ -908,11 +905,9 @@ int rds_cmsg_atomic(struct rds_sock *rs, struct rds_message *rm,
 	rm->atomic.op_silent = !!(args->flags & RDS_RDMA_SILENT);
 	rm->atomic.op_active = 1;
 	rm->atomic.op_recverr = rs->rs_recverr;
-	rm->atomic.op_sg = rds_message_alloc_sgs(rm, 1);
-	if (IS_ERR(rm->atomic.op_sg)) {
-		ret = PTR_ERR(rm->atomic.op_sg);
+	rm->atomic.op_sg = rds_message_alloc_sgs(rm, 1, &ret);
+	if (!rm->atomic.op_sg)
 		goto err;
-	}
 
 	/* verify 8 byte-aligned */
 	if (args->local_addr & 0x7) {

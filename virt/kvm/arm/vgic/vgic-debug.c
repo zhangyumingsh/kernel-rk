@@ -178,8 +178,6 @@ static void print_irq_state(struct seq_file *s, struct vgic_irq *irq,
 			    struct kvm_vcpu *vcpu)
 {
 	char *type;
-	bool pending;
-
 	if (irq->intid < VGIC_NR_SGIS)
 		type = "SGI";
 	else if (irq->intid < VGIC_NR_PRIVATE_IRQS)
@@ -192,16 +190,6 @@ static void print_irq_state(struct seq_file *s, struct vgic_irq *irq,
 	if (irq->intid ==0 || irq->intid == VGIC_NR_PRIVATE_IRQS)
 		print_header(s, irq, vcpu);
 
-	pending = irq->pending_latch;
-	if (irq->hw && vgic_irq_is_sgi(irq->intid)) {
-		int err;
-
-		err = irq_get_irqchip_state(irq->host_irq,
-					    IRQCHIP_STATE_PENDING,
-					    &pending);
-		WARN_ON_ONCE(err);
-	}
-
 	seq_printf(s, "       %s %4d "
 		      "    %2d "
 		      "%d%d%d%d%d%d%d "
@@ -213,7 +201,7 @@ static void print_irq_state(struct seq_file *s, struct vgic_irq *irq,
 		      "\n",
 			type, irq->intid,
 			(irq->target_vcpu) ? irq->target_vcpu->vcpu_id : -1,
-			pending,
+			irq->pending_latch,
 			irq->line_level,
 			irq->active,
 			irq->enabled,

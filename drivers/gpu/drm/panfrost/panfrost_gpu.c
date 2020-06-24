@@ -311,6 +311,12 @@ void panfrost_gpu_power_on(struct panfrost_device *pfdev)
 	if (ret)
 		dev_err(pfdev->dev, "error powering up gpu L2");
 
+	gpu_write(pfdev, STACK_PWRON_LO, pfdev->features.stack_present);
+	ret = readl_relaxed_poll_timeout(pfdev->iomem + STACK_READY_LO,
+		val, val == pfdev->features.stack_present, 100, 1000);
+	if (ret)
+		dev_err(pfdev->dev, "error powering up gpu stack");
+
 	gpu_write(pfdev, SHADER_PWRON_LO, pfdev->features.shader_present);
 	ret = readl_relaxed_poll_timeout(pfdev->iomem + SHADER_READY_LO,
 		val, val == pfdev->features.shader_present, 100, 1000);
@@ -320,6 +326,7 @@ void panfrost_gpu_power_on(struct panfrost_device *pfdev)
 	gpu_write(pfdev, TILER_PWRON_LO, pfdev->features.tiler_present);
 	ret = readl_relaxed_poll_timeout(pfdev->iomem + TILER_READY_LO,
 		val, val == pfdev->features.tiler_present, 100, 1000);
+
 	if (ret)
 		dev_err(pfdev->dev, "error powering up gpu tiler");
 }
@@ -328,6 +335,7 @@ void panfrost_gpu_power_off(struct panfrost_device *pfdev)
 {
 	gpu_write(pfdev, TILER_PWROFF_LO, 0);
 	gpu_write(pfdev, SHADER_PWROFF_LO, 0);
+	gpu_write(pfdev, STACK_PWROFF_LO, 0);
 	gpu_write(pfdev, L2_PWROFF_LO, 0);
 }
 

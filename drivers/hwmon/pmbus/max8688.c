@@ -28,8 +28,7 @@
 #define MAX8688_STATUS_OT_FAULT		BIT(13)
 #define MAX8688_STATUS_OT_WARNING	BIT(14)
 
-static int max8688_read_word_data(struct i2c_client *client, int page,
-				  int phase, int reg)
+static int max8688_read_word_data(struct i2c_client *client, int page, int reg)
 {
 	int ret;
 
@@ -38,15 +37,13 @@ static int max8688_read_word_data(struct i2c_client *client, int page,
 
 	switch (reg) {
 	case PMBUS_VIRT_READ_VOUT_MAX:
-		ret = pmbus_read_word_data(client, 0, 0xff,
-					   MAX8688_MFR_VOUT_PEAK);
+		ret = pmbus_read_word_data(client, 0, MAX8688_MFR_VOUT_PEAK);
 		break;
 	case PMBUS_VIRT_READ_IOUT_MAX:
-		ret = pmbus_read_word_data(client, 0, 0xff,
-					   MAX8688_MFR_IOUT_PEAK);
+		ret = pmbus_read_word_data(client, 0, MAX8688_MFR_IOUT_PEAK);
 		break;
 	case PMBUS_VIRT_READ_TEMP_MAX:
-		ret = pmbus_read_word_data(client, 0, 0xff,
+		ret = pmbus_read_word_data(client, 0,
 					   MAX8688_MFR_TEMPERATURE_PEAK);
 		break;
 	case PMBUS_VIRT_RESET_VOUT_HISTORY:
@@ -97,7 +94,7 @@ static int max8688_read_byte_data(struct i2c_client *client, int page, int reg)
 
 	switch (reg) {
 	case PMBUS_STATUS_VOUT:
-		mfg_status = pmbus_read_word_data(client, 0, 0xff,
+		mfg_status = pmbus_read_word_data(client, 0,
 						  MAX8688_MFG_STATUS);
 		if (mfg_status < 0)
 			return mfg_status;
@@ -111,7 +108,7 @@ static int max8688_read_byte_data(struct i2c_client *client, int page, int reg)
 			ret |= PB_VOLTAGE_OV_FAULT;
 		break;
 	case PMBUS_STATUS_IOUT:
-		mfg_status = pmbus_read_word_data(client, 0, 0xff,
+		mfg_status = pmbus_read_word_data(client, 0,
 						  MAX8688_MFG_STATUS);
 		if (mfg_status < 0)
 			return mfg_status;
@@ -123,7 +120,7 @@ static int max8688_read_byte_data(struct i2c_client *client, int page, int reg)
 			ret |= PB_IOUT_OC_FAULT;
 		break;
 	case PMBUS_STATUS_TEMPERATURE:
-		mfg_status = pmbus_read_word_data(client, 0, 0xff,
+		mfg_status = pmbus_read_word_data(client, 0,
 						  MAX8688_MFG_STATUS);
 		if (mfg_status < 0)
 			return mfg_status;

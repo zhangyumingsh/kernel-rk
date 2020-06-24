@@ -113,6 +113,7 @@ static inline int pte_dirty(pte_t pte)		\
 	{ return pte_val(pte) & _PAGE_DIRTY; }
 static inline int pte_young(pte_t pte)		\
 	{ return pte_val(pte) & _PAGE_ACCESSED; }
+static inline int pte_special(pte_t pte)	{ return 0; }
 
 #define pgprot_noncached pgprot_noncached
 
@@ -166,6 +167,8 @@ static inline pte_t pte_mkdirty(pte_t pte)
 	pte_val(pte) |= _PAGE_DIRTY;
 	return pte;
 }
+
+static inline pte_t pte_mkspecial(pte_t pte)	{ return pte; }
 
 static inline pte_t pte_mkyoung(pte_t pte)
 {

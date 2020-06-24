@@ -9,6 +9,8 @@
  *      Helpers to manage template descriptors.
  */
 
+#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+
 #include <linux/rculist.h>
 #include "ima.h"
 #include "ima_template_lib.h"

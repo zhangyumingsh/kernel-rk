@@ -13,8 +13,6 @@
 #include <string.h>
 #include <syscall.h>
 #include <sys/mount.h>
-#include <sys/types.h>
-#include <sys/wait.h>
 
 #include "../kselftest.h"
 

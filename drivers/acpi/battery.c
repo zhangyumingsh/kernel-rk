@@ -1365,19 +1365,19 @@ static const struct dmi_system_id bat_dmi_table[] __initconst = {
 		},
 	},
 	{
-		/* ECS EF20EA, AXP288 PMIC but uses separate fuel-gauge */
+		/* ECS EF20EA */
 		.callback = battery_do_not_check_pmic_quirk,
 		.matches = {
 			DMI_MATCH(DMI_PRODUCT_NAME, "EF20EA"),
 		},
 	},
 	{
-		/* Lenovo Ideapad Miix 320, AXP288 PMIC, separate fuel-gauge */
+		/* Lenovo Ideapad Miix 320 */
 		.callback = battery_do_not_check_pmic_quirk,
 		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
-			DMI_MATCH(DMI_PRODUCT_NAME, "80XF"),
-			DMI_MATCH(DMI_PRODUCT_VERSION, "Lenovo MIIX 320-10ICR"),
+		  DMI_EXACT_MATCH(DMI_SYS_VENDOR, "LENOVO"),
+		  DMI_EXACT_MATCH(DMI_PRODUCT_NAME, "80XF"),
+		  DMI_EXACT_MATCH(DMI_PRODUCT_VERSION, "Lenovo MIIX 320-10ICR"),
 		},
 	},
 	{},

@@ -16,7 +16,6 @@ general.
    devlink-dpipe
    devlink-health
    devlink-info
-   devlink-flash
    devlink-params
    devlink-region
    devlink-resource
@@ -33,7 +32,6 @@ parameters, info versions, and other features it supports.
 
    bnxt
    ionic
-   ice
    mlx4
    mlx5
    mlxsw

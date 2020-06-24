@@ -25,7 +25,6 @@ struct platform_device {
 	bool		id_auto;
 	struct device	dev;
 	u64		platform_dma_mask;
-	struct device_dma_parameters dma_parms;
 	u32		num_resources;
 	struct resource	*resource;
 
@@ -55,9 +54,6 @@ extern struct resource *platform_get_resource(struct platform_device *,
 extern struct device *
 platform_find_device_by_driver(struct device *start,
 			       const struct device_driver *drv);
-extern void __iomem *
-devm_platform_get_and_ioremap_resource(struct platform_device *pdev,
-				unsigned int index, struct resource **res);
 extern void __iomem *
 devm_platform_ioremap_resource(struct platform_device *pdev,
 			       unsigned int index);
@@ -93,7 +89,7 @@ struct platform_device_info {
 		size_t size_data;
 		u64 dma_mask;
 
-		const struct property_entry *properties;
+		struct property_entry *properties;
 };
 extern struct platform_device *platform_device_register_full(
 		const struct platform_device_info *pdevinfo);

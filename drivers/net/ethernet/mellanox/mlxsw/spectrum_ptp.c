@@ -922,8 +922,6 @@ static int mlxsw_sp_ptp_get_message_types(const struct hwtstamp_config *config,
 	case HWTSTAMP_TX_ONESTEP_SYNC:
 	case HWTSTAMP_TX_ONESTEP_P2P:
 		return -ERANGE;
-	default:
-		return -EINVAL;
 	}
 
 	switch (rx_filter) {
@@ -954,8 +952,6 @@ static int mlxsw_sp_ptp_get_message_types(const struct hwtstamp_config *config,
 	case HWTSTAMP_FILTER_SOME:
 	case HWTSTAMP_FILTER_NTP_ALL:
 		return -ERANGE;
-	default:
-		return -EINVAL;
 	}
 
 	*p_ing_types = ing_types;

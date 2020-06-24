@@ -40,18 +40,14 @@ struct core_vmid {
 
 static void add_ptb_to_table(struct core_vmid *core_vmid, unsigned int vmid, uint64_t ptb)
 {
-	if (vmid < MAX_VMID) {
-		core_vmid->ptb_assigned_to_vmid[vmid] = ptb;
-		core_vmid->num_vmids_available--;
-	}
+	core_vmid->ptb_assigned_to_vmid[vmid] = ptb;
+	core_vmid->num_vmids_available--;
 }
 
 static void clear_entry_from_vmid_table(struct core_vmid *core_vmid, unsigned int vmid)
 {
-	if (vmid < MAX_VMID) {
-		core_vmid->ptb_assigned_to_vmid[vmid] = 0;
-		core_vmid->num_vmids_available++;
-	}
+	core_vmid->ptb_assigned_to_vmid[vmid] = 0;
+	core_vmid->num_vmids_available++;
 }
 
 static void evict_vmids(struct core_vmid *core_vmid)
@@ -61,7 +57,7 @@ static void evict_vmids(struct core_vmid *core_vmid)
 
 	// At this point any positions with value 0 are unused vmids, evict them
 	for (i = 1; i < core_vmid->num_vmid; i++) {
-		if (!(ord & (1u << i)))
+		if (ord & (1u << i))
 			clear_entry_from_vmid_table(core_vmid, i);
 	}
 }
@@ -95,7 +91,7 @@ static int get_next_available_vmid(struct core_vmid *core_vmid)
 uint8_t mod_vmid_get_for_ptb(struct mod_vmid *mod_vmid, uint64_t ptb)
 {
 	struct core_vmid *core_vmid = MOD_VMID_TO_CORE(mod_vmid);
-	int vmid = 0;
+	unsigned int vmid = 0;
 
 	// Physical address gets vmid 0
 	if (ptb == 0)

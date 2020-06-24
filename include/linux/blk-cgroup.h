@@ -46,7 +46,6 @@ struct blkcg_gq;
 struct blkcg {
 	struct cgroup_subsys_state	css;
 	spinlock_t			lock;
-	refcount_t			online_pin;
 
 	struct radix_tree_root		blkg_tree;
 	struct blkcg_gq	__rcu		*blkg_hint;
@@ -57,6 +56,7 @@ struct blkcg {
 	struct list_head		all_blkcgs_node;
 #ifdef CONFIG_CGROUP_WRITEBACK
 	struct list_head		cgwb_list;
+	refcount_t			cgwb_refcnt;
 #endif
 };
 
@@ -412,37 +412,46 @@ static inline struct blkcg *cpd_to_blkcg(struct blkcg_policy_data *cpd)
 
 extern void blkcg_destroy_blkgs(struct blkcg *blkcg);
 
+#ifdef CONFIG_CGROUP_WRITEBACK
+
 /**
- * blkcg_pin_online - pin online state
+ * blkcg_cgwb_get - get a reference for blkcg->cgwb_list
  * @blkcg: blkcg of interest
  *
- * While pinned, a blkcg is kept online.  This is primarily used to
- * impedance-match blkg and cgwb lifetimes so that blkg doesn't go offline
- * while an associated cgwb is still active.
+ * This is used to track the number of active wb's related to a blkcg.
  */
-static inline void blkcg_pin_online(struct blkcg *blkcg)
+static inline void blkcg_cgwb_get(struct blkcg *blkcg)
 {
-	refcount_inc(&blkcg->online_pin);
+	refcount_inc(&blkcg->cgwb_refcnt);
 }
 
 /**
- * blkcg_unpin_online - unpin online state
+ * blkcg_cgwb_put - put a reference for @blkcg->cgwb_list
  * @blkcg: blkcg of interest
  *
- * This is primarily used to impedance-match blkg and cgwb lifetimes so
- * that blkg doesn't go offline while an associated cgwb is still active.
- * When this count goes to zero, all active cgwbs have finished so the
+ * This is used to track the number of active wb's related to a blkcg.
+ * When this count goes to zero, all active wb has finished so the
  * blkcg can continue destruction by calling blkcg_destroy_blkgs().
+ * This work may occur in cgwb_release_workfn() on the cgwb_release
+ * workqueue.
  */
-static inline void blkcg_unpin_online(struct blkcg *blkcg)
+static inline void blkcg_cgwb_put(struct blkcg *blkcg)
 {
-	do {
-		if (!refcount_dec_and_test(&blkcg->online_pin))
-			break;
+	if (refcount_dec_and_test(&blkcg->cgwb_refcnt))
 		blkcg_destroy_blkgs(blkcg);
-		blkcg = blkcg_parent(blkcg);
-	} while (blkcg);
 }
+
+#else
+
+static inline void blkcg_cgwb_get(struct blkcg *blkcg) { }
+
+static inline void blkcg_cgwb_put(struct blkcg *blkcg)
+{
+	/* wb isn't being accounted, so trigger destruction right away */
+	blkcg_destroy_blkgs(blkcg);
+}
+
+#endif
 
 /**
  * blkg_path - format cgroup path of blkg

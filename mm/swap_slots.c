@@ -309,7 +309,7 @@ direct_free:
 
 swp_entry_t get_swap_page(struct page *page)
 {
-	swp_entry_t entry;
+	swp_entry_t entry, *pentry;
 	struct swap_slots_cache *cache;
 
 	entry.val = 0;
@@ -336,11 +336,13 @@ swp_entry_t get_swap_page(struct page *page)
 		if (cache->slots) {
 repeat:
 			if (cache->nr) {
-				entry = cache->slots[cache->cur];
-				cache->slots[cache->cur++].val = 0;
+				pentry = &cache->slots[cache->cur++];
+				entry = *pentry;
+				pentry->val = 0;
 				cache->nr--;
-			} else if (refill_swap_slots_cache(cache)) {
-				goto repeat;
+			} else {
+				if (refill_swap_slots_cache(cache))
+					goto repeat;
 			}
 		}
 		mutex_unlock(&cache->alloc_lock);

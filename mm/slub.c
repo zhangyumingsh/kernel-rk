@@ -449,7 +449,6 @@ static DEFINE_SPINLOCK(object_map_lock);
  * not vanish from under us.
  */
 static unsigned long *get_map(struct kmem_cache *s, struct page *page)
-	__acquires(&object_map_lock)
 {
 	void *p;
 	void *addr = page_address(page);
@@ -466,7 +465,7 @@ static unsigned long *get_map(struct kmem_cache *s, struct page *page)
 	return object_map;
 }
 
-static void put_map(unsigned long *map) __releases(&object_map_lock)
+static void put_map(unsigned long *map)
 {
 	VM_BUG_ON(map != object_map);
 	lockdep_assert_held(&object_map_lock);
@@ -551,32 +550,15 @@ static void print_section(char *level, char *text, u8 *addr,
 	metadata_access_disable();
 }
 
-/*
- * See comment in calculate_sizes().
- */
-static inline bool freeptr_outside_object(struct kmem_cache *s)
-{
-	return s->offset >= s->inuse;
-}
-
-/*
- * Return offset of the end of info block which is inuse + free pointer if
- * not overlapping with object.
- */
-static inline unsigned int get_info_end(struct kmem_cache *s)
-{
-	if (freeptr_outside_object(s))
-		return s->inuse + sizeof(void *);
-	else
-		return s->inuse;
-}
-
 static struct track *get_track(struct kmem_cache *s, void *object,
 	enum track_item alloc)
 {
 	struct track *p;
 
-	p = object + get_info_end(s);
+	if (s->offset)
+		p = object + s->offset + sizeof(void *);
+	else
+		p = object + s->inuse;
 
 	return p + alloc;
 }
@@ -703,7 +685,10 @@ static void print_trailer(struct kmem_cache *s, struct page *page, u8 *p)
 		print_section(KERN_ERR, "Redzone ", p + s->object_size,
 			s->inuse - s->object_size);
 
-	off = get_info_end(s);
+	if (s->offset)
+		off = s->offset + sizeof(void *);
+	else
+		off = s->inuse;
 
 	if (s->flags & SLAB_STORE_USER)
 		off += 2 * sizeof(struct track);
@@ -796,7 +781,7 @@ static int check_bytes_and_report(struct kmem_cache *s, struct page *page,
  * object address
  * 	Bytes of the object to be managed.
  * 	If the freepointer may overlay the object then the free
- *	pointer is at the middle of the object.
+ * 	pointer is the first word of the object.
  *
  * 	Poisoning uses 0x6b (POISON_FREE) and the last byte is
  * 	0xa5 (POISON_END)
@@ -830,7 +815,11 @@ static int check_bytes_and_report(struct kmem_cache *s, struct page *page,
 
 static int check_pad_bytes(struct kmem_cache *s, struct page *page, u8 *p)
 {
-	unsigned long off = get_info_end(s);	/* The end of info */
+	unsigned long off = s->inuse;	/* The end of info */
+
+	if (s->offset)
+		/* Freepointer is placed after the object. */
+		off += sizeof(void *);
 
 	if (s->flags & SLAB_STORE_USER)
 		/* We also have user information there */
@@ -917,7 +906,7 @@ static int check_object(struct kmem_cache *s, struct page *page,
 		check_pad_bytes(s, page, p);
 	}
 
-	if (!freeptr_outside_object(s) && val == SLUB_RED_ACTIVE)
+	if (!s->offset && val == SLUB_RED_ACTIVE)
 		/*
 		 * Object and freepointer overlap. Cannot check
 		 * freepointer while object is allocated.
@@ -2216,11 +2205,11 @@ static void unfreeze_partials(struct kmem_cache *s,
 	struct kmem_cache_node *n = NULL, *n2 = NULL;
 	struct page *page, *discard_page = NULL;
 
-	while ((page = slub_percpu_partial(c))) {
+	while ((page = c->partial)) {
 		struct page new;
 		struct page old;
 
-		slub_set_percpu_partial(c, page);
+		c->partial = page->next;
 
 		n2 = get_node(s, page_to_nid(page));
 		if (n != n2) {
@@ -2293,7 +2282,7 @@ static void put_cpu_partial(struct kmem_cache *s, struct page *page, int drain)
 		if (oldpage) {
 			pobjects = oldpage->pobjects;
 			pages = oldpage->pages;
-			if (drain && pobjects > slub_cpu_partial(s)) {
+			if (drain && pobjects > s->cpu_partial) {
 				unsigned long flags;
 				/*
 				 * partial array is full. Move the existing
@@ -2318,7 +2307,7 @@ static void put_cpu_partial(struct kmem_cache *s, struct page *page, int drain)
 
 	} while (this_cpu_cmpxchg(s->cpu_slab->partial, oldpage, page)
 								!= oldpage);
-	if (unlikely(!slub_cpu_partial(s))) {
+	if (unlikely(!s->cpu_partial)) {
 		unsigned long flags;
 
 		local_irq_save(flags);
@@ -3523,15 +3512,15 @@ static void set_cpu_partial(struct kmem_cache *s)
 	 *    50% to keep some capacity around for frees.
 	 */
 	if (!kmem_cache_has_cpu_partial(s))
-		slub_set_cpu_partial(s, 0);
+		s->cpu_partial = 0;
 	else if (s->size >= PAGE_SIZE)
-		slub_set_cpu_partial(s, 2);
+		s->cpu_partial = 2;
 	else if (s->size >= 1024)
-		slub_set_cpu_partial(s, 6);
+		s->cpu_partial = 6;
 	else if (s->size >= 256)
-		slub_set_cpu_partial(s, 13);
+		s->cpu_partial = 13;
 	else
-		slub_set_cpu_partial(s, 30);
+		s->cpu_partial = 30;
 #endif
 }
 
@@ -3543,7 +3532,6 @@ static int calculate_sizes(struct kmem_cache *s, int forced_order)
 {
 	slab_flags_t flags = s->flags;
 	unsigned int size = s->object_size;
-	unsigned int freepointer_area;
 	unsigned int order;
 
 	/*
@@ -3552,13 +3540,6 @@ static int calculate_sizes(struct kmem_cache *s, int forced_order)
 	 * the possible location of the free pointer.
 	 */
 	size = ALIGN(size, sizeof(void *));
-	/*
-	 * This is the area of the object where a freepointer can be
-	 * safely written. If redzoning adds more to the inuse size, we
-	 * can't use that portion for writing the freepointer, so
-	 * s->offset must be limited within this for the general case.
-	 */
-	freepointer_area = size;
 
 #ifdef CONFIG_SLUB_DEBUG
 	/*
@@ -3597,21 +3578,9 @@ static int calculate_sizes(struct kmem_cache *s, int forced_order)
 		 *
 		 * This is the case if we do RCU, have a constructor or
 		 * destructor or are poisoning the objects.
-		 *
-		 * The assumption that s->offset >= s->inuse means free
-		 * pointer is outside of the object is used in the
-		 * freeptr_outside_object() function. If that is no
-		 * longer true, the function needs to be modified.
 		 */
 		s->offset = size;
 		size += sizeof(void *);
-	} else if (freepointer_area > sizeof(void *)) {
-		/*
-		 * Store freelist pointer near middle of object to keep
-		 * it away from the edges of the object to avoid small
-		 * sized over/underflows from neighboring allocations.
-		 */
-		s->offset = ALIGN(freepointer_area / 2, sizeof(void *));
 	}
 
 #ifdef CONFIG_SLUB_DEBUG

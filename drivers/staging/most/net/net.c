@@ -15,7 +15,8 @@
 #include <linux/list.h>
 #include <linux/wait.h>
 #include <linux/kobject.h>
-#include <linux/most.h>
+
+#include "../most.h"
 
 #define MEP_HDR_LEN 8
 #define MDP_HDR_LEN 16

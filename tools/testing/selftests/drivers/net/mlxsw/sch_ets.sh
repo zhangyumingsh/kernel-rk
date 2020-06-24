@@ -56,19 +56,11 @@ switch_destroy()
 }
 
 # Callback from sch_ets_tests.sh
-collect_stats()
+get_stats()
 {
-	local -a streams=("$@")
-	local stream
+	local band=$1; shift
 
-	# Wait for qdisc counter update so that we don't get it mid-way through.
-	busywait_for_counter 1000 +1 \
-		qdisc_parent_stats_get $swp2 10:$((${streams[0]} + 1)) .bytes \
-		> /dev/null
-
-	for stream in ${streams[@]}; do
-		qdisc_parent_stats_get $swp2 10:$((stream + 1)) .bytes
-	done
+	ethtool_stats_get "$h2" rx_octets_prio_$band
 }
 
 bail_on_lldpad

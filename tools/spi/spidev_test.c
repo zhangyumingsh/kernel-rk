@@ -13,7 +13,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <errno.h>
 #include <getopt.h>
 #include <fcntl.h>
 #include <time.h>
@@ -27,11 +26,7 @@
 
 static void pabort(const char *s)
 {
-	if (errno != 0)
-		perror(s);
-	else
-		printf("%s\n", s);
-
+	perror(s);
 	abort();
 }
 
@@ -288,6 +283,7 @@ static void parse_opts(int argc, char *argv[])
 			break;
 		default:
 			print_usage(argv[0]);
+			break;
 		}
 	}
 	if (mode & SPI_LOOP) {
@@ -409,9 +405,6 @@ int main(int argc, char *argv[])
 
 	parse_opts(argc, argv);
 
-	if (input_tx && input_file)
-		pabort("only one of -p and --input may be selected");
-
 	fd = open(device, O_RDWR);
 	if (fd < 0)
 		pabort("can't open device");
@@ -452,6 +445,9 @@ int main(int argc, char *argv[])
 	printf("spi mode: 0x%x\n", mode);
 	printf("bits per word: %d\n", bits);
 	printf("max speed: %d Hz (%d KHz)\n", speed, speed/1000);
+
+	if (input_tx && input_file)
+		pabort("only one of -p and --input may be selected");
 
 	if (input_tx)
 		transfer_escaped_string(fd, input_tx);

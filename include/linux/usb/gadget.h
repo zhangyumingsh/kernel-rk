@@ -767,7 +767,7 @@ struct usb_gadget_strings {
 
 struct usb_gadget_string_container {
 	struct list_head        list;
-	u8                      *stash[];
+	u8                      *stash[0];
 };
 
 /* put descriptor for string with that id into buf (buflen >= 256) */

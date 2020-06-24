@@ -1418,11 +1418,6 @@ static netdev_tx_t cxgb4_eth_xmit(struct sk_buff *skb, struct net_device *dev)
 		return adap->uld[CXGB4_ULD_CRYPTO].tx_handler(skb, dev);
 #endif /* CHELSIO_IPSEC_INLINE */
 
-#ifdef CONFIG_CHELSIO_TLS_DEVICE
-	if (skb->decrypted)
-		return adap->uld[CXGB4_ULD_CRYPTO].tx_handler(skb, dev);
-#endif /* CHELSIO_TLS_DEVICE */
-
 	qidx = skb_get_queue_mapping(skb);
 	if (ptp_enabled) {
 		spin_lock(&adap->ptp_lock);
@@ -2207,9 +2202,6 @@ static void ethofld_hard_xmit(struct net_device *dev,
 	if (unlikely(skip_eotx_wr)) {
 		start = (u64 *)wr;
 		eosw_txq->state = next_state;
-		eosw_txq->cred -= wrlen16;
-		eosw_txq->ncompl++;
-		eosw_txq->last_compl = 0;
 		goto write_wr_headers;
 	}
 
@@ -2368,34 +2360,6 @@ netdev_tx_t t4_start_xmit(struct sk_buff *skb, struct net_device *dev)
 	return cxgb4_eth_xmit(skb, dev);
 }
 
-static void eosw_txq_flush_pending_skbs(struct sge_eosw_txq *eosw_txq)
-{
-	int pktcount = eosw_txq->pidx - eosw_txq->last_pidx;
-	int pidx = eosw_txq->pidx;
-	struct sk_buff *skb;
-
-	if (!pktcount)
-		return;
-
-	if (pktcount < 0)
-		pktcount += eosw_txq->ndesc;
-
-	while (pktcount--) {
-		pidx--;
-		if (pidx < 0)
-			pidx += eosw_txq->ndesc;
-
-		skb = eosw_txq->desc[pidx].skb;
-		if (skb) {
-			dev_consume_skb_any(skb);
-			eosw_txq->desc[pidx].skb = NULL;
-			eosw_txq->inuse--;
-		}
-	}
-
-	eosw_txq->pidx = eosw_txq->last_pidx + 1;
-}
-
 /**
  * cxgb4_ethofld_send_flowc - Send ETHOFLD flowc request to bind eotid to tc.
  * @dev - netdevice
@@ -2471,11 +2435,9 @@ int cxgb4_ethofld_send_flowc(struct net_device *dev, u32 eotid, u32 tc)
 					    FW_FLOWC_MNEM_EOSTATE_CLOSING :
 					    FW_FLOWC_MNEM_EOSTATE_ESTABLISHED);
 
-	/* Free up any pending skbs to ensure there's room for
-	 * termination FLOWC.
-	 */
-	if (tc == FW_SCHED_CLS_NONE)
-		eosw_txq_flush_pending_skbs(eosw_txq);
+	eosw_txq->cred -= len16;
+	eosw_txq->ncompl++;
+	eosw_txq->last_compl = 0;
 
 	ret = eosw_txq_enqueue(eosw_txq, skb);
 	if (ret) {
@@ -2728,7 +2690,6 @@ static void ofldtxq_stop(struct sge_uld_txq *q, struct fw_wr_hdr *wr)
  *	is ever running at a time ...
  */
 static void service_ofldq(struct sge_uld_txq *q)
-	__must_hold(&q->sendq.lock)
 {
 	u64 *pos, *before, *end;
 	int credits;

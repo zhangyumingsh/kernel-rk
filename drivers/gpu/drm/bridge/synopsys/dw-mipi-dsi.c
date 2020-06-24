@@ -824,8 +824,7 @@ static void dw_mipi_dsi_bridge_post_disable(struct drm_bridge *bridge)
 	 * This needs to be fixed in the drm_bridge framework and the API
 	 * needs to be updated to manage our own call chains...
 	 */
-	if (dsi->panel_bridge->funcs->post_disable)
-		dsi->panel_bridge->funcs->post_disable(dsi->panel_bridge);
+	dsi->panel_bridge->funcs->post_disable(dsi->panel_bridge);
 
 	if (phy_ops->power_off)
 		phy_ops->power_off(dsi->plat_data->priv_data);
@@ -936,8 +935,7 @@ dw_mipi_dsi_bridge_mode_valid(struct drm_bridge *bridge,
 	return mode_status;
 }
 
-static int dw_mipi_dsi_bridge_attach(struct drm_bridge *bridge,
-				     enum drm_bridge_attach_flags flags)
+static int dw_mipi_dsi_bridge_attach(struct drm_bridge *bridge)
 {
 	struct dw_mipi_dsi *dsi = bridge_to_dsi(bridge);
 
@@ -950,8 +948,7 @@ static int dw_mipi_dsi_bridge_attach(struct drm_bridge *bridge,
 	bridge->encoder->encoder_type = DRM_MODE_ENCODER_DSI;
 
 	/* Attach the panel-bridge to the dsi bridge */
-	return drm_bridge_attach(bridge->encoder, dsi->panel_bridge, bridge,
-				 flags);
+	return drm_bridge_attach(bridge->encoder, dsi->panel_bridge, bridge);
 }
 
 static const struct drm_bridge_funcs dw_mipi_dsi_bridge_funcs = {
@@ -1122,7 +1119,7 @@ int dw_mipi_dsi_bind(struct dw_mipi_dsi *dsi, struct drm_encoder *encoder)
 {
 	int ret;
 
-	ret = drm_bridge_attach(encoder, &dsi->bridge, NULL, 0);
+	ret = drm_bridge_attach(encoder, &dsi->bridge, NULL);
 	if (ret) {
 		DRM_ERROR("Failed to initialize bridge with drm\n");
 		return ret;

@@ -242,9 +242,13 @@ void omap_fbdev_init(struct drm_device *dev)
 
 	drm_fb_helper_prepare(dev, helper, &omap_fb_helper_funcs);
 
-	ret = drm_fb_helper_init(dev, helper);
+	ret = drm_fb_helper_init(dev, helper, priv->num_pipes);
 	if (ret)
 		goto fail;
+
+	ret = drm_fb_helper_single_add_all_connectors(helper);
+	if (ret)
+		goto fini;
 
 	ret = drm_fb_helper_initial_config(helper, 32);
 	if (ret)

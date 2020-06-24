@@ -8,8 +8,8 @@ Protected Execution Facility
 .. contents::
     :depth: 3
 
-Introduction
-############
+Protected Execution Facility
+############################
 
     Protected Execution Facility (PEF) is an architectural change for
     POWER 9 that enables Secure Virtual Machines (SVMs). DD2.3 chips

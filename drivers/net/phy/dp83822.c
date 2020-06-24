@@ -137,18 +137,19 @@ static int dp83822_set_wol(struct phy_device *phydev,
 			value &= ~DP83822_WOL_SECURE_ON;
 		}
 
-		/* Clear any pending WoL interrupt */
-		phy_read(phydev, MII_DP83822_MISR2);
-
-		value |= DP83822_WOL_EN | DP83822_WOL_INDICATION_SEL |
-			 DP83822_WOL_CLR_INDICATION;
-
-		return phy_write_mmd(phydev, DP83822_DEVADDR,
-				     MII_DP83822_WOL_CFG, value);
+		value |= (DP83822_WOL_EN | DP83822_WOL_INDICATION_SEL |
+			  DP83822_WOL_CLR_INDICATION);
+		phy_write_mmd(phydev, DP83822_DEVADDR, MII_DP83822_WOL_CFG,
+			      value);
 	} else {
-		return phy_clear_bits_mmd(phydev, DP83822_DEVADDR,
-					  MII_DP83822_WOL_CFG, DP83822_WOL_EN);
+		value = phy_read_mmd(phydev, DP83822_DEVADDR,
+				     MII_DP83822_WOL_CFG);
+		value &= ~DP83822_WOL_EN;
+		phy_write_mmd(phydev, DP83822_DEVADDR, MII_DP83822_WOL_CFG,
+			      value);
 	}
+
+	return 0;
 }
 
 static void dp83822_get_wol(struct phy_device *phydev,
@@ -257,11 +258,12 @@ static int dp83822_config_intr(struct phy_device *phydev)
 
 static int dp83822_config_init(struct phy_device *phydev)
 {
-	int value = DP83822_WOL_EN | DP83822_WOL_MAGIC_EN |
-		    DP83822_WOL_SECURE_ON;
+	int value;
 
-	return phy_clear_bits_mmd(phydev, DP83822_DEVADDR,
-				  MII_DP83822_WOL_CFG, value);
+	value = DP83822_WOL_MAGIC_EN | DP83822_WOL_SECURE_ON | DP83822_WOL_EN;
+
+	return phy_write_mmd(phydev, DP83822_DEVADDR, MII_DP83822_WOL_CFG,
+	      value);
 }
 
 static int dp83822_phy_reset(struct phy_device *phydev)

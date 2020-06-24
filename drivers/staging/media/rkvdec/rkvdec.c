@@ -10,12 +10,15 @@
  */
 
 #include <linux/clk.h>
+#include <linux/delay.h>
 #include <linux/interrupt.h>
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/pm.h>
 #include <linux/pm_runtime.h>
+#include <linux/reset.h>
+#include <linux/rockchip_pmu.h>
 #include <linux/slab.h>
 #include <linux/videodev2.h>
 #include <linux/workqueue.h>
@@ -67,6 +70,19 @@ static const struct rkvdec_ctrl_desc rkvdec_h264_ctrl_descs[] = {
 		.cfg.def = V4L2_MPEG_VIDEO_H264_START_CODE_ANNEX_B,
 		.cfg.max = V4L2_MPEG_VIDEO_H264_START_CODE_ANNEX_B,
 	},
+	{
+		.cfg.id = V4L2_CID_MPEG_VIDEO_H264_PROFILE,
+		.cfg.min = V4L2_MPEG_VIDEO_H264_PROFILE_BASELINE,
+		.cfg.max = V4L2_MPEG_VIDEO_H264_PROFILE_HIGH_422,
+		.cfg.menu_skip_mask =
+			BIT(V4L2_MPEG_VIDEO_H264_PROFILE_EXTENDED),
+		.cfg.def = V4L2_MPEG_VIDEO_H264_PROFILE_MAIN,
+	},
+	{
+		.cfg.id = V4L2_CID_MPEG_VIDEO_H264_LEVEL,
+		.cfg.min = V4L2_MPEG_VIDEO_H264_LEVEL_1_0,
+		.cfg.max = V4L2_MPEG_VIDEO_H264_LEVEL_5_1,
+	},
 };
 
 static const struct rkvdec_ctrls rkvdec_h264_ctrls = {
@@ -76,16 +92,108 @@ static const struct rkvdec_ctrls rkvdec_h264_ctrls = {
 
 static const u32 rkvdec_h264_decoded_fmts[] = {
 	V4L2_PIX_FMT_NV12,
+	V4L2_PIX_FMT_NV15,
+	V4L2_PIX_FMT_NV16,
+	V4L2_PIX_FMT_NV20,
+};
+
+static const struct rkvdec_ctrl_desc rkvdec_hevc_ctrl_descs[] = {
+	{
+		.per_request = true,
+		.mandatory = true,
+		.cfg.id = V4L2_CID_MPEG_VIDEO_HEVC_SLICE_PARAMS,
+		// HACK: match ffmpeg v4l2 request api hwaccel size,
+		//       we should support variable length up to 600 slices
+		.cfg.dims = { 16 },
+	},
+	{
+		.per_request = true,
+		.mandatory = true,
+		.cfg.id = V4L2_CID_MPEG_VIDEO_HEVC_SPS,
+	},
+	{
+		.per_request = true,
+		.mandatory = true,
+		.cfg.id = V4L2_CID_MPEG_VIDEO_HEVC_PPS,
+	},
+	{
+		.per_request = true,
+		.mandatory = true,
+		.cfg.id = V4L2_CID_MPEG_VIDEO_HEVC_SCALING_MATRIX,
+	},
+	{
+		.mandatory = true,
+		.cfg.id = V4L2_CID_MPEG_VIDEO_HEVC_DECODE_MODE,
+		.cfg.min = V4L2_MPEG_VIDEO_HEVC_DECODE_MODE_FRAME_BASED,
+		.cfg.max = V4L2_MPEG_VIDEO_HEVC_DECODE_MODE_FRAME_BASED,
+		.cfg.def = V4L2_MPEG_VIDEO_HEVC_DECODE_MODE_FRAME_BASED,
+	},
+	{
+		.mandatory = true,
+		.cfg.id = V4L2_CID_MPEG_VIDEO_HEVC_START_CODE,
+		.cfg.min = V4L2_MPEG_VIDEO_HEVC_START_CODE_ANNEX_B,
+		.cfg.def = V4L2_MPEG_VIDEO_HEVC_START_CODE_ANNEX_B,
+		.cfg.max = V4L2_MPEG_VIDEO_HEVC_START_CODE_ANNEX_B,
+	},
+};
+
+static const struct rkvdec_ctrls rkvdec_hevc_ctrls = {
+	.ctrls = rkvdec_hevc_ctrl_descs,
+	.num_ctrls = ARRAY_SIZE(rkvdec_hevc_ctrl_descs),
+};
+
+static const u32 rkvdec_hevc_decoded_fmts[] = {
+	V4L2_PIX_FMT_NV12,
+	V4L2_PIX_FMT_NV15,
+};
+
+static const struct rkvdec_ctrl_desc rkvdec_vp9_ctrl_descs[] = {
+	{
+		.per_request = true,
+		.mandatory = true,
+		.cfg.id = V4L2_CID_MPEG_VIDEO_VP9_FRAME_DECODE_PARAMS,
+	},
+	{
+		.mandatory = true,
+		.cfg.id = V4L2_CID_MPEG_VIDEO_VP9_FRAME_CONTEXT(0),
+	},
+	{
+		.mandatory = true,
+		.cfg.id = V4L2_CID_MPEG_VIDEO_VP9_FRAME_CONTEXT(1),
+	},
+	{
+		.mandatory = true,
+		.cfg.id = V4L2_CID_MPEG_VIDEO_VP9_FRAME_CONTEXT(2),
+	},
+	{
+		.mandatory = true,
+		.cfg.id = V4L2_CID_MPEG_VIDEO_VP9_FRAME_CONTEXT(3),
+	},
+	{
+		.cfg.id = V4L2_CID_MPEG_VIDEO_VP9_PROFILE,
+		.cfg.min = V4L2_MPEG_VIDEO_VP9_PROFILE_0,
+		.cfg.max = V4L2_MPEG_VIDEO_VP9_PROFILE_0,
+		.cfg.def = V4L2_MPEG_VIDEO_VP9_PROFILE_0,
+	},
+};
+
+static const u32 rkvdec_vp9_decoded_fmts[] = {
+	V4L2_PIX_FMT_NV12,
+};
+
+static const struct rkvdec_ctrls rkvdec_vp9_ctrls = {
+	.ctrls = rkvdec_vp9_ctrl_descs,
+	.num_ctrls = ARRAY_SIZE(rkvdec_vp9_ctrl_descs),
 };
 
 static const struct rkvdec_coded_fmt_desc rkvdec_coded_fmts[] = {
 	{
 		.fourcc = V4L2_PIX_FMT_H264_SLICE,
 		.frmsize = {
-			.min_width = 48,
+			.min_width = 64,
 			.max_width = 4096,
-			.step_width = 16,
-			.min_height = 48,
+			.step_width = 64,
+			.min_height = 64,
 			.max_height = 2304,
 			.step_height = 16,
 		},
@@ -93,6 +201,36 @@ static const struct rkvdec_coded_fmt_desc rkvdec_coded_fmts[] = {
 		.ops = &rkvdec_h264_fmt_ops,
 		.num_decoded_fmts = ARRAY_SIZE(rkvdec_h264_decoded_fmts),
 		.decoded_fmts = rkvdec_h264_decoded_fmts,
+	},
+	{
+		.fourcc = V4L2_PIX_FMT_HEVC_SLICE,
+		.frmsize = {
+			.min_width = 64,
+			.max_width = 4096,
+			.step_width = 64,
+			.min_height = 64,
+			.max_height = 2304,
+			.step_height = 16,
+		},
+		.ctrls = &rkvdec_hevc_ctrls,
+		.ops = &rkvdec_hevc_fmt_ops,
+		.num_decoded_fmts = ARRAY_SIZE(rkvdec_hevc_decoded_fmts),
+		.decoded_fmts = rkvdec_hevc_decoded_fmts,
+	},
+	{
+		.fourcc = V4L2_PIX_FMT_VP9_FRAME,
+		.frmsize = {
+			.min_width = 64,
+			.max_width = 4096,
+			.step_width = 64,
+			.min_height = 64,
+			.max_height = 2304,
+			.step_height = 64,
+		},
+		.ctrls = &rkvdec_vp9_ctrls,
+		.ops = &rkvdec_vp9_fmt_ops,
+		.num_decoded_fmts = ARRAY_SIZE(rkvdec_vp9_decoded_fmts),
+		.decoded_fmts = rkvdec_vp9_decoded_fmts,
 	}
 };
 
@@ -146,7 +284,7 @@ static void rkvdec_reset_decoded_fmt(struct rkvdec_ctx *ctx)
 			    ctx->coded_fmt_desc->decoded_fmts[0],
 			    ctx->coded_fmt.fmt.pix_mp.width,
 			    ctx->coded_fmt.fmt.pix_mp.height);
-	f->fmt.pix_mp.plane_fmt[0].sizeimage += 128 *
+	f->fmt.pix_mp.plane_fmt[0].sizeimage += 256 *
 		DIV_ROUND_UP(f->fmt.pix_mp.width, 16) *
 		DIV_ROUND_UP(f->fmt.pix_mp.height, 16);
 }
@@ -215,7 +353,7 @@ static int rkvdec_try_capture_fmt(struct file *file, void *priv,
 	v4l2_fill_pixfmt_mp(pix_mp, pix_mp->pixelformat,
 			    pix_mp->width, pix_mp->height);
 	pix_mp->plane_fmt[0].sizeimage +=
-		128 *
+		256 *
 		DIV_ROUND_UP(pix_mp->width, 16) *
 		DIV_ROUND_UP(pix_mp->height, 16);
 	pix_mp->field = V4L2_FIELD_NONE;
@@ -456,7 +594,15 @@ static int rkvdec_buf_prepare(struct vb2_buffer *vb)
 		if (vb2_plane_size(vb, i) < sizeimage)
 			return -EINVAL;
 	}
-	vb2_set_plane_payload(vb, 0, f->fmt.pix_mp.plane_fmt[0].sizeimage);
+
+	/*
+	 * Buffer's bytesused is written by the driver for CAPTURE buffers,
+	 * or if the application passed zero bytesused on an OUTPUT buffer.
+	 */
+	if (!V4L2_TYPE_IS_OUTPUT(vq->type) ||
+	    (V4L2_TYPE_IS_OUTPUT(vq->type) && !vb2_get_plane_payload(vb, 0)))
+		vb2_set_plane_payload(vb, 0,
+				      f->fmt.pix_mp.plane_fmt[0].sizeimage);
 	return 0;
 }
 
@@ -638,6 +784,11 @@ static void rkvdec_job_finish(struct rkvdec_ctx *ctx,
 
 	pm_runtime_mark_last_busy(rkvdec->dev);
 	pm_runtime_put_autosuspend(rkvdec->dev);
+
+	if (result == VB2_BUF_STATE_ERROR &&
+	    rkvdec->reset_mask == RESET_NONE)
+		rkvdec->reset_mask |= RESET_SOFT;
+
 	rkvdec_job_finish_no_pm(ctx, result);
 }
 
@@ -675,6 +826,40 @@ static void rkvdec_device_run(void *priv)
 
 	if (WARN_ON(!desc))
 		return;
+	if (rkvdec->reset_mask != RESET_NONE) {
+
+		if (rkvdec->reset_mask & RESET_SOFT) {
+			writel(RKVDEC_SOFTRST_EN_P,
+			       rkvdec->regs + RKVDEC_REG_INTERRUPT);
+			udelay(RKVDEC_RESET_DELAY);
+			if (readl(rkvdec->regs + RKVDEC_REG_INTERRUPT)
+			    & RKVDEC_SOFTRESET_RDY)
+				dev_info_ratelimited(rkvdec->dev,
+						      "softreset failed\n");
+			else
+				dev_notice_ratelimited(rkvdec->dev,
+							"softreset done\n");
+		}
+
+		if (rkvdec->reset_mask & RESET_HARD) {
+			pm_runtime_suspend(rkvdec->dev);
+			rockchip_pmu_idle_request(rkvdec->dev, true);
+			ret = reset_control_assert(rkvdec->rstc);
+			if (!ret) {
+				udelay(RKVDEC_RESET_DELAY);
+				ret = reset_control_deassert(rkvdec->rstc);
+			}
+			rockchip_pmu_idle_request(rkvdec->dev, false);
+			if (ret)
+				dev_notice_ratelimited(rkvdec->dev,
+							"hardreset failed\n");
+			else
+				dev_notice_ratelimited(rkvdec->dev,
+							"hardreset done\n");
+		}
+
+		rkvdec->reset_mask = RESET_NONE;
+	}
 
 	ret = pm_runtime_get_sync(rkvdec->dev);
 	if (ret < 0) {
@@ -941,6 +1126,11 @@ static irqreturn_t rkvdec_irq_handler(int irq, void *priv)
 	if (cancel_delayed_work(&rkvdec->watchdog_work)) {
 		struct rkvdec_ctx *ctx;
 
+		if (state == VB2_BUF_STATE_ERROR) {
+			rkvdec->reset_mask |= (status & RKVDEC_ERR_MASK) ?
+						RESET_HARD : RESET_SOFT;
+		}
+
 		ctx = v4l2_m2m_get_curr_priv(rkvdec->m2m_dev);
 		rkvdec_job_finish(ctx, state);
 	}
@@ -958,6 +1148,7 @@ static void rkvdec_watchdog_func(struct work_struct *work)
 	ctx = v4l2_m2m_get_curr_priv(rkvdec->m2m_dev);
 	if (ctx) {
 		dev_err(rkvdec->dev, "Frame processing timed out!\n");
+		rkvdec->reset_mask |= RESET_HARD;
 		writel(RKVDEC_IRQ_DIS, rkvdec->regs + RKVDEC_REG_INTERRUPT);
 		writel(0, rkvdec->regs + RKVDEC_REG_SYSCTRL);
 		rkvdec_job_finish(ctx, VB2_BUF_STATE_ERROR);
@@ -980,6 +1171,7 @@ static int rkvdec_probe(struct platform_device *pdev)
 	struct resource *res;
 	unsigned int i;
 	int ret, irq;
+	u32 hw_info_reg;
 
 	rkvdec = devm_kzalloc(&pdev->dev, sizeof(*rkvdec), GFP_KERNEL);
 	if (!rkvdec)
@@ -1014,6 +1206,24 @@ static int rkvdec_probe(struct platform_device *pdev)
 	if (IS_ERR(rkvdec->regs))
 		return PTR_ERR(rkvdec->regs);
 
+	hw_info_reg = readl(rkvdec->regs + RKVDEC_REG_HW_INFO);
+	if ((hw_info_reg >> 16) == RKVDEC_HW_ID) {
+		dev_info(&pdev->dev, "HEVC %s%s%s %s decoder%s minor version \
+			              0x%02x detected",
+			 ((hw_info_reg & RKVDEC_HW_CAP_MAIN10)
+			   ? "Main10" : "Main"),
+			 ((hw_info_reg & RKVDEC_HW_CAP_H264)
+			   ? "/H264" : ""),
+			 ((hw_info_reg & RKVDEC_HW_CAP_VP9)
+			   ? "/VP9" : ""),
+			 ((hw_info_reg & RKVDEC_HW_CAP_UHD)
+			   ? "UHD" : "FHD"),
+			 ((hw_info_reg & RKVDEC_HW_CAP_ENCODER)
+			   ? "/encoder" : ""),
+			 (hw_info_reg & 0x000000ff));
+	} else
+		dev_info(&pdev->dev, "Unknown version: 0x%x", hw_info_reg);
+
 	ret = dma_set_coherent_mask(&pdev->dev, DMA_BIT_MASK(32));
 	if (ret) {
 		dev_err(&pdev->dev, "Could not set DMA coherent mask.\n");
@@ -1036,6 +1246,18 @@ static int rkvdec_probe(struct platform_device *pdev)
 		return ret;
 	}
 
+
+	rkvdec->rstc = devm_reset_control_array_get(&pdev->dev, false, true);
+	if (IS_ERR(rkvdec->rstc)) {
+		dev_err(&pdev->dev,
+			"get resets failed %ld\n", PTR_ERR(rkvdec->rstc));
+		return PTR_ERR(rkvdec->rstc);
+	} else {
+		dev_dbg(&pdev->dev,
+			 "requested %d resets\n",
+			 reset_control_get_count(&pdev->dev));
+	}
+
 	pm_runtime_set_autosuspend_delay(&pdev->dev, 100);
 	pm_runtime_use_autosuspend(&pdev->dev);
 	pm_runtime_enable(&pdev->dev);
@@ -1056,9 +1278,9 @@ static int rkvdec_remove(struct platform_device *pdev)
 {
 	struct rkvdec_dev *rkvdec = platform_get_drvdata(pdev);
 
-	rkvdec_v4l2_cleanup(rkvdec);
-	pm_runtime_disable(&pdev->dev);
 	pm_runtime_dont_use_autosuspend(&pdev->dev);
+	pm_runtime_disable(&pdev->dev);
+	rkvdec_v4l2_cleanup(rkvdec);
 	return 0;
 }
 

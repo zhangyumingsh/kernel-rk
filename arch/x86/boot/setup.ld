@@ -52,6 +52,7 @@ SECTIONS
 	_end = .;
 
 	/DISCARD/	: {
+		*(.eh_frame)
 		*(.note*)
 	}
 

@@ -49,6 +49,7 @@ struct tee_shm_pool;
  */
 struct tee_context {
 	struct tee_device *teedev;
+	struct list_head list_shm;
 	void *data;
 	struct kref refcount;
 	bool releasing;
@@ -167,7 +168,9 @@ void tee_device_unregister(struct tee_device *teedev);
 
 /**
  * struct tee_shm - shared memory object
- * @ctx:	context using the object
+ * @teedev:	device used to allocate the object
+ * @ctx:	context using the object, if NULL the context is gone
+ * @link	link element
  * @paddr:	physical address of the shared memory
  * @kaddr:	virtual address of the shared memory
  * @size:	size of shared memory
@@ -182,7 +185,9 @@ void tee_device_unregister(struct tee_device *teedev);
  * subsystem and from drivers that implements their own shm pool manager.
  */
 struct tee_shm {
+	struct tee_device *teedev;
 	struct tee_context *ctx;
+	struct list_head link;
 	phys_addr_t paddr;
 	void *kaddr;
 	size_t size;
@@ -312,6 +317,18 @@ void *tee_get_drvdata(struct tee_device *teedev);
  * @returns a pointer to 'struct tee_shm'
  */
 struct tee_shm *tee_shm_alloc(struct tee_context *ctx, size_t size, u32 flags);
+
+/**
+ * tee_shm_priv_alloc() - Allocate shared memory privately
+ * @dev:	Device that allocates the shared memory
+ * @size:	Requested size of shared memory
+ *
+ * Allocates shared memory buffer that is not associated with any client
+ * context. Such buffers are owned by TEE driver and used for internal calls.
+ *
+ * @returns a pointer to 'struct tee_shm'
+ */
+struct tee_shm *tee_shm_priv_alloc(struct tee_device *teedev, size_t size);
 
 /**
  * tee_shm_register() - Register shared memory buffer

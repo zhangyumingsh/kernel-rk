@@ -745,15 +745,14 @@ void radeon_driver_postclose_kms(struct drm_device *dev,
 /**
  * radeon_get_vblank_counter_kms - get frame count
  *
- * @crtc: crtc to get the frame count from
+ * @dev: drm dev pointer
+ * @pipe: crtc to get the frame count from
  *
  * Gets the frame count on the requested crtc (all asics).
  * Returns frame count on success, -EINVAL on failure.
  */
-u32 radeon_get_vblank_counter_kms(struct drm_crtc *crtc)
+u32 radeon_get_vblank_counter_kms(struct drm_device *dev, unsigned int pipe)
 {
-	struct drm_device *dev = crtc->dev;
-	unsigned int pipe = crtc->index;
 	int vpos, hpos, stat;
 	u32 count;
 	struct radeon_device *rdev = dev->dev_private;
@@ -815,26 +814,25 @@ u32 radeon_get_vblank_counter_kms(struct drm_crtc *crtc)
 /**
  * radeon_enable_vblank_kms - enable vblank interrupt
  *
+ * @dev: drm dev pointer
  * @crtc: crtc to enable vblank interrupt for
  *
  * Enable the interrupt on the requested crtc (all asics).
  * Returns 0 on success, -EINVAL on failure.
  */
-int radeon_enable_vblank_kms(struct drm_crtc *crtc)
+int radeon_enable_vblank_kms(struct drm_device *dev, int crtc)
 {
-	struct drm_device *dev = crtc->dev;
-	unsigned int pipe = crtc->index;
 	struct radeon_device *rdev = dev->dev_private;
 	unsigned long irqflags;
 	int r;
 
-	if (pipe < 0 || pipe >= rdev->num_crtc) {
-		DRM_ERROR("Invalid crtc %d\n", pipe);
+	if (crtc < 0 || crtc >= rdev->num_crtc) {
+		DRM_ERROR("Invalid crtc %d\n", crtc);
 		return -EINVAL;
 	}
 
 	spin_lock_irqsave(&rdev->irq.lock, irqflags);
-	rdev->irq.crtc_vblank_int[pipe] = true;
+	rdev->irq.crtc_vblank_int[crtc] = true;
 	r = radeon_irq_set(rdev);
 	spin_unlock_irqrestore(&rdev->irq.lock, irqflags);
 	return r;
@@ -843,24 +841,23 @@ int radeon_enable_vblank_kms(struct drm_crtc *crtc)
 /**
  * radeon_disable_vblank_kms - disable vblank interrupt
  *
+ * @dev: drm dev pointer
  * @crtc: crtc to disable vblank interrupt for
  *
  * Disable the interrupt on the requested crtc (all asics).
  */
-void radeon_disable_vblank_kms(struct drm_crtc *crtc)
+void radeon_disable_vblank_kms(struct drm_device *dev, int crtc)
 {
-	struct drm_device *dev = crtc->dev;
-	unsigned int pipe = crtc->index;
 	struct radeon_device *rdev = dev->dev_private;
 	unsigned long irqflags;
 
-	if (pipe < 0 || pipe >= rdev->num_crtc) {
-		DRM_ERROR("Invalid crtc %d\n", pipe);
+	if (crtc < 0 || crtc >= rdev->num_crtc) {
+		DRM_ERROR("Invalid crtc %d\n", crtc);
 		return;
 	}
 
 	spin_lock_irqsave(&rdev->irq.lock, irqflags);
-	rdev->irq.crtc_vblank_int[pipe] = false;
+	rdev->irq.crtc_vblank_int[crtc] = false;
 	radeon_irq_set(rdev);
 	spin_unlock_irqrestore(&rdev->irq.lock, irqflags);
 }

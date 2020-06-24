@@ -133,7 +133,8 @@ static int amdgpufb_create_pinned_object(struct amdgpu_fbdev *rfbdev,
 	u32 cpp;
 	u64 flags = AMDGPU_GEM_CREATE_CPU_ACCESS_REQUIRED |
 			       AMDGPU_GEM_CREATE_VRAM_CONTIGUOUS     |
-			       AMDGPU_GEM_CREATE_VRAM_CLEARED;
+			       AMDGPU_GEM_CREATE_VRAM_CLEARED 	     |
+			       AMDGPU_GEM_CREATE_CPU_GTT_USWC;
 
 	info = drm_get_format_info(adev->ddev, mode_cmd);
 	cpp = info->cpp[0];
@@ -335,11 +336,14 @@ int amdgpu_fbdev_init(struct amdgpu_device *adev)
 	drm_fb_helper_prepare(adev->ddev, &rfbdev->helper,
 			&amdgpu_fb_helper_funcs);
 
-	ret = drm_fb_helper_init(adev->ddev, &rfbdev->helper);
+	ret = drm_fb_helper_init(adev->ddev, &rfbdev->helper,
+				 AMDGPUFB_CONN_LIMIT);
 	if (ret) {
 		kfree(rfbdev);
 		return ret;
 	}
+
+	drm_fb_helper_single_add_all_connectors(&rfbdev->helper);
 
 	/* disable all the possible outputs/crtcs before entering KMS mode */
 	if (!amdgpu_device_has_dc_support(adev))

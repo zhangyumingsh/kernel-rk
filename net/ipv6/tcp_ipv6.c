@@ -1742,7 +1742,7 @@ do_time_wait:
 		}
 	}
 		/* to ACK */
-		fallthrough;
+		/* fall through */
 	case TCP_TW_ACK:
 		tcp_v6_timewait_ack(sk, skb);
 		break;

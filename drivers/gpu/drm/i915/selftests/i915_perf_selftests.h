@@ -17,4 +17,3 @@
  */
 selftest(engine_cs, intel_engine_cs_perf_selftests)
 selftest(blt, i915_gem_object_blt_perf_selftests)
-selftest(region, intel_memory_region_perf_selftests)

@@ -116,7 +116,7 @@ static int get_lightbar_version(struct cros_ec_dev *ec,
 
 	param = (struct ec_params_lightbar *)msg->data;
 	param->cmd = LIGHTBAR_CMD_VERSION;
-	ret = cros_ec_cmd_xfer_status(ec->ec_dev, msg);
+	ret = cros_ec_cmd_xfer(ec->ec_dev, msg);
 	if (ret < 0) {
 		ret = 0;
 		goto exit;
@@ -193,9 +193,14 @@ static ssize_t brightness_store(struct device *dev,
 	if (ret)
 		goto exit;
 
-	ret = cros_ec_cmd_xfer_status(ec->ec_dev, msg);
+	ret = cros_ec_cmd_xfer(ec->ec_dev, msg);
 	if (ret < 0)
 		goto exit;
+
+	if (msg->result != EC_RES_SUCCESS) {
+		ret = -EINVAL;
+		goto exit;
+	}
 
 	ret = count;
 exit:
@@ -253,8 +258,11 @@ static ssize_t led_rgb_store(struct device *dev, struct device_attribute *attr,
 					goto exit;
 			}
 
-			ret = cros_ec_cmd_xfer_status(ec->ec_dev, msg);
+			ret = cros_ec_cmd_xfer(ec->ec_dev, msg);
 			if (ret < 0)
+				goto exit;
+
+			if (msg->result != EC_RES_SUCCESS)
 				goto exit;
 
 			i = 0;
@@ -297,12 +305,13 @@ static ssize_t sequence_show(struct device *dev,
 	if (ret)
 		goto exit;
 
-	ret = cros_ec_cmd_xfer_status(ec->ec_dev, msg);
-	if (ret == -EPROTO) {
+	ret = cros_ec_cmd_xfer(ec->ec_dev, msg);
+	if (ret < 0)
+		goto exit;
+
+	if (msg->result != EC_RES_SUCCESS) {
 		ret = scnprintf(buf, PAGE_SIZE,
 				"ERROR: EC returned %d\n", msg->result);
-		goto exit;
-	} else if (ret < 0) {
 		goto exit;
 	}
 
@@ -335,10 +344,13 @@ static int lb_send_empty_cmd(struct cros_ec_dev *ec, uint8_t cmd)
 	if (ret)
 		goto error;
 
-	ret = cros_ec_cmd_xfer_status(ec->ec_dev, msg);
+	ret = cros_ec_cmd_xfer(ec->ec_dev, msg);
 	if (ret < 0)
 		goto error;
-
+	if (msg->result != EC_RES_SUCCESS) {
+		ret = -EINVAL;
+		goto error;
+	}
 	ret = 0;
 error:
 	kfree(msg);
@@ -365,10 +377,13 @@ static int lb_manual_suspend_ctrl(struct cros_ec_dev *ec, uint8_t enable)
 	if (ret)
 		goto error;
 
-	ret = cros_ec_cmd_xfer_status(ec->ec_dev, msg);
+	ret = cros_ec_cmd_xfer(ec->ec_dev, msg);
 	if (ret < 0)
 		goto error;
-
+	if (msg->result != EC_RES_SUCCESS) {
+		ret = -EINVAL;
+		goto error;
+	}
 	ret = 0;
 error:
 	kfree(msg);
@@ -410,9 +425,14 @@ static ssize_t sequence_store(struct device *dev, struct device_attribute *attr,
 	if (ret)
 		goto exit;
 
-	ret = cros_ec_cmd_xfer_status(ec->ec_dev, msg);
+	ret = cros_ec_cmd_xfer(ec->ec_dev, msg);
 	if (ret < 0)
 		goto exit;
+
+	if (msg->result != EC_RES_SUCCESS) {
+		ret = -EINVAL;
+		goto exit;
+	}
 
 	ret = count;
 exit:
@@ -467,9 +487,13 @@ static ssize_t program_store(struct device *dev, struct device_attribute *attr,
 	 */
 	msg->outsize = count + extra_bytes;
 
-	ret = cros_ec_cmd_xfer_status(ec->ec_dev, msg);
+	ret = cros_ec_cmd_xfer(ec->ec_dev, msg);
 	if (ret < 0)
 		goto exit;
+	if (msg->result != EC_RES_SUCCESS) {
+		ret = -EINVAL;
+		goto exit;
+	}
 
 	ret = count;
 exit:

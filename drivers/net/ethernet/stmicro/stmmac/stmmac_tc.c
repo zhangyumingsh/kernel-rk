@@ -367,17 +367,13 @@ static int tc_setup_cbs(struct stmmac_priv *priv,
 
 static int tc_parse_flow_actions(struct stmmac_priv *priv,
 				 struct flow_action *action,
-				 struct stmmac_flow_entry *entry,
-				 struct netlink_ext_ack *extack)
+				 struct stmmac_flow_entry *entry)
 {
 	struct flow_action_entry *act;
 	int i;
 
 	if (!flow_action_has_entries(action))
 		return -EINVAL;
-
-	if (!flow_action_basic_hw_stats_check(action, extack))
-		return -EOPNOTSUPP;
 
 	flow_action_for_each(i, act, action) {
 		switch (act->id) {
@@ -534,8 +530,7 @@ static int tc_add_flow(struct stmmac_priv *priv,
 			return -ENOENT;
 	}
 
-	ret = tc_parse_flow_actions(priv, &rule->action, entry,
-				    cls->common.extack);
+	ret = tc_parse_flow_actions(priv, &rule->action, entry);
 	if (ret)
 		return ret;
 

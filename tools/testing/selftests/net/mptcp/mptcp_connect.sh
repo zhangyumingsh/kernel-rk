@@ -3,7 +3,7 @@
 
 time_start=$(date +%s)
 
-optstring="S:R:d:e:l:r:h4cm:"
+optstring="b:d:e:l:r:h4cm:"
 ret=0
 sin=""
 sout=""
@@ -19,7 +19,6 @@ tc_loss=$((RANDOM%101))
 tc_reorder=""
 testmode=""
 sndbuf=0
-rcvbuf=0
 options_log=true
 
 if [ $tc_loss -eq 100 ];then
@@ -40,8 +39,7 @@ usage() {
 	echo -e "\t-e: ethtool features to disable, e.g.: \"-e tso -e gso\" (default: randomly disable any of tso/gso/gro)"
 	echo -e "\t-4: IPv4 only: disable IPv6 tests (default: test both IPv4 and IPv6)"
 	echo -e "\t-c: capture packets for each test using tcpdump (default: no capture)"
-	echo -e "\t-S: set sndbuf value (default: use kernel default)"
-	echo -e "\t-R: set rcvbuf value (default: use kernel default)"
+	echo -e "\t-b: set sndbuf value (default: use kernel default)"
 	echo -e "\t-m: test mode (poll, sendfile; default: poll)"
 }
 
@@ -75,19 +73,11 @@ while getopts "$optstring" option;do
 	"c")
 		capture=true
 		;;
-	"S")
+	"b")
 		if [ $OPTARG -ge 0 ];then
 			sndbuf="$OPTARG"
 		else
-			echo "-S requires numeric argument, got \"$OPTARG\"" 1>&2
-			exit 1
-		fi
-		;;
-	"R")
-		if [ $OPTARG -ge 0 ];then
-			rcvbuf="$OPTARG"
-		else
-			echo "-R requires numeric argument, got \"$OPTARG\"" 1>&2
+			echo "-s requires numeric argument, got \"$OPTARG\"" 1>&2
 			exit 1
 		fi
 		;;
@@ -352,12 +342,8 @@ do_transfer()
 	port=$((10000+$TEST_COUNT))
 	TEST_COUNT=$((TEST_COUNT+1))
 
-	if [ "$rcvbuf" -gt 0 ]; then
-		extra_args="$extra_args -R $rcvbuf"
-	fi
-
 	if [ "$sndbuf" -gt 0 ]; then
-		extra_args="$extra_args -S $sndbuf"
+		extra_args="$extra_args -b $sndbuf"
 	fi
 
 	if [ -n "$testmode" ]; then

@@ -297,19 +297,6 @@ int dsa_port_mrouter(struct dsa_port *dp, bool mrouter,
 	return ds->ops->port_egress_floods(ds, port, true, mrouter);
 }
 
-int dsa_port_mtu_change(struct dsa_port *dp, int new_mtu,
-			bool propagate_upstream)
-{
-	struct dsa_notifier_mtu_info info = {
-		.sw_index = dp->ds->index,
-		.propagate_upstream = propagate_upstream,
-		.port = dp->index,
-		.mtu = new_mtu,
-	};
-
-	return dsa_port_notify(dp, DSA_NOTIFIER_MTU, &info);
-}
-
 int dsa_port_fdb_add(struct dsa_port *dp, const unsigned char *addr,
 		     u16 vid)
 {
@@ -470,7 +457,6 @@ static void dsa_port_phylink_mac_pcs_get_state(struct phylink_config *config,
 {
 	struct dsa_port *dp = container_of(config, struct dsa_port, pl_config);
 	struct dsa_switch *ds = dp->ds;
-	int err;
 
 	/* Only called for inband modes */
 	if (!ds->ops->phylink_mac_link_state) {
@@ -478,12 +464,8 @@ static void dsa_port_phylink_mac_pcs_get_state(struct phylink_config *config,
 		return;
 	}
 
-	err = ds->ops->phylink_mac_link_state(ds, dp->index, state);
-	if (err < 0) {
-		dev_err(ds->dev, "p%d: phylink_mac_link_state() failed: %d\n",
-			dp->index, err);
+	if (ds->ops->phylink_mac_link_state(ds, dp->index, state) < 0)
 		state->link = 0;
-	}
 }
 
 static void dsa_port_phylink_mac_config(struct phylink_config *config,
@@ -531,11 +513,9 @@ static void dsa_port_phylink_mac_link_down(struct phylink_config *config,
 }
 
 static void dsa_port_phylink_mac_link_up(struct phylink_config *config,
-					 struct phy_device *phydev,
 					 unsigned int mode,
 					 phy_interface_t interface,
-					 int speed, int duplex,
-					 bool tx_pause, bool rx_pause)
+					 struct phy_device *phydev)
 {
 	struct dsa_port *dp = container_of(config, struct dsa_port, pl_config);
 	struct dsa_switch *ds = dp->ds;
@@ -546,8 +526,7 @@ static void dsa_port_phylink_mac_link_up(struct phylink_config *config,
 		return;
 	}
 
-	ds->ops->phylink_mac_link_up(ds, dp->index, mode, interface, phydev,
-				     speed, duplex, tx_pause, rx_pause);
+	ds->ops->phylink_mac_link_up(ds, dp->index, mode, interface, phydev);
 }
 
 const struct phylink_mac_ops dsa_port_phylink_mac_ops = {
@@ -670,16 +649,11 @@ int dsa_port_link_register_of(struct dsa_port *dp)
 {
 	struct dsa_switch *ds = dp->ds;
 	struct device_node *phy_np;
-	int port = dp->index;
 
 	if (!ds->ops->adjust_link) {
 		phy_np = of_parse_phandle(dp->dn, "phy-handle", 0);
-		if (of_phy_is_fixed_link(dp->dn) || phy_np) {
-			if (ds->ops->phylink_mac_link_down)
-				ds->ops->phylink_mac_link_down(ds, port,
-					MLO_AN_FIXED, PHY_INTERFACE_MODE_NA);
+		if (of_phy_is_fixed_link(dp->dn) || phy_np)
 			return dsa_port_phylink_register(dp);
-		}
 		return 0;
 	}
 

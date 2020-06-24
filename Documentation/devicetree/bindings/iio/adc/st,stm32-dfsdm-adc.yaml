@@ -69,8 +69,6 @@ required:
   - "#address-cells"
   - "#size-cells"
 
-additionalProperties: false
-
 patternProperties:
   "^filter@[0-9]+$":
     type: object

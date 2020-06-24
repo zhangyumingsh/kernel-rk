@@ -715,19 +715,17 @@ static int create_cq_user(struct mlx5_ib_dev *dev, struct ib_udata *udata,
 	struct mlx5_ib_ucontext *context = rdma_udata_to_drv_context(
 		udata, struct mlx5_ib_ucontext, ibucontext);
 
-	ucmdlen = min(udata->inlen, sizeof(ucmd));
-	if (ucmdlen < offsetof(struct mlx5_ib_create_cq, flags))
-		return -EINVAL;
+	ucmdlen = udata->inlen < sizeof(ucmd) ?
+		  (sizeof(ucmd) - sizeof(ucmd.flags)) : sizeof(ucmd);
 
 	if (ib_copy_from_udata(&ucmd, udata, ucmdlen))
 		return -EFAULT;
 
-	if ((ucmd.flags & ~(MLX5_IB_CREATE_CQ_FLAGS_CQE_128B_PAD |
-			    MLX5_IB_CREATE_CQ_FLAGS_UAR_PAGE_INDEX)))
+	if (ucmdlen == sizeof(ucmd) &&
+	    (ucmd.flags & ~(MLX5_IB_CREATE_CQ_FLAGS_CQE_128B_PAD)))
 		return -EINVAL;
 
-	if ((ucmd.cqe_size != 64 && ucmd.cqe_size != 128) ||
-	    ucmd.reserved0 || ucmd.reserved1)
+	if (ucmd.cqe_size != 64 && ucmd.cqe_size != 128)
 		return -EINVAL;
 
 	*cqe_size = ucmd.cqe_size;
@@ -764,14 +762,7 @@ static int create_cq_user(struct mlx5_ib_dev *dev, struct ib_udata *udata,
 	MLX5_SET(cqc, cqc, log_page_size,
 		 page_shift - MLX5_ADAPTER_PAGE_SHIFT);
 
-	if (ucmd.flags & MLX5_IB_CREATE_CQ_FLAGS_UAR_PAGE_INDEX) {
-		*index = ucmd.uar_page_index;
-	} else if (context->bfregi.lib_uar_dyn) {
-		err = -EINVAL;
-		goto err_cqb;
-	} else {
-		*index = context->bfregi.sys_pages[0];
-	}
+	*index = context->bfregi.sys_pages[0];
 
 	if (ucmd.cqe_comp_en == 1) {
 		int mini_cqe_format;

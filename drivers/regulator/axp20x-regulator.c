@@ -381,7 +381,8 @@ static int axp20x_set_ramp_delay(struct regulator_dev *rdev, int ramp)
 			mask = AXP20X_DCDC2_LDO3_V_RAMP_DCDC2_RATE_MASK |
 			       AXP20X_DCDC2_LDO3_V_RAMP_DCDC2_EN_MASK;
 			enable = (ramp > 0) ?
-				 AXP20X_DCDC2_LDO3_V_RAMP_DCDC2_EN : 0;
+				 AXP20X_DCDC2_LDO3_V_RAMP_DCDC2_EN :
+				 !AXP20X_DCDC2_LDO3_V_RAMP_DCDC2_EN;
 			break;
 		}
 
@@ -392,7 +393,8 @@ static int axp20x_set_ramp_delay(struct regulator_dev *rdev, int ramp)
 			mask = AXP20X_DCDC2_LDO3_V_RAMP_LDO3_RATE_MASK |
 			       AXP20X_DCDC2_LDO3_V_RAMP_LDO3_EN_MASK;
 			enable = (ramp > 0) ?
-				 AXP20X_DCDC2_LDO3_V_RAMP_LDO3_EN : 0;
+				 AXP20X_DCDC2_LDO3_V_RAMP_LDO3_EN :
+				 !AXP20X_DCDC2_LDO3_V_RAMP_LDO3_EN;
 			break;
 		}
 

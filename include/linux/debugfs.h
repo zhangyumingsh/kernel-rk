@@ -35,7 +35,6 @@ struct debugfs_regset32 {
 	const struct debugfs_reg32 *regs;
 	int nregs;
 	void __iomem *base;
-	struct device *dev;	/* Optional device for Runtime PM */
 };
 
 extern struct dentry *arch_debugfs_dir;
@@ -68,10 +67,10 @@ struct dentry *debugfs_create_file_unsafe(const char *name, umode_t mode,
 				   struct dentry *parent, void *data,
 				   const struct file_operations *fops);
 
-void debugfs_create_file_size(const char *name, umode_t mode,
-			      struct dentry *parent, void *data,
-			      const struct file_operations *fops,
-			      loff_t file_size);
+struct dentry *debugfs_create_file_size(const char *name, umode_t mode,
+					struct dentry *parent, void *data,
+					const struct file_operations *fops,
+					loff_t file_size);
 
 struct dentry *debugfs_create_dir(const char *name, struct dentry *parent);
 
@@ -103,8 +102,8 @@ void debugfs_create_u8(const char *name, umode_t mode, struct dentry *parent,
 		       u8 *value);
 void debugfs_create_u16(const char *name, umode_t mode, struct dentry *parent,
 			u16 *value);
-void debugfs_create_u32(const char *name, umode_t mode, struct dentry *parent,
-			u32 *value);
+struct dentry *debugfs_create_u32(const char *name, umode_t mode,
+				  struct dentry *parent, u32 *value);
 void debugfs_create_u64(const char *name, umode_t mode, struct dentry *parent,
 			u64 *value);
 struct dentry *debugfs_create_ulong(const char *name, umode_t mode,
@@ -182,11 +181,13 @@ static inline struct dentry *debugfs_create_file_unsafe(const char *name,
 	return ERR_PTR(-ENODEV);
 }
 
-static inline void debugfs_create_file_size(const char *name, umode_t mode,
-					    struct dentry *parent, void *data,
-					    const struct file_operations *fops,
-					    loff_t file_size)
-{ }
+static inline struct dentry *debugfs_create_file_size(const char *name, umode_t mode,
+					struct dentry *parent, void *data,
+					const struct file_operations *fops,
+					loff_t file_size)
+{
+	return ERR_PTR(-ENODEV);
+}
 
 static inline struct dentry *debugfs_create_dir(const char *name,
 						struct dentry *parent)
@@ -250,8 +251,12 @@ static inline void debugfs_create_u8(const char *name, umode_t mode,
 static inline void debugfs_create_u16(const char *name, umode_t mode,
 				      struct dentry *parent, u16 *value) { }
 
-static inline void debugfs_create_u32(const char *name, umode_t mode,
-				      struct dentry *parent, u32 *value) { }
+static inline struct dentry *debugfs_create_u32(const char *name, umode_t mode,
+						struct dentry *parent,
+						u32 *value)
+{
+	return ERR_PTR(-ENODEV);
+}
 
 static inline void debugfs_create_u64(const char *name, umode_t mode,
 				      struct dentry *parent, u64 *value) { }

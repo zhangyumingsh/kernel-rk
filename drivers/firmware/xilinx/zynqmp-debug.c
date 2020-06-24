@@ -35,7 +35,7 @@ static struct pm_api_info pm_api_list[] = {
 	PM_API(PM_QUERY_DATA),
 };
 
-static struct dentry *firmware_debugfs_root;
+struct dentry *firmware_debugfs_root;
 
 /**
  * zynqmp_pm_argument_value() - Extract argument value from a PM-API request

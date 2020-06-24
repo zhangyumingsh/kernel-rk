@@ -131,7 +131,7 @@ struct mtk_nfc_nand_chip {
 	u32 spare_per_sector;
 
 	int nsels;
-	u8 sels[];
+	u8 sels[0];
 	/* nothing after this field */
 };
 

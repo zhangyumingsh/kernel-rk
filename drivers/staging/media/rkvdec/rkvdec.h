@@ -11,16 +11,23 @@
 #ifndef RKVDEC_H_
 #define RKVDEC_H_
 
+#include <linux/clk.h>
 #include <linux/platform_device.h>
+#include <linux/reset.h>
 #include <linux/videodev2.h>
 #include <linux/wait.h>
-#include <linux/clk.h>
 
 #include <media/v4l2-ctrls.h>
 #include <media/v4l2-device.h>
 #include <media/v4l2-ioctl.h>
 #include <media/videobuf2-core.h>
 #include <media/videobuf2-dma-contig.h>
+
+#define RESET_NONE		0
+#define RESET_SOFT		BIT(0)
+#define RESET_HARD		BIT(1)
+
+#define RKVDEC_RESET_DELAY	5
 
 struct rkvdec_ctx;
 
@@ -52,6 +59,10 @@ struct rkvdec_vp9_decoded_buffer_info {
 struct rkvdec_decoded_buffer {
 	/* Must be the first field in this struct. */
 	struct v4l2_m2m_buffer base;
+
+	union {
+		struct rkvdec_vp9_decoded_buffer_info vp9;
+	};
 };
 
 static inline struct rkvdec_decoded_buffer *
@@ -91,6 +102,8 @@ struct rkvdec_dev {
 	void __iomem *regs;
 	struct mutex vdev_lock; /* serializes ioctls */
 	struct delayed_work watchdog_work;
+	struct reset_control *rstc;
+	u8 reset_mask;
 };
 
 struct rkvdec_ctx {
@@ -118,4 +131,7 @@ void rkvdec_run_preamble(struct rkvdec_ctx *ctx, struct rkvdec_run *run);
 void rkvdec_run_postamble(struct rkvdec_ctx *ctx, struct rkvdec_run *run);
 
 extern const struct rkvdec_coded_fmt_ops rkvdec_h264_fmt_ops;
+extern const struct rkvdec_coded_fmt_ops rkvdec_hevc_fmt_ops;
+extern const struct rkvdec_coded_fmt_ops rkvdec_vp9_fmt_ops;
+
 #endif /* RKVDEC_H_ */

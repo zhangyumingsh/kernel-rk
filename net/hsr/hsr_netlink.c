@@ -35,34 +35,26 @@ static int hsr_newlink(struct net *src_net, struct net_device *dev,
 	unsigned char multicast_spec, hsr_version;
 
 	if (!data) {
-		NL_SET_ERR_MSG_MOD(extack, "No slave devices specified");
+		netdev_info(dev, "HSR: No slave devices specified\n");
 		return -EINVAL;
 	}
 	if (!data[IFLA_HSR_SLAVE1]) {
-		NL_SET_ERR_MSG_MOD(extack, "Slave1 device not specified");
+		netdev_info(dev, "HSR: Slave1 device not specified\n");
 		return -EINVAL;
 	}
 	link[0] = __dev_get_by_index(src_net,
 				     nla_get_u32(data[IFLA_HSR_SLAVE1]));
-	if (!link[0]) {
-		NL_SET_ERR_MSG_MOD(extack, "Slave1 does not exist");
-		return -EINVAL;
-	}
 	if (!data[IFLA_HSR_SLAVE2]) {
-		NL_SET_ERR_MSG_MOD(extack, "Slave2 device not specified");
+		netdev_info(dev, "HSR: Slave2 device not specified\n");
 		return -EINVAL;
 	}
 	link[1] = __dev_get_by_index(src_net,
 				     nla_get_u32(data[IFLA_HSR_SLAVE2]));
-	if (!link[1]) {
-		NL_SET_ERR_MSG_MOD(extack, "Slave2 does not exist");
-		return -EINVAL;
-	}
 
-	if (link[0] == link[1]) {
-		NL_SET_ERR_MSG_MOD(extack, "Slave1 and Slave2 are same");
+	if (!link[0] || !link[1])
+		return -ENODEV;
+	if (link[0] == link[1])
 		return -EINVAL;
-	}
 
 	if (!data[IFLA_HSR_MULTICAST_SPEC])
 		multicast_spec = 0;
@@ -80,25 +72,34 @@ static int hsr_newlink(struct net *src_net, struct net_device *dev,
 		}
 	}
 
-	return hsr_dev_finalize(dev, link, multicast_spec, hsr_version, extack);
+	return hsr_dev_finalize(dev, link, multicast_spec, hsr_version);
 }
 
 static int hsr_fill_info(struct sk_buff *skb, const struct net_device *dev)
 {
-	struct hsr_priv *hsr = netdev_priv(dev);
+	struct hsr_priv *hsr;
 	struct hsr_port *port;
+	int res;
 
+	hsr = netdev_priv(dev);
+
+	res = 0;
+
+	rcu_read_lock();
 	port = hsr_port_get_hsr(hsr, HSR_PT_SLAVE_A);
-	if (port) {
-		if (nla_put_u32(skb, IFLA_HSR_SLAVE1, port->dev->ifindex))
-			goto nla_put_failure;
-	}
+	if (port)
+		res = nla_put_u32(skb, IFLA_HSR_SLAVE1, port->dev->ifindex);
+	rcu_read_unlock();
+	if (res)
+		goto nla_put_failure;
 
+	rcu_read_lock();
 	port = hsr_port_get_hsr(hsr, HSR_PT_SLAVE_B);
-	if (port) {
-		if (nla_put_u32(skb, IFLA_HSR_SLAVE2, port->dev->ifindex))
-			goto nla_put_failure;
-	}
+	if (port)
+		res = nla_put_u32(skb, IFLA_HSR_SLAVE2, port->dev->ifindex);
+	rcu_read_unlock();
+	if (res)
+		goto nla_put_failure;
 
 	if (nla_put(skb, IFLA_HSR_SUPERVISION_ADDR, ETH_ALEN,
 		    hsr->sup_multicast_addr) ||

@@ -38,7 +38,6 @@
 #include <linux/hrtimer.h>
 #include <linux/uuid.h>
 #include <linux/t10-pi.h>
-#include <linux/msdos_partition.h>
 
 #include <net/checksum.h>
 
@@ -4147,7 +4146,7 @@ static int scsi_debug_host_reset(struct scsi_cmnd *SCpnt)
 static void __init sdebug_build_parts(unsigned char *ramp,
 				      unsigned long store_size)
 {
-	struct msdos_partition *pp;
+	struct partition *pp;
 	int starts[SDEBUG_MAX_PARTS + 2];
 	int sectors_per_part, num_sectors, k;
 	int heads_by_sects, start_sec, end_sec;
@@ -4172,7 +4171,7 @@ static void __init sdebug_build_parts(unsigned char *ramp,
 
 	ramp[510] = 0x55;	/* magic partition markings */
 	ramp[511] = 0xAA;
-	pp = (struct msdos_partition *)(ramp + 0x1be);
+	pp = (struct partition *)(ramp + 0x1be);
 	for (k = 0; starts[k + 1]; ++k, ++pp) {
 		start_sec = starts[k];
 		end_sec = starts[k + 1] - 1;

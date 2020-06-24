@@ -9,6 +9,6 @@
 
 #define NR_IRQS			24
 
-#include <asm/mach-generic/irq.h>
+#include_next <irq.h>
 
 #endif /* _ASM_MACH_LASAT_IRQ_H */

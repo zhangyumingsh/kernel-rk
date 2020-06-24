@@ -23,7 +23,6 @@
 #include "head.h"
 
 #include <nvif/cl507d.h>
-#include <nvif/timer.h>
 
 #include "nouveau_bo.h"
 

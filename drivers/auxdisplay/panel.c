@@ -57,6 +57,8 @@
 
 #include "charlcd.h"
 
+#define KEYPAD_MINOR		185
+
 #define LCD_MAXBYTES		256	/* max burst write */
 
 #define KEYPAD_BUFFER		64

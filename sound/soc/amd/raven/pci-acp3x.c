@@ -38,13 +38,8 @@ static int acp3x_power_on(void __iomem *acp3x_base)
 	timeout = 0;
 	while (++timeout < 500) {
 		val = rv_readl(acp3x_base + mmACP_PGFSM_STATUS);
-		if (!val) {
-			/* Set PME_EN as after ACP power On,
-			 * PME_EN gets cleared
-			 */
-			rv_writel(0x1, acp3x_base + mmACP_PME_EN);
+		if (!val)
 			return 0;
-		}
 		udelay(1);
 	}
 	return -ETIMEDOUT;

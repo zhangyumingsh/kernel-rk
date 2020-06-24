@@ -6,6 +6,8 @@
  * Dmitry Kasatkin <dmitry.kasatkin@intel.com>
  */
 
+#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
+
 #include <linux/err.h>
 #include <linux/sched.h>
 #include <linux/slab.h>

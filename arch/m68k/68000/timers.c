@@ -68,6 +68,14 @@ static irqreturn_t hw_tick(int irq, void *dummy)
 
 /***************************************************************************/
 
+static struct irqaction m68328_timer_irq = {
+	.name	 = "timer",
+	.flags	 = IRQF_TIMER,
+	.handler = hw_tick,
+};
+
+/***************************************************************************/
+
 static u64 m68328_read_clk(struct clocksource *cs)
 {
 	unsigned long flags;
@@ -94,17 +102,11 @@ static struct clocksource m68328_clk = {
 
 void hw_timer_init(irq_handler_t handler)
 {
-	int ret;
-
 	/* disable timer 1 */
 	TCTL = 0;
 
 	/* set ISR */
-	ret = request_irq(TMR_IRQ_NUM, hw_tick, IRQF_TIMER, "timer", NULL);
-	if (ret) {
-		pr_err("Failed to request irq %d (timer): %pe\n", TMR_IRQ_NUM,
-		       ERR_PTR(ret));
-	}
+	setup_irq(TMR_IRQ_NUM, &m68328_timer_irq);
 
 	/* Restart mode, Enable int, Set clock source */
 	TCTL = TCTL_OM | TCTL_IRQEN | CLOCK_SOURCE;

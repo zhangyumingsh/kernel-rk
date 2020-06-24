@@ -128,7 +128,7 @@ static int aic5_retrigger(struct irq_data *d)
 	irq_reg_writel(bgc, 1, AT91_AIC5_ISCR);
 	irq_gc_unlock(bgc);
 
-	return 1;
+	return 0;
 }
 
 static int aic5_set_type(struct irq_data *d, unsigned type)

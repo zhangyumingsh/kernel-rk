@@ -11,10 +11,8 @@
  *	Jianhua Li <lijianhua@huawei.com>
  */
 
-#include <drm/drm_gem_vram_helper.h>
 #include <drm/drm_atomic_helper.h>
 #include <drm/drm_probe_helper.h>
-#include <drm/drm_crtc_helper.h>
 #include <drm/drm_print.h>
 
 #include "hibmc_drm_drv.h"
@@ -22,14 +20,7 @@
 
 static int hibmc_connector_get_modes(struct drm_connector *connector)
 {
-	int count;
-
-	count = drm_add_modes_noedid(connector,
-				     connector->dev->mode_config.max_width,
-				     connector->dev->mode_config.max_height);
-	drm_set_preferred_mode(connector, 1024, 768);
-
-	return count;
+	return drm_add_modes_noedid(connector, 800, 600);
 }
 
 static enum drm_mode_status hibmc_connector_mode_valid(struct drm_connector *connector,

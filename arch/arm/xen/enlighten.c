@@ -36,7 +36,7 @@
 
 #include <linux/mm.h>
 
-static struct start_info _xen_start_info;
+struct start_info _xen_start_info;
 struct start_info *xen_start_info = &_xen_start_info;
 EXPORT_SYMBOL(xen_start_info);
 

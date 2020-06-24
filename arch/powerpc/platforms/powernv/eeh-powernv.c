@@ -40,8 +40,15 @@ static int eeh_event_irq = -EINVAL;
 
 void pnv_pcibios_bus_add_device(struct pci_dev *pdev)
 {
+	struct pci_dn *pdn = pci_get_pdn(pdev);
+
+	if (!pdn || eeh_has_flag(EEH_FORCE_DISABLED))
+		return;
+
 	dev_dbg(&pdev->dev, "EEH: Setting up device\n");
-	eeh_probe_device(pdev);
+	eeh_add_device_early(pdn);
+	eeh_add_device_late(pdev);
+	eeh_sysfs_add_device(pdev);
 }
 
 static int pnv_eeh_init(void)
@@ -340,13 +347,23 @@ static int pnv_eeh_find_ecap(struct pci_dn *pdn, int cap)
 
 /**
  * pnv_eeh_probe - Do probe on PCI device
- * @pdev: pci_dev to probe
+ * @pdn: PCI device node
+ * @data: unused
  *
- * Create, or find the existing, eeh_dev for this pci_dev.
+ * When EEH module is installed during system boot, all PCI devices
+ * are checked one by one to see if it supports EEH. The function
+ * is introduced for the purpose. By default, EEH has been enabled
+ * on all PCI devices. That's to say, we only need do necessary
+ * initialization on the corresponding eeh device and create PE
+ * accordingly.
+ *
+ * It's notable that's unsafe to retrieve the EEH device through
+ * the corresponding PCI device. During the PCI device hotplug, which
+ * was possiblly triggered by EEH core, the binding between EEH device
+ * and the PCI device isn't built yet.
  */
-static struct eeh_dev *pnv_eeh_probe(struct pci_dev *pdev)
+static void *pnv_eeh_probe(struct pci_dn *pdn, void *data)
 {
-	struct pci_dn *pdn = pci_get_pdn(pdev);
 	struct pci_controller *hose = pdn->phb;
 	struct pnv_phb *phb = hose->private_data;
 	struct eeh_dev *edev = pdn_to_eeh_dev(pdn);
@@ -362,14 +379,6 @@ static struct eeh_dev *pnv_eeh_probe(struct pci_dev *pdev)
 	 */
 	if (!edev || edev->pe)
 		return NULL;
-
-	/* already configured? */
-	if (edev->pdev) {
-		pr_debug("%s: found existing edev for %04x:%02x:%02x.%01x\n",
-			__func__, hose->global_number, config_addr >> 8,
-			PCI_SLOT(config_addr), PCI_FUNC(config_addr));
-		return edev;
-	}
 
 	/* Skip for PCI-ISA bridge */
 	if ((pdn->class_code >> 8) == PCI_CLASS_BRIDGE_ISA)
@@ -462,7 +471,7 @@ static struct eeh_dev *pnv_eeh_probe(struct pci_dev *pdev)
 
 	eeh_edev_dbg(edev, "EEH enabled on device\n");
 
-	return edev;
+	return NULL;
 }
 
 /**

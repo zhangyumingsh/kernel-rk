@@ -105,7 +105,7 @@ pe_header:
 	 *  x24        __primary_switch() .. relocate_kernel()
 	 *                                        current RELR displacement
 	 */
-SYM_CODE_START(stext)
+ENTRY(stext)
 	bl	preserve_boot_args
 	bl	el2_setup			// Drop to EL1, w0=cpu_boot_mode
 	adrp	x23, __PHYS_OFFSET
@@ -118,15 +118,14 @@ SYM_CODE_START(stext)
 	 * On return, the CPU will be ready for the MMU to be turned on and
 	 * the TCR will have been set.
 	 */
-	mov	x0, #ARM64_CPU_BOOT_PRIMARY
 	bl	__cpu_setup			// initialise processor
 	b	__primary_switch
-SYM_CODE_END(stext)
+ENDPROC(stext)
 
 /*
  * Preserve the arguments passed by the bootloader in x0 .. x3
  */
-SYM_CODE_START_LOCAL(preserve_boot_args)
+preserve_boot_args:
 	mov	x21, x0				// x21=FDT
 
 	adr_l	x0, boot_args			// record the contents of
@@ -138,7 +137,7 @@ SYM_CODE_START_LOCAL(preserve_boot_args)
 
 	mov	x1, #0x20			// 4 x 8 bytes
 	b	__inval_dcache_area		// tail call
-SYM_CODE_END(preserve_boot_args)
+ENDPROC(preserve_boot_args)
 
 /*
  * Macro to create a table entry to the next page.
@@ -276,7 +275,7 @@ SYM_CODE_END(preserve_boot_args)
  *   - first few MB of the kernel linear mapping to jump to once the MMU has
  *     been enabled
  */
-SYM_FUNC_START_LOCAL(__create_page_tables)
+__create_page_tables:
 	mov	x28, lr
 
 	/*
@@ -404,14 +403,15 @@ SYM_FUNC_START_LOCAL(__create_page_tables)
 	bl	__inval_dcache_area
 
 	ret	x28
-SYM_FUNC_END(__create_page_tables)
+ENDPROC(__create_page_tables)
+	.ltorg
 
 /*
  * The following fragment of code is executed with the MMU enabled.
  *
  *   x0 = __PHYS_OFFSET
  */
-SYM_FUNC_START_LOCAL(__primary_switched)
+__primary_switched:
 	adrp	x4, init_thread_union
 	add	sp, x4, #THREAD_SIZE
 	adr_l	x5, init_task
@@ -456,20 +456,17 @@ SYM_FUNC_START_LOCAL(__primary_switched)
 	mov	x29, #0
 	mov	x30, #0
 	b	start_kernel
-SYM_FUNC_END(__primary_switched)
-
-	.pushsection ".rodata", "a"
-SYM_DATA_START(kimage_vaddr)
-	.quad		_text - TEXT_OFFSET
-SYM_DATA_END(kimage_vaddr)
-EXPORT_SYMBOL(kimage_vaddr)
-	.popsection
+ENDPROC(__primary_switched)
 
 /*
  * end early head section, begin head code that is also used for
  * hotplug and needs to have the same protections as the text region
  */
 	.section ".idmap.text","awx"
+
+ENTRY(kimage_vaddr)
+	.quad		_text - TEXT_OFFSET
+EXPORT_SYMBOL(kimage_vaddr)
 
 /*
  * If we're fortunate enough to boot at EL2, ensure that the world is
@@ -478,7 +475,7 @@ EXPORT_SYMBOL(kimage_vaddr)
  * Returns either BOOT_CPU_MODE_EL1 or BOOT_CPU_MODE_EL2 in w0 if
  * booted in EL1 or EL2 respectively.
  */
-SYM_FUNC_START(el2_setup)
+ENTRY(el2_setup)
 	msr	SPsel, #1			// We want to use SP_EL{1,2}
 	mrs	x0, CurrentEL
 	cmp	x0, #CurrentEL_EL2
@@ -602,7 +599,7 @@ set_hcr:
 	isb
 	ret
 
-SYM_INNER_LABEL(install_el2_stub, SYM_L_LOCAL)
+install_el2_stub:
 	/*
 	 * When VHE is not in use, early init of EL2 and EL1 needs to be
 	 * done here.
@@ -639,13 +636,13 @@ SYM_INNER_LABEL(install_el2_stub, SYM_L_LOCAL)
 	msr	elr_el2, lr
 	mov	w0, #BOOT_CPU_MODE_EL2		// This CPU booted in EL2
 	eret
-SYM_FUNC_END(el2_setup)
+ENDPROC(el2_setup)
 
 /*
  * Sets the __boot_cpu_mode flag depending on the CPU boot mode passed
  * in w0. See arch/arm64/include/asm/virt.h for more info.
  */
-SYM_FUNC_START_LOCAL(set_cpu_boot_mode_flag)
+set_cpu_boot_mode_flag:
 	adr_l	x1, __boot_cpu_mode
 	cmp	w0, #BOOT_CPU_MODE_EL2
 	b.ne	1f
@@ -654,7 +651,7 @@ SYM_FUNC_START_LOCAL(set_cpu_boot_mode_flag)
 	dmb	sy
 	dc	ivac, x1			// Invalidate potentially stale cache line
 	ret
-SYM_FUNC_END(set_cpu_boot_mode_flag)
+ENDPROC(set_cpu_boot_mode_flag)
 
 /*
  * These values are written with the MMU off, but read with the MMU on.
@@ -670,17 +667,15 @@ SYM_FUNC_END(set_cpu_boot_mode_flag)
  * This is not in .bss, because we set it sufficiently early that the boot-time
  * zeroing of .bss would clobber it.
  */
-SYM_DATA_START(__boot_cpu_mode)
+ENTRY(__boot_cpu_mode)
 	.long	BOOT_CPU_MODE_EL2
 	.long	BOOT_CPU_MODE_EL1
-SYM_DATA_END(__boot_cpu_mode)
 /*
  * The booting CPU updates the failed status @__early_cpu_boot_status,
  * with MMU turned off.
  */
-SYM_DATA_START(__early_cpu_boot_status)
+ENTRY(__early_cpu_boot_status)
 	.quad 	0
-SYM_DATA_END(__early_cpu_boot_status)
 
 	.popsection
 
@@ -688,7 +683,7 @@ SYM_DATA_END(__early_cpu_boot_status)
 	 * This provides a "holding pen" for platforms to hold all secondary
 	 * cores are held until we're ready for them to initialise.
 	 */
-SYM_FUNC_START(secondary_holding_pen)
+ENTRY(secondary_holding_pen)
 	bl	el2_setup			// Drop to EL1, w0=cpu_boot_mode
 	bl	set_cpu_boot_mode_flag
 	mrs	x0, mpidr_el1
@@ -700,32 +695,31 @@ pen:	ldr	x4, [x3]
 	b.eq	secondary_startup
 	wfe
 	b	pen
-SYM_FUNC_END(secondary_holding_pen)
+ENDPROC(secondary_holding_pen)
 
 	/*
 	 * Secondary entry point that jumps straight into the kernel. Only to
 	 * be used where CPUs are brought online dynamically by the kernel.
 	 */
-SYM_FUNC_START(secondary_entry)
+ENTRY(secondary_entry)
 	bl	el2_setup			// Drop to EL1
 	bl	set_cpu_boot_mode_flag
 	b	secondary_startup
-SYM_FUNC_END(secondary_entry)
+ENDPROC(secondary_entry)
 
-SYM_FUNC_START_LOCAL(secondary_startup)
+secondary_startup:
 	/*
 	 * Common entry point for secondary CPUs.
 	 */
 	bl	__cpu_secondary_check52bitva
-	mov	x0, #ARM64_CPU_BOOT_SECONDARY
 	bl	__cpu_setup			// initialise processor
 	adrp	x1, swapper_pg_dir
 	bl	__enable_mmu
 	ldr	x8, =__secondary_switched
 	br	x8
-SYM_FUNC_END(secondary_startup)
+ENDPROC(secondary_startup)
 
-SYM_FUNC_START_LOCAL(__secondary_switched)
+__secondary_switched:
 	adr_l	x5, vectors
 	msr	vbar_el1, x5
 	isb
@@ -740,13 +734,13 @@ SYM_FUNC_START_LOCAL(__secondary_switched)
 	mov	x29, #0
 	mov	x30, #0
 	b	secondary_start_kernel
-SYM_FUNC_END(__secondary_switched)
+ENDPROC(__secondary_switched)
 
-SYM_FUNC_START_LOCAL(__secondary_too_slow)
+__secondary_too_slow:
 	wfe
 	wfi
 	b	__secondary_too_slow
-SYM_FUNC_END(__secondary_too_slow)
+ENDPROC(__secondary_too_slow)
 
 /*
  * The booting CPU updates the failed status @__early_cpu_boot_status,
@@ -778,7 +772,7 @@ SYM_FUNC_END(__secondary_too_slow)
  * Checks if the selected granule size is supported by the CPU.
  * If it isn't, park the CPU
  */
-SYM_FUNC_START(__enable_mmu)
+ENTRY(__enable_mmu)
 	mrs	x2, ID_AA64MMFR0_EL1
 	ubfx	x2, x2, #ID_AA64MMFR0_TGRAN_SHIFT, 4
 	cmp	x2, #ID_AA64MMFR0_TGRAN_SUPPORTED
@@ -802,9 +796,9 @@ SYM_FUNC_START(__enable_mmu)
 	dsb	nsh
 	isb
 	ret
-SYM_FUNC_END(__enable_mmu)
+ENDPROC(__enable_mmu)
 
-SYM_FUNC_START(__cpu_secondary_check52bitva)
+ENTRY(__cpu_secondary_check52bitva)
 #ifdef CONFIG_ARM64_VA_BITS_52
 	ldr_l	x0, vabits_actual
 	cmp	x0, #52
@@ -822,9 +816,9 @@ SYM_FUNC_START(__cpu_secondary_check52bitva)
 
 #endif
 2:	ret
-SYM_FUNC_END(__cpu_secondary_check52bitva)
+ENDPROC(__cpu_secondary_check52bitva)
 
-SYM_FUNC_START_LOCAL(__no_granule_support)
+__no_granule_support:
 	/* Indicate that this CPU can't boot and is stuck in the kernel */
 	update_early_cpu_boot_status \
 		CPU_STUCK_IN_KERNEL | CPU_STUCK_REASON_NO_GRAN, x1, x2
@@ -832,10 +826,10 @@ SYM_FUNC_START_LOCAL(__no_granule_support)
 	wfe
 	wfi
 	b	1b
-SYM_FUNC_END(__no_granule_support)
+ENDPROC(__no_granule_support)
 
 #ifdef CONFIG_RELOCATABLE
-SYM_FUNC_START_LOCAL(__relocate_kernel)
+__relocate_kernel:
 	/*
 	 * Iterate over each entry in the relocation table, and apply the
 	 * relocations in place.
@@ -937,10 +931,10 @@ SYM_FUNC_START_LOCAL(__relocate_kernel)
 #endif
 	ret
 
-SYM_FUNC_END(__relocate_kernel)
+ENDPROC(__relocate_kernel)
 #endif
 
-SYM_FUNC_START_LOCAL(__primary_switch)
+__primary_switch:
 #ifdef CONFIG_RANDOMIZE_BASE
 	mov	x19, x0				// preserve new SCTLR_EL1 value
 	mrs	x20, sctlr_el1			// preserve old SCTLR_EL1 value
@@ -983,4 +977,4 @@ SYM_FUNC_START_LOCAL(__primary_switch)
 	ldr	x8, =__primary_switched
 	adrp	x0, __PHYS_OFFSET
 	br	x8
-SYM_FUNC_END(__primary_switch)
+ENDPROC(__primary_switch)

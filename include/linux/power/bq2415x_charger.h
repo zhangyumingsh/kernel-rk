@@ -2,7 +2,7 @@
 /*
  * bq2415x charger driver
  *
- * Copyright (C) 2011-2013  Pali Rohár <pali@kernel.org>
+ * Copyright (C) 2011-2013  Pali Rohár <pali.rohar@gmail.com>
  */
 
 #ifndef BQ2415X_CHARGER_H

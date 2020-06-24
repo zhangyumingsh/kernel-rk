@@ -116,7 +116,7 @@ struct l2tp_session {
 	void (*recv_skb)(struct l2tp_session *session, struct sk_buff *skb, int data_len);
 	void (*session_close)(struct l2tp_session *session);
 	void (*show)(struct seq_file *m, void *priv);
-	u8			priv[];	/* private data */
+	uint8_t			priv[0];	/* private data */
 };
 
 /* Describes the tunnel. It contains info to track all the associated

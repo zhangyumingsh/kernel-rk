@@ -110,7 +110,7 @@ _GLOBAL(longjmp)
 	li	r3, 1
 	blr
 
-_GLOBAL(current_stack_frame)
+_GLOBAL(current_stack_pointer)
 	PPC_LL	r3,0(r1)
 	blr
-EXPORT_SYMBOL(current_stack_frame)
+EXPORT_SYMBOL(current_stack_pointer)

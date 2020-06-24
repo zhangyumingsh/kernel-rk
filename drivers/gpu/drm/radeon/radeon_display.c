@@ -45,10 +45,6 @@
 #include "atom.h"
 #include "radeon.h"
 
-u32 radeon_get_vblank_counter_kms(struct drm_crtc *crtc);
-int radeon_enable_vblank_kms(struct drm_crtc *crtc);
-void radeon_disable_vblank_kms(struct drm_crtc *crtc);
-
 static void avivo_crtc_load_lut(struct drm_crtc *crtc)
 {
 	struct radeon_crtc *radeon_crtc = to_radeon_crtc(crtc);
@@ -464,7 +460,7 @@ static void radeon_flip_work_func(struct work_struct *__work)
 		(DRM_SCANOUTPOS_VALID | DRM_SCANOUTPOS_IN_VBLANK) &&
 		(!ASIC_IS_AVIVO(rdev) ||
 		((int) (work->target_vblank -
-		crtc->funcs->get_vblank_counter(crtc)) > 0)))
+		dev->driver->get_vblank_counter(dev, work->crtc_id)) > 0)))
 		usleep_range(1000, 2000);
 
 	/* We borrow the event spin lock for protecting flip_status */
@@ -580,7 +576,7 @@ static int radeon_crtc_page_flip_target(struct drm_crtc *crtc,
 	}
 	work->base = base;
 	work->target_vblank = target - (uint32_t)drm_crtc_vblank_count(crtc) +
-		crtc->funcs->get_vblank_counter(crtc);
+		dev->driver->get_vblank_counter(dev, work->crtc_id);
 
 	/* We borrow the event spin lock for protecting flip_work */
 	spin_lock_irqsave(&crtc->dev->event_lock, flags);
@@ -672,10 +668,6 @@ static const struct drm_crtc_funcs radeon_crtc_funcs = {
 	.set_config = radeon_crtc_set_config,
 	.destroy = radeon_crtc_destroy,
 	.page_flip_target = radeon_crtc_page_flip_target,
-	.get_vblank_counter = radeon_get_vblank_counter_kms,
-	.enable_vblank = radeon_enable_vblank_kms,
-	.disable_vblank = radeon_disable_vblank_kms,
-	.get_vblank_timestamp = drm_crtc_vblank_helper_get_vblank_timestamp,
 };
 
 static void radeon_crtc_init(struct drm_device *dev, int index)
@@ -1980,17 +1972,4 @@ int radeon_get_crtc_scanoutpos(struct drm_device *dev, unsigned int pipe,
 	*vpos = *vpos - vbl_end;
 
 	return ret;
-}
-
-bool
-radeon_get_crtc_scanout_position(struct drm_crtc *crtc,
-				 bool in_vblank_irq, int *vpos, int *hpos,
-				 ktime_t *stime, ktime_t *etime,
-				 const struct drm_display_mode *mode)
-{
-	struct drm_device *dev = crtc->dev;
-	unsigned int pipe = crtc->index;
-
-	return radeon_get_crtc_scanoutpos(dev, pipe, 0, vpos, hpos,
-					  stime, etime, mode);
 }

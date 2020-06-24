@@ -90,9 +90,14 @@ asmlinkage void plat_irq_dispatch(void)
 	}
 }
 
+static struct irqaction cascade = {
+	.handler	= no_action,
+	.name		= "cascade",
+	.flags		= IRQF_NO_THREAD,
+};
+
 void __init arch_init_irq(void)
 {
-	int irq = LASAT_CASCADE_IRQ;
 	int i;
 
 	if (IS_LASAT_200()) {
@@ -114,6 +119,5 @@ void __init arch_init_irq(void)
 	for (i = LASAT_IRQ_BASE; i <= LASAT_IRQ_END; i++)
 		irq_set_chip_and_handler(i, &lasat_irq_type, handle_level_irq);
 
-	if (request_irq(irq, no_action, IRQF_NO_THREAD, "cascade", NULL))
-		pr_err("Failed to request irq %d (cascade)\n", irq);
+	setup_irq(LASAT_CASCADE_IRQ, &cascade);
 }

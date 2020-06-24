@@ -88,6 +88,9 @@ void amdgpu_driver_unload_kms(struct drm_device *dev)
 	if (adev->rmmio == NULL)
 		goto done_free;
 
+	if (amdgpu_sriov_vf(adev))
+		amdgpu_virt_request_full_gpu(adev, false);
+
 	if (adev->runpm) {
 		pm_runtime_get_sync(dev->dev);
 		pm_runtime_forbid(dev->dev);
@@ -167,17 +170,10 @@ int amdgpu_driver_load_kms(struct drm_device *dev, unsigned long flags)
 	}
 
 	if (amdgpu_device_supports_boco(dev) &&
-	    (amdgpu_runtime_pm != 0)) /* enable runpm by default for boco */
+	    (amdgpu_runtime_pm != 0)) /* enable runpm by default */
 		adev->runpm = true;
 	else if (amdgpu_device_supports_baco(dev) &&
-		 (amdgpu_runtime_pm != 0) &&
-		 (adev->asic_type >= CHIP_TOPAZ) &&
-		 (adev->asic_type != CHIP_VEGA10) &&
-		 (adev->asic_type != CHIP_VEGA20) &&
-		 (adev->asic_type != CHIP_ARCTURUS)) /* enable runpm on VI+ */
-		adev->runpm = true;
-	else if (amdgpu_device_supports_baco(dev) &&
-		 (amdgpu_runtime_pm > 0))  /* enable runpm if runpm=1 on CI */
+		 (amdgpu_runtime_pm > 0)) /* enable runpm if runpm=1 */
 		adev->runpm = true;
 
 	/* Call ACPI methods: require modeset init
@@ -1114,15 +1110,14 @@ void amdgpu_driver_postclose_kms(struct drm_device *dev,
 /**
  * amdgpu_get_vblank_counter_kms - get frame count
  *
- * @crtc: crtc to get the frame count from
+ * @dev: drm dev pointer
+ * @pipe: crtc to get the frame count from
  *
  * Gets the frame count on the requested crtc (all asics).
  * Returns frame count on success, -EINVAL on failure.
  */
-u32 amdgpu_get_vblank_counter_kms(struct drm_crtc *crtc)
+u32 amdgpu_get_vblank_counter_kms(struct drm_device *dev, unsigned int pipe)
 {
-	struct drm_device *dev = crtc->dev;
-	unsigned int pipe = crtc->index;
 	struct amdgpu_device *adev = dev->dev_private;
 	int vpos, hpos, stat;
 	u32 count;
@@ -1182,15 +1177,14 @@ u32 amdgpu_get_vblank_counter_kms(struct drm_crtc *crtc)
 /**
  * amdgpu_enable_vblank_kms - enable vblank interrupt
  *
- * @crtc: crtc to enable vblank interrupt for
+ * @dev: drm dev pointer
+ * @pipe: crtc to enable vblank interrupt for
  *
  * Enable the interrupt on the requested crtc (all asics).
  * Returns 0 on success, -EINVAL on failure.
  */
-int amdgpu_enable_vblank_kms(struct drm_crtc *crtc)
+int amdgpu_enable_vblank_kms(struct drm_device *dev, unsigned int pipe)
 {
-	struct drm_device *dev = crtc->dev;
-	unsigned int pipe = crtc->index;
 	struct amdgpu_device *adev = dev->dev_private;
 	int idx = amdgpu_display_crtc_idx_to_irq_type(adev, pipe);
 
@@ -1200,14 +1194,13 @@ int amdgpu_enable_vblank_kms(struct drm_crtc *crtc)
 /**
  * amdgpu_disable_vblank_kms - disable vblank interrupt
  *
- * @crtc: crtc to disable vblank interrupt for
+ * @dev: drm dev pointer
+ * @pipe: crtc to disable vblank interrupt for
  *
  * Disable the interrupt on the requested crtc (all asics).
  */
-void amdgpu_disable_vblank_kms(struct drm_crtc *crtc)
+void amdgpu_disable_vblank_kms(struct drm_device *dev, unsigned int pipe)
 {
-	struct drm_device *dev = crtc->dev;
-	unsigned int pipe = crtc->index;
 	struct amdgpu_device *adev = dev->dev_private;
 	int idx = amdgpu_display_crtc_idx_to_irq_type(adev, pipe);
 

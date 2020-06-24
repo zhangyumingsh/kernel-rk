@@ -46,7 +46,8 @@
 #define I2C_NO_STOP	1
 #define I2C_RESTART	2
 
-#define to_amdgpu_device(x) (container_of(x, struct amdgpu_device, pm.smu_i2c))
+#define to_amdgpu_device(x) (container_of(x, struct amdgpu_ras, eeprom_control.eeprom_accessor))->adev
+#define to_eeprom_control(x) container_of(x, struct amdgpu_ras_eeprom_control, eeprom_accessor)
 
 static void smu_v11_0_i2c_set_clock_gating(struct i2c_adapter *control, bool en)
 {
@@ -591,8 +592,7 @@ static uint32_t smu_v11_0_i2c_eeprom_write_data(struct i2c_adapter *control,
 
 static void lock_bus(struct i2c_adapter *i2c, unsigned int flags)
 {
-	struct amdgpu_device *adev = to_amdgpu_device(i2c);
-	struct amdgpu_ras_eeprom_control *control = &adev->psp.ras.ras->eeprom_control;
+	struct amdgpu_ras_eeprom_control *control = to_eeprom_control(i2c);
 
 	if (!smu_v11_0_i2c_bus_lock(i2c)) {
 		DRM_ERROR("Failed to lock the bus from SMU");
@@ -610,8 +610,7 @@ static int trylock_bus(struct i2c_adapter *i2c, unsigned int flags)
 
 static void unlock_bus(struct i2c_adapter *i2c, unsigned int flags)
 {
-	struct amdgpu_device *adev = to_amdgpu_device(i2c);
-	struct amdgpu_ras_eeprom_control *control = &adev->psp.ras.ras->eeprom_control;
+	struct amdgpu_ras_eeprom_control *control = to_eeprom_control(i2c);
 
 	if (!smu_v11_0_i2c_bus_unlock(i2c)) {
 		DRM_ERROR("Failed to unlock the bus from SMU");
@@ -631,8 +630,7 @@ static int smu_v11_0_i2c_eeprom_i2c_xfer(struct i2c_adapter *i2c_adap,
 			      struct i2c_msg *msgs, int num)
 {
 	int i, ret;
-	struct amdgpu_device *adev = to_amdgpu_device(i2c_adap);
-	struct amdgpu_ras_eeprom_control *control = &adev->psp.ras.ras->eeprom_control;
+	struct amdgpu_ras_eeprom_control *control = to_eeprom_control(i2c_adap);
 
 	if (!control->bus_locked) {
 		DRM_ERROR("I2C bus unlocked, stopping transaction!");
@@ -681,7 +679,7 @@ int smu_v11_0_i2c_eeprom_control_init(struct i2c_adapter *control)
 	control->class = I2C_CLASS_SPD;
 	control->dev.parent = &adev->pdev->dev;
 	control->algo = &smu_v11_0_i2c_eeprom_i2c_algo;
-	snprintf(control->name, sizeof(control->name), "AMDGPU EEPROM");
+	snprintf(control->name, sizeof(control->name), "RAS EEPROM");
 	control->lock_ops = &smu_v11_0_i2c_i2c_lock_ops;
 
 	res = i2c_add_adapter(control);

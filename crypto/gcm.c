@@ -840,6 +840,7 @@ static int crypto_rfc4106_create(struct crypto_template *tmpl,
 	struct aead_instance *inst;
 	struct crypto_aead_spawn *spawn;
 	struct aead_alg *alg;
+	const char *ccm_name;
 	int err;
 
 	algt = crypto_get_attr_type(tb);
@@ -851,15 +852,19 @@ static int crypto_rfc4106_create(struct crypto_template *tmpl,
 
 	mask = crypto_requires_sync(algt->type, algt->mask);
 
+	ccm_name = crypto_attr_alg_name(tb[1]);
+	if (IS_ERR(ccm_name))
+		return PTR_ERR(ccm_name);
+
 	inst = kzalloc(sizeof(*inst) + sizeof(*spawn), GFP_KERNEL);
 	if (!inst)
 		return -ENOMEM;
 
 	spawn = aead_instance_ctx(inst);
 	err = crypto_grab_aead(spawn, aead_crypto_instance(inst),
-			       crypto_attr_alg_name(tb[1]), 0, mask);
+			       ccm_name, 0, mask);
 	if (err)
-		goto err_free_inst;
+		goto out_free_inst;
 
 	alg = crypto_spawn_aead_alg(spawn);
 
@@ -867,11 +872,11 @@ static int crypto_rfc4106_create(struct crypto_template *tmpl,
 
 	/* Underlying IV size must be 12. */
 	if (crypto_aead_alg_ivsize(alg) != GCM_AES_IV_SIZE)
-		goto err_free_inst;
+		goto out_drop_alg;
 
 	/* Not a stream cipher? */
 	if (alg->base.cra_blocksize != 1)
-		goto err_free_inst;
+		goto out_drop_alg;
 
 	err = -ENAMETOOLONG;
 	if (snprintf(inst->alg.base.cra_name, CRYPTO_MAX_ALG_NAME,
@@ -880,7 +885,7 @@ static int crypto_rfc4106_create(struct crypto_template *tmpl,
 	    snprintf(inst->alg.base.cra_driver_name, CRYPTO_MAX_ALG_NAME,
 		     "rfc4106(%s)", alg->base.cra_driver_name) >=
 	    CRYPTO_MAX_ALG_NAME)
-		goto err_free_inst;
+		goto out_drop_alg;
 
 	inst->alg.base.cra_flags = alg->base.cra_flags & CRYPTO_ALG_ASYNC;
 	inst->alg.base.cra_priority = alg->base.cra_priority;
@@ -904,11 +909,17 @@ static int crypto_rfc4106_create(struct crypto_template *tmpl,
 	inst->free = crypto_rfc4106_free;
 
 	err = aead_register_instance(tmpl, inst);
-	if (err) {
-err_free_inst:
-		crypto_rfc4106_free(inst);
-	}
+	if (err)
+		goto out_drop_alg;
+
+out:
 	return err;
+
+out_drop_alg:
+	crypto_drop_aead(spawn);
+out_free_inst:
+	kfree(inst);
+	goto out;
 }
 
 static int crypto_rfc4543_setkey(struct crypto_aead *parent, const u8 *key,
@@ -1060,8 +1071,10 @@ static int crypto_rfc4543_create(struct crypto_template *tmpl,
 	struct crypto_attr_type *algt;
 	u32 mask;
 	struct aead_instance *inst;
+	struct crypto_aead_spawn *spawn;
 	struct aead_alg *alg;
 	struct crypto_rfc4543_instance_ctx *ctx;
+	const char *ccm_name;
 	int err;
 
 	algt = crypto_get_attr_type(tb);
@@ -1073,27 +1086,32 @@ static int crypto_rfc4543_create(struct crypto_template *tmpl,
 
 	mask = crypto_requires_sync(algt->type, algt->mask);
 
+	ccm_name = crypto_attr_alg_name(tb[1]);
+	if (IS_ERR(ccm_name))
+		return PTR_ERR(ccm_name);
+
 	inst = kzalloc(sizeof(*inst) + sizeof(*ctx), GFP_KERNEL);
 	if (!inst)
 		return -ENOMEM;
 
 	ctx = aead_instance_ctx(inst);
-	err = crypto_grab_aead(&ctx->aead, aead_crypto_instance(inst),
-			       crypto_attr_alg_name(tb[1]), 0, mask);
+	spawn = &ctx->aead;
+	err = crypto_grab_aead(spawn, aead_crypto_instance(inst),
+			       ccm_name, 0, mask);
 	if (err)
-		goto err_free_inst;
+		goto out_free_inst;
 
-	alg = crypto_spawn_aead_alg(&ctx->aead);
+	alg = crypto_spawn_aead_alg(spawn);
 
 	err = -EINVAL;
 
 	/* Underlying IV size must be 12. */
 	if (crypto_aead_alg_ivsize(alg) != GCM_AES_IV_SIZE)
-		goto err_free_inst;
+		goto out_drop_alg;
 
 	/* Not a stream cipher? */
 	if (alg->base.cra_blocksize != 1)
-		goto err_free_inst;
+		goto out_drop_alg;
 
 	err = -ENAMETOOLONG;
 	if (snprintf(inst->alg.base.cra_name, CRYPTO_MAX_ALG_NAME,
@@ -1102,7 +1120,7 @@ static int crypto_rfc4543_create(struct crypto_template *tmpl,
 	    snprintf(inst->alg.base.cra_driver_name, CRYPTO_MAX_ALG_NAME,
 		     "rfc4543(%s)", alg->base.cra_driver_name) >=
 	    CRYPTO_MAX_ALG_NAME)
-		goto err_free_inst;
+		goto out_drop_alg;
 
 	inst->alg.base.cra_flags = alg->base.cra_flags & CRYPTO_ALG_ASYNC;
 	inst->alg.base.cra_priority = alg->base.cra_priority;
@@ -1123,14 +1141,20 @@ static int crypto_rfc4543_create(struct crypto_template *tmpl,
 	inst->alg.encrypt = crypto_rfc4543_encrypt;
 	inst->alg.decrypt = crypto_rfc4543_decrypt;
 
-	inst->free = crypto_rfc4543_free;
+	inst->free = crypto_rfc4543_free,
 
 	err = aead_register_instance(tmpl, inst);
-	if (err) {
-err_free_inst:
-		crypto_rfc4543_free(inst);
-	}
+	if (err)
+		goto out_drop_alg;
+
+out:
 	return err;
+
+out_drop_alg:
+	crypto_drop_aead(spawn);
+out_free_inst:
+	kfree(inst);
+	goto out;
 }
 
 static struct crypto_template crypto_gcm_tmpls[] = {

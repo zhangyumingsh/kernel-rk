@@ -7,7 +7,6 @@ locking
 .. toctree::
     :maxdepth: 1
 
-    locktypes
     lockdep-design
     lockstat
     locktorture

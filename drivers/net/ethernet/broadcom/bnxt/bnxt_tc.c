@@ -279,8 +279,7 @@ bnxt_tc_parse_pedit(struct bnxt *bp, struct bnxt_tc_actions *actions,
 
 static int bnxt_tc_parse_actions(struct bnxt *bp,
 				 struct bnxt_tc_actions *actions,
-				 struct flow_action *flow_action,
-				 struct netlink_ext_ack *extack)
+				 struct flow_action *flow_action)
 {
 	/* Used to store the L2 rewrite mask for dmac (6 bytes) followed by
 	 * smac (6 bytes) if rewrite of both is specified, otherwise either
@@ -299,9 +298,6 @@ static int bnxt_tc_parse_actions(struct bnxt *bp,
 		netdev_info(bp->dev, "no actions\n");
 		return -EINVAL;
 	}
-
-	if (!flow_action_basic_hw_stats_check(flow_action, extack))
-		return -EOPNOTSUPP;
 
 	flow_action_for_each(i, act, flow_action) {
 		switch (act->id) {
@@ -495,8 +491,7 @@ static int bnxt_tc_parse_flow(struct bnxt *bp,
 		flow->tun_mask.tp_src = match.mask->src;
 	}
 
-	return bnxt_tc_parse_actions(bp, &flow->actions, &rule->action,
-				     tc_flow_cmd->common.extack);
+	return bnxt_tc_parse_actions(bp, &flow->actions, &rule->action);
 }
 
 static int bnxt_hwrm_cfa_flow_free(struct bnxt *bp,
@@ -1639,7 +1634,7 @@ static int bnxt_tc_get_flow_stats(struct bnxt *bp,
 	spin_unlock(&flow->stats_lock);
 
 	flow_stats_update(&tc_flow_cmd->stats, stats.bytes, stats.packets,
-			  lastused, FLOW_ACTION_HW_STATS_DELAYED);
+			  lastused);
 	return 0;
 }
 

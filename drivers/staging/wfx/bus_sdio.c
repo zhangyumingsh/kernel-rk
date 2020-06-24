@@ -251,7 +251,6 @@ MODULE_DEVICE_TABLE(sdio, wfx_sdio_ids);
 #ifdef CONFIG_OF
 static const struct of_device_id wfx_sdio_of_match[] = {
 	{ .compatible = "silabs,wfx-sdio" },
-	{ .compatible = "silabs,wf200" },
 	{ },
 };
 MODULE_DEVICE_TABLE(of, wfx_sdio_of_match);

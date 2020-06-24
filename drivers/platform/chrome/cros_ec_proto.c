@@ -553,10 +553,7 @@ EXPORT_SYMBOL(cros_ec_cmd_xfer);
  * replied with success status. It's not necessary to check msg->result when
  * using this function.
  *
- * Return:
- * >=0 - The number of bytes transferred
- * -ENOTSUPP - Operation not supported
- * -EPROTO - Protocol error
+ * Return: The number of bytes transferred on success or negative error code.
  */
 int cros_ec_cmd_xfer_status(struct cros_ec_device *ec_dev,
 			    struct cros_ec_command *msg)
@@ -566,10 +563,6 @@ int cros_ec_cmd_xfer_status(struct cros_ec_device *ec_dev,
 	ret = cros_ec_cmd_xfer(ec_dev, msg);
 	if (ret < 0) {
 		dev_err(ec_dev->dev, "Command xfer error (err:%d)\n", ret);
-	} else if (msg->result == EC_RES_INVALID_VERSION) {
-		dev_dbg(ec_dev->dev, "Command invalid version (err:%d)\n",
-			msg->result);
-		return -ENOTSUPP;
 	} else if (msg->result != EC_RES_SUCCESS) {
 		dev_dbg(ec_dev->dev, "Command result (err: %d)\n", msg->result);
 		return -EPROTO;

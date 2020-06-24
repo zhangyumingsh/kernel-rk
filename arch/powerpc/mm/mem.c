@@ -66,6 +66,12 @@ pte_t *kmap_pte;
 EXPORT_SYMBOL(kmap_pte);
 pgprot_t kmap_prot;
 EXPORT_SYMBOL(kmap_prot);
+
+static inline pte_t *virt_to_kpte(unsigned long vaddr)
+{
+	return pte_offset_kernel(pmd_offset(pud_offset(pgd_offset_k(vaddr),
+			vaddr), vaddr), vaddr);
+}
 #endif
 
 pgprot_t phys_mem_access_prot(struct file *file, unsigned long pfn,
@@ -90,8 +96,7 @@ int memory_add_physaddr_to_nid(u64 start)
 }
 #endif
 
-int __weak create_section_mapping(unsigned long start, unsigned long end,
-				  int nid, pgprot_t prot)
+int __weak create_section_mapping(unsigned long start, unsigned long end, int nid)
 {
 	return -ENODEV;
 }
@@ -123,7 +128,7 @@ static void flush_dcache_range_chunked(unsigned long start, unsigned long stop,
 }
 
 int __ref arch_add_memory(int nid, u64 start, u64 size,
-			  struct mhp_params *params)
+			struct mhp_restrictions *restrictions)
 {
 	unsigned long start_pfn = start >> PAGE_SHIFT;
 	unsigned long nr_pages = size >> PAGE_SHIFT;
@@ -132,15 +137,14 @@ int __ref arch_add_memory(int nid, u64 start, u64 size,
 	resize_hpt_for_hotplug(memblock_phys_mem_size());
 
 	start = (unsigned long)__va(start);
-	rc = create_section_mapping(start, start + size, nid,
-				    params->pgprot);
+	rc = create_section_mapping(start, start + size, nid);
 	if (rc) {
 		pr_warn("Unable to create mapping for hot added memory 0x%llx..0x%llx: %d\n",
 			start, start + size, rc);
 		return -EFAULT;
 	}
 
-	return __add_pages(nid, start_pfn, nr_pages, params);
+	return __add_pages(nid, start_pfn, nr_pages, restrictions);
 }
 
 void __ref arch_remove_memory(int nid, u64 start, u64 size,

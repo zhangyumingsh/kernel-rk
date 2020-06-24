@@ -265,11 +265,11 @@ ENTRY(tegra30_sleep_core_finish)
 ENDPROC(tegra30_sleep_core_finish)
 
 /*
- * tegra30_pm_secondary_cpu_suspend(unsigned long unused_arg)
+ * tegra30_sleep_cpu_secondary_finish(unsigned long v2p)
  *
  * Enters LP2 on secondary CPU by exiting coherency and powergating the CPU.
  */
-ENTRY(tegra30_pm_secondary_cpu_suspend)
+ENTRY(tegra30_sleep_cpu_secondary_finish)
 	mov	r7, lr
 
 	/* Flush and disable the L1 data cache */
@@ -281,7 +281,7 @@ ENTRY(tegra30_pm_secondary_cpu_suspend)
 	bl	tegra30_cpu_shutdown
 	mov	r0, #1                          @ never return here
 	ret	r7
-ENDPROC(tegra30_pm_secondary_cpu_suspend)
+ENDPROC(tegra30_sleep_cpu_secondary_finish)
 
 /*
  * tegra30_tear_down_cpu

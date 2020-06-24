@@ -11,7 +11,7 @@
 
 static inline bool is_wilc1000(u32 id)
 {
-	return (id & (~WILC_CHIP_REV_FIELD)) == WILC_1000_BASE_ID;
+	return (id & 0xfffff000) == 0x100000;
 }
 
 static inline void acquire_bus(struct wilc *wilc, enum bus_acquire acquire)
@@ -393,67 +393,62 @@ void chip_allow_sleep(struct wilc *wilc)
 {
 	u32 reg = 0;
 
-	wilc->hif_func->hif_read_reg(wilc, WILC_SDIO_WAKEUP_REG, &reg);
+	wilc->hif_func->hif_read_reg(wilc, 0xf0, &reg);
 
-	wilc->hif_func->hif_write_reg(wilc, WILC_SDIO_WAKEUP_REG,
-				      reg & ~WILC_SDIO_WAKEUP_BIT);
-	wilc->hif_func->hif_write_reg(wilc, WILC_SDIO_HOST_TO_FW_REG, 0);
+	wilc->hif_func->hif_write_reg(wilc, 0xf0, reg & ~BIT(0));
+	wilc->hif_func->hif_write_reg(wilc, 0xfa, 0);
 }
 EXPORT_SYMBOL_GPL(chip_allow_sleep);
 
 void chip_wakeup(struct wilc *wilc)
 {
 	u32 reg, clk_status_reg;
-	const struct wilc_hif_func *h = wilc->hif_func;
 
-	if (wilc->io_type == WILC_HIF_SPI) {
+	if ((wilc->io_type & 0x1) == WILC_HIF_SPI) {
 		do {
-			h->hif_read_reg(wilc, WILC_SPI_WAKEUP_REG, &reg);
-			h->hif_write_reg(wilc, WILC_SPI_WAKEUP_REG,
-					 reg | WILC_SPI_WAKEUP_BIT);
-			h->hif_write_reg(wilc, WILC_SPI_WAKEUP_REG,
-					 reg & ~WILC_SPI_WAKEUP_BIT);
+			wilc->hif_func->hif_read_reg(wilc, 1, &reg);
+			wilc->hif_func->hif_write_reg(wilc, 1, reg | BIT(1));
+			wilc->hif_func->hif_write_reg(wilc, 1, reg & ~BIT(1));
 
 			do {
 				usleep_range(2000, 2500);
 				wilc_get_chipid(wilc, true);
 			} while (wilc_get_chipid(wilc, true) == 0);
 		} while (wilc_get_chipid(wilc, true) == 0);
-	} else if (wilc->io_type == WILC_HIF_SDIO) {
-		h->hif_write_reg(wilc, WILC_SDIO_HOST_TO_FW_REG,
-				 WILC_SDIO_HOST_TO_FW_BIT);
+	} else if ((wilc->io_type & 0x1) == WILC_HIF_SDIO) {
+		wilc->hif_func->hif_write_reg(wilc, 0xfa, 1);
 		usleep_range(200, 400);
-		h->hif_read_reg(wilc, WILC_SDIO_WAKEUP_REG, &reg);
+		wilc->hif_func->hif_read_reg(wilc, 0xf0, &reg);
 		do {
-			h->hif_write_reg(wilc, WILC_SDIO_WAKEUP_REG,
-					 reg | WILC_SDIO_WAKEUP_BIT);
-			h->hif_read_reg(wilc, WILC_SDIO_CLK_STATUS_REG,
-					&clk_status_reg);
+			wilc->hif_func->hif_write_reg(wilc, 0xf0,
+						      reg | BIT(0));
+			wilc->hif_func->hif_read_reg(wilc, 0xf1,
+						     &clk_status_reg);
 
-			while (!(clk_status_reg & WILC_SDIO_CLK_STATUS_BIT)) {
+			while ((clk_status_reg & 0x1) == 0) {
 				usleep_range(2000, 2500);
 
-				h->hif_read_reg(wilc, WILC_SDIO_CLK_STATUS_REG,
-						&clk_status_reg);
+				wilc->hif_func->hif_read_reg(wilc, 0xf1,
+							     &clk_status_reg);
 			}
-			if (!(clk_status_reg & WILC_SDIO_CLK_STATUS_BIT)) {
-				h->hif_write_reg(wilc, WILC_SDIO_WAKEUP_REG,
-						 reg & ~WILC_SDIO_WAKEUP_BIT);
+			if ((clk_status_reg & 0x1) == 0) {
+				wilc->hif_func->hif_write_reg(wilc, 0xf0,
+							      reg & (~BIT(0)));
 			}
-		} while (!(clk_status_reg & WILC_SDIO_CLK_STATUS_BIT));
+		} while ((clk_status_reg & 0x1) == 0);
 	}
 
 	if (wilc->chip_ps_state == WILC_CHIP_SLEEPING_MANUAL) {
-		if (wilc_get_chipid(wilc, false) < WILC_1000_BASE_ID_2B) {
+		if (wilc_get_chipid(wilc, false) < 0x1002b0) {
 			u32 val32;
 
-			h->hif_read_reg(wilc, WILC_REG_4_TO_1_RX, &val32);
+			wilc->hif_func->hif_read_reg(wilc, 0x1e1c, &val32);
 			val32 |= BIT(6);
-			h->hif_write_reg(wilc, WILC_REG_4_TO_1_RX, val32);
+			wilc->hif_func->hif_write_reg(wilc, 0x1e1c, val32);
 
-			h->hif_read_reg(wilc, WILC_REG_4_TO_1_TX_BANK0, &val32);
+			wilc->hif_func->hif_read_reg(wilc, 0x1e9c, &val32);
 			val32 |= BIT(6);
-			h->hif_write_reg(wilc, WILC_REG_4_TO_1_TX_BANK0, val32);
+			wilc->hif_func->hif_write_reg(wilc, 0x1e9c, val32);
 		}
 	}
 	wilc->chip_ps_state = WILC_CHIP_WAKEDUP;
@@ -463,7 +458,7 @@ EXPORT_SYMBOL_GPL(chip_wakeup);
 void host_wakeup_notify(struct wilc *wilc)
 {
 	acquire_bus(wilc, WILC_BUS_ACQUIRE_ONLY);
-	wilc->hif_func->hif_write_reg(wilc, WILC_CORTUS_INTERRUPT_2, 1);
+	wilc->hif_func->hif_write_reg(wilc, 0x10b0, 1);
 	release_bus(wilc, WILC_BUS_RELEASE_ONLY);
 }
 EXPORT_SYMBOL_GPL(host_wakeup_notify);
@@ -471,7 +466,7 @@ EXPORT_SYMBOL_GPL(host_wakeup_notify);
 void host_sleep_notify(struct wilc *wilc)
 {
 	acquire_bus(wilc, WILC_BUS_ACQUIRE_ONLY);
-	wilc->hif_func->hif_write_reg(wilc, WILC_CORTUS_INTERRUPT_1, 1);
+	wilc->hif_func->hif_write_reg(wilc, 0x10ac, 1);
 	release_bus(wilc, WILC_BUS_RELEASE_ONLY);
 }
 EXPORT_SYMBOL_GPL(host_sleep_notify);
@@ -513,7 +508,9 @@ int wilc_wlan_handle_txq(struct wilc *wilc, u32 *txq_count)
 			vmm_sz = HOST_HDR_OFFSET;
 
 		vmm_sz += tqe->buffer_size;
-		vmm_sz = ALIGN(vmm_sz, 4);
+
+		if (vmm_sz & 0x3)
+			vmm_sz = (vmm_sz + 4) & ~0x3;
 
 		if ((sum + vmm_sz) > WILC_TX_BUFF_SIZE)
 			break;
@@ -571,8 +568,8 @@ int wilc_wlan_handle_txq(struct wilc *wilc, u32 *txq_count)
 			ret = func->hif_read_reg(wilc, WILC_HOST_VMM_CTL, &reg);
 			if (ret)
 				break;
-			if (FIELD_GET(WILC_VMM_ENTRY_AVAILABLE, reg)) {
-				entries = FIELD_GET(WILC_VMM_ENTRY_COUNT, reg);
+			if ((reg >> 2) & 0x1) {
+				entries = ((reg >> 3) & 0x3f);
 				break;
 			}
 		} while (--timeout);
@@ -612,7 +609,6 @@ int wilc_wlan_handle_txq(struct wilc *wilc, u32 *txq_count)
 	do {
 		u32 header, buffer_offset;
 		char *bssid;
-		u8 mgmt_ptk = 0;
 
 		tqe = wilc_wlan_txq_remove_from_head(dev);
 		if (!tqe)
@@ -623,16 +619,15 @@ int wilc_wlan_handle_txq(struct wilc *wilc, u32 *txq_count)
 			break;
 
 		le32_to_cpus(&vmm_table[i]);
-		vmm_sz = FIELD_GET(WILC_VMM_BUFFER_SIZE, vmm_table[i]);
+		vmm_sz = (vmm_table[i] & 0x3ff);
 		vmm_sz *= 4;
-
+		header = (tqe->type << 31) |
+			 (tqe->buffer_size << 15) |
+			 vmm_sz;
 		if (tqe->type == WILC_MGMT_PKT)
-			mgmt_ptk = 1;
-
-		header = (FIELD_PREP(WILC_VMM_HDR_TYPE, tqe->type) |
-			  FIELD_PREP(WILC_VMM_HDR_MGMT_FIELD, mgmt_ptk) |
-			  FIELD_PREP(WILC_VMM_HDR_PKT_SIZE, tqe->buffer_size) |
-			  FIELD_PREP(WILC_VMM_HDR_BUFF_SIZE, vmm_sz));
+			header |= BIT(30);
+		else
+			header &= ~BIT(30);
 
 		cpu_to_le32s(&header);
 		memcpy(&txb[offset], &header, 4);
@@ -690,10 +685,10 @@ static void wilc_wlan_handle_rx_buff(struct wilc *wilc, u8 *buffer, int size)
 		buff_ptr = buffer + offset;
 		header = get_unaligned_le32(buff_ptr);
 
-		is_cfg_packet = FIELD_GET(WILC_PKT_HDR_CONFIG_FIELD, header);
-		pkt_offset = FIELD_GET(WILC_PKT_HDR_OFFSET_FIELD, header);
-		tp_len = FIELD_GET(WILC_PKT_HDR_TOTAL_LEN_FIELD, header);
-		pkt_len = FIELD_GET(WILC_PKT_HDR_LEN_FIELD, header);
+		is_cfg_packet = (header >> 31) & 0x1;
+		pkt_offset = (header >> 22) & 0x1ff;
+		tp_len = (header >> 11) & 0x7ff;
+		pkt_len = header & 0x7ff;
 
 		if (pkt_len == 0 || tp_len == 0)
 			break;
@@ -703,8 +698,10 @@ static void wilc_wlan_handle_rx_buff(struct wilc *wilc, u8 *buffer, int size)
 			wilc_wfi_mgmt_rx(wilc, buff_ptr, pkt_len);
 		} else {
 			if (!is_cfg_packet) {
-				wilc_frmw_to_host(wilc, buff_ptr, pkt_len,
-						  pkt_offset);
+				if (pkt_len > 0) {
+					wilc_frmw_to_host(wilc, buff_ptr,
+							  pkt_len, pkt_offset);
+				}
 			} else {
 				struct wilc_cfg_rsp rsp;
 
@@ -760,11 +757,11 @@ static void wilc_wlan_handle_isr_ext(struct wilc *wilc, u32 int_status)
 	int ret = 0;
 	struct rxq_entry_t *rqe;
 
-	size = FIELD_GET(WILC_INTERRUPT_DATA_SIZE, int_status) << 2;
+	size = (int_status & 0x7fff) << 2;
 
 	while (!size && retries < 10) {
 		wilc->hif_func->hif_read_size(wilc, &size);
-		size = FIELD_GET(WILC_INTERRUPT_DATA_SIZE, size) << 2;
+		size = (size & 0x7fff) << 2;
 		retries++;
 	}
 
@@ -889,7 +886,7 @@ int wilc_wlan_start(struct wilc *wilc)
 
 	wilc->hif_func->hif_sync_ext(wilc, NUM_INT_EXT);
 
-	ret = wilc->hif_func->hif_read_reg(wilc, WILC_CHIPID, &chipid);
+	ret = wilc->hif_func->hif_read_reg(wilc, 0x1000, &chipid);
 	if (ret) {
 		release_bus(wilc, WILC_BUS_RELEASE_ONLY);
 		return ret;
@@ -1130,24 +1127,18 @@ static int init_chip(struct net_device *dev)
 	chipid = wilc_get_chipid(wilc, true);
 
 	if ((chipid & 0xfff) != 0xa0) {
-		ret = wilc->hif_func->hif_read_reg(wilc,
-						   WILC_CORTUS_RESET_MUX_SEL,
-						   &reg);
+		ret = wilc->hif_func->hif_read_reg(wilc, 0x1118, &reg);
 		if (ret) {
 			netdev_err(dev, "fail read reg 0x1118\n");
 			goto release;
 		}
 		reg |= BIT(0);
-		ret = wilc->hif_func->hif_write_reg(wilc,
-						    WILC_CORTUS_RESET_MUX_SEL,
-						    reg);
+		ret = wilc->hif_func->hif_write_reg(wilc, 0x1118, reg);
 		if (ret) {
 			netdev_err(dev, "fail write reg 0x1118\n");
 			goto release;
 		}
-		ret = wilc->hif_func->hif_write_reg(wilc,
-						    WILC_CORTUS_BOOT_REGISTER,
-						    WILC_CORTUS_BOOT_FROM_IRAM);
+		ret = wilc->hif_func->hif_write_reg(wilc, 0xc0000, 0x71);
 		if (ret) {
 			netdev_err(dev, "fail write reg 0xc0000\n");
 			goto release;
@@ -1167,21 +1158,20 @@ u32 wilc_get_chipid(struct wilc *wilc, bool update)
 	u32 rfrevid = 0;
 
 	if (chipid == 0 || update) {
-		wilc->hif_func->hif_read_reg(wilc, WILC_CHIPID, &tempchipid);
-		wilc->hif_func->hif_read_reg(wilc, WILC_RF_REVISION_ID,
-					     &rfrevid);
+		wilc->hif_func->hif_read_reg(wilc, 0x1000, &tempchipid);
+		wilc->hif_func->hif_read_reg(wilc, 0x13f4, &rfrevid);
 		if (!is_wilc1000(tempchipid)) {
 			chipid = 0;
 			return chipid;
 		}
-		if (tempchipid == WILC_1000_BASE_ID_2A) { /* 0x1002A0 */
+		if (tempchipid == 0x1002a0) {
 			if (rfrevid != 0x1)
-				tempchipid = WILC_1000_BASE_ID_2A_REV1;
-		} else if (tempchipid == WILC_1000_BASE_ID_2B) { /* 0x1002B0 */
+				tempchipid = 0x1002a1;
+		} else if (tempchipid == 0x1002b0) {
 			if (rfrevid == 0x4)
-				tempchipid = WILC_1000_BASE_ID_2B_REV1;
+				tempchipid = 0x1002b1;
 			else if (rfrevid != 0x3)
-				tempchipid = WILC_1000_BASE_ID_2B_REV2;
+				tempchipid = 0x1002b2;
 		}
 
 		chipid = tempchipid;

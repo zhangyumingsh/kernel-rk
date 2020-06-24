@@ -11,7 +11,10 @@
 #
 
 # The triggers are set within the set_ftrace_filter file
-check_filter_file set_ftrace_filter
+if [ ! -f set_ftrace_filter ]; then
+    echo "set_ftrace_filter not found? Is dynamic ftrace not set?"
+    exit_unsupported
+fi
 
 fail() { # mesg
     echo $1
@@ -38,7 +41,7 @@ fi
 
 echo '** ENABLE EVENTS'
 
-echo 1 > events/sched/enable
+echo 1 > events/enable
 
 echo '** ENABLE TRACING'
 enable_tracing

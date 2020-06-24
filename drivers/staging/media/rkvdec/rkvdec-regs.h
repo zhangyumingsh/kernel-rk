@@ -4,6 +4,15 @@
 #define RKVDEC_REGS_H_
 
 /* rkvcodec registers */
+#define RKVDEC_REG_HW_INFO				0x000
+#define RKVDEC_HW_ID					0x6876
+#define RKVDEC_HW_CAP_UHD				BIT(8)
+#define RKVDEC_HW_CAP_VP9				BIT(9)
+#define RKVDEC_HW_CAP_H264				BIT(10)
+#define RKVDEC_HW_CAP_HEVC				BIT(11)
+#define RKVDEC_HW_CAP_MAIN10				BIT(12)
+#define RKVDEC_HW_CAP_ENCODER				BIT(13)
+
 #define RKVDEC_REG_INTERRUPT				0x004
 #define RKVDEC_INTERRUPT_DEC_E				BIT(0)
 #define RKVDEC_CONFIG_DEC_CLK_GATE_E			BIT(1)
@@ -28,6 +37,11 @@
 #define RKVDEC_SOFTRST_EN_P				BIT(20)
 #define RKVDEC_FORCE_SOFTRESET_VALID			BIT(21)
 #define RKVDEC_SOFTRESET_RDY				BIT(22)
+#define RKVDEC_ERR_MASK					(RKVDEC_BUS_STA \
+							 | RKVDEC_ERR_STA \
+							 | RKVDEC_TIMEOUT_STA \
+							 | RKVDEC_BUF_EMPTY_STA \
+							 | RKVDEC_COLMV_REF_ERR_STA )
 
 #define RKVDEC_REG_SYSCTRL				0x008
 #define RKVDEC_IN_ENDIAN				BIT(0)
@@ -43,6 +57,7 @@
 #define RKVDEC_RLC_MODE					BIT(11)
 #define RKVDEC_STRM_START_BIT(x)			(((x) & 0x7f) << 12)
 #define RKVDEC_MODE(x)					(((x) & 0x03) << 20)
+#define RKVDEC_MODE_HEVC				0
 #define RKVDEC_MODE_H264				1
 #define RKVDEC_MODE_VP9					2
 #define RKVDEC_RPS_MODE					BIT(24)

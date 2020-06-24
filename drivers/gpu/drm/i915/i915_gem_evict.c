@@ -26,6 +26,8 @@
  *
  */
 
+#include <drm/i915_drm.h>
+
 #include "gem/i915_gem_context.h"
 #include "gt/intel_gt_requests.h"
 
@@ -128,13 +130,6 @@ search_again:
 	active = NULL;
 	INIT_LIST_HEAD(&eviction_list);
 	list_for_each_entry_safe(vma, next, &vm->bound_list, vm_link) {
-		if (vma == active) { /* now seen this vma twice */
-			if (flags & PIN_NONBLOCK)
-				break;
-
-			active = ERR_PTR(-EAGAIN);
-		}
-
 		/*
 		 * We keep this list in a rough least-recently scanned order
 		 * of active elements (inactive elements are cheap to reap).
@@ -150,12 +145,21 @@ search_again:
 		 * To notice when we complete one full cycle, we record the
 		 * first active element seen, before moving it to the tail.
 		 */
-		if (active != ERR_PTR(-EAGAIN) && i915_vma_is_active(vma)) {
-			if (!active)
-				active = vma;
+		if (i915_vma_is_active(vma)) {
+			if (vma == active) {
+				if (flags & PIN_NONBLOCK)
+					break;
 
-			list_move_tail(&vma->vm_link, &vm->bound_list);
-			continue;
+				active = ERR_PTR(-EAGAIN);
+			}
+
+			if (active != ERR_PTR(-EAGAIN)) {
+				if (!active)
+					active = vma;
+
+				list_move_tail(&vma->vm_link, &vm->bound_list);
+				continue;
+			}
 		}
 
 		if (mark_free(&scan, vma, flags, &eviction_list))
@@ -288,8 +292,7 @@ int i915_gem_evict_for_node(struct i915_address_space *vm,
 		GEM_BUG_ON(!drm_mm_node_allocated(node));
 		vma = container_of(node, typeof(*vma), node);
 
-		/*
-		 * If we are using coloring to insert guard pages between
+		/* If we are using coloring to insert guard pages between
 		 * different cache domains within the address space, we have
 		 * to check whether the objects on either side of our range
 		 * abutt and conflict. If they are in conflict, then we evict
@@ -306,18 +309,22 @@ int i915_gem_evict_for_node(struct i915_address_space *vm,
 			}
 		}
 
+		if (flags & PIN_NONBLOCK &&
+		    (i915_vma_is_pinned(vma) || i915_vma_is_active(vma))) {
+			ret = -ENOSPC;
+			break;
+		}
+
+		/* Overlap of objects in the same batch? */
 		if (i915_vma_is_pinned(vma)) {
 			ret = -ENOSPC;
+			if (vma->exec_flags &&
+			    *vma->exec_flags & EXEC_OBJECT_PINNED)
+				ret = -EINVAL;
 			break;
 		}
 
-		if (flags & PIN_NONBLOCK && i915_vma_is_active(vma)) {
-			ret = -ENOSPC;
-			break;
-		}
-
-		/*
-		 * Never show fear in the face of dragons!
+		/* Never show fear in the face of dragons!
 		 *
 		 * We cannot directly remove this node from within this
 		 * iterator and as with i915_gem_evict_something() we employ

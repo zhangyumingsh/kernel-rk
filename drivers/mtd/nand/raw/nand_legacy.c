@@ -331,7 +331,8 @@ static void nand_command(struct nand_chip *chip, unsigned int command,
 		 */
 		if (column == -1 && page_addr == -1)
 			return;
-		fallthrough;
+		/* fall through */
+
 	default:
 		/*
 		 * If we don't have access to the busy pin, we apply the given
@@ -482,7 +483,8 @@ static void nand_command_lp(struct nand_chip *chip, unsigned int command,
 				      NAND_NCE | NAND_CLE | NAND_CTRL_CHANGE);
 		chip->legacy.cmd_ctrl(chip, NAND_CMD_NONE,
 				      NAND_NCE | NAND_CTRL_CHANGE);
-		fallthrough;	/* This applies to read commands */
+
+		/* fall through - This applies to read commands */
 	default:
 		/*
 		 * If we don't have access to the busy pin, we apply the given

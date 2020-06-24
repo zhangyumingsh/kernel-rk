@@ -248,6 +248,17 @@ static bool has_rb_swapped(uint32_t format)
 	}
 }
 
+static bool has_10_bits(uint32_t format)
+{
+	switch (format) {
+	case DRM_FORMAT_NV15:
+	case DRM_FORMAT_NV20:
+		return true;
+	default:
+		return false;
+	}
+}
+
 static enum vop_data_format vop_convert_format(uint32_t format)
 {
 	switch (format) {
@@ -263,14 +274,40 @@ static enum vop_data_format vop_convert_format(uint32_t format)
 	case DRM_FORMAT_BGR565:
 		return VOP_FMT_RGB565;
 	case DRM_FORMAT_NV12:
+	case DRM_FORMAT_NV15:
 		return VOP_FMT_YUV420SP;
 	case DRM_FORMAT_NV16:
+	case DRM_FORMAT_NV20:
 		return VOP_FMT_YUV422SP;
 	case DRM_FORMAT_NV24:
 		return VOP_FMT_YUV444SP;
 	default:
 		DRM_ERROR("unsupported format[%08x]\n", format);
 		return -EINVAL;
+	}
+}
+
+static bool is_yuv_output(uint32_t bus_format)
+{
+	switch (bus_format) {
+	case MEDIA_BUS_FMT_YUV8_1X24:
+	case MEDIA_BUS_FMT_YUV10_1X30:
+	case MEDIA_BUS_FMT_UYYVYY8_0_5X24:
+	case MEDIA_BUS_FMT_UYYVYY10_0_5X30:
+		return true;
+	default:
+		return false;
+	}
+}
+
+static bool has_uv_swapped(uint32_t bus_format)
+{
+	switch (bus_format) {
+	case MEDIA_BUS_FMT_YUV8_1X24:
+	case MEDIA_BUS_FMT_YUV10_1X30:
+		return true;
+	default:
+		return false;
 	}
 }
 
@@ -724,7 +761,7 @@ static int vop_plane_atomic_check(struct drm_plane *plane,
 	int max_scale = win->phy->scl ? FRAC_16_16(8, 1) :
 					DRM_PLANE_HELPER_NO_SCALING;
 
-	if (!crtc || WARN_ON(!fb))
+	if (!crtc || !fb)
 		return 0;
 
 	crtc_state = drm_atomic_get_existing_crtc_state(state->state, crtc);
@@ -798,6 +835,7 @@ static void vop_plane_atomic_update(struct drm_plane *plane,
 	dma_addr_t dma_addr;
 	uint32_t val;
 	bool rb_swap;
+	bool is_10_bits;
 	int win_index = VOP_WIN_TO_INDEX(vop_win);
 	int format;
 	int is_yuv = fb->format->is_yuv;
@@ -831,7 +869,12 @@ static void vop_plane_atomic_update(struct drm_plane *plane,
 	dsp_sty = dest->y1 + crtc->mode.vtotal - crtc->mode.vsync_start;
 	dsp_st = dsp_sty << 16 | (dsp_stx & 0xffff);
 
-	offset = (src->x1 >> 16) * fb->format->cpp[0];
+	is_10_bits = has_10_bits(fb->format->format);
+	if (is_10_bits)
+		offset = (src->x1 >> 16) * (fb->format->cpp[0] * 5 / 4);
+	else
+		offset = (src->x1 >> 16) * fb->format->cpp[0];
+
 	offset += (src->y1 >> 16) * fb->pitches[0];
 	dma_addr = rk_obj->dma_addr + offset + fb->offsets[0];
 
@@ -847,6 +890,7 @@ static void vop_plane_atomic_update(struct drm_plane *plane,
 	spin_lock(&vop->reg_lock);
 
 	VOP_WIN_SET(vop, win, format, format);
+	VOP_WIN_SET(vop, win, fmt_10, is_10_bits);
 	VOP_WIN_SET(vop, win, yrgb_vir, DIV_ROUND_UP(fb->pitches[0], 4));
 	VOP_WIN_SET(vop, win, yrgb_mst, dma_addr);
 	VOP_WIN_YUV2YUV_SET(vop, win_yuv2yuv, y2r_en, is_yuv);
@@ -863,7 +907,10 @@ static void vop_plane_atomic_update(struct drm_plane *plane,
 		uv_obj = fb->obj[1];
 		rk_uv_obj = to_rockchip_obj(uv_obj);
 
-		offset = (src->x1 >> 16) * bpp / hsub;
+		if (is_10_bits)
+			offset = (src->x1 >> 16) * (bpp * 5 / 4) / hsub;
+		else
+			offset = (src->x1 >> 16) * bpp / hsub;
 		offset += (src->y1 >> 16) * fb->pitches[1] / vsub;
 
 		dma_addr = rk_uv_obj->dma_addr + offset + fb->offsets[1];
@@ -906,8 +953,11 @@ static void vop_plane_atomic_update(struct drm_plane *plane,
 			SRC_ALPHA_CAL_M0(ALPHA_NO_SATURATION) |
 			SRC_FACTOR_M0(ALPHA_ONE);
 		VOP_WIN_SET(vop, win, src_alpha_ctl, val);
+		VOP_WIN_SET(vop, win, alpha_mode, 1);
+		VOP_WIN_SET(vop, win, alpha_en, 1);
 	} else {
 		VOP_WIN_SET(vop, win, src_alpha_ctl, SRC_ALPHA_EN(0));
+		VOP_WIN_SET(vop, win, alpha_en, 0);
 	}
 
 	VOP_WIN_SET(vop, win, enable, 1);
@@ -1036,30 +1086,13 @@ static void vop_crtc_disable_vblank(struct drm_crtc *crtc)
 	spin_unlock_irqrestore(&vop->irq_lock, flags);
 }
 
-/*
- * The VESA DMT standard specifies a 0.5% pixel clock frequency tolerance.
- * The CVT spec reuses that tolerance in its examples.
- */
-#define	CLOCK_TOLERANCE_PER_MILLE	5
-
-static enum drm_mode_status vop_crtc_mode_valid(struct drm_crtc *crtc,
-					const struct drm_display_mode *mode)
+enum drm_mode_status vop_crtc_mode_valid(struct drm_crtc *crtc,
+					 const struct drm_display_mode *mode)
 {
-	struct vop *vop = to_vop(crtc);
-	long rounded_rate;
-	long lowest, highest;
-
-	rounded_rate = clk_round_rate(vop->dclk, mode->clock * 1000 + 999);
-	if (rounded_rate < 0)
-		return MODE_NOCLOCK;
-
-	lowest = mode->clock * (1000 - CLOCK_TOLERANCE_PER_MILLE);
-	if (rounded_rate < lowest)
-		return MODE_CLOCK_LOW;
-
-	highest = mode->clock * (1000 + CLOCK_TOLERANCE_PER_MILLE);
-	if (rounded_rate > highest)
-		return MODE_CLOCK_HIGH;
+	if (mode->flags & DRM_MODE_FLAG_INTERLACE)
+		return MODE_NO_INTERLACE;
+	if (mode->hdisplay > 3840)
+		return MODE_BAD_HVALUE;
 
 	return MODE_OK;
 }
@@ -1069,10 +1102,41 @@ static bool vop_crtc_mode_fixup(struct drm_crtc *crtc,
 				struct drm_display_mode *adjusted_mode)
 {
 	struct vop *vop = to_vop(crtc);
+	unsigned long rate;
 
-	adjusted_mode->clock =
-		DIV_ROUND_UP(clk_round_rate(vop->dclk,
-					    adjusted_mode->clock * 1000), 1000);
+	/*
+	 * Clock craziness.
+	 *
+	 * Key points:
+	 *
+	 * - DRM works in in kHz.
+	 * - Clock framework works in Hz.
+	 * - Rockchip's clock driver picks the clock rate that is the
+	 *   same _OR LOWER_ than the one requested.
+	 *
+	 * Action plan:
+	 *
+	 * 1. When DRM gives us a mode, we should add 999 Hz to it.  That way
+	 *    if the clock we need is 60000001 Hz (~60 MHz) and DRM tells us to
+	 *    make 60000 kHz then the clock framework will actually give us
+	 *    the right clock.
+	 *
+	 *    NOTE: if the PLL (maybe through a divider) could actually make
+	 *    a clock rate 999 Hz higher instead of the one we want then this
+	 *    could be a problem.  Unfortunately there's not much we can do
+	 *    since it's baked into DRM to use kHz.  It shouldn't matter in
+	 *    practice since Rockchip PLLs are controlled by tables and
+	 *    even if there is a divider in the middle I wouldn't expect PLL
+	 *    rates in the table that are just a few kHz different.
+	 *
+	 * 2. Get the clock framework to round the rate for us to tell us
+	 *    what it will actually make.
+	 *
+	 * 3. Store the rounded up rate so that we don't need to worry about
+	 *    this in the actual clk_set_rate().
+	 */
+	rate = clk_round_rate(vop->dclk, adjusted_mode->clock * 1000 + 999);
+	adjusted_mode->clock = DIV_ROUND_UP(rate, 1000);
 
 	return true;
 }
@@ -1169,6 +1233,7 @@ static void vop_crtc_atomic_enable(struct drm_crtc *crtc,
 	u16 vact_end = vact_st + vdisplay;
 	uint32_t pin_pol, val;
 	int dither_bpc = s->output_bpc ? s->output_bpc : 10;
+	bool yuv_output = is_yuv_output(s->bus_format);
 	int ret;
 
 	if (old_state && old_state->self_refresh_active) {
@@ -1242,6 +1307,8 @@ static void vop_crtc_atomic_enable(struct drm_crtc *crtc,
 	    !(vop_data->feature & VOP_FEATURE_OUTPUT_RGB10))
 		s->output_mode = ROCKCHIP_OUT_MODE_P888;
 
+	VOP_REG_SET(vop, common, dsp_data_swap, has_uv_swapped(s->bus_format) ? 2 : 0);
+
 	if (s->output_mode == ROCKCHIP_OUT_MODE_AAAA && dither_bpc <= 8)
 		VOP_REG_SET(vop, common, pre_dither_down, 1);
 	else
@@ -1256,6 +1323,24 @@ static void vop_crtc_atomic_enable(struct drm_crtc *crtc,
 	}
 
 	VOP_REG_SET(vop, common, out_mode, s->output_mode);
+
+	VOP_REG_SET(vop, common, dclk_ddr,
+		    s->output_mode == ROCKCHIP_OUT_MODE_YUV420 ? 1 : 0);
+
+	VOP_REG_SET(vop, common, overlay_mode, yuv_output);
+	VOP_REG_SET(vop, common, dsp_out_yuv, yuv_output);
+
+	/*
+	 * Background color is 10bit depth if vop version >= 3.5
+	 */
+	if (!yuv_output)
+		val = 0;
+	else if (VOP_MAJOR(vop_data->version) == 3 &&
+		 VOP_MINOR(vop_data->version) >= 5)
+		val = 0x20010200;
+	else
+		val = 0x801080;
+	VOP_REG_SET(vop, common, dsp_background, val);
 
 	VOP_REG_SET(vop, modeset, htotal_pw, (htotal << 16) | hsync_len);
 	val = hact_st << 16;
@@ -1390,13 +1475,21 @@ static void vop_crtc_destroy(struct drm_crtc *crtc)
 
 static struct drm_crtc_state *vop_crtc_duplicate_state(struct drm_crtc *crtc)
 {
-	struct rockchip_crtc_state *rockchip_state;
+	struct rockchip_crtc_state *rockchip_state, *s;
+
+	if (WARN_ON(!crtc->state))
+		return NULL;
 
 	rockchip_state = kzalloc(sizeof(*rockchip_state), GFP_KERNEL);
 	if (!rockchip_state)
 		return NULL;
 
 	__drm_atomic_helper_crtc_duplicate_state(crtc, &rockchip_state->base);
+
+	s = to_rockchip_crtc_state(crtc->state);
+	rockchip_state->bus_format = s->bus_format;
+	rockchip_state->bus_width = s->bus_width;
+
 	return &rockchip_state->base;
 }
 

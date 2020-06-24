@@ -16,7 +16,10 @@ if [ ! -f set_ftrace_pid ]; then
     exit_unsupported
 fi
 
-check_filter_file set_ftrace_filter
+if [ ! -f set_ftrace_filter ]; then
+    echo "set_ftrace_filter not found? Is function tracer not set?"
+    exit_unsupported
+fi
 
 do_function_fork=1
 

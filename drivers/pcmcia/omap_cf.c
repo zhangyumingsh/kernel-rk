@@ -329,7 +329,7 @@ static int __exit omap_cf_remove(struct platform_device *pdev)
 
 static struct platform_driver omap_cf_driver = {
 	.driver = {
-		.name	= driver_name,
+		.name	= (char *) driver_name,
 	},
 	.remove		= __exit_p(omap_cf_remove),
 };

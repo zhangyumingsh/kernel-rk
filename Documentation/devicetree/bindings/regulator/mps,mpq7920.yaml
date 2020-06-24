@@ -75,8 +75,7 @@ properties:
             description: |
               disables over voltage protection of this buck
 
-        unevaluatedProperties: false
-
+      additionalProperties: false
     additionalProperties: false
 
 required:

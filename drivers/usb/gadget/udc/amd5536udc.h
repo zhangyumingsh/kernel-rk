@@ -440,7 +440,7 @@ struct udc_ep_regs {
 	/* endpoint data descriptor pointer */
 	u32 desptr;
 
-	/* reserved */
+	/* reserverd */
 	u32 reserved;
 
 	/* write/read confirmation */

@@ -23,8 +23,6 @@
 #include <linux/workqueue.h>
 #include <linux/mod_devicetable.h>
 #include <linux/u64_stats_sync.h>
-#include <linux/irqreturn.h>
-#include <linux/iopoll.h>
 
 #include <linux/atomic.h>
 
@@ -96,7 +94,6 @@ typedef enum {
 	PHY_INTERFACE_MODE_RTBI,
 	PHY_INTERFACE_MODE_SMII,
 	PHY_INTERFACE_MODE_XGMII,
-	PHY_INTERFACE_MODE_XLGMII,
 	PHY_INTERFACE_MODE_MOCA,
 	PHY_INTERFACE_MODE_QSGMII,
 	PHY_INTERFACE_MODE_TRGMII,
@@ -168,8 +165,6 @@ static inline const char *phy_modes(phy_interface_t interface)
 		return "smii";
 	case PHY_INTERFACE_MODE_XGMII:
 		return "xgmii";
-	case PHY_INTERFACE_MODE_XLGMII:
-		return "xlgmii";
 	case PHY_INTERFACE_MODE_MOCA:
 		return "moca";
 	case PHY_INTERFACE_MODE_QSGMII:
@@ -294,7 +289,6 @@ static inline struct mii_bus *devm_mdiobus_alloc(struct device *dev)
 	return devm_mdiobus_alloc_size(dev, 0);
 }
 
-struct mii_bus *mdio_find_bus(const char *mdio_name);
 void devm_mdiobus_free(struct device *dev, struct mii_bus *bus);
 struct phy_device *mdiobus_scan(struct mii_bus *bus, int addr);
 
@@ -366,7 +360,6 @@ struct macsec_ops;
  * suspended_by_mdio_bus: Set to true if this phy was suspended by MDIO bus.
  * sysfs_links: Internal boolean tracking sysfs symbolic links setup/removal.
  * loopback_enabled: Set true if this phy has been loopbacked successfully.
- * downshifted_rate: Set true if link speed has been downshifted.
  * state: state of the PHY for management purposes
  * dev_flags: Device-specific flags used by the PHY driver.
  * irq: IRQ number of the PHY's interrupt (-1 if none)
@@ -407,7 +400,6 @@ struct phy_device {
 	unsigned suspended_by_mdio_bus:1;
 	unsigned sysfs_links:1;
 	unsigned loopback_enabled:1;
-	unsigned downshifted_rate:1;
 
 	unsigned autoneg:1;
 	/* The most recently read link state */
@@ -572,7 +564,7 @@ struct phy_driver {
 	int (*did_interrupt)(struct phy_device *phydev);
 
 	/* Override default interrupt handling */
-	irqreturn_t (*handle_interrupt)(struct phy_device *phydev);
+	int (*handle_interrupt)(struct phy_device *phydev);
 
 	/* Clears up any memory if needed */
 	void (*remove)(struct phy_device *phydev);
@@ -701,7 +693,6 @@ static inline bool phy_is_started(struct phy_device *phydev)
 
 void phy_resolve_aneg_pause(struct phy_device *phydev);
 void phy_resolve_aneg_linkmode(struct phy_device *phydev);
-void phy_check_downshift(struct phy_device *phydev);
 
 /**
  * phy_read - Convenience function for reading a given PHY register
@@ -716,19 +707,6 @@ static inline int phy_read(struct phy_device *phydev, u32 regnum)
 {
 	return mdiobus_read(phydev->mdio.bus, phydev->mdio.addr, regnum);
 }
-
-#define phy_read_poll_timeout(phydev, regnum, val, cond, sleep_us, \
-				timeout_us, sleep_before_read) \
-({ \
-	int __ret = read_poll_timeout(phy_read, val, (cond) || val < 0, \
-		sleep_us, timeout_us, sleep_before_read, phydev, regnum); \
-	if (val <  0) \
-		__ret = val; \
-	if (__ret) \
-		phydev_err(phydev, "%s failed: %d\n", __func__, __ret); \
-	__ret; \
-})
-
 
 /**
  * __phy_read - convenience function for reading a given PHY register
@@ -772,25 +750,6 @@ static inline int __phy_write(struct phy_device *phydev, u32 regnum, u16 val)
 }
 
 /**
- * __phy_modify_changed() - Convenience function for modifying a PHY register
- * @phydev: a pointer to a &struct phy_device
- * @regnum: register number
- * @mask: bit mask of bits to clear
- * @set: bit mask of bits to set
- *
- * Unlocked helper function which allows a PHY register to be modified as
- * new register value = (old register value & ~mask) | set
- *
- * Returns negative errno, 0 if there was no change, and 1 in case of change
- */
-static inline int __phy_modify_changed(struct phy_device *phydev, u32 regnum,
-				       u16 mask, u16 set)
-{
-	return __mdiobus_modify_changed(phydev->mdio.bus, phydev->mdio.addr,
-					regnum, mask, set);
-}
-
-/**
  * phy_read_mmd - Convenience function for reading a register
  * from an MMD on a given PHY.
  * @phydev: The phy_device struct
@@ -800,19 +759,6 @@ static inline int __phy_modify_changed(struct phy_device *phydev, u32 regnum,
  * Same rules as for phy_read();
  */
 int phy_read_mmd(struct phy_device *phydev, int devad, u32 regnum);
-
-#define phy_read_mmd_poll_timeout(phydev, devaddr, regnum, val, cond, \
-				  sleep_us, timeout_us, sleep_before_read) \
-({ \
-	int __ret = read_poll_timeout(phy_read_mmd, val, (cond) || val < 0, \
-				  sleep_us, timeout_us, sleep_before_read, \
-				  phydev, devaddr, regnum); \
-	if (val <  0) \
-		__ret = val; \
-	if (__ret) \
-		phydev_err(phydev, "%s failed: %d\n", __func__, __ret); \
-	__ret; \
-})
 
 /**
  * __phy_read_mmd - Convenience function for reading a register
@@ -1314,9 +1260,6 @@ void phy_set_sym_pause(struct phy_device *phydev, bool rx, bool tx,
 void phy_set_asym_pause(struct phy_device *phydev, bool rx, bool tx);
 bool phy_validate_pause(struct phy_device *phydev,
 			struct ethtool_pauseparam *pp);
-void phy_get_pause(struct phy_device *phydev, bool *tx_pause, bool *rx_pause);
-void phy_resolve_pause(unsigned long *local_adv, unsigned long *partner_adv,
-		       bool *tx_pause, bool *rx_pause);
 
 int phy_register_fixup(const char *bus_id, u32 phy_uid, u32 phy_uid_mask,
 		       int (*run)(struct phy_device *));

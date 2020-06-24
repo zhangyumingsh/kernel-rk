@@ -52,11 +52,10 @@ struct switchtec_user {
 
 	enum mrpc_state state;
 
-	wait_queue_head_t cmd_comp;
+	struct completion comp;
 	struct kref kref;
 	struct list_head list;
 
-	bool cmd_done;
 	u32 cmd;
 	u32 status;
 	u32 return_code;
@@ -78,7 +77,7 @@ static struct switchtec_user *stuser_create(struct switchtec_dev *stdev)
 	stuser->stdev = stdev;
 	kref_init(&stuser->kref);
 	INIT_LIST_HEAD(&stuser->list);
-	init_waitqueue_head(&stuser->cmd_comp);
+	init_completion(&stuser->comp);
 	stuser->event_cnt = atomic_read(&stdev->event_cnt);
 
 	dev_dbg(&stdev->dev, "%s: %p\n", __func__, stuser);
@@ -176,7 +175,7 @@ static int mrpc_queue_cmd(struct switchtec_user *stuser)
 	kref_get(&stuser->kref);
 	stuser->read_len = sizeof(stuser->data);
 	stuser_set_state(stuser, MRPC_QUEUED);
-	stuser->cmd_done = false;
+	reinit_completion(&stuser->comp);
 	list_add_tail(&stuser->list, &stdev->mrpc_queue);
 
 	mrpc_cmd_submit(stdev);
@@ -223,8 +222,7 @@ static void mrpc_complete_cmd(struct switchtec_dev *stdev)
 		memcpy_fromio(stuser->data, &stdev->mmio_mrpc->output_data,
 			      stuser->read_len);
 out:
-	stuser->cmd_done = true;
-	wake_up_interruptible(&stuser->cmd_comp);
+	complete_all(&stuser->comp);
 	list_del_init(&stuser->list);
 	stuser_put(stuser);
 	stdev->mrpc_busy = 0;
@@ -531,11 +529,10 @@ static ssize_t switchtec_dev_read(struct file *filp, char __user *data,
 	mutex_unlock(&stdev->mrpc_mutex);
 
 	if (filp->f_flags & O_NONBLOCK) {
-		if (!stuser->cmd_done)
+		if (!try_wait_for_completion(&stuser->comp))
 			return -EAGAIN;
 	} else {
-		rc = wait_event_interruptible(stuser->cmd_comp,
-					      stuser->cmd_done);
+		rc = wait_for_completion_interruptible(&stuser->comp);
 		if (rc < 0)
 			return rc;
 	}
@@ -583,7 +580,7 @@ static __poll_t switchtec_dev_poll(struct file *filp, poll_table *wait)
 	struct switchtec_dev *stdev = stuser->stdev;
 	__poll_t ret = 0;
 
-	poll_wait(filp, &stuser->cmd_comp, wait);
+	poll_wait(filp, &stuser->comp.wait, wait);
 	poll_wait(filp, &stdev->event_wq, wait);
 
 	if (lock_mutex_and_test_alive(stdev))
@@ -591,7 +588,7 @@ static __poll_t switchtec_dev_poll(struct file *filp, poll_table *wait)
 
 	mutex_unlock(&stdev->mrpc_mutex);
 
-	if (stuser->cmd_done)
+	if (try_wait_for_completion(&stuser->comp))
 		ret |= EPOLLIN | EPOLLRDNORM;
 
 	if (stuser->event_cnt != atomic_read(&stdev->event_cnt))
@@ -1275,8 +1272,7 @@ static void stdev_kill(struct switchtec_dev *stdev)
 
 	/* Wake up and kill any users waiting on an MRPC request */
 	list_for_each_entry_safe(stuser, tmpuser, &stdev->mrpc_queue, list) {
-		stuser->cmd_done = true;
-		wake_up_interruptible(&stuser->cmd_comp);
+		complete_all(&stuser->comp);
 		list_del_init(&stuser->list);
 		stuser_put(stuser);
 	}

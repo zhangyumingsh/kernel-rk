@@ -13,7 +13,7 @@
 struct idset {
 	int num_ssid;
 	int num_id;
-	unsigned long bitmap[];
+	unsigned long bitmap[0];
 };
 
 static inline unsigned long bitmap_size(int num_ssid, int num_id)

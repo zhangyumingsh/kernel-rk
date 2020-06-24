@@ -73,22 +73,11 @@ const struct rvin_video_format *rvin_format_from_pixel(struct rvin_dev *vin,
 {
 	int i;
 
-	switch (pixelformat) {
-	case V4L2_PIX_FMT_XBGR32:
-		if (vin->info->model == RCAR_M1)
-			return NULL;
-		break;
-	case V4L2_PIX_FMT_NV12:
-		/*
-		 * If NV12 is supported it's only supported on channels 0, 1, 4,
-		 * 5, 8, 9, 12 and 13.
-		 */
-		if (!vin->info->nv12 || !(BIT(vin->id) & 0x3333))
-			return NULL;
-		break;
-	default:
-		break;
-	}
+	if (vin->info->model == RCAR_M1 && pixelformat == V4L2_PIX_FMT_XBGR32)
+		return NULL;
+
+	if (pixelformat == V4L2_PIX_FMT_NV12 && !vin->info->nv12)
+		return NULL;
 
 	for (i = 0; i < ARRAY_SIZE(rvin_formats); i++)
 		if (rvin_formats[i].fourcc == pixelformat)
@@ -117,9 +106,6 @@ static u32 rvin_format_bytesperline(struct rvin_dev *vin,
 		align = 0x10;
 		break;
 	}
-
-	if (V4L2_FIELD_IS_SEQUENTIAL(pix->field))
-		align = 0x80;
 
 	return ALIGN(pix->width, align) * fmt->bpp;
 }
@@ -151,8 +137,6 @@ static void rvin_format_align(struct rvin_dev *vin, struct v4l2_pix_format *pix)
 	case V4L2_FIELD_INTERLACED_BT:
 	case V4L2_FIELD_INTERLACED:
 	case V4L2_FIELD_ALTERNATE:
-	case V4L2_FIELD_SEQ_TB:
-	case V4L2_FIELD_SEQ_BT:
 		break;
 	default:
 		pix->field = RVIN_DEFAULT_FIELD;
@@ -842,7 +826,7 @@ static int rvin_open(struct file *file)
 		goto err_unlock;
 
 	if (vin->info->use_mc)
-		ret = v4l2_pipeline_pm_get(&vin->vdev.entity);
+		ret = v4l2_pipeline_pm_use(&vin->vdev.entity, 1);
 	else if (v4l2_fh_is_singular_file(file))
 		ret = rvin_power_parallel(vin, true);
 
@@ -858,7 +842,7 @@ static int rvin_open(struct file *file)
 	return 0;
 err_power:
 	if (vin->info->use_mc)
-		v4l2_pipeline_pm_put(&vin->vdev.entity);
+		v4l2_pipeline_pm_use(&vin->vdev.entity, 0);
 	else if (v4l2_fh_is_singular_file(file))
 		rvin_power_parallel(vin, false);
 err_open:
@@ -886,7 +870,7 @@ static int rvin_release(struct file *file)
 	ret = _vb2_fop_release(file, NULL);
 
 	if (vin->info->use_mc) {
-		v4l2_pipeline_pm_put(&vin->vdev.entity);
+		v4l2_pipeline_pm_use(&vin->vdev.entity, 0);
 	} else {
 		if (fh_singular)
 			rvin_power_parallel(vin, false);
@@ -969,7 +953,7 @@ int rvin_v4l2_register(struct rvin_dev *vin)
 
 	rvin_format_align(vin, &vin->format);
 
-	ret = video_register_device(&vin->vdev, VFL_TYPE_VIDEO, -1);
+	ret = video_register_device(&vin->vdev, VFL_TYPE_GRABBER, -1);
 	if (ret) {
 		vin_err(vin, "Failed to register video device\n");
 		return ret;

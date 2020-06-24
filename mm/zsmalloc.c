@@ -424,7 +424,7 @@ static void *zs_zpool_map(void *pool, unsigned long handle,
 	case ZPOOL_MM_WO:
 		zs_mm = ZS_MM_WO;
 		break;
-	case ZPOOL_MM_RW:
+	case ZPOOL_MM_RW: /* fall through */
 	default:
 		zs_mm = ZS_MM_RW;
 		break;
@@ -891,12 +891,12 @@ static inline int trypin_tag(unsigned long handle)
 	return bit_spin_trylock(HANDLE_PIN_BIT, (unsigned long *)handle);
 }
 
-static void pin_tag(unsigned long handle) __acquires(bitlock)
+static void pin_tag(unsigned long handle)
 {
 	bit_spin_lock(HANDLE_PIN_BIT, (unsigned long *)handle);
 }
 
-static void unpin_tag(unsigned long handle) __releases(bitlock)
+static void unpin_tag(unsigned long handle)
 {
 	bit_spin_unlock(HANDLE_PIN_BIT, (unsigned long *)handle);
 }
@@ -1833,12 +1833,12 @@ static void migrate_lock_init(struct zspage *zspage)
 	rwlock_init(&zspage->lock);
 }
 
-static void migrate_read_lock(struct zspage *zspage) __acquires(&zspage->lock)
+static void migrate_read_lock(struct zspage *zspage)
 {
 	read_lock(&zspage->lock);
 }
 
-static void migrate_read_unlock(struct zspage *zspage) __releases(&zspage->lock)
+static void migrate_read_unlock(struct zspage *zspage)
 {
 	read_unlock(&zspage->lock);
 }

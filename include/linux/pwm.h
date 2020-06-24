@@ -71,8 +71,7 @@ struct pwm_state {
  * @chip: PWM chip providing this PWM device
  * @chip_data: chip-private data associated with the PWM device
  * @args: PWM arguments
- * @state: last applied state
- * @last: last implemented state (for PWM_DEBUG)
+ * @state: curent PWM channel state
  */
 struct pwm_device {
 	const char *label;
@@ -84,7 +83,6 @@ struct pwm_device {
 
 	struct pwm_args args;
 	struct pwm_state state;
-	struct pwm_state last;
 };
 
 /**

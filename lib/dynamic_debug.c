@@ -876,14 +876,6 @@ static const struct file_operations ddebug_proc_fops = {
 	.write = ddebug_proc_write
 };
 
-static const struct proc_ops proc_fops = {
-	.proc_open = ddebug_proc_open,
-	.proc_read = seq_read,
-	.proc_lseek = seq_lseek,
-	.proc_release = seq_release_private,
-	.proc_write = ddebug_proc_write
-};
-
 /*
  * Allocate a new ddebug_table for the given module
  * and add it to the global list.
@@ -999,25 +991,15 @@ static void ddebug_remove_all_tables(void)
 
 static __initdata int ddebug_init_success;
 
-static int __init dynamic_debug_init_control(void)
+static int __init dynamic_debug_init_debugfs(void)
 {
-	struct proc_dir_entry *procfs_dir;
-	struct dentry *debugfs_dir;
+	struct dentry *dir;
 
 	if (!ddebug_init_success)
 		return -ENODEV;
 
-	/* Create the control file in debugfs if it is enabled */
-	if (debugfs_initialized()) {
-		debugfs_dir = debugfs_create_dir("dynamic_debug", NULL);
-		debugfs_create_file("control", 0644, debugfs_dir, NULL,
-				    &ddebug_proc_fops);
-	}
-
-	/* Also create the control file in procfs */
-	procfs_dir = proc_mkdir("dynamic_debug", NULL);
-	if (procfs_dir)
-		proc_create("control", 0644, procfs_dir, &proc_fops);
+	dir = debugfs_create_dir("dynamic_debug", NULL);
+	debugfs_create_file("control", 0644, dir, NULL, &ddebug_proc_fops);
 
 	return 0;
 }
@@ -1031,7 +1013,7 @@ static int __init dynamic_debug_init(void)
 	int n = 0, entries = 0, modct = 0;
 	int verbose_bytes = 0;
 
-	if (&__start___verbose == &__stop___verbose) {
+	if (__start___verbose == __stop___verbose) {
 		pr_warn("_ddebug table is empty in a CONFIG_DYNAMIC_DEBUG build\n");
 		return 1;
 	}
@@ -1095,4 +1077,4 @@ out_err:
 early_initcall(dynamic_debug_init);
 
 /* Debugfs setup must be done later */
-fs_initcall(dynamic_debug_init_control);
+fs_initcall(dynamic_debug_init_debugfs);

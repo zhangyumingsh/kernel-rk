@@ -24,12 +24,6 @@ properties:
   reg:
     maxItems: 1
 
-  clocks:
-    maxItems: 1
-
-  clock-names:
-    maxItems: 1
-
   interrupts:
     maxItems: 1
 
@@ -53,6 +47,7 @@ allOf:
             - description: AO-CEC clock
 
         clock-names:
+          maxItems: 1
           items:
             - const: core
 
@@ -71,6 +66,7 @@ allOf:
             - description: AO-CEC clock generator source
 
         clock-names:
+          maxItems: 1
           items:
             - const: oscin
 
@@ -82,8 +78,6 @@ required:
   - clocks
   - clock-names
 
-additionalProperties: false
-
 examples:
   - |
     cec_AO: cec@100 {
@@ -94,3 +88,4 @@ examples:
         clock-names = "core";
         hdmi-phandle = <&hdmi_tx>;
     };
+

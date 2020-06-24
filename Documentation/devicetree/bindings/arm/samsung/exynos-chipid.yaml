@@ -30,8 +30,6 @@ required:
   - compatible
   - reg
 
-additionalProperties: false
-
 examples:
   - |
     chipid@10000000 {

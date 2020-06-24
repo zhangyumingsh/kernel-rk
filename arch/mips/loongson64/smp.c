@@ -4,7 +4,6 @@
  * Author: Chen Huacai, chenhc@lemote.com
  */
 
-#include <irq.h>
 #include <linux/init.h>
 #include <linux/cpu.h>
 #include <linux/sched.h>
@@ -25,8 +24,6 @@
 #include "smp.h"
 
 DEFINE_PER_CPU(int, cpu_state);
-
-#define LS_IPI_IRQ (MIPS_CPU_IRQ_BASE + 6)
 
 static void *ipi_set0_regs[16];
 static void *ipi_clear0_regs[16];
@@ -305,13 +302,20 @@ loongson3_send_ipi_mask(const struct cpumask *mask, unsigned int action)
 		ipi_write_action(cpu_logical_map(i), (u32)action);
 }
 
+#define IPI_IRQ_OFFSET 6
 
-static irqreturn_t loongson3_ipi_interrupt(int irq, void *dev_id)
+void loongson3_send_irq_by_ipi(int cpu, int irqs)
+{
+	ipi_write_action(cpu_logical_map(cpu), irqs << IPI_IRQ_OFFSET);
+}
+
+void loongson3_ipi_interrupt(struct pt_regs *regs)
 {
 	int i, cpu = smp_processor_id();
-	unsigned int action, c0count;
+	unsigned int action, c0count, irqs;
 
 	action = ipi_read_clear(cpu);
+	irqs = action >> IPI_IRQ_OFFSET;
 
 	if (action & SMP_RESCHEDULE_YOURSELF)
 		scheduler_ipi();
@@ -331,7 +335,13 @@ static irqreturn_t loongson3_ipi_interrupt(int irq, void *dev_id)
 		__wbflush(); /* Let others see the result ASAP */
 	}
 
-	return IRQ_HANDLED;
+	if (irqs) {
+		int irq;
+		while ((irq = ffs(irqs))) {
+			do_IRQ(irq-1);
+			irqs &= ~(1<<(irq-1));
+		}
+	}
 }
 
 #define MAX_LOOPS 800
@@ -428,9 +438,6 @@ static void __init loongson3_smp_setup(void)
 
 static void __init loongson3_prepare_cpus(unsigned int max_cpus)
 {
-	if (request_irq(LS_IPI_IRQ, loongson3_ipi_interrupt,
-			IRQF_PERCPU | IRQF_NO_SUSPEND, "SMP_IPI", NULL))
-		pr_err("Failed to request IPI IRQ\n");
 	init_cpu_present(cpu_possible_mask);
 	per_cpu(cpu_state, smp_processor_id()) = CPU_ONLINE;
 }
@@ -477,8 +484,7 @@ static int loongson3_cpu_disable(void)
 	set_cpu_online(cpu, false);
 	calculate_cpu_foreign_map();
 	local_irq_save(flags);
-	irq_cpu_offline();
-	clear_c0_status(ST0_IM);
+	fixup_irqs();
 	local_irq_restore(flags);
 	local_flush_tlb_all();
 

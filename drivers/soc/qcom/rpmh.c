@@ -23,7 +23,7 @@
 
 #define RPMH_TIMEOUT_MS			msecs_to_jiffies(10000)
 
-#define DEFINE_RPMH_MSG_ONSTACK(device, s, q, name)	\
+#define DEFINE_RPMH_MSG_ONSTACK(dev, s, q, name)	\
 	struct rpmh_request name = {			\
 		.msg = {				\
 			.state = s,			\
@@ -33,7 +33,7 @@
 		},					\
 		.cmd = { { 0 } },			\
 		.completion = q,			\
-		.dev = device,				\
+		.dev = dev,				\
 		.needs_free = false,				\
 	}
 
@@ -427,10 +427,11 @@ static int is_req_valid(struct cache_req *req)
 		req->sleep_val != req->wake_val);
 }
 
-static int send_single(struct rpmh_ctrlr *ctrlr, enum rpmh_state state,
+static int send_single(const struct device *dev, enum rpmh_state state,
 		       u32 addr, u32 data)
 {
-	DEFINE_RPMH_MSG_ONSTACK(NULL, state, NULL, rpm_msg);
+	DEFINE_RPMH_MSG_ONSTACK(dev, state, NULL, rpm_msg);
+	struct rpmh_ctrlr *ctrlr = get_rpmh_ctrlr(dev);
 
 	/* Wake sets are always complete and sleep sets are not */
 	rpm_msg.msg.wait_for_compl = (state == RPMH_WAKE_ONLY_STATE);
@@ -444,7 +445,7 @@ static int send_single(struct rpmh_ctrlr *ctrlr, enum rpmh_state state,
 /**
  * rpmh_flush: Flushes the buffered active and sleep sets to TCS
  *
- * @ctrlr: controller making request to flush cached data
+ * @dev: The device making the request
  *
  * Return: -EBUSY if the controller is busy, probably waiting on a response
  * to a RPMH request sent earlier.
@@ -453,9 +454,10 @@ static int send_single(struct rpmh_ctrlr *ctrlr, enum rpmh_state state,
  * that is powering down the entire system. Since no other RPMH API would be
  * executing at this time, it is safe to run lockless.
  */
-int rpmh_flush(struct rpmh_ctrlr *ctrlr)
+int rpmh_flush(const struct device *dev)
 {
 	struct cache_req *p;
+	struct rpmh_ctrlr *ctrlr = get_rpmh_ctrlr(dev);
 	int ret;
 
 	if (!ctrlr->dirty) {
@@ -478,12 +480,11 @@ int rpmh_flush(struct rpmh_ctrlr *ctrlr)
 				 __func__, p->addr, p->sleep_val, p->wake_val);
 			continue;
 		}
-		ret = send_single(ctrlr, RPMH_SLEEP_STATE, p->addr,
-				  p->sleep_val);
+		ret = send_single(dev, RPMH_SLEEP_STATE, p->addr, p->sleep_val);
 		if (ret)
 			return ret;
-		ret = send_single(ctrlr, RPMH_WAKE_ONLY_STATE, p->addr,
-				  p->wake_val);
+		ret = send_single(dev, RPMH_WAKE_ONLY_STATE,
+				  p->addr, p->wake_val);
 		if (ret)
 			return ret;
 	}
@@ -492,6 +493,7 @@ int rpmh_flush(struct rpmh_ctrlr *ctrlr)
 
 	return 0;
 }
+EXPORT_SYMBOL(rpmh_flush);
 
 /**
  * rpmh_invalidate: Invalidate all sleep and active sets

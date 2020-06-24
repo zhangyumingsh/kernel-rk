@@ -32,7 +32,7 @@
 struct ts_fsm
 {
 	unsigned int		ntokens;
-	struct ts_fsm_token	tokens[];
+	struct ts_fsm_token	tokens[0];
 };
 
 /* other values derived from ctype.h */

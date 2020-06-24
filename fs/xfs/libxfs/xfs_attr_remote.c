@@ -397,7 +397,7 @@ xfs_attr_rmtval_get(
 
 	trace_xfs_attr_rmtval_get(args);
 
-	ASSERT(args->valuelen != 0);
+	ASSERT(!(args->flags & ATTR_KERNOVAL));
 	ASSERT(args->rmtvaluelen == args->valuelen);
 
 	valuelen = args->rmtvaluelen;

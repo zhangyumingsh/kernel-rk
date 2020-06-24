@@ -162,7 +162,6 @@ Hardware Monitoring Kernel Drivers
    tmp421
    tmp513
    tps40422
-   tps53679
    twl4030-madc-hwmon
    ucd9000
    ucd9200

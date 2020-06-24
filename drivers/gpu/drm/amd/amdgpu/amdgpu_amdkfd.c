@@ -29,7 +29,6 @@
 #include <linux/module.h>
 #include <linux/dma-buf.h>
 #include "amdgpu_xgmi.h"
-#include <uapi/linux/kfd_ioctl.h>
 
 static const unsigned int compute_vmid_bitmap = 0xFF00;
 
@@ -127,7 +126,7 @@ void amdgpu_amdkfd_device_init(struct amdgpu_device *adev)
 		/* this is going to have a few of the MSBs set that we need to
 		 * clear
 		 */
-		bitmap_complement(gpu_resources.cp_queue_bitmap,
+		bitmap_complement(gpu_resources.queue_bitmap,
 				  adev->gfx.mec.queue_bitmap,
 				  KGD_MAX_QUEUES);
 
@@ -138,7 +137,7 @@ void amdgpu_amdkfd_device_init(struct amdgpu_device *adev)
 				* adev->gfx.mec.num_pipe_per_mec
 				* adev->gfx.mec.num_queue_per_pipe;
 		for (i = last_valid_bit; i < KGD_MAX_QUEUES; ++i)
-			clear_bit(i, gpu_resources.cp_queue_bitmap);
+			clear_bit(i, gpu_resources.queue_bitmap);
 
 		amdgpu_doorbell_get_kfd_info(adev,
 				&gpu_resources.doorbell_physical_address,
@@ -179,18 +178,18 @@ void amdgpu_amdkfd_interrupt(struct amdgpu_device *adev,
 		kgd2kfd_interrupt(adev->kfd.dev, ih_ring_entry);
 }
 
-void amdgpu_amdkfd_suspend(struct amdgpu_device *adev, bool run_pm)
+void amdgpu_amdkfd_suspend(struct amdgpu_device *adev)
 {
 	if (adev->kfd.dev)
-		kgd2kfd_suspend(adev->kfd.dev, run_pm);
+		kgd2kfd_suspend(adev->kfd.dev);
 }
 
-int amdgpu_amdkfd_resume(struct amdgpu_device *adev, bool run_pm)
+int amdgpu_amdkfd_resume(struct amdgpu_device *adev)
 {
 	int r = 0;
 
 	if (adev->kfd.dev)
-		r = kgd2kfd_resume(adev->kfd.dev, run_pm);
+		r = kgd2kfd_resume(adev->kfd.dev);
 
 	return r;
 }
@@ -225,7 +224,7 @@ void amdgpu_amdkfd_gpu_reset(struct kgd_dev *kgd)
 
 int amdgpu_amdkfd_alloc_gtt_mem(struct kgd_dev *kgd, size_t size,
 				void **mem_obj, uint64_t *gpu_addr,
-				void **cpu_ptr, bool cp_mqd_gfx9)
+				void **cpu_ptr, bool mqd_gfx9)
 {
 	struct amdgpu_device *adev = (struct amdgpu_device *)kgd;
 	struct amdgpu_bo *bo = NULL;
@@ -241,8 +240,8 @@ int amdgpu_amdkfd_alloc_gtt_mem(struct kgd_dev *kgd, size_t size,
 	bp.type = ttm_bo_type_kernel;
 	bp.resv = NULL;
 
-	if (cp_mqd_gfx9)
-		bp.flags |= AMDGPU_GEM_CREATE_CP_MQD_GFX9;
+	if (mqd_gfx9)
+		bp.flags |= AMDGPU_GEM_CREATE_MQD_GFX9;
 
 	r = amdgpu_bo_create(adev, &bp, &bo);
 	if (r) {
@@ -403,7 +402,7 @@ void amdgpu_amdkfd_get_local_mem_info(struct kgd_dev *kgd,
 
 	if (amdgpu_sriov_vf(adev))
 		mem_info->mem_clk_max = adev->clock.default_mclk / 100;
-	else if (adev->pm.dpm_enabled) {
+	else if (adev->powerplay.pp_funcs) {
 		if (amdgpu_emu_mode == 1)
 			mem_info->mem_clk_max = 0;
 		else
@@ -428,7 +427,7 @@ uint32_t amdgpu_amdkfd_get_max_engine_clock_in_mhz(struct kgd_dev *kgd)
 	/* the sclk is in quantas of 10kHz */
 	if (amdgpu_sriov_vf(adev))
 		return adev->clock.default_sclk / 100;
-	else if (adev->pm.dpm_enabled)
+	else if (adev->powerplay.pp_funcs)
 		return amdgpu_dpm_get_sclk(adev, false) / 100;
 	else
 		return 100;
@@ -502,11 +501,10 @@ int amdgpu_amdkfd_get_dmabuf_info(struct kgd_dev *kgd, int dma_buf_fd,
 					   metadata_size, &metadata_flags);
 	if (flags) {
 		*flags = (bo->preferred_domains & AMDGPU_GEM_DOMAIN_VRAM) ?
-				KFD_IOC_ALLOC_MEM_FLAGS_VRAM
-				: KFD_IOC_ALLOC_MEM_FLAGS_GTT;
+			ALLOC_MEM_FLAGS_VRAM : ALLOC_MEM_FLAGS_GTT;
 
 		if (bo->flags & AMDGPU_GEM_CREATE_CPU_ACCESS_REQUIRED)
-			*flags |= KFD_IOC_ALLOC_MEM_FLAGS_PUBLIC;
+			*flags |= ALLOC_MEM_FLAGS_PUBLIC;
 	}
 
 out_put:
@@ -527,14 +525,6 @@ uint64_t amdgpu_amdkfd_get_hive_id(struct kgd_dev *kgd)
 
 	return adev->gmc.xgmi.hive_id;
 }
-
-uint64_t amdgpu_amdkfd_get_unique_id(struct kgd_dev *kgd)
-{
-	struct amdgpu_device *adev = (struct amdgpu_device *)kgd;
-
-	return adev->unique_id;
-}
-
 uint8_t amdgpu_amdkfd_get_xgmi_hops_count(struct kgd_dev *dst, struct kgd_dev *src)
 {
 	struct amdgpu_device *peer_adev = (struct amdgpu_device *)src;
@@ -657,8 +647,12 @@ int amdgpu_amdkfd_flush_gpu_tlb_vmid(struct kgd_dev *kgd, uint16_t vmid)
 int amdgpu_amdkfd_flush_gpu_tlb_pasid(struct kgd_dev *kgd, uint16_t pasid)
 {
 	struct amdgpu_device *adev = (struct amdgpu_device *)kgd;
-	const uint32_t flush_type = 0;
+	uint32_t flush_type = 0;
 	bool all_hub = false;
+
+	if (adev->gmc.xgmi.num_physical_nodes &&
+		adev->asic_type == CHIP_VEGA20)
+		flush_type = 2;
 
 	if (adev->family == AMDGPU_FAMILY_AI)
 		all_hub = true;
@@ -681,11 +675,6 @@ bool amdkfd_fence_check_mm(struct dma_fence *f, struct mm_struct *mm)
 
 void amdgpu_amdkfd_unreserve_memory_limit(struct amdgpu_bo *bo)
 {
-}
-
-int amdgpu_amdkfd_remove_fence_on_pt_pd_bos(struct amdgpu_bo *bo)
-{
-	return 0;
 }
 
 void amdgpu_amdkfd_gpuvm_destroy_cb(struct amdgpu_device *adev,
@@ -724,11 +713,11 @@ void kgd2kfd_exit(void)
 {
 }
 
-void kgd2kfd_suspend(struct kfd_dev *kfd, bool run_pm)
+void kgd2kfd_suspend(struct kfd_dev *kfd)
 {
 }
 
-int kgd2kfd_resume(struct kfd_dev *kfd, bool run_pm)
+int kgd2kfd_resume(struct kfd_dev *kfd)
 {
 	return 0;
 }

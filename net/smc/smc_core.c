@@ -46,7 +46,6 @@ static DECLARE_WAIT_QUEUE_HEAD(lgrs_deleted);
 
 static void smc_buf_free(struct smc_link_group *lgr, bool is_rmb,
 			 struct smc_buf_desc *buf_desc);
-static void __smc_lgr_terminate(struct smc_link_group *lgr, bool soft);
 
 /* return head of link group list and its lock for a given link group */
 static inline struct list_head *smc_lgr_list_head(struct smc_link_group *lgr,
@@ -242,7 +241,7 @@ static void smc_lgr_terminate_work(struct work_struct *work)
 	struct smc_link_group *lgr = container_of(work, struct smc_link_group,
 						  terminate_work);
 
-	__smc_lgr_terminate(lgr, true);
+	smc_lgr_terminate(lgr, true);
 }
 
 /* create a new SMC link group */
@@ -589,15 +588,15 @@ static void smc_lgr_cleanup(struct smc_link_group *lgr)
 	} else {
 		struct smc_link *lnk = &lgr->lnk[SMC_SINGLE_LINK];
 
-		if (lnk->state != SMC_LNK_INACTIVE)
+		wake_up(&lnk->wr_reg_wait);
+		if (lnk->state != SMC_LNK_INACTIVE) {
+			smc_link_send_delete(lnk, false);
 			smc_llc_link_inactive(lnk);
+		}
 	}
 }
 
-/* terminate link group
- * @soft: true if link group shutdown can take its time
- *	  false if immediate link group shutdown is required
- */
+/* terminate link group */
 static void __smc_lgr_terminate(struct smc_link_group *lgr, bool soft)
 {
 	struct smc_connection *conn;
@@ -635,20 +634,25 @@ static void __smc_lgr_terminate(struct smc_link_group *lgr, bool soft)
 		smc_lgr_free(lgr);
 }
 
-/* unlink link group and schedule termination */
-void smc_lgr_terminate_sched(struct smc_link_group *lgr)
+/* unlink and terminate link group
+ * @soft: true if link group shutdown can take its time
+ *	  false if immediate link group shutdown is required
+ */
+void smc_lgr_terminate(struct smc_link_group *lgr, bool soft)
 {
 	spinlock_t *lgr_lock;
 
 	smc_lgr_list_head(lgr, &lgr_lock);
 	spin_lock_bh(lgr_lock);
-	if (list_empty(&lgr->list) || lgr->terminating || lgr->freeing) {
+	if (lgr->terminating) {
 		spin_unlock_bh(lgr_lock);
 		return;	/* lgr already terminating */
 	}
+	if (!soft)
+		lgr->freeing = 1;
 	list_del_init(&lgr->list);
 	spin_unlock_bh(lgr_lock);
-	schedule_work(&lgr->terminate_work);
+	__smc_lgr_terminate(lgr, soft);
 }
 
 /* Called when IB port is terminated */

@@ -259,9 +259,8 @@ static void ql_update_stats(struct ql_adapter *qdev)
 				  "Error reading status register 0x%.04x.\n",
 				  i);
 			goto end;
-		} else {
+		} else
 			*iter = data;
-		}
 		iter++;
 	}
 
@@ -274,9 +273,8 @@ static void ql_update_stats(struct ql_adapter *qdev)
 				  "Error reading status register 0x%.04x.\n",
 				  i);
 			goto end;
-		} else {
+		} else
 			*iter = data;
-		}
 		iter++;
 	}
 
@@ -292,9 +290,8 @@ static void ql_update_stats(struct ql_adapter *qdev)
 				  "Error reading status register 0x%.04x.\n",
 				  i);
 			goto end;
-		} else {
+		} else
 			*iter = data;
-		}
 		iter++;
 	}
 
@@ -307,9 +304,8 @@ static void ql_update_stats(struct ql_adapter *qdev)
 				  "Error reading status register 0x%.04x.\n",
 				  i);
 			goto end;
-		} else {
+		} else
 			*iter = data;
-		}
 		iter++;
 	}
 
@@ -320,9 +316,8 @@ static void ql_update_stats(struct ql_adapter *qdev)
 		netif_err(qdev, drv, qdev->ndev,
 			  "Error reading status register 0x%.04x.\n", i);
 		goto end;
-	} else {
+	} else
 		*iter = data;
-	}
 end:
 	ql_sem_unlock(qdev, qdev->xg_sem_mask);
 quit:
@@ -493,9 +488,8 @@ static int ql_start_loopback(struct ql_adapter *qdev)
 	if (netif_carrier_ok(qdev->ndev)) {
 		set_bit(QL_LB_LINK_UP, &qdev->flags);
 		netif_carrier_off(qdev->ndev);
-	} else {
+	} else
 		clear_bit(QL_LB_LINK_UP, &qdev->flags);
-	}
 	qdev->link_config |= CFG_LOOPBACK_PCS;
 	return ql_mb_set_port_cfg(qdev);
 }
@@ -692,6 +686,7 @@ static int ql_set_pauseparam(struct net_device *netdev,
 			     struct ethtool_pauseparam *pause)
 {
 	struct ql_adapter *qdev = netdev_priv(netdev);
+	int status = 0;
 
 	if ((pause->rx_pause) && (pause->tx_pause))
 		qdev->link_config |= CFG_PAUSE_STD;
@@ -700,7 +695,8 @@ static int ql_set_pauseparam(struct net_device *netdev,
 	else
 		return -EINVAL;
 
-	return ql_mb_set_port_cfg(qdev);
+	status = ql_mb_set_port_cfg(qdev);
+	return status;
 }
 
 static u32 ql_get_msglevel(struct net_device *ndev)
@@ -718,8 +714,6 @@ static void ql_set_msglevel(struct net_device *ndev, u32 value)
 }
 
 const struct ethtool_ops qlge_ethtool_ops = {
-	.supported_coalesce_params = ETHTOOL_COALESCE_USECS |
-				     ETHTOOL_COALESCE_MAX_FRAMES,
 	.get_drvinfo = ql_get_drvinfo,
 	.get_wol = ql_get_wol,
 	.set_wol = ql_set_wol,

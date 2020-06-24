@@ -72,7 +72,7 @@ static struct page * __meminit shuffle_valid_page(unsigned long pfn, int order)
 		return NULL;
 
 	/* ...is the pfn in a present section or a hole? */
-	if (!pfn_in_present_section(pfn))
+	if (!pfn_present(pfn))
 		return NULL;
 
 	/* ...is the page free and currently on a free_area list? */
@@ -183,11 +183,11 @@ void __meminit __shuffle_free_memory(pg_data_t *pgdat)
 		shuffle_zone(z);
 }
 
-bool shuffle_pick_tail(void)
+void add_to_free_area_random(struct page *page, struct free_area *area,
+		int migratetype)
 {
 	static u64 rand;
 	static u8 rand_bits;
-	bool ret;
 
 	/*
 	 * The lack of locking is deliberate. If 2 threads race to
@@ -198,10 +198,10 @@ bool shuffle_pick_tail(void)
 		rand = get_random_u64();
 	}
 
-	ret = rand & 1;
-
+	if (rand & 1)
+		add_to_free_area(page, area, migratetype);
+	else
+		add_to_free_area_tail(page, area, migratetype);
 	rand_bits--;
 	rand >>= 1;
-
-	return ret;
 }

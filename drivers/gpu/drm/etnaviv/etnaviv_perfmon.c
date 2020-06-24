@@ -453,7 +453,7 @@ static const struct etnaviv_pm_domain *pm_domain(const struct etnaviv_gpu *gpu,
 		if (!(gpu->identity.features & meta->feature))
 			continue;
 
-		if (index - offset >= meta->nr_domains) {
+		if (meta->nr_domains < (index - offset)) {
 			offset += meta->nr_domains;
 			continue;
 		}

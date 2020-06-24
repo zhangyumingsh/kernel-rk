@@ -11,7 +11,6 @@
 #include "aq_vec.h"
 #include "aq_hw.h"
 #include "aq_pci_func.h"
-#include "aq_macsec.h"
 #include "aq_main.h"
 #include "aq_phy.h"
 #include "aq_ptp.h"
@@ -177,9 +176,6 @@ static int aq_nic_update_link_status(struct aq_nic_s *self)
 		aq_utils_obj_clear(&self->flags,
 				   AQ_NIC_LINK_DOWN);
 		netif_carrier_on(self->ndev);
-#if IS_ENABLED(CONFIG_MACSEC)
-		aq_macsec_enable(self);
-#endif
 		netif_tx_wake_all_queues(self->ndev);
 	}
 	if (netif_carrier_ok(self->ndev) && !self->link_status.mbps) {
@@ -220,10 +216,6 @@ static void aq_nic_service_task(struct work_struct *work)
 	err = aq_nic_update_link_status(self);
 	if (err)
 		return;
-
-#if IS_ENABLED(CONFIG_MACSEC)
-	aq_macsec_work(self);
-#endif
 
 	mutex_lock(&self->fwreq_mutex);
 	if (self->aq_fw_ops->update_stats)
@@ -270,10 +262,6 @@ int aq_nic_ndev_register(struct aq_nic_s *self)
 	if (err)
 		goto err_exit;
 
-#if IS_ENABLED(CONFIG_MACSEC)
-	aq_macsec_init(self);
-#endif
-
 	mutex_lock(&self->fwreq_mutex);
 	err = self->aq_fw_ops->get_mac_permanent(self->aq_hw,
 			    self->ndev->dev_addr);
@@ -308,10 +296,6 @@ int aq_nic_ndev_register(struct aq_nic_s *self)
 		goto err_exit;
 
 err_exit:
-#if IS_ENABLED(CONFIG_MACSEC)
-	if (err)
-		aq_macsec_free(self);
-#endif
 	return err;
 }
 
@@ -781,7 +765,7 @@ int aq_nic_get_regs_count(struct aq_nic_s *self)
 	return self->aq_nic_cfg.aq_hw_caps->mac_regs_count;
 }
 
-u64 *aq_nic_get_stats(struct aq_nic_s *self, u64 *data)
+void aq_nic_get_stats(struct aq_nic_s *self, u64 *data)
 {
 	struct aq_vec_s *aq_vec = NULL;
 	struct aq_stats_s *stats;
@@ -831,10 +815,7 @@ u64 *aq_nic_get_stats(struct aq_nic_s *self, u64 *data)
 		aq_vec_get_sw_stats(aq_vec, data, &count);
 	}
 
-	data += count;
-
 err_exit:;
-	return data;
 }
 
 static void aq_nic_update_ndev_stats(struct aq_nic_s *self)

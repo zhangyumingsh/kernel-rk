@@ -39,56 +39,26 @@
  * encoder chain.
  *
  * A bridge is always attached to a single &drm_encoder at a time, but can be
- * either connected to it directly, or through a chain of bridges::
+ * either connected to it directly, or through an intermediate bridge::
  *
- *     [ CRTC ---> ] Encoder ---> Bridge A ---> Bridge B
+ *     encoder ---> bridge B ---> bridge A
  *
- * Here, the output of the encoder feeds to bridge A, and that furthers feeds to
- * bridge B. Bridge chains can be arbitrarily long, and shall be fully linear:
- * Chaining multiple bridges to the output of a bridge, or the same bridge to
- * the output of different bridges, is not supported.
+ * Here, the output of the encoder feeds to bridge B, and that furthers feeds to
+ * bridge A.
  *
- * Display drivers are responsible for linking encoders with the first bridge
- * in the chains. This is done by acquiring the appropriate bridge with
- * of_drm_find_bridge() or drm_of_find_panel_or_bridge(), or creating it for a
- * panel with drm_panel_bridge_add_typed() (or the managed version
- * devm_drm_panel_bridge_add_typed()). Once acquired, the bridge shall be
- * attached to the encoder with a call to drm_bridge_attach().
+ * The driver using the bridge is responsible to make the associations between
+ * the encoder and bridges. Once these links are made, the bridges will
+ * participate along with encoder functions to perform mode_set/enable/disable
+ * through the ops provided in &drm_bridge_funcs.
  *
- * Bridges are responsible for linking themselves with the next bridge in the
- * chain, if any. This is done the same way as for encoders, with the call to
- * drm_bridge_attach() occurring in the &drm_bridge_funcs.attach operation.
- *
- * Once these links are created, the bridges can participate along with encoder
- * functions to perform mode validation and fixup (through
- * drm_bridge_chain_mode_valid() and drm_atomic_bridge_chain_check()), mode
- * setting (through drm_bridge_chain_mode_set()), enable (through
- * drm_atomic_bridge_chain_pre_enable() and drm_atomic_bridge_chain_enable())
- * and disable (through drm_atomic_bridge_chain_disable() and
- * drm_atomic_bridge_chain_post_disable()). Those functions call the
- * corresponding operations provided in &drm_bridge_funcs in sequence for all
- * bridges in the chain.
- *
- * For display drivers that use the atomic helpers
- * drm_atomic_helper_check_modeset(),
- * drm_atomic_helper_commit_modeset_enables() and
- * drm_atomic_helper_commit_modeset_disables() (either directly in hand-rolled
- * commit check and commit tail handlers, or through the higher-level
- * drm_atomic_helper_check() and drm_atomic_helper_commit_tail() or
- * drm_atomic_helper_commit_tail_rpm() helpers), this is done transparently and
- * requires no intervention from the driver. For other drivers, the relevant
- * DRM bridge chain functions shall be called manually.
- *
- * Bridges also participate in implementing the &drm_connector at the end of
- * the bridge chain. Display drivers may use the drm_bridge_connector_init()
- * helper to create the &drm_connector, or implement it manually on top of the
- * connector-related operations exposed by the bridge (see the overview
- * documentation of bridge operations for more details).
- *
- * &drm_bridge, like &drm_panel, aren't &drm_mode_object entities like planes,
+ * drm_bridge, like drm_panel, aren't drm_mode_object entities like planes,
  * CRTCs, encoders or connectors and hence are not visible to userspace. They
  * just provide additional hooks to get the desired output at the end of the
  * encoder chain.
+ *
+ * Bridges can also be chained up using the &drm_bridge.chain_node field.
+ *
+ * Both legacy CRTC helpers and the new atomic modeset helpers support bridges.
  */
 
 static DEFINE_MUTEX(bridge_lock);
@@ -101,8 +71,6 @@ static LIST_HEAD(bridge_list);
  */
 void drm_bridge_add(struct drm_bridge *bridge)
 {
-	mutex_init(&bridge->hpd_mutex);
-
 	mutex_lock(&bridge_lock);
 	list_add_tail(&bridge->list, &bridge_list);
 	mutex_unlock(&bridge_lock);
@@ -119,8 +87,6 @@ void drm_bridge_remove(struct drm_bridge *bridge)
 	mutex_lock(&bridge_lock);
 	list_del_init(&bridge->list);
 	mutex_unlock(&bridge_lock);
-
-	mutex_destroy(&bridge->hpd_mutex);
 }
 EXPORT_SYMBOL(drm_bridge_remove);
 
@@ -130,7 +96,11 @@ drm_bridge_atomic_duplicate_priv_state(struct drm_private_obj *obj)
 	struct drm_bridge *bridge = drm_priv_to_bridge(obj);
 	struct drm_bridge_state *state;
 
-	state = bridge->funcs->atomic_duplicate_state(bridge);
+	if (bridge->funcs->atomic_duplicate_state)
+		state = bridge->funcs->atomic_duplicate_state(bridge);
+	else
+		state = drm_atomic_helper_bridge_duplicate_state(bridge);
+
 	return state ? &state->base : NULL;
 }
 
@@ -141,7 +111,10 @@ drm_bridge_atomic_destroy_priv_state(struct drm_private_obj *obj,
 	struct drm_bridge_state *state = drm_priv_to_bridge_state(s);
 	struct drm_bridge *bridge = drm_priv_to_bridge(obj);
 
-	bridge->funcs->atomic_destroy_state(bridge, state);
+	if (bridge->funcs->atomic_destroy_state)
+		bridge->funcs->atomic_destroy_state(bridge, state);
+	else
+		drm_atomic_helper_bridge_destroy_state(bridge, state);
 }
 
 static const struct drm_private_state_funcs drm_bridge_priv_state_funcs = {
@@ -155,7 +128,6 @@ static const struct drm_private_state_funcs drm_bridge_priv_state_funcs = {
  * @encoder: DRM encoder
  * @bridge: bridge to attach
  * @previous: previous bridge in the chain (optional)
- * @flags: DRM_BRIDGE_ATTACH_* flags
  *
  * Called by a kms driver to link the bridge to an encoder's chain. The previous
  * argument specifies the previous bridge in the chain. If NULL, the bridge is
@@ -173,9 +145,9 @@ static const struct drm_private_state_funcs drm_bridge_priv_state_funcs = {
  * Zero on success, error code on failure
  */
 int drm_bridge_attach(struct drm_encoder *encoder, struct drm_bridge *bridge,
-		      struct drm_bridge *previous,
-		      enum drm_bridge_attach_flags flags)
+		      struct drm_bridge *previous)
 {
+	struct drm_bridge_state *state;
 	int ret;
 
 	if (!encoder || !bridge)
@@ -196,24 +168,24 @@ int drm_bridge_attach(struct drm_encoder *encoder, struct drm_bridge *bridge,
 		list_add(&bridge->chain_node, &encoder->bridge_chain);
 
 	if (bridge->funcs->attach) {
-		ret = bridge->funcs->attach(bridge, flags);
+		ret = bridge->funcs->attach(bridge);
 		if (ret < 0)
 			goto err_reset_bridge;
 	}
 
-	if (bridge->funcs->atomic_reset) {
-		struct drm_bridge_state *state;
-
+	if (bridge->funcs->atomic_reset)
 		state = bridge->funcs->atomic_reset(bridge);
-		if (IS_ERR(state)) {
-			ret = PTR_ERR(state);
-			goto err_detach_bridge;
-		}
+	else
+		state = drm_atomic_helper_bridge_reset(bridge);
 
-		drm_atomic_private_obj_init(bridge->dev, &bridge->base,
-					    &state->base,
-					    &drm_bridge_priv_state_funcs);
+	if (IS_ERR(state)) {
+		ret = PTR_ERR(state);
+		goto err_detach_bridge;
 	}
+
+	drm_atomic_private_obj_init(bridge->dev, &bridge->base,
+				    &state->base,
+				    &drm_bridge_priv_state_funcs);
 
 	return 0;
 
@@ -237,8 +209,7 @@ void drm_bridge_detach(struct drm_bridge *bridge)
 	if (WARN_ON(!bridge->dev))
 		return;
 
-	if (bridge->funcs->atomic_reset)
-		drm_atomic_private_obj_fini(&bridge->base);
+	drm_atomic_private_obj_fini(&bridge->base);
 
 	if (bridge->funcs->detach)
 		bridge->funcs->detach(bridge);
@@ -248,92 +219,14 @@ void drm_bridge_detach(struct drm_bridge *bridge)
 }
 
 /**
- * DOC: bridge operations
+ * DOC: bridge callbacks
  *
- * Bridge drivers expose operations through the &drm_bridge_funcs structure.
- * The DRM internals (atomic and CRTC helpers) use the helpers defined in
- * drm_bridge.c to call bridge operations. Those operations are divided in
- * three big categories to support different parts of the bridge usage.
+ * The &drm_bridge_funcs ops are populated by the bridge driver. The DRM
+ * internals (atomic and CRTC helpers) use the helpers defined in drm_bridge.c
+ * These helpers call a specific &drm_bridge_funcs op for all the bridges
+ * during encoder configuration.
  *
- * - The encoder-related operations support control of the bridges in the
- *   chain, and are roughly counterparts to the &drm_encoder_helper_funcs
- *   operations. They are used by the legacy CRTC and the atomic modeset
- *   helpers to perform mode validation, fixup and setting, and enable and
- *   disable the bridge automatically.
- *
- *   The enable and disable operations are split in
- *   &drm_bridge_funcs.pre_enable, &drm_bridge_funcs.enable,
- *   &drm_bridge_funcs.disable and &drm_bridge_funcs.post_disable to provide
- *   finer-grained control.
- *
- *   Bridge drivers may implement the legacy version of those operations, or
- *   the atomic version (prefixed with atomic\_), in which case they shall also
- *   implement the atomic state bookkeeping operations
- *   (&drm_bridge_funcs.atomic_duplicate_state,
- *   &drm_bridge_funcs.atomic_destroy_state and &drm_bridge_funcs.reset).
- *   Mixing atomic and non-atomic versions of the operations is not supported.
- *
- * - The bus format negotiation operations
- *   &drm_bridge_funcs.atomic_get_output_bus_fmts and
- *   &drm_bridge_funcs.atomic_get_input_bus_fmts allow bridge drivers to
- *   negotiate the formats transmitted between bridges in the chain when
- *   multiple formats are supported. Negotiation for formats is performed
- *   transparently for display drivers by the atomic modeset helpers. Only
- *   atomic versions of those operations exist, bridge drivers that need to
- *   implement them shall thus also implement the atomic version of the
- *   encoder-related operations. This feature is not supported by the legacy
- *   CRTC helpers.
- *
- * - The connector-related operations support implementing a &drm_connector
- *   based on a chain of bridges. DRM bridges traditionally create a
- *   &drm_connector for bridges meant to be used at the end of the chain. This
- *   puts additional burden on bridge drivers, especially for bridges that may
- *   be used in the middle of a chain or at the end of it. Furthermore, it
- *   requires all operations of the &drm_connector to be handled by a single
- *   bridge, which doesn't always match the hardware architecture.
- *
- *   To simplify bridge drivers and make the connector implementation more
- *   flexible, a new model allows bridges to unconditionally skip creation of
- *   &drm_connector and instead expose &drm_bridge_funcs operations to support
- *   an externally-implemented &drm_connector. Those operations are
- *   &drm_bridge_funcs.detect, &drm_bridge_funcs.get_modes,
- *   &drm_bridge_funcs.get_edid, &drm_bridge_funcs.hpd_notify,
- *   &drm_bridge_funcs.hpd_enable and &drm_bridge_funcs.hpd_disable. When
- *   implemented, display drivers shall create a &drm_connector instance for
- *   each chain of bridges, and implement those connector instances based on
- *   the bridge connector operations.
- *
- *   Bridge drivers shall implement the connector-related operations for all
- *   the features that the bridge hardware support. For instance, if a bridge
- *   supports reading EDID, the &drm_bridge_funcs.get_edid shall be
- *   implemented. This however doesn't mean that the DDC lines are wired to the
- *   bridge on a particular platform, as they could also be connected to an I2C
- *   controller of the SoC. Support for the connector-related operations on the
- *   running platform is reported through the &drm_bridge.ops flags. Bridge
- *   drivers shall detect which operations they can support on the platform
- *   (usually this information is provided by ACPI or DT), and set the
- *   &drm_bridge.ops flags for all supported operations. A flag shall only be
- *   set if the corresponding &drm_bridge_funcs operation is implemented, but
- *   an implemented operation doesn't necessarily imply that the corresponding
- *   flag will be set. Display drivers shall use the &drm_bridge.ops flags to
- *   decide which bridge to delegate a connector operation to. This mechanism
- *   allows providing a single static const &drm_bridge_funcs instance in
- *   bridge drivers, improving security by storing function pointers in
- *   read-only memory.
- *
- *   In order to ease transition, bridge drivers may support both the old and
- *   new models by making connector creation optional and implementing the
- *   connected-related bridge operations. Connector creation is then controlled
- *   by the flags argument to the drm_bridge_attach() function. Display drivers
- *   that support the new model and create connectors themselves shall set the
- *   %DRM_BRIDGE_ATTACH_NO_CONNECTOR flag, and bridge drivers shall then skip
- *   connector creation. For intermediate bridges in the chain, the flag shall
- *   be passed to the drm_bridge_attach() call for the downstream bridge.
- *   Bridge drivers that implement the new model only shall return an error
- *   from their &drm_bridge_funcs.attach handler when the
- *   %DRM_BRIDGE_ATTACH_NO_CONNECTOR flag is not set. New display drivers
- *   should use the new model, and convert the bridge drivers they use if
- *   needed, in order to gradually transition to the new model.
+ * For detailed specification of the bridge callbacks see &drm_bridge_funcs.
  */
 
 /**
@@ -742,6 +635,47 @@ static int drm_atomic_bridge_check(struct drm_bridge *bridge,
 	return 0;
 }
 
+/**
+ * drm_atomic_helper_bridge_propagate_bus_fmt() - Propagate output format to
+ *						  the input end of a bridge
+ * @bridge: bridge control structure
+ * @bridge_state: new bridge state
+ * @crtc_state: new CRTC state
+ * @conn_state: new connector state
+ * @output_fmt: tested output bus format
+ * @num_input_fmts: will contain the size of the returned array
+ *
+ * This helper is a pluggable implementation of the
+ * &drm_bridge_funcs.atomic_get_input_bus_fmts operation for bridges that don't
+ * modify the bus configuration between their input and their output. It
+ * returns an array of input formats with a single element set to @output_fmt.
+ *
+ * RETURNS:
+ * a valid format array of size @num_input_fmts, or NULL if the allocation
+ * failed
+ */
+u32 *
+drm_atomic_helper_bridge_propagate_bus_fmt(struct drm_bridge *bridge,
+					struct drm_bridge_state *bridge_state,
+					struct drm_crtc_state *crtc_state,
+					struct drm_connector_state *conn_state,
+					u32 output_fmt,
+					unsigned int *num_input_fmts)
+{
+	u32 *input_fmts;
+
+	input_fmts = kzalloc(sizeof(*input_fmts), GFP_KERNEL);
+	if (!input_fmts) {
+		*num_input_fmts = 0;
+		return NULL;
+	}
+
+	*num_input_fmts = 1;
+	input_fmts[0] = output_fmt;
+	return input_fmts;
+}
+EXPORT_SYMBOL(drm_atomic_helper_bridge_propagate_bus_fmt);
+
 static int select_bus_fmt_recursive(struct drm_bridge *first_bridge,
 				    struct drm_bridge *cur_bridge,
 				    struct drm_crtc_state *crtc_state,
@@ -757,6 +691,8 @@ static int select_bus_fmt_recursive(struct drm_bridge *first_bridge,
 	prev_bridge = drm_bridge_get_prev_bridge(cur_bridge);
 	cur_state = drm_atomic_get_new_bridge_state(crtc_state->state,
 						    cur_bridge);
+	if (WARN_ON(!cur_state))
+		return -EINVAL;
 
 	/*
 	 * If bus format negotiation is not supported by this bridge, let's
@@ -774,24 +710,10 @@ static int select_bus_fmt_recursive(struct drm_bridge *first_bridge,
 				return ret;
 		}
 
-		/*
-		 * Driver does not implement the atomic state hooks, but that's
-		 * fine, as long as it does not access the bridge state.
-		 */
-		if (cur_state) {
-			cur_state->input_bus_cfg.format = MEDIA_BUS_FMT_FIXED;
-			cur_state->output_bus_cfg.format = out_bus_fmt;
-		}
-
+		cur_state->input_bus_cfg.format = MEDIA_BUS_FMT_FIXED;
+		cur_state->output_bus_cfg.format = out_bus_fmt;
 		return 0;
 	}
-
-	/*
-	 * If the driver implements ->atomic_get_input_bus_fmts() it
-	 * should also implement the atomic state hooks.
-	 */
-	if (WARN_ON(!cur_state))
-		return -EINVAL;
 
 	in_bus_fmts = cur_bridge->funcs->atomic_get_input_bus_fmts(cur_bridge,
 							cur_state,
@@ -879,16 +801,11 @@ drm_atomic_bridge_chain_select_bus_fmts(struct drm_bridge *bridge,
 				      struct drm_bridge, chain_node);
 	last_bridge_state = drm_atomic_get_new_bridge_state(crtc_state->state,
 							    last_bridge);
+	if (WARN_ON(!last_bridge_state))
+		return -EINVAL;
 
 	if (last_bridge->funcs->atomic_get_output_bus_fmts) {
 		const struct drm_bridge_funcs *funcs = last_bridge->funcs;
-
-		/*
-		 * If the driver implements ->atomic_get_output_bus_fmts() it
-		 * should also implement the atomic state hooks.
-		 */
-		if (WARN_ON(!last_bridge_state))
-			return -EINVAL;
 
 		out_bus_fmts = funcs->atomic_get_output_bus_fmts(last_bridge,
 							last_bridge_state,
@@ -931,14 +848,9 @@ drm_atomic_bridge_propagate_bus_flags(struct drm_bridge *bridge,
 {
 	struct drm_bridge_state *bridge_state, *next_bridge_state;
 	struct drm_bridge *next_bridge;
-	u32 output_flags = 0;
+	u32 output_flags;
 
 	bridge_state = drm_atomic_get_new_bridge_state(state, bridge);
-
-	/* No bridge state attached to this bridge => nothing to propagate. */
-	if (!bridge_state)
-		return;
-
 	next_bridge = drm_bridge_get_next_bridge(bridge);
 
 	/*
@@ -956,12 +868,7 @@ drm_atomic_bridge_propagate_bus_flags(struct drm_bridge *bridge,
 	} else {
 		next_bridge_state = drm_atomic_get_new_bridge_state(state,
 								next_bridge);
-		/*
-		 * No bridge state attached to the next bridge, just leave the
-		 * flags to 0.
-		 */
-		if (next_bridge_state)
-			output_flags = next_bridge_state->input_bus_cfg.flags;
+		output_flags = next_bridge_state->input_bus_cfg.flags;
 	}
 
 	bridge_state->output_bus_cfg.flags = output_flags;
@@ -995,19 +902,15 @@ int drm_atomic_bridge_chain_check(struct drm_bridge *bridge,
 				  struct drm_connector_state *conn_state)
 {
 	struct drm_connector *conn = conn_state->connector;
-	struct drm_encoder *encoder;
+	struct drm_encoder *encoder = bridge->encoder;
 	struct drm_bridge *iter;
 	int ret;
-
-	if (!bridge)
-		return 0;
 
 	ret = drm_atomic_bridge_chain_select_bus_fmts(bridge, crtc_state,
 						      conn_state);
 	if (ret)
 		return ret;
 
-	encoder = bridge->encoder;
 	list_for_each_entry_reverse(iter, &encoder->bridge_chain, chain_node) {
 		int ret;
 
@@ -1034,162 +937,105 @@ int drm_atomic_bridge_chain_check(struct drm_bridge *bridge,
 EXPORT_SYMBOL(drm_atomic_bridge_chain_check);
 
 /**
- * drm_bridge_detect - check if anything is attached to the bridge output
- * @bridge: bridge control structure
+ * drm_atomic_helper_bridge_destroy_state() - Default destroy state helper
+ * @bridge: the bridge this state refers to
+ * @state: state object to destroy
  *
- * If the bridge supports output detection, as reported by the
- * DRM_BRIDGE_OP_DETECT bridge ops flag, call &drm_bridge_funcs.detect for the
- * bridge and return the connection status. Otherwise return
- * connector_status_unknown.
+ * Just a simple kfree() for now.
+ */
+void drm_atomic_helper_bridge_destroy_state(struct drm_bridge *bridge,
+					    struct drm_bridge_state *state)
+{
+	kfree(state);
+}
+EXPORT_SYMBOL(drm_atomic_helper_bridge_destroy_state);
+
+/**
+ * __drm_atomic_helper_bridge_reset() - Initialize a bridge state to its
+ *					default
+ * @bridge: the bridge this state is refers to
+ * @state: bridge state to initialize
+ *
+ * Initialize the bridge state to default values. This is meant to be* called
+ * by the bridge &drm_plane_funcs.reset hook for bridges that subclass the
+ * bridge state.
+ */
+void __drm_atomic_helper_bridge_reset(struct drm_bridge *bridge,
+				      struct drm_bridge_state *state)
+{
+	memset(state, 0, sizeof(*state));
+	state->bridge = bridge;
+}
+EXPORT_SYMBOL(__drm_atomic_helper_bridge_reset);
+
+/**
+ * drm_atomic_helper_bridge_reset() - default &drm_plane_funcs.reset hook for
+ *				      bridges
+ * @bridge: the bridge to reset state on
+ *
+ * Resets the atomic state for @bridge by freeing the state pointer (which
+ * might be NULL, e.g. at driver load time) and allocating a new empty state
+ * object.
  *
  * RETURNS:
- * The detection status on success, or connector_status_unknown if the bridge
- * doesn't support output detection.
+ * A valid drm_bridge_state object in case of success, an ERR_PTR()
+ * giving the reaon of the failure otherwise.
  */
-enum drm_connector_status drm_bridge_detect(struct drm_bridge *bridge)
+struct drm_bridge_state *
+drm_atomic_helper_bridge_reset(struct drm_bridge *bridge)
 {
-	if (!(bridge->ops & DRM_BRIDGE_OP_DETECT))
-		return connector_status_unknown;
+	struct drm_bridge_state *bridge_state;
 
-	return bridge->funcs->detect(bridge);
+	bridge_state = kzalloc(sizeof(*bridge_state), GFP_KERNEL);
+	if (!bridge_state)
+		return ERR_PTR(-ENOMEM);
+
+	__drm_atomic_helper_bridge_reset(bridge, bridge_state);
+	return bridge_state;
 }
-EXPORT_SYMBOL_GPL(drm_bridge_detect);
+EXPORT_SYMBOL(drm_atomic_helper_bridge_reset);
 
 /**
- * drm_bridge_get_modes - fill all modes currently valid for the sink into the
- * @connector
- * @bridge: bridge control structure
- * @connector: the connector to fill with modes
+ * __drm_atomic_helper_bridge_duplicate_state() - Copy atomic bridge state
+ * @bridge: bridge object
+ * @state: atomic bridge state
  *
- * If the bridge supports output modes retrieval, as reported by the
- * DRM_BRIDGE_OP_MODES bridge ops flag, call &drm_bridge_funcs.get_modes to
- * fill the connector with all valid modes and return the number of modes
- * added. Otherwise return 0.
+ * Copies atomic state from a bridge's current state and resets inferred values.
+ * This is useful for drivers that subclass the bridge state.
+ */
+void __drm_atomic_helper_bridge_duplicate_state(struct drm_bridge *bridge,
+						struct drm_bridge_state *state)
+{
+	__drm_atomic_helper_private_obj_duplicate_state(&bridge->base,
+							&state->base);
+	state->bridge = bridge;
+}
+EXPORT_SYMBOL(__drm_atomic_helper_bridge_duplicate_state);
+
+/**
+ * drm_atomic_helper_duplicate_bridge_state() - Default duplicate state helper
+ * @bridge: bridge containing the state to duplicate
+ *
+ * Default implementation of &drm_bridge_funcs.atomic_duplicate().
  *
  * RETURNS:
- * The number of modes added to the connector.
+ * a valid state object or NULL if the allocation fails.
  */
-int drm_bridge_get_modes(struct drm_bridge *bridge,
-			 struct drm_connector *connector)
+struct drm_bridge_state *
+drm_atomic_helper_bridge_duplicate_state(struct drm_bridge *bridge)
 {
-	if (!(bridge->ops & DRM_BRIDGE_OP_MODES))
-		return 0;
+	struct drm_bridge_state *new;
 
-	return bridge->funcs->get_modes(bridge, connector);
+	if (WARN_ON(!bridge->base.state))
+		return NULL;
+
+	new = kzalloc(sizeof(*new), GFP_KERNEL);
+	if (new)
+		__drm_atomic_helper_bridge_duplicate_state(bridge, new);
+
+	return new;
 }
-EXPORT_SYMBOL_GPL(drm_bridge_get_modes);
-
-/**
- * drm_bridge_get_edid - get the EDID data of the connected display
- * @bridge: bridge control structure
- * @connector: the connector to read EDID for
- *
- * If the bridge supports output EDID retrieval, as reported by the
- * DRM_BRIDGE_OP_EDID bridge ops flag, call &drm_bridge_funcs.get_edid to
- * get the EDID and return it. Otherwise return ERR_PTR(-ENOTSUPP).
- *
- * RETURNS:
- * The retrieved EDID on success, or an error pointer otherwise.
- */
-struct edid *drm_bridge_get_edid(struct drm_bridge *bridge,
-				 struct drm_connector *connector)
-{
-	if (!(bridge->ops & DRM_BRIDGE_OP_EDID))
-		return ERR_PTR(-ENOTSUPP);
-
-	return bridge->funcs->get_edid(bridge, connector);
-}
-EXPORT_SYMBOL_GPL(drm_bridge_get_edid);
-
-/**
- * drm_bridge_hpd_enable - enable hot plug detection for the bridge
- * @bridge: bridge control structure
- * @cb: hot-plug detection callback
- * @data: data to be passed to the hot-plug detection callback
- *
- * Call &drm_bridge_funcs.hpd_enable if implemented and register the given @cb
- * and @data as hot plug notification callback. From now on the @cb will be
- * called with @data when an output status change is detected by the bridge,
- * until hot plug notification gets disabled with drm_bridge_hpd_disable().
- *
- * Hot plug detection is supported only if the DRM_BRIDGE_OP_HPD flag is set in
- * bridge->ops. This function shall not be called when the flag is not set.
- *
- * Only one hot plug detection callback can be registered at a time, it is an
- * error to call this function when hot plug detection is already enabled for
- * the bridge.
- */
-void drm_bridge_hpd_enable(struct drm_bridge *bridge,
-			   void (*cb)(void *data,
-				      enum drm_connector_status status),
-			   void *data)
-{
-	if (!(bridge->ops & DRM_BRIDGE_OP_HPD))
-		return;
-
-	mutex_lock(&bridge->hpd_mutex);
-
-	if (WARN(bridge->hpd_cb, "Hot plug detection already enabled\n"))
-		goto unlock;
-
-	bridge->hpd_cb = cb;
-	bridge->hpd_data = data;
-
-	if (bridge->funcs->hpd_enable)
-		bridge->funcs->hpd_enable(bridge);
-
-unlock:
-	mutex_unlock(&bridge->hpd_mutex);
-}
-EXPORT_SYMBOL_GPL(drm_bridge_hpd_enable);
-
-/**
- * drm_bridge_hpd_disable - disable hot plug detection for the bridge
- * @bridge: bridge control structure
- *
- * Call &drm_bridge_funcs.hpd_disable if implemented and unregister the hot
- * plug detection callback previously registered with drm_bridge_hpd_enable().
- * Once this function returns the callback will not be called by the bridge
- * when an output status change occurs.
- *
- * Hot plug detection is supported only if the DRM_BRIDGE_OP_HPD flag is set in
- * bridge->ops. This function shall not be called when the flag is not set.
- */
-void drm_bridge_hpd_disable(struct drm_bridge *bridge)
-{
-	if (!(bridge->ops & DRM_BRIDGE_OP_HPD))
-		return;
-
-	mutex_lock(&bridge->hpd_mutex);
-	if (bridge->funcs->hpd_disable)
-		bridge->funcs->hpd_disable(bridge);
-
-	bridge->hpd_cb = NULL;
-	bridge->hpd_data = NULL;
-	mutex_unlock(&bridge->hpd_mutex);
-}
-EXPORT_SYMBOL_GPL(drm_bridge_hpd_disable);
-
-/**
- * drm_bridge_hpd_notify - notify hot plug detection events
- * @bridge: bridge control structure
- * @status: output connection status
- *
- * Bridge drivers shall call this function to report hot plug events when they
- * detect a change in the output status, when hot plug detection has been
- * enabled by drm_bridge_hpd_enable().
- *
- * This function shall be called in a context that can sleep.
- */
-void drm_bridge_hpd_notify(struct drm_bridge *bridge,
-			   enum drm_connector_status status)
-{
-	mutex_lock(&bridge->hpd_mutex);
-	if (bridge->hpd_cb)
-		bridge->hpd_cb(bridge->hpd_data, status);
-	mutex_unlock(&bridge->hpd_mutex);
-}
-EXPORT_SYMBOL_GPL(drm_bridge_hpd_notify);
+EXPORT_SYMBOL(drm_atomic_helper_bridge_duplicate_state);
 
 #ifdef CONFIG_OF
 /**

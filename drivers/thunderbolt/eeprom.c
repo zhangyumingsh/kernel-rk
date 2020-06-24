@@ -247,7 +247,7 @@ struct tb_drom_entry_header {
 
 struct tb_drom_entry_generic {
 	struct tb_drom_entry_header header;
-	u8 data[];
+	u8 data[0];
 } __packed;
 
 struct tb_drom_entry_port {

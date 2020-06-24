@@ -97,33 +97,12 @@ DO_ERROR_INFO(do_trap_insn_fault,
 	SIGSEGV, SEGV_ACCERR, "instruction access fault");
 DO_ERROR_INFO(do_trap_insn_illegal,
 	SIGILL, ILL_ILLOPC, "illegal instruction");
+DO_ERROR_INFO(do_trap_load_misaligned,
+	SIGBUS, BUS_ADRALN, "load address misaligned");
 DO_ERROR_INFO(do_trap_load_fault,
 	SIGSEGV, SEGV_ACCERR, "load access fault");
-#ifndef CONFIG_RISCV_M_MODE
-DO_ERROR_INFO(do_trap_load_misaligned,
-	SIGBUS, BUS_ADRALN, "Oops - load address misaligned");
 DO_ERROR_INFO(do_trap_store_misaligned,
-	SIGBUS, BUS_ADRALN, "Oops - store (or AMO) address misaligned");
-#else
-int handle_misaligned_load(struct pt_regs *regs);
-int handle_misaligned_store(struct pt_regs *regs);
-
-asmlinkage void do_trap_load_misaligned(struct pt_regs *regs)
-{
-	if (!handle_misaligned_load(regs))
-		return;
-	do_trap_error(regs, SIGBUS, BUS_ADRALN, regs->epc,
-		      "Oops - load address misaligned");
-}
-
-asmlinkage void do_trap_store_misaligned(struct pt_regs *regs)
-{
-	if (!handle_misaligned_store(regs))
-		return;
-	do_trap_error(regs, SIGBUS, BUS_ADRALN, regs->epc,
-		      "Oops - store (or AMO) address misaligned");
-}
-#endif
+	SIGBUS, BUS_ADRALN, "store (or AMO) address misaligned");
 DO_ERROR_INFO(do_trap_store_fault,
 	SIGSEGV, SEGV_ACCERR, "store (or AMO) access fault");
 DO_ERROR_INFO(do_trap_ecall_u,
@@ -139,8 +118,7 @@ static inline unsigned long get_break_insn_length(unsigned long pc)
 
 	if (probe_kernel_address((bug_insn_t *)pc, insn))
 		return 0;
-
-	return GET_INSN_LENGTH(insn);
+	return (((insn & __INSN_LENGTH_MASK) == __INSN_LENGTH_32) ? 4UL : 2UL);
 }
 
 asmlinkage __visible void do_trap_break(struct pt_regs *regs)
@@ -169,7 +147,7 @@ int is_valid_bugaddr(unsigned long pc)
 }
 #endif /* CONFIG_GENERIC_BUG */
 
-void trap_init(void)
+void __init trap_init(void)
 {
 	/*
 	 * Set sup0 scratch register to 0, indicating to exception vector
@@ -179,5 +157,5 @@ void trap_init(void)
 	/* Set the exception vector address */
 	csr_write(CSR_TVEC, &handle_exception);
 	/* Enable interrupts */
-	csr_write(CSR_IE, IE_SIE);
+	csr_write(CSR_IE, IE_SIE | IE_EIE);
 }

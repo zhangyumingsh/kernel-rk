@@ -42,7 +42,7 @@ struct nfp_shared_buf;
  */
 struct nfp_dumpspec {
 	u32 size;
-	u8 data[];
+	u8 data[0];
 };
 
 /**

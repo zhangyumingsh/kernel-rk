@@ -152,7 +152,7 @@ static struct ap_queue_status ap_sm_recv(struct ap_queue *aq)
 			ap_msg->receive(aq, ap_msg, aq->reply);
 			break;
 		}
-		fallthrough;
+		/* fall through */
 	case AP_RESPONSE_NO_PENDING_REPLY:
 		if (!status.queue_empty || aq->queue_count <= 0)
 			break;
@@ -201,6 +201,31 @@ static enum ap_wait ap_sm_read(struct ap_queue *aq)
 }
 
 /**
+ * ap_sm_suspend_read(): Receive pending reply messages from an AP queue
+ * without changing the device state in between. In suspend mode we don't
+ * allow sending new requests, therefore just fetch pending replies.
+ * @aq: pointer to the AP queue
+ *
+ * Returns AP_WAIT_NONE or AP_WAIT_AGAIN
+ */
+static enum ap_wait ap_sm_suspend_read(struct ap_queue *aq)
+{
+	struct ap_queue_status status;
+
+	if (!aq->reply)
+		return AP_WAIT_NONE;
+	status = ap_sm_recv(aq);
+	switch (status.response_code) {
+	case AP_RESPONSE_NORMAL:
+		if (aq->queue_count > 0)
+			return AP_WAIT_AGAIN;
+		/* fall through */
+	default:
+		return AP_WAIT_NONE;
+	}
+}
+
+/**
  * ap_sm_write(): Send messages from the request queue to an AP queue.
  * @aq: pointer to the AP queue
  *
@@ -229,7 +254,7 @@ static enum ap_wait ap_sm_write(struct ap_queue *aq)
 			aq->state = AP_STATE_WORKING;
 			return AP_WAIT_AGAIN;
 		}
-		fallthrough;
+		/* fall through */
 	case AP_RESPONSE_Q_FULL:
 		aq->state = AP_STATE_QUEUE_FULL;
 		return AP_WAIT_INTERRUPT;
@@ -355,7 +380,7 @@ static enum ap_wait ap_sm_setirq_wait(struct ap_queue *aq)
 	case AP_RESPONSE_NORMAL:
 		if (aq->queue_count > 0)
 			return AP_WAIT_AGAIN;
-		fallthrough;
+		/* fallthrough */
 	case AP_RESPONSE_NO_PENDING_REPLY:
 		return AP_WAIT_TIMEOUT;
 	default:
@@ -392,6 +417,10 @@ static ap_func_t *ap_jumptable[NR_AP_STATES][NR_AP_EVENTS] = {
 		[AP_EVENT_POLL] = ap_sm_read,
 		[AP_EVENT_TIMEOUT] = ap_sm_reset,
 	},
+	[AP_STATE_SUSPEND_WAIT] = {
+		[AP_EVENT_POLL] = ap_sm_suspend_read,
+		[AP_EVENT_TIMEOUT] = ap_sm_nop,
+	},
 	[AP_STATE_REMOVE] = {
 		[AP_EVENT_POLL] = ap_sm_nop,
 		[AP_EVENT_TIMEOUT] = ap_sm_nop,
@@ -421,6 +450,28 @@ enum ap_wait ap_sm_event_loop(struct ap_queue *aq, enum ap_event event)
 }
 
 /*
+ * Power management for queue devices
+ */
+void ap_queue_suspend(struct ap_device *ap_dev)
+{
+	struct ap_queue *aq = to_ap_queue(&ap_dev->device);
+
+	/* Poll on the device until all requests are finished. */
+	spin_lock_bh(&aq->lock);
+	aq->state = AP_STATE_SUSPEND_WAIT;
+	while (ap_sm_event(aq, AP_EVENT_POLL) != AP_WAIT_NONE)
+		;
+	aq->state = AP_STATE_BORKED;
+	spin_unlock_bh(&aq->lock);
+}
+EXPORT_SYMBOL(ap_queue_suspend);
+
+void ap_queue_resume(struct ap_device *ap_dev)
+{
+}
+EXPORT_SYMBOL(ap_queue_resume);
+
+/*
  * AP queue related attributes.
  */
 static ssize_t request_count_show(struct device *dev,
@@ -433,7 +484,7 @@ static ssize_t request_count_show(struct device *dev,
 	spin_lock_bh(&aq->lock);
 	req_cnt = aq->total_request_count;
 	spin_unlock_bh(&aq->lock);
-	return scnprintf(buf, PAGE_SIZE, "%llu\n", req_cnt);
+	return snprintf(buf, PAGE_SIZE, "%llu\n", req_cnt);
 }
 
 static ssize_t request_count_store(struct device *dev,
@@ -460,7 +511,7 @@ static ssize_t requestq_count_show(struct device *dev,
 	spin_lock_bh(&aq->lock);
 	reqq_cnt = aq->requestq_count;
 	spin_unlock_bh(&aq->lock);
-	return scnprintf(buf, PAGE_SIZE, "%d\n", reqq_cnt);
+	return snprintf(buf, PAGE_SIZE, "%d\n", reqq_cnt);
 }
 
 static DEVICE_ATTR_RO(requestq_count);
@@ -474,7 +525,7 @@ static ssize_t pendingq_count_show(struct device *dev,
 	spin_lock_bh(&aq->lock);
 	penq_cnt = aq->pendingq_count;
 	spin_unlock_bh(&aq->lock);
-	return scnprintf(buf, PAGE_SIZE, "%d\n", penq_cnt);
+	return snprintf(buf, PAGE_SIZE, "%d\n", penq_cnt);
 }
 
 static DEVICE_ATTR_RO(pendingq_count);
@@ -489,14 +540,14 @@ static ssize_t reset_show(struct device *dev,
 	switch (aq->state) {
 	case AP_STATE_RESET_START:
 	case AP_STATE_RESET_WAIT:
-		rc = scnprintf(buf, PAGE_SIZE, "Reset in progress.\n");
+		rc = snprintf(buf, PAGE_SIZE, "Reset in progress.\n");
 		break;
 	case AP_STATE_WORKING:
 	case AP_STATE_QUEUE_FULL:
-		rc = scnprintf(buf, PAGE_SIZE, "Reset Timer armed.\n");
+		rc = snprintf(buf, PAGE_SIZE, "Reset Timer armed.\n");
 		break;
 	default:
-		rc = scnprintf(buf, PAGE_SIZE, "No Reset Timer set.\n");
+		rc = snprintf(buf, PAGE_SIZE, "No Reset Timer set.\n");
 	}
 	spin_unlock_bh(&aq->lock);
 	return rc;
@@ -530,11 +581,11 @@ static ssize_t interrupt_show(struct device *dev,
 
 	spin_lock_bh(&aq->lock);
 	if (aq->state == AP_STATE_SETIRQ_WAIT)
-		rc = scnprintf(buf, PAGE_SIZE, "Enable Interrupt pending.\n");
+		rc = snprintf(buf, PAGE_SIZE, "Enable Interrupt pending.\n");
 	else if (aq->interrupt == AP_INTR_ENABLED)
-		rc = scnprintf(buf, PAGE_SIZE, "Interrupts enabled.\n");
+		rc = snprintf(buf, PAGE_SIZE, "Interrupts enabled.\n");
 	else
-		rc = scnprintf(buf, PAGE_SIZE, "Interrupts disabled.\n");
+		rc = snprintf(buf, PAGE_SIZE, "Interrupts disabled.\n");
 	spin_unlock_bh(&aq->lock);
 	return rc;
 }

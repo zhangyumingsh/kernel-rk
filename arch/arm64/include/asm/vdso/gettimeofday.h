@@ -8,6 +8,9 @@
 #ifndef __ASSEMBLY__
 
 #include <asm/unistd.h>
+#include <uapi/linux/time.h>
+
+#define __VDSO_USE_SYSCALL		ULLONG_MAX
 
 #define VDSO_HAS_CLOCK_GETRES		1
 
@@ -68,12 +71,11 @@ static __always_inline u64 __arch_get_hw_counter(s32 clock_mode)
 	u64 res;
 
 	/*
-	 * Core checks for mode already, so this raced against a concurrent
-	 * update. Return something. Core will do another round and then
-	 * see the mode change and fallback to the syscall.
+	 * clock_mode == 0 implies that vDSO are enabled otherwise
+	 * fallback on syscall.
 	 */
-	if (clock_mode == VDSO_CLOCKMODE_NONE)
-		return 0;
+	if (clock_mode)
+		return __VDSO_USE_SYSCALL;
 
 	/*
 	 * This isb() is required to prevent that the counter value

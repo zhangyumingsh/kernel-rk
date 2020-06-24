@@ -310,7 +310,7 @@ reread:
 	/*
 	 * Initialize the mount structure from the superblock.
 	 */
-	xfs_sb_from_disk(sbp, bp->b_addr);
+	xfs_sb_from_disk(sbp, XFS_BUF_TO_SBP(bp));
 
 	/*
 	 * If we haven't validated the superblock, do so now before we try

@@ -46,6 +46,7 @@
 #include <linux/in.h>
 #include <linux/sched.h>
 #include <linux/audit.h>
+#include <linux/mutex.h>
 #include <linux/vmalloc.h>
 #include <net/netlabel.h>
 
@@ -72,8 +73,7 @@ const char *selinux_policycap_names[__POLICYDB_CAPABILITY_MAX] = {
 	"extended_socket_class",
 	"always_check_network",
 	"cgroup_seclabel",
-	"nnp_nosuid_transition",
-	"genfs_seclabel_symlinks"
+	"nnp_nosuid_transition"
 };
 
 static struct selinux_ss selinux_ss;
@@ -81,6 +81,7 @@ static struct selinux_ss selinux_ss;
 void selinux_ss_init(struct selinux_ss **ss)
 {
 	rwlock_init(&selinux_ss.policy_rwlock);
+	mutex_init(&selinux_ss.status_lock);
 	*ss = &selinux_ss;
 }
 
@@ -1322,22 +1323,23 @@ static int security_sid_to_context_core(struct selinux_state *state,
 	if (!selinux_initialized(state)) {
 		if (sid <= SECINITSID_NUM) {
 			char *scontextp;
-			const char *s = initial_sid_to_string[sid];
 
-			if (!s)
-				return -EINVAL;
-			*scontext_len = strlen(s) + 1;
+			*scontext_len = strlen(initial_sid_to_string[sid]) + 1;
 			if (!scontext)
-				return 0;
-			scontextp = kmemdup(s, *scontext_len, GFP_ATOMIC);
-			if (!scontextp)
-				return -ENOMEM;
+				goto out;
+			scontextp = kmemdup(initial_sid_to_string[sid],
+					    *scontext_len, GFP_ATOMIC);
+			if (!scontextp) {
+				rc = -ENOMEM;
+				goto out;
+			}
 			*scontext = scontextp;
-			return 0;
+			goto out;
 		}
 		pr_err("SELinux: %s:  called before initial "
 		       "load_policy on unknown SID %d\n", __func__, sid);
-		return -EINVAL;
+		rc = -EINVAL;
+		goto out;
 	}
 	read_lock(&state->ss->policy_rwlock);
 	policydb = &state->ss->policydb;
@@ -1361,6 +1363,7 @@ static int security_sid_to_context_core(struct selinux_state *state,
 
 out_unlock:
 	read_unlock(&state->ss->policy_rwlock);
+out:
 	return rc;
 
 }
@@ -1550,9 +1553,7 @@ static int security_context_to_sid_core(struct selinux_state *state,
 		int i;
 
 		for (i = 1; i < SECINITSID_NUM; i++) {
-			const char *s = initial_sid_to_string[i];
-
-			if (s && !strcmp(s, scontext2)) {
+			if (!strcmp(initial_sid_to_string[i], scontext2)) {
 				*sid = i;
 				goto out;
 			}
@@ -1692,8 +1693,8 @@ static void filename_compute_type(struct policydb *policydb,
 				  u32 stype, u32 ttype, u16 tclass,
 				  const char *objname)
 {
-	struct filename_trans_key ft;
-	struct filename_trans_datum *datum;
+	struct filename_trans ft;
+	struct filename_trans_datum *otype;
 
 	/*
 	 * Most filename trans rules are going to live in specific directories
@@ -1703,18 +1704,14 @@ static void filename_compute_type(struct policydb *policydb,
 	if (!ebitmap_get_bit(&policydb->filename_trans_ttypes, ttype))
 		return;
 
+	ft.stype = stype;
 	ft.ttype = ttype;
 	ft.tclass = tclass;
 	ft.name = objname;
 
-	datum = hashtab_search(policydb->filename_trans, &ft);
-	while (datum) {
-		if (ebitmap_get_bit(&datum->stypes, stype - 1)) {
-			newcontext->type = datum->otype;
-			return;
-		}
-		datum = datum->next;
-	}
+	otype = hashtab_search(policydb->filename_trans, &ft);
+	if (otype)
+		newcontext->type = otype->otype;
 }
 
 static int security_compute_sid(struct selinux_state *state,
@@ -2871,11 +2868,10 @@ out:
 }
 
 int security_get_bools(struct selinux_state *state,
-		       u32 *len, char ***names, int **values)
+		       int *len, char ***names, int **values)
 {
 	struct policydb *policydb;
-	u32 i;
-	int rc;
+	int i, rc;
 
 	if (!selinux_initialized(state)) {
 		*len = 0;
@@ -2929,11 +2925,12 @@ err:
 }
 
 
-int security_set_bools(struct selinux_state *state, u32 len, int *values)
+int security_set_bools(struct selinux_state *state, int len, int *values)
 {
 	struct policydb *policydb;
-	int rc;
-	u32 i, lenp, seqno = 0;
+	int i, rc;
+	int lenp, seqno = 0;
+	struct cond_node *cur;
 
 	write_lock_irq(&state->ss->policy_rwlock);
 
@@ -2961,7 +2958,11 @@ int security_set_bools(struct selinux_state *state, u32 len, int *values)
 			policydb->bool_val_to_struct[i]->state = 0;
 	}
 
-	evaluate_cond_nodes(policydb);
+	for (cur = policydb->cond_list; cur; cur = cur->next) {
+		rc = evaluate_cond_node(policydb, cur);
+		if (rc)
+			goto out;
+	}
 
 	seqno = ++state->ss->latest_granting;
 	rc = 0;
@@ -2977,11 +2978,11 @@ out:
 }
 
 int security_get_bool_value(struct selinux_state *state,
-			    u32 index)
+			    int index)
 {
 	struct policydb *policydb;
 	int rc;
-	u32 len;
+	int len;
 
 	read_lock(&state->ss->policy_rwlock);
 
@@ -3001,10 +3002,10 @@ out:
 static int security_preserve_bools(struct selinux_state *state,
 				   struct policydb *policydb)
 {
-	int rc, *bvalues = NULL;
+	int rc, nbools = 0, *bvalues = NULL, i;
 	char **bnames = NULL;
 	struct cond_bool_datum *booldatum;
-	u32 i, nbools = 0;
+	struct cond_node *cur;
 
 	rc = security_get_bools(state, &nbools, &bnames, &bvalues);
 	if (rc)
@@ -3014,7 +3015,11 @@ static int security_preserve_bools(struct selinux_state *state,
 		if (booldatum)
 			booldatum->state = bvalues[i];
 	}
-	evaluate_cond_nodes(policydb);
+	for (cur = policydb->cond_list; cur; cur = cur->next) {
+		rc = evaluate_cond_node(policydb, cur);
+		if (rc)
+			goto out;
+	}
 
 out:
 	if (bnames) {

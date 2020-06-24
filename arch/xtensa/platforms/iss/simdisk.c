@@ -267,12 +267,13 @@ static int __init simdisk_setup(struct simdisk *dev, int which,
 	spin_lock_init(&dev->lock);
 	dev->users = 0;
 
-	dev->queue = blk_alloc_queue(simdisk_make_request, NUMA_NO_NODE);
+	dev->queue = blk_alloc_queue(GFP_KERNEL);
 	if (dev->queue == NULL) {
 		pr_err("blk_alloc_queue failed\n");
 		goto out_alloc_queue;
 	}
 
+	blk_queue_make_request(dev->queue, simdisk_make_request);
 	dev->queue->queuedata = dev;
 
 	dev->gd = alloc_disk(SIMDISK_MINORS);

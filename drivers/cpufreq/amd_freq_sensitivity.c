@@ -18,7 +18,6 @@
 
 #include <asm/msr.h>
 #include <asm/cpufeature.h>
-#include <asm/cpu_device_id.h>
 
 #include "cpufreq_ondemand.h"
 
@@ -145,7 +144,7 @@ static void __exit amd_freq_sensitivity_exit(void)
 module_exit(amd_freq_sensitivity_exit);
 
 static const struct x86_cpu_id amd_freq_sensitivity_ids[] = {
-	X86_MATCH_FEATURE(X86_FEATURE_PROC_FEEDBACK, NULL),
+	X86_FEATURE_MATCH(X86_FEATURE_PROC_FEEDBACK),
 	{}
 };
 MODULE_DEVICE_TABLE(x86cpu, amd_freq_sensitivity_ids);

@@ -102,7 +102,7 @@
 
 #define MCE_OVERFLOW 0		/* bit 0 in flags means overflow */
 
-#define MCE_LOG_MIN_LEN 32U
+#define MCE_LOG_LEN 32
 #define MCE_LOG_SIGNATURE	"MACHINECHECK"
 
 /* AMD Scalable MCA */
@@ -135,11 +135,11 @@
  */
 struct mce_log_buffer {
 	char signature[12]; /* "MACHINECHECK" */
-	unsigned len;	    /* = elements in .mce_entry[] */
+	unsigned len;	    /* = MCE_LOG_LEN */
 	unsigned next;
 	unsigned flags;
 	unsigned recordlen;	/* length of struct mce */
-	struct mce entry[];
+	struct mce entry[MCE_LOG_LEN];
 };
 
 enum mce_notifier_prios {
@@ -238,6 +238,9 @@ extern void mce_disable_bank(int bank);
 /*
  * Exception handler
  */
+
+/* Call the installed machine check handler for this CPU setup. */
+extern void (*machine_check_vector)(struct pt_regs *, long error_code);
 void do_machine_check(struct pt_regs *, long);
 
 /*

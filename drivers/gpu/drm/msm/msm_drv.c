@@ -444,10 +444,8 @@ static int msm_drm_init(struct device *dev, struct drm_driver *drv)
 	if (!dev->dma_parms) {
 		dev->dma_parms = devm_kzalloc(dev, sizeof(*dev->dma_parms),
 					      GFP_KERNEL);
-		if (!dev->dma_parms) {
-			ret = -ENOMEM;
-			goto err_msm_uninit;
-		}
+		if (!dev->dma_parms)
+			return -ENOMEM;
 	}
 	dma_set_max_seg_size(dev, DMA_BIT_MASK(32));
 
@@ -670,10 +668,8 @@ static void msm_irq_uninstall(struct drm_device *dev)
 	kms->funcs->irq_uninstall(kms);
 }
 
-int msm_crtc_enable_vblank(struct drm_crtc *crtc)
+static int msm_enable_vblank(struct drm_device *dev, unsigned int pipe)
 {
-	struct drm_device *dev = crtc->dev;
-	unsigned int pipe = crtc->index;
 	struct msm_drm_private *priv = dev->dev_private;
 	struct msm_kms *kms = priv->kms;
 	if (!kms)
@@ -682,10 +678,8 @@ int msm_crtc_enable_vblank(struct drm_crtc *crtc)
 	return vblank_ctrl_queue_work(priv, pipe, true);
 }
 
-void msm_crtc_disable_vblank(struct drm_crtc *crtc)
+static void msm_disable_vblank(struct drm_device *dev, unsigned int pipe)
 {
-	struct drm_device *dev = crtc->dev;
-	unsigned int pipe = crtc->index;
 	struct msm_drm_private *priv = dev->dev_private;
 	struct msm_kms *kms = priv->kms;
 	if (!kms)
@@ -1010,6 +1004,8 @@ static struct drm_driver msm_driver = {
 	.irq_preinstall     = msm_irq_preinstall,
 	.irq_postinstall    = msm_irq_postinstall,
 	.irq_uninstall      = msm_irq_uninstall,
+	.enable_vblank      = msm_enable_vblank,
+	.disable_vblank     = msm_disable_vblank,
 	.gem_free_object_unlocked = msm_gem_free_object,
 	.gem_vm_ops         = &vm_ops,
 	.dumb_create        = msm_gem_dumb_create,

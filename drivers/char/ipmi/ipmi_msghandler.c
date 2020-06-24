@@ -618,8 +618,6 @@ static DEFINE_MUTEX(ipmidriver_mutex);
 
 static LIST_HEAD(ipmi_interfaces);
 static DEFINE_MUTEX(ipmi_interfaces_mutex);
-#define ipmi_interfaces_mutex_held() \
-	lockdep_is_held(&ipmi_interfaces_mutex)
 static struct srcu_struct ipmi_interfaces_srcu;
 
 /*
@@ -1323,8 +1321,7 @@ static void _ipmi_destroy_user(struct ipmi_user *user)
 	 * synchronize_srcu()) then free everything in that list.
 	 */
 	mutex_lock(&intf->cmd_rcvrs_mutex);
-	list_for_each_entry_rcu(rcvr, &intf->cmd_rcvrs, link,
-				lockdep_is_held(&intf->cmd_rcvrs_mutex)) {
+	list_for_each_entry_rcu(rcvr, &intf->cmd_rcvrs, link) {
 		if (rcvr->user == user) {
 			list_del_rcu(&rcvr->link);
 			rcvr->next = rcvrs;
@@ -1602,8 +1599,7 @@ static struct cmd_rcvr *find_cmd_rcvr(struct ipmi_smi *intf,
 {
 	struct cmd_rcvr *rcvr;
 
-	list_for_each_entry_rcu(rcvr, &intf->cmd_rcvrs, link,
-				lockdep_is_held(&intf->cmd_rcvrs_mutex)) {
+	list_for_each_entry_rcu(rcvr, &intf->cmd_rcvrs, link) {
 		if ((rcvr->netfn == netfn) && (rcvr->cmd == cmd)
 					&& (rcvr->chans & (1 << chan)))
 			return rcvr;
@@ -1618,8 +1614,7 @@ static int is_cmd_rcvr_exclusive(struct ipmi_smi *intf,
 {
 	struct cmd_rcvr *rcvr;
 
-	list_for_each_entry_rcu(rcvr, &intf->cmd_rcvrs, link,
-				lockdep_is_held(&intf->cmd_rcvrs_mutex)) {
+	list_for_each_entry_rcu(rcvr, &intf->cmd_rcvrs, link) {
 		if ((rcvr->netfn == netfn) && (rcvr->cmd == cmd)
 					&& (rcvr->chans & chans))
 			return 0;
@@ -3455,8 +3450,7 @@ int ipmi_add_smi(struct module         *owner,
 	/* Look for a hole in the numbers. */
 	i = 0;
 	link = &ipmi_interfaces;
-	list_for_each_entry_rcu(tintf, &ipmi_interfaces, link,
-				ipmi_interfaces_mutex_held()) {
+	list_for_each_entry_rcu(tintf, &ipmi_interfaces, link) {
 		if (tintf->intf_num != i) {
 			link = &tintf->link;
 			break;

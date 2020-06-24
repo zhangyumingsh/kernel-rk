@@ -404,7 +404,7 @@ static int xlr_i2c_probe(struct platform_device *pdev)
 
 	if (of_property_read_u32(pdev->dev.of_node, "clock-frequency",
 				 &busfreq))
-		busfreq = I2C_MAX_STANDARD_MODE_FREQ;
+		busfreq = 100000;
 
 	clk = devm_clk_get(&pdev->dev, NULL);
 	if (!IS_ERR(clk)) {

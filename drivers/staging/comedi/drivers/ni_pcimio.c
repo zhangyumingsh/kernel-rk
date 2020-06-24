@@ -888,7 +888,6 @@ static const struct ni_board_struct ni_boards[] = {
 	},
 	[BOARD_PCIE6251] = {
 		.name		= "pcie-6251",
-		.alt_route_name	= "pci-6251",
 		.n_adchan	= 16,
 		.ai_maxdata	= 0xffff,
 		.ai_fifo_depth	= 4095,
@@ -977,7 +976,6 @@ static const struct ni_board_struct ni_boards[] = {
 	},
 	[BOARD_PCIE6259] = {
 		.name		= "pcie-6259",
-		.alt_route_name	= "pci-6259",
 		.n_adchan	= 32,
 		.ai_maxdata	= 0xffff,
 		.ai_fifo_depth	= 4095,

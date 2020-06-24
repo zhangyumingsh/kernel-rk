@@ -11,8 +11,6 @@
 
 /* Algorithm resource per hardware SEC queue */
 struct sec_alg_res {
-	u8 *pbuf;
-	dma_addr_t pbuf_dma;
 	u8 *c_ivin;
 	dma_addr_t c_ivin_dma;
 	u8 *out_mac;
@@ -25,8 +23,6 @@ struct sec_cipher_req {
 	dma_addr_t c_in_dma;
 	struct hisi_acc_hw_sgl *c_out;
 	dma_addr_t c_out_dma;
-	u8 *c_ivin;
-	dma_addr_t c_ivin_dma;
 	struct skcipher_request *sk_req;
 	u32 c_len;
 	bool encrypt;
@@ -52,7 +48,6 @@ struct sec_req {
 
 	/* Status of the SEC request */
 	bool fake_busy;
-	bool use_pbuf;
 };
 
 /**
@@ -119,7 +114,6 @@ struct sec_ctx {
 	struct sec_qp_ctx *qp_ctx;
 	struct sec_dev *sec;
 	const struct sec_req_op *req_op;
-	struct hisi_qp **qps;
 
 	/* Half queues for encipher, and half for decipher */
 	u32 hlf_q_num;
@@ -134,7 +128,6 @@ struct sec_ctx {
 	atomic_t dec_qcyclic;
 
 	enum sec_alg_type alg_type;
-	bool pbuf_supported;
 	struct sec_cipher_ctx c_ctx;
 	struct sec_auth_ctx a_ctx;
 };
@@ -169,15 +162,14 @@ struct sec_debug {
 
 struct sec_dev {
 	struct hisi_qm qm;
+	struct list_head list;
 	struct sec_debug debug;
 	u32 ctx_q_num;
-	bool iommu_used;
 	u32 num_vfs;
 	unsigned long status;
 };
 
-void sec_destroy_qps(struct hisi_qp **qps, int qp_num);
-struct hisi_qp **sec_create_qps(void);
+struct sec_dev *sec_find_device(int node);
 int sec_register_to_crypto(void);
 void sec_unregister_from_crypto(void);
 #endif

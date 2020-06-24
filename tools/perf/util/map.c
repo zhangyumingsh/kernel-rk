@@ -44,8 +44,8 @@ static inline int is_no_dso_memory(const char *filename)
 
 static inline int is_android_lib(const char *filename)
 {
-	return strstarts(filename, "/data/app-lib/") ||
-	       strstarts(filename, "/system/lib/");
+	return !strncmp(filename, "/data/app-lib", 13) ||
+	       !strncmp(filename, "/system/lib", 11);
 }
 
 static inline bool replace_android_lib(const char *filename, char *newfilename)
@@ -65,7 +65,7 @@ static inline bool replace_android_lib(const char *filename, char *newfilename)
 
 	app_abi_length = strlen(app_abi);
 
-	if (strstarts(filename, "/data/app-lib/")) {
+	if (!strncmp(filename, "/data/app-lib", 13)) {
 		char *apk_path;
 
 		if (!app_abi_length)
@@ -89,7 +89,7 @@ static inline bool replace_android_lib(const char *filename, char *newfilename)
 		return true;
 	}
 
-	if (strstarts(filename, "/system/lib/")) {
+	if (!strncmp(filename, "/system/lib/", 12)) {
 		char *ndk, *app;
 		const char *arch;
 		size_t ndk_length;
