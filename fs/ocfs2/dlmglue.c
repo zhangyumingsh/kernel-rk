@@ -570,7 +570,7 @@ void ocfs2_inode_lock_res_init(struct ocfs2_lock_res *res,
 			mlog_bug_on_msg(1, "type: %d\n", type);
 			ops = NULL; /* thanks, gcc */
 			break;
-	};
+	}
 
 	ocfs2_build_lock_name(type, OCFS2_I(inode)->ip_blkno,
 			      generation, res->l_name);
@@ -687,6 +687,12 @@ static void ocfs2_nfs_sync_lock_res_init(struct ocfs2_lock_res *res,
 	ocfs2_build_lock_name(OCFS2_LOCK_TYPE_NFS_SYNC, 0, 0, res->l_name);
 	ocfs2_lock_res_init_common(osb, res, OCFS2_LOCK_TYPE_NFS_SYNC,
 				   &ocfs2_nfs_sync_lops, osb);
+}
+
+static void ocfs2_nfs_sync_lock_init(struct ocfs2_super *osb)
+{
+	ocfs2_nfs_sync_lock_res_init(&osb->osb_nfs_sync_lockres, osb);
+	init_rwsem(&osb->nfs_sync_rwlock);
 }
 
 void ocfs2_trim_fs_lock_res_init(struct ocfs2_super *osb)
@@ -1687,7 +1693,7 @@ static void __ocfs2_cluster_unlock(struct ocfs2_super *osb,
 	spin_unlock_irqrestore(&lockres->l_lock, flags);
 #ifdef CONFIG_DEBUG_LOCK_ALLOC
 	if (lockres->l_lockdep_map.key != NULL)
-		rwsem_release(&lockres->l_lockdep_map, 1, caller_ip);
+		rwsem_release(&lockres->l_lockdep_map, caller_ip);
 #endif
 }
 
@@ -2133,7 +2139,7 @@ static void ocfs2_downconvert_on_unlock(struct ocfs2_super *osb,
 }
 
 #define OCFS2_SEC_BITS   34
-#define OCFS2_SEC_SHIFT  (64 - 34)
+#define OCFS2_SEC_SHIFT  (64 - OCFS2_SEC_BITS)
 #define OCFS2_NSEC_MASK  ((1ULL << OCFS2_SEC_SHIFT) - 1)
 
 /* LVB only has room for 64 bits of time here so we pack it for
@@ -2508,9 +2514,7 @@ bail:
 			ocfs2_inode_unlock(inode, ex);
 	}
 
-	if (local_bh)
-		brelse(local_bh);
-
+	brelse(local_bh);
 	return status;
 }
 
@@ -2593,8 +2597,7 @@ int ocfs2_inode_lock_atime(struct inode *inode,
 		*level = 1;
 		if (ocfs2_should_update_atime(inode, vfsmnt))
 			ocfs2_update_inode_atime(inode, bh);
-		if (bh)
-			brelse(bh);
+		brelse(bh);
 	} else
 		*level = 0;
 
@@ -2858,6 +2861,11 @@ int ocfs2_nfs_sync_lock(struct ocfs2_super *osb, int ex)
 	if (ocfs2_is_hard_readonly(osb))
 		return -EROFS;
 
+	if (ex)
+		down_write(&osb->nfs_sync_rwlock);
+	else
+		down_read(&osb->nfs_sync_rwlock);
+
 	if (ocfs2_mount_local(osb))
 		return 0;
 
@@ -2876,6 +2884,10 @@ void ocfs2_nfs_sync_unlock(struct ocfs2_super *osb, int ex)
 	if (!ocfs2_mount_local(osb))
 		ocfs2_cluster_unlock(osb, lockres,
 				     ex ? LKM_EXMODE : LKM_PRMODE);
+	if (ex)
+		up_write(&osb->nfs_sync_rwlock);
+	else
+		up_read(&osb->nfs_sync_rwlock);
 }
 
 int ocfs2_trim_fs_lock(struct ocfs2_super *osb,
@@ -3012,8 +3024,6 @@ struct ocfs2_dlm_debug *ocfs2_new_dlm_debug(void)
 
 	kref_init(&dlm_debug->d_refcnt);
 	INIT_LIST_HEAD(&dlm_debug->d_lockres_tracking);
-	dlm_debug->d_locking_state = NULL;
-	dlm_debug->d_locking_filter = NULL;
 	dlm_debug->d_filter_secs = 0;
 out:
 	return dlm_debug;
@@ -3282,27 +3292,20 @@ static void ocfs2_dlm_init_debug(struct ocfs2_super *osb)
 {
 	struct ocfs2_dlm_debug *dlm_debug = osb->osb_dlm_debug;
 
-	dlm_debug->d_locking_state = debugfs_create_file("locking_state",
-							 S_IFREG|S_IRUSR,
-							 osb->osb_debug_root,
-							 osb,
-							 &ocfs2_dlm_debug_fops);
+	debugfs_create_file("locking_state", S_IFREG|S_IRUSR,
+			    osb->osb_debug_root, osb, &ocfs2_dlm_debug_fops);
 
-	dlm_debug->d_locking_filter = debugfs_create_u32("locking_filter",
-						0600,
-						osb->osb_debug_root,
-						&dlm_debug->d_filter_secs);
+	debugfs_create_u32("locking_filter", 0600, osb->osb_debug_root,
+			   &dlm_debug->d_filter_secs);
+	ocfs2_get_dlm_debug(dlm_debug);
 }
 
 static void ocfs2_dlm_shutdown_debug(struct ocfs2_super *osb)
 {
 	struct ocfs2_dlm_debug *dlm_debug = osb->osb_dlm_debug;
 
-	if (dlm_debug) {
-		debugfs_remove(dlm_debug->d_locking_state);
-		debugfs_remove(dlm_debug->d_locking_filter);
+	if (dlm_debug)
 		ocfs2_put_dlm_debug(dlm_debug);
-	}
 }
 
 int ocfs2_dlm_init(struct ocfs2_super *osb)
@@ -3352,7 +3355,7 @@ int ocfs2_dlm_init(struct ocfs2_super *osb)
 local:
 	ocfs2_super_lock_res_init(&osb->osb_super_lockres, osb);
 	ocfs2_rename_lock_res_init(&osb->osb_rename_lockres, osb);
-	ocfs2_nfs_sync_lock_res_init(&osb->osb_nfs_sync_lockres, osb);
+	ocfs2_nfs_sync_lock_init(osb);
 	ocfs2_orphan_scan_lock_res_init(&osb->osb_orphan_scan.os_lockres, osb);
 
 	osb->cconn = conn;

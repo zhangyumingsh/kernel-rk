@@ -8,8 +8,9 @@
 #define INCLUDE__UTIL_PERF_CS_ETM_H__
 
 #include "util/event.h"
-#include "util/session.h"
 #include <linux/bits.h>
+
+struct perf_session;
 
 /* Versionning header in case things need tro change in the future.  That way
  * decoding of old snapshot is still possible.
@@ -112,9 +113,6 @@ enum cs_etm_isa {
 	CS_ETM_ISA_A32,
 	CS_ETM_ISA_T32,
 };
-
-/* RB tree for quick conversion between traceID and metadata pointers */
-struct intlist *traceid_list;
 
 struct cs_etm_queue;
 

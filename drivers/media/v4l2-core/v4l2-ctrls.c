@@ -29,6 +29,8 @@
 #define call_op(master, op) \
 	(has_op(master, op) ? master->ops->op(master) : 0)
 
+static const union v4l2_ctrl_ptr ptr_null;
+
 /* Internal temporary helper struct, one for each v4l2_ext_control */
 struct v4l2_ctrl_helper {
 	/* Pointer to the control reference of the master control */
@@ -334,6 +336,10 @@ const char * const *v4l2_ctrl_get_menu(u32 id)
 		"4.2",
 		"5",
 		"5.1",
+		"5.2",
+		"6.0",
+		"6.1",
+		"6.2",
 		NULL,
 	};
 	static const char * const h264_loop_filter[] = {
@@ -360,6 +366,7 @@ const char * const *v4l2_ctrl_get_menu(u32 id)
 		"Scalable High Intra",
 		"Stereo High",
 		"Multiview High",
+		"Constrained High",
 		NULL,
 	};
 	static const char * const vui_sar_idc[] = {
@@ -566,6 +573,16 @@ const char * const *v4l2_ctrl_get_menu(u32 id)
 		"Disabled at slice boundary",
 		"NULL",
 	};
+	static const char * const hevc_decode_mode[] = {
+		"Slice-Based",
+		"Frame-Based",
+		NULL,
+	};
+	static const char * const hevc_start_code[] = {
+		"No Start Code",
+		"Annex B Start Code",
+		NULL,
+	};
 
 	switch (id) {
 	case V4L2_CID_MPEG_AUDIO_SAMPLING_FREQ:
@@ -687,7 +704,10 @@ const char * const *v4l2_ctrl_get_menu(u32 id)
 		return hevc_tier;
 	case V4L2_CID_MPEG_VIDEO_HEVC_LOOP_FILTER_MODE:
 		return hevc_loop_filter_mode;
-
+	case V4L2_CID_MPEG_VIDEO_HEVC_DECODE_MODE:
+		return hevc_decode_mode;
+	case V4L2_CID_MPEG_VIDEO_HEVC_START_CODE:
+		return hevc_start_code;
 	default:
 		return NULL;
 	}
@@ -910,6 +930,11 @@ const char *v4l2_ctrl_get_name(u32 id)
 	case V4L2_CID_MPEG_VIDEO_VP8_PROFILE:			return "VP8 Profile";
 	case V4L2_CID_MPEG_VIDEO_VP9_PROFILE:			return "VP9 Profile";
 	case V4L2_CID_MPEG_VIDEO_VP8_FRAME_HEADER:		return "VP8 Frame Header";
+	case V4L2_CID_MPEG_VIDEO_VP9_FRAME_DECODE_PARAMS:	return "VP9 Frame Decode Parameters";
+	case V4L2_CID_MPEG_VIDEO_VP9_FRAME_CONTEXT(0):		return "VP9 Frame Context 0";
+	case V4L2_CID_MPEG_VIDEO_VP9_FRAME_CONTEXT(1):		return "VP9 Frame Context 1";
+	case V4L2_CID_MPEG_VIDEO_VP9_FRAME_CONTEXT(2):		return "VP9 Frame Context 2";
+	case V4L2_CID_MPEG_VIDEO_VP9_FRAME_CONTEXT(3):		return "VP9 Frame Context 3";
 
 	/* HEVC controls */
 	case V4L2_CID_MPEG_VIDEO_HEVC_I_FRAME_QP:		return "HEVC I-Frame QP Value";
@@ -957,6 +982,12 @@ const char *v4l2_ctrl_get_name(u32 id)
 	case V4L2_CID_MPEG_VIDEO_HEVC_SIZE_OF_LENGTH_FIELD:	return "HEVC Size of Length Field";
 	case V4L2_CID_MPEG_VIDEO_REF_NUMBER_FOR_PFRAMES:	return "Reference Frames for a P-Frame";
 	case V4L2_CID_MPEG_VIDEO_PREPEND_SPSPPS_TO_IDR:		return "Prepend SPS and PPS to IDR";
+	case V4L2_CID_MPEG_VIDEO_HEVC_SPS:			return "HEVC Sequence Parameter Set";
+	case V4L2_CID_MPEG_VIDEO_HEVC_PPS:			return "HEVC Picture Parameter Set";
+	case V4L2_CID_MPEG_VIDEO_HEVC_SLICE_PARAMS:		return "HEVC Slice Parameters";
+	case V4L2_CID_MPEG_VIDEO_HEVC_SCALING_MATRIX:		return "HEVC Scaling Matrix";
+	case V4L2_CID_MPEG_VIDEO_HEVC_DECODE_MODE:		return "HEVC Decode Mode";
+	case V4L2_CID_MPEG_VIDEO_HEVC_START_CODE:		return "HEVC Start Code";
 
 	/* CAMERA controls */
 	/* Keep the order of the 'case's the same as in v4l2-controls.h! */
@@ -994,6 +1025,7 @@ const char *v4l2_ctrl_get_name(u32 id)
 	case V4L2_CID_AUTO_FOCUS_RANGE:		return "Auto Focus, Range";
 	case V4L2_CID_PAN_SPEED:		return "Pan, Speed";
 	case V4L2_CID_TILT_SPEED:		return "Tilt, Speed";
+	case V4L2_CID_UNIT_CELL_SIZE:		return "Unit Cell Size";
 
 	/* FM Radio Modulator controls */
 	/* Keep the order of the 'case's the same as in v4l2-controls.h! */
@@ -1265,6 +1297,8 @@ void v4l2_ctrl_fill(u32 id, const char **name, enum v4l2_ctrl_type *type,
 	case V4L2_CID_MPEG_VIDEO_HEVC_SIZE_OF_LENGTH_FIELD:
 	case V4L2_CID_MPEG_VIDEO_HEVC_TIER:
 	case V4L2_CID_MPEG_VIDEO_HEVC_LOOP_FILTER_MODE:
+	case V4L2_CID_MPEG_VIDEO_HEVC_DECODE_MODE:
+	case V4L2_CID_MPEG_VIDEO_HEVC_START_CODE:
 		*type = V4L2_CTRL_TYPE_MENU;
 		break;
 	case V4L2_CID_LINK_FREQ:
@@ -1374,6 +1408,31 @@ void v4l2_ctrl_fill(u32 id, const char **name, enum v4l2_ctrl_type *type,
 		break;
 	case V4L2_CID_MPEG_VIDEO_VP8_FRAME_HEADER:
 		*type = V4L2_CTRL_TYPE_VP8_FRAME_HEADER;
+		break;
+	case V4L2_CID_MPEG_VIDEO_VP9_FRAME_DECODE_PARAMS:
+		*type = V4L2_CTRL_TYPE_VP9_FRAME_DECODE_PARAMS;
+		break;
+	case V4L2_CID_MPEG_VIDEO_VP9_FRAME_CONTEXT(0):
+	case V4L2_CID_MPEG_VIDEO_VP9_FRAME_CONTEXT(1):
+	case V4L2_CID_MPEG_VIDEO_VP9_FRAME_CONTEXT(2):
+	case V4L2_CID_MPEG_VIDEO_VP9_FRAME_CONTEXT(3):
+		*type = V4L2_CTRL_TYPE_VP9_FRAME_CONTEXT;
+		break;
+	case V4L2_CID_MPEG_VIDEO_HEVC_SPS:
+		*type = V4L2_CTRL_TYPE_HEVC_SPS;
+		break;
+	case V4L2_CID_MPEG_VIDEO_HEVC_PPS:
+		*type = V4L2_CTRL_TYPE_HEVC_PPS;
+		break;
+	case V4L2_CID_MPEG_VIDEO_HEVC_SLICE_PARAMS:
+		*type = V4L2_CTRL_TYPE_HEVC_SLICE_PARAMS;
+		break;
+	case V4L2_CID_MPEG_VIDEO_HEVC_SCALING_MATRIX:
+		*type = V4L2_CTRL_TYPE_HEVC_SCALING_MATRIX;
+		break;
+	case V4L2_CID_UNIT_CELL_SIZE:
+		*type = V4L2_CTRL_TYPE_AREA;
+		*flags |= V4L2_CTRL_FLAG_READ_ONLY;
 		break;
 	default:
 		*type = V4L2_CTRL_TYPE_INTEGER;
@@ -1520,7 +1579,8 @@ static bool std_equal(const struct v4l2_ctrl *ctrl, u32 idx,
 		if (ctrl->is_int)
 			return ptr1.p_s32[idx] == ptr2.p_s32[idx];
 		idx *= ctrl->elem_size;
-		return !memcmp(ptr1.p + idx, ptr2.p + idx, ctrl->elem_size);
+		return !memcmp(ptr1.p_const + idx, ptr2.p_const + idx,
+			       ctrl->elem_size);
 	}
 }
 
@@ -1530,7 +1590,10 @@ static void std_init_compound(const struct v4l2_ctrl *ctrl, u32 idx,
 	struct v4l2_ctrl_mpeg2_slice_params *p_mpeg2_slice_params;
 	void *p = ptr.p + idx * ctrl->elem_size;
 
-	memset(p, 0, ctrl->elem_size);
+	if (ctrl->p_def.p_const)
+		memcpy(p, ctrl->p_def.p_const, ctrl->elem_size);
+	else
+		memset(p, 0, ctrl->elem_size);
 
 	/*
 	 * The cast is needed to get rid of a gcc warning complaining that
@@ -1658,6 +1721,222 @@ static void std_log(const struct v4l2_ctrl *ctrl)
 	0;							\
 })
 
+static int
+validate_vp9_lf_params(struct v4l2_vp9_loop_filter *lf)
+{
+	unsigned int i, j, k;
+
+	if (lf->flags &
+	    ~(V4L2_VP9_LOOP_FILTER_FLAG_DELTA_ENABLED |
+	      V4L2_VP9_LOOP_FILTER_FLAG_DELTA_UPDATE))
+		return -EINVAL;
+
+	/*
+	 * V4L2_VP9_LOOP_FILTER_FLAG_DELTA_ENABLED implies
+	 * V4L2_VP9_LOOP_FILTER_FLAG_DELTA_UPDATE.
+	 */
+	if (lf->flags & V4L2_VP9_LOOP_FILTER_FLAG_DELTA_UPDATE &&
+	    !(lf->flags & V4L2_VP9_LOOP_FILTER_FLAG_DELTA_ENABLED))
+		return -EINVAL;
+
+	/* That all values are in the accepted range. */
+	if (lf->level > GENMASK(5, 0))
+		return -EINVAL;
+
+	if (lf->sharpness > GENMASK(2, 0))
+		return -EINVAL;
+
+	for (i = 0; i < ARRAY_SIZE(lf->ref_deltas); i++) {
+		if (lf->ref_deltas[i] < -63 || lf->ref_deltas[i] > 63)
+			return -EINVAL;
+	}
+
+	for (i = 0; i < ARRAY_SIZE(lf->mode_deltas); i++) {
+		if (lf->mode_deltas[i] < -63 || lf->mode_deltas[i] > 63)
+			return -EINVAL;
+	}
+
+	for (i = 0; i < ARRAY_SIZE(lf->lvl_lookup); i++) {
+		for (j = 0; j < ARRAY_SIZE(lf->lvl_lookup[0]); j++) {
+			for (k = 0; k < ARRAY_SIZE(lf->lvl_lookup[0][0]); k++) {
+				if (lf->lvl_lookup[i][j][k] > 63)
+					return -EINVAL;
+			}
+		}
+	}
+
+	return 0;
+}
+
+static int
+validate_vp9_quant_params(struct v4l2_vp9_quantization *quant)
+{
+	if (quant->delta_q_y_dc < -15 || quant->delta_q_y_dc > 15 ||
+	    quant->delta_q_uv_dc < -15 || quant->delta_q_uv_dc > 15 ||
+	    quant->delta_q_uv_ac < -15 || quant->delta_q_uv_ac > 15)
+		return -EINVAL;
+
+	memset(quant->padding, 0, sizeof(quant->padding));
+	return 0;
+}
+
+static int
+validate_vp9_seg_params(struct v4l2_vp9_segmentation *seg)
+{
+	unsigned int i, j;
+
+	if (seg->flags &
+	    ~(V4L2_VP9_SEGMENTATION_FLAG_ENABLED |
+	      V4L2_VP9_SEGMENTATION_FLAG_UPDATE_MAP |
+	      V4L2_VP9_SEGMENTATION_FLAG_TEMPORAL_UPDATE |
+	      V4L2_VP9_SEGMENTATION_FLAG_UPDATE_DATA |
+	      V4L2_VP9_SEGMENTATION_FLAG_ABS_OR_DELTA_UPDATE))
+		return -EINVAL;
+
+	/*
+	 * V4L2_VP9_SEGMENTATION_FLAG_UPDATE_MAP and
+	 * V4L2_VP9_SEGMENTATION_FLAG_UPDATE_DATA imply
+	 * V4L2_VP9_SEGMENTATION_FLAG_ENABLED.
+	 */
+	if ((seg->flags &
+	     (V4L2_VP9_SEGMENTATION_FLAG_UPDATE_MAP |
+	      V4L2_VP9_SEGMENTATION_FLAG_UPDATE_DATA)) &&
+	    !(seg->flags & V4L2_VP9_SEGMENTATION_FLAG_ENABLED))
+		return -EINVAL;
+
+	/*
+	 * V4L2_VP9_SEGMENTATION_FLAG_TEMPORAL_UPDATE implies
+	 * V4L2_VP9_SEGMENTATION_FLAG_UPDATE_MAP.
+	 */
+	if (seg->flags & V4L2_VP9_SEGMENTATION_FLAG_TEMPORAL_UPDATE &&
+	    !(seg->flags & V4L2_VP9_SEGMENTATION_FLAG_UPDATE_MAP))
+		return -EINVAL;
+
+	/*
+	 * V4L2_VP9_SEGMENTATION_FLAG_ABS_OR_DELTA_UPDATE implies
+	 * V4L2_VP9_SEGMENTATION_FLAG_UPDATE_DATA.
+	 */
+	if (seg->flags & V4L2_VP9_SEGMENTATION_FLAG_ABS_OR_DELTA_UPDATE &&
+	    !(seg->flags & V4L2_VP9_SEGMENTATION_FLAG_UPDATE_DATA))
+		return -EINVAL;
+
+	for (i = 0; i < ARRAY_SIZE(seg->feature_enabled); i++) {
+		if (seg->feature_enabled[i] &
+		    ~(V4L2_VP9_SEGMENT_FEATURE_QP_DELTA |
+		      V4L2_VP9_SEGMENT_FEATURE_LF |
+		      V4L2_VP9_SEGMENT_FEATURE_REF_FRAME |
+		      V4L2_VP9_SEGMENT_FEATURE_SKIP))
+			return -EINVAL;
+	}
+
+	for (i = 0; i < ARRAY_SIZE(seg->feature_data); i++) {
+		const int range[] = {255, 63, 3, 0};
+
+		for (j = 0; j < ARRAY_SIZE(seg->feature_data[j]); j++) {
+			if (seg->feature_data[i][j] < -range[j] ||
+			    seg->feature_data[i][j] > range[j])
+				return -EINVAL;
+		}
+	}
+
+	memset(seg->padding, 0, sizeof(seg->padding));
+	return 0;
+}
+
+static int
+validate_vp9_frame_decode_params(struct v4l2_ctrl_vp9_frame_decode_params *dec_params)
+{
+	int ret;
+
+	/* Make sure we're not passed invalid flags. */
+	if (dec_params->flags &
+	    ~(V4L2_VP9_FRAME_FLAG_KEY_FRAME |
+	      V4L2_VP9_FRAME_FLAG_SHOW_FRAME |
+	      V4L2_VP9_FRAME_FLAG_ERROR_RESILIENT |
+	      V4L2_VP9_FRAME_FLAG_INTRA_ONLY |
+	      V4L2_VP9_FRAME_FLAG_ALLOW_HIGH_PREC_MV |
+	      V4L2_VP9_FRAME_FLAG_REFRESH_FRAME_CTX |
+	      V4L2_VP9_FRAME_FLAG_PARALLEL_DEC_MODE |
+	      V4L2_VP9_FRAME_FLAG_X_SUBSAMPLING |
+	      V4L2_VP9_FRAME_FLAG_Y_SUBSAMPLING |
+	      V4L2_VP9_FRAME_FLAG_COLOR_RANGE_FULL_SWING))
+		return -EINVAL;
+
+	/*
+	 * The refresh context and error resilient flags are mutually exclusive.
+	 * Same goes for parallel decoding and error resilient modes.
+	 */
+	if (dec_params->flags & V4L2_VP9_FRAME_FLAG_ERROR_RESILIENT &&
+	    dec_params->flags &
+	    (V4L2_VP9_FRAME_FLAG_REFRESH_FRAME_CTX |
+	     V4L2_VP9_FRAME_FLAG_PARALLEL_DEC_MODE))
+		return -EINVAL;
+
+	if (dec_params->profile > V4L2_VP9_PROFILE_MAX)
+		return -EINVAL;
+
+	if (dec_params->reset_frame_context > V4L2_VP9_RESET_FRAME_CTX_ALL)
+		return -EINVAL;
+
+	if (dec_params->frame_context_idx >= V4L2_VP9_NUM_FRAME_CTX)
+		return -EINVAL;
+
+	/*
+	 * Profiles 0 and 1 only support 8-bit depth, profiles 2 and 3 only 10
+	 * and 12 bit depths.
+	 */
+	if ((dec_params->profile < 2 && dec_params->bit_depth != 8) ||
+	    (dec_params->profile >= 2 &&
+	     (dec_params->bit_depth != 10 && dec_params->bit_depth != 12)))
+		return -EINVAL;
+
+	/* Profile 0 and 2 only accept YUV 4:2:0. */
+	if ((dec_params->profile == 0 || dec_params->profile == 2) &&
+	    (!(dec_params->flags & V4L2_VP9_FRAME_FLAG_X_SUBSAMPLING) ||
+	     !(dec_params->flags & V4L2_VP9_FRAME_FLAG_Y_SUBSAMPLING)))
+		return -EINVAL;
+
+	/* Profile 1 and 3 only accept YUV 4:2:2, 4:4:0 and 4:4:4. */
+	if ((dec_params->profile == 1 || dec_params->profile == 3) &&
+	    ((dec_params->flags & V4L2_VP9_FRAME_FLAG_X_SUBSAMPLING) &&
+	     (dec_params->flags & V4L2_VP9_FRAME_FLAG_Y_SUBSAMPLING)))
+		return -EINVAL;
+
+	if (dec_params->color_space > V4L2_VP9_COLOR_SPACE_SRGB)
+		return -EINVAL;
+
+	if (dec_params->interpolation_filter > V4L2_VP9_INTERP_FILTER_SWITCHABLE)
+		return -EINVAL;
+
+	/*
+	 * According to the spec, tile_cols_log2 shall be less than or equal
+	 * to 6.
+	 */
+	if (dec_params->tile_cols_log2 > 6)
+		return -EINVAL;
+
+	if (dec_params->tx_mode > V4L2_VP9_TX_MODE_SELECT)
+		return -EINVAL;
+
+	if (dec_params->reference_mode > V4L2_VP9_REF_MODE_SELECT)
+		return -EINVAL;
+
+	ret = validate_vp9_lf_params(&dec_params->lf);
+	if (ret)
+		return ret;
+
+	ret = validate_vp9_quant_params(&dec_params->quant);
+	if (ret)
+		return ret;
+
+	ret = validate_vp9_seg_params(&dec_params->seg);
+	if (ret)
+		return ret;
+
+	memset(dec_params->padding, 0, sizeof(dec_params->padding));
+	return 0;
+}
+
 /* Validate a new control */
 
 #define zero_padding(s) \
@@ -1672,7 +1951,12 @@ static int std_validate_compound(const struct v4l2_ctrl *ctrl, u32 idx,
 {
 	struct v4l2_ctrl_mpeg2_slice_params *p_mpeg2_slice_params;
 	struct v4l2_ctrl_vp8_frame_header *p_vp8_frame_header;
+	struct v4l2_ctrl_hevc_sps *p_hevc_sps;
+	struct v4l2_ctrl_hevc_pps *p_hevc_pps;
+	struct v4l2_ctrl_hevc_slice_params *p_hevc_slice_params;
+	struct v4l2_area *area;
 	void *p = ptr.p + idx * ctrl->elem_size;
+	unsigned int i;
 
 	switch ((u32)ctrl->type) {
 	case V4L2_CTRL_TYPE_MPEG2_SLICE_PARAMS:
@@ -1748,6 +2032,85 @@ static int std_validate_compound(const struct v4l2_ctrl *ctrl, u32 idx,
 		zero_padding(p_vp8_frame_header->entropy_header);
 		zero_padding(p_vp8_frame_header->coder_state);
 		break;
+
+	case V4L2_CTRL_TYPE_VP9_FRAME_DECODE_PARAMS:
+		return validate_vp9_frame_decode_params(p);
+
+	case V4L2_CTRL_TYPE_VP9_FRAME_CONTEXT:
+		break;
+
+	case V4L2_CTRL_TYPE_HEVC_SPS:
+		p_hevc_sps = p;
+
+		if (!(p_hevc_sps->flags & V4L2_HEVC_SPS_FLAG_PCM_ENABLED)) {
+			p_hevc_sps->pcm_sample_bit_depth_luma_minus1 = 0;
+			p_hevc_sps->pcm_sample_bit_depth_chroma_minus1 = 0;
+			p_hevc_sps->log2_min_pcm_luma_coding_block_size_minus3 = 0;
+			p_hevc_sps->log2_diff_max_min_pcm_luma_coding_block_size = 0;
+		}
+
+		if (!(p_hevc_sps->flags &
+		      V4L2_HEVC_SPS_FLAG_LONG_TERM_REF_PICS_PRESENT))
+			p_hevc_sps->num_long_term_ref_pics_sps = 0;
+		break;
+
+	case V4L2_CTRL_TYPE_HEVC_PPS:
+		p_hevc_pps = p;
+
+		if (!(p_hevc_pps->flags &
+		      V4L2_HEVC_PPS_FLAG_CU_QP_DELTA_ENABLED))
+			p_hevc_pps->diff_cu_qp_delta_depth = 0;
+
+		if (!(p_hevc_pps->flags & V4L2_HEVC_PPS_FLAG_TILES_ENABLED)) {
+			p_hevc_pps->num_tile_columns_minus1 = 0;
+			p_hevc_pps->num_tile_rows_minus1 = 0;
+			memset(&p_hevc_pps->column_width_minus1, 0,
+			       sizeof(p_hevc_pps->column_width_minus1));
+			memset(&p_hevc_pps->row_height_minus1, 0,
+			       sizeof(p_hevc_pps->row_height_minus1));
+
+			p_hevc_pps->flags &=
+				~V4L2_HEVC_PPS_FLAG_LOOP_FILTER_ACROSS_TILES_ENABLED;
+		}
+
+		if (p_hevc_pps->flags &
+		    V4L2_HEVC_PPS_FLAG_PPS_DISABLE_DEBLOCKING_FILTER) {
+			p_hevc_pps->pps_beta_offset_div2 = 0;
+			p_hevc_pps->pps_tc_offset_div2 = 0;
+		}
+
+		zero_padding(*p_hevc_pps);
+		break;
+
+	case V4L2_CTRL_TYPE_HEVC_SLICE_PARAMS:
+		p_hevc_slice_params = p;
+
+		if (p_hevc_slice_params->num_active_dpb_entries >
+		    V4L2_HEVC_DPB_ENTRIES_NUM_MAX)
+			return -EINVAL;
+
+		zero_padding(p_hevc_slice_params->pred_weight_table);
+
+		for (i = 0; i < p_hevc_slice_params->num_active_dpb_entries;
+		     i++) {
+			struct v4l2_hevc_dpb_entry *dpb_entry =
+				&p_hevc_slice_params->dpb[i];
+
+			zero_padding(*dpb_entry);
+		}
+
+		zero_padding(*p_hevc_slice_params);
+		break;
+
+	case V4L2_CTRL_TYPE_HEVC_SCALING_MATRIX:
+		break;
+
+	case V4L2_CTRL_TYPE_AREA:
+		area = p;
+		if (!area->width || !area->height)
+			return -EINVAL;
+		break;
+
 	default:
 		return -EINVAL;
 	}
@@ -1840,7 +2203,7 @@ static int ptr_to_user(struct v4l2_ext_control *c,
 	u32 len;
 
 	if (ctrl->is_ptr && !ctrl->is_string)
-		return copy_to_user(c->ptr, ptr.p, c->size) ?
+		return copy_to_user(c->ptr, ptr.p_const, c->size) ?
 		       -EFAULT : 0;
 
 	switch (ctrl->type) {
@@ -1955,7 +2318,7 @@ static void ptr_to_ptr(struct v4l2_ctrl *ctrl,
 {
 	if (ctrl == NULL)
 		return;
-	memcpy(to.p, from.p, ctrl->elems * ctrl->elem_size);
+	memcpy(to.p, from.p_const, ctrl->elems * ctrl->elem_size);
 }
 
 /* Copy the new value to the current value. */
@@ -2354,7 +2717,8 @@ static struct v4l2_ctrl *v4l2_ctrl_new(struct v4l2_ctrl_handler *hdl,
 			s64 min, s64 max, u64 step, s64 def,
 			const u32 dims[V4L2_CTRL_MAX_DIMS], u32 elem_size,
 			u32 flags, const char * const *qmenu,
-			const s64 *qmenu_int, void *priv)
+			const s64 *qmenu_int, const union v4l2_ctrl_ptr p_def,
+			void *priv)
 {
 	struct v4l2_ctrl *ctrl;
 	unsigned sz_extra;
@@ -2421,6 +2785,27 @@ static struct v4l2_ctrl *v4l2_ctrl_new(struct v4l2_ctrl_handler *hdl,
 	case V4L2_CTRL_TYPE_VP8_FRAME_HEADER:
 		elem_size = sizeof(struct v4l2_ctrl_vp8_frame_header);
 		break;
+	case V4L2_CTRL_TYPE_VP9_FRAME_CONTEXT:
+		elem_size = sizeof(struct v4l2_ctrl_vp9_frame_ctx);
+		break;
+	case V4L2_CTRL_TYPE_VP9_FRAME_DECODE_PARAMS:
+		elem_size = sizeof(struct v4l2_ctrl_vp9_frame_decode_params);
+		break;
+	case V4L2_CTRL_TYPE_HEVC_SPS:
+		elem_size = sizeof(struct v4l2_ctrl_hevc_sps);
+		break;
+	case V4L2_CTRL_TYPE_HEVC_PPS:
+		elem_size = sizeof(struct v4l2_ctrl_hevc_pps);
+		break;
+	case V4L2_CTRL_TYPE_HEVC_SLICE_PARAMS:
+		elem_size = sizeof(struct v4l2_ctrl_hevc_slice_params);
+		break;
+	case V4L2_CTRL_TYPE_HEVC_SCALING_MATRIX:
+		elem_size = sizeof(struct v4l2_ctrl_hevc_scaling_matrix);
+		break;
+	case V4L2_CTRL_TYPE_AREA:
+		elem_size = sizeof(struct v4l2_area);
+		break;
 	default:
 		if (type < V4L2_CTRL_COMPOUND_TYPES)
 			elem_size = sizeof(s32);
@@ -2459,6 +2844,9 @@ static struct v4l2_ctrl *v4l2_ctrl_new(struct v4l2_ctrl_handler *hdl,
 		 type >= V4L2_CTRL_COMPOUND_TYPES ||
 		 is_array)
 		sz_extra += 2 * tot_ctrl_size;
+
+	if (type >= V4L2_CTRL_COMPOUND_TYPES && p_def.p_const)
+		sz_extra += elem_size;
 
 	ctrl = kvzalloc(sizeof(*ctrl) + sz_extra, GFP_KERNEL);
 	if (ctrl == NULL) {
@@ -2503,6 +2891,12 @@ static struct v4l2_ctrl *v4l2_ctrl_new(struct v4l2_ctrl_handler *hdl,
 		ctrl->p_new.p = &ctrl->val;
 		ctrl->p_cur.p = &ctrl->cur.val;
 	}
+
+	if (type >= V4L2_CTRL_COMPOUND_TYPES && p_def.p_const) {
+		ctrl->p_def.p = ctrl->p_cur.p + tot_ctrl_size;
+		memcpy(ctrl->p_def.p, p_def.p_const, elem_size);
+	}
+
 	for (idx = 0; idx < elems; idx++) {
 		ctrl->type_ops->init(ctrl, idx, ctrl->p_cur);
 		ctrl->type_ops->init(ctrl, idx, ctrl->p_new);
@@ -2554,7 +2948,7 @@ struct v4l2_ctrl *v4l2_ctrl_new_custom(struct v4l2_ctrl_handler *hdl,
 			type, min, max,
 			is_menu ? cfg->menu_skip_mask : step, def,
 			cfg->dims, cfg->elem_size,
-			flags, qmenu, qmenu_int, priv);
+			flags, qmenu, qmenu_int, cfg->p_def, priv);
 	if (ctrl)
 		ctrl->is_private = cfg->is_private;
 	return ctrl;
@@ -2579,7 +2973,7 @@ struct v4l2_ctrl *v4l2_ctrl_new_std(struct v4l2_ctrl_handler *hdl,
 	}
 	return v4l2_ctrl_new(hdl, ops, NULL, id, name, type,
 			     min, max, step, def, NULL, 0,
-			     flags, NULL, NULL, NULL);
+			     flags, NULL, NULL, ptr_null, NULL);
 }
 EXPORT_SYMBOL(v4l2_ctrl_new_std);
 
@@ -2612,7 +3006,7 @@ struct v4l2_ctrl *v4l2_ctrl_new_std_menu(struct v4l2_ctrl_handler *hdl,
 	}
 	return v4l2_ctrl_new(hdl, ops, NULL, id, name, type,
 			     0, max, mask, def, NULL, 0,
-			     flags, qmenu, qmenu_int, NULL);
+			     flags, qmenu, qmenu_int, ptr_null, NULL);
 }
 EXPORT_SYMBOL(v4l2_ctrl_new_std_menu);
 
@@ -2644,10 +3038,31 @@ struct v4l2_ctrl *v4l2_ctrl_new_std_menu_items(struct v4l2_ctrl_handler *hdl,
 	}
 	return v4l2_ctrl_new(hdl, ops, NULL, id, name, type,
 			     0, max, mask, def, NULL, 0,
-			     flags, qmenu, NULL, NULL);
+			     flags, qmenu, NULL, ptr_null, NULL);
 
 }
 EXPORT_SYMBOL(v4l2_ctrl_new_std_menu_items);
+
+/* Helper function for standard compound controls */
+struct v4l2_ctrl *v4l2_ctrl_new_std_compound(struct v4l2_ctrl_handler *hdl,
+				const struct v4l2_ctrl_ops *ops, u32 id,
+				const union v4l2_ctrl_ptr p_def)
+{
+	const char *name;
+	enum v4l2_ctrl_type type;
+	u32 flags;
+	s64 min, max, step, def;
+
+	v4l2_ctrl_fill(id, &name, &type, &min, &max, &step, &def, &flags);
+	if (type < V4L2_CTRL_COMPOUND_TYPES) {
+		handler_set_err(hdl, -EINVAL);
+		return NULL;
+	}
+	return v4l2_ctrl_new(hdl, ops, NULL, id, name, type,
+			     min, max, step, def, NULL, 0,
+			     flags, NULL, NULL, p_def, NULL);
+}
+EXPORT_SYMBOL(v4l2_ctrl_new_std_compound);
 
 /* Helper function for standard integer menu controls */
 struct v4l2_ctrl *v4l2_ctrl_new_int_menu(struct v4l2_ctrl_handler *hdl,
@@ -2669,7 +3084,7 @@ struct v4l2_ctrl *v4l2_ctrl_new_int_menu(struct v4l2_ctrl_handler *hdl,
 	}
 	return v4l2_ctrl_new(hdl, ops, NULL, id, name, type,
 			     0, max, 0, def, NULL, 0,
-			     flags, NULL, qmenu_int, NULL);
+			     flags, NULL, qmenu_int, ptr_null, NULL);
 }
 EXPORT_SYMBOL(v4l2_ctrl_new_int_menu);
 
@@ -3144,6 +3559,7 @@ static void v4l2_ctrl_request_queue(struct media_request_object *obj)
 	struct v4l2_ctrl_handler *prev_hdl = NULL;
 	struct v4l2_ctrl_ref *ref_ctrl, *ref_ctrl_prev = NULL;
 
+	mutex_lock(main_hdl->lock);
 	if (list_empty(&main_hdl->requests_queued))
 		goto queue;
 
@@ -3175,18 +3591,22 @@ static void v4l2_ctrl_request_queue(struct media_request_object *obj)
 queue:
 	list_add_tail(&hdl->requests_queued, &main_hdl->requests_queued);
 	hdl->request_is_queued = true;
+	mutex_unlock(main_hdl->lock);
 }
 
 static void v4l2_ctrl_request_unbind(struct media_request_object *obj)
 {
 	struct v4l2_ctrl_handler *hdl =
 		container_of(obj, struct v4l2_ctrl_handler, req_obj);
+	struct v4l2_ctrl_handler *main_hdl = obj->priv;
 
 	list_del_init(&hdl->requests);
+	mutex_lock(main_hdl->lock);
 	if (hdl->request_is_queued) {
 		list_del_init(&hdl->requests_queued);
 		hdl->request_is_queued = false;
 	}
+	mutex_unlock(main_hdl->lock);
 }
 
 static void v4l2_ctrl_request_release(struct media_request_object *obj)
@@ -3631,7 +4051,8 @@ s32 v4l2_ctrl_g_ctrl(struct v4l2_ctrl *ctrl)
 	struct v4l2_ext_control c;
 
 	/* It's a driver bug if this happens. */
-	WARN_ON(!ctrl->is_int);
+	if (WARN_ON(!ctrl->is_int))
+		return 0;
 	c.value = 0;
 	get_ctrl(ctrl, &c);
 	return c.value;
@@ -3643,7 +4064,8 @@ s64 v4l2_ctrl_g_ctrl_int64(struct v4l2_ctrl *ctrl)
 	struct v4l2_ext_control c;
 
 	/* It's a driver bug if this happens. */
-	WARN_ON(ctrl->is_ptr || ctrl->type != V4L2_CTRL_TYPE_INTEGER64);
+	if (WARN_ON(ctrl->is_ptr || ctrl->type != V4L2_CTRL_TYPE_INTEGER64))
+		return 0;
 	c.value64 = 0;
 	get_ctrl(ctrl, &c);
 	return c.value64;
@@ -4052,7 +4474,8 @@ int __v4l2_ctrl_s_ctrl(struct v4l2_ctrl *ctrl, s32 val)
 	lockdep_assert_held(ctrl->handler->lock);
 
 	/* It's a driver bug if this happens. */
-	WARN_ON(!ctrl->is_int);
+	if (WARN_ON(!ctrl->is_int))
+		return -EINVAL;
 	ctrl->val = val;
 	return set_ctrl(NULL, ctrl, 0);
 }
@@ -4063,7 +4486,8 @@ int __v4l2_ctrl_s_ctrl_int64(struct v4l2_ctrl *ctrl, s64 val)
 	lockdep_assert_held(ctrl->handler->lock);
 
 	/* It's a driver bug if this happens. */
-	WARN_ON(ctrl->is_ptr || ctrl->type != V4L2_CTRL_TYPE_INTEGER64);
+	if (WARN_ON(ctrl->is_ptr || ctrl->type != V4L2_CTRL_TYPE_INTEGER64))
+		return -EINVAL;
 	*ctrl->p_new.p_s64 = val;
 	return set_ctrl(NULL, ctrl, 0);
 }
@@ -4074,11 +4498,25 @@ int __v4l2_ctrl_s_ctrl_string(struct v4l2_ctrl *ctrl, const char *s)
 	lockdep_assert_held(ctrl->handler->lock);
 
 	/* It's a driver bug if this happens. */
-	WARN_ON(ctrl->type != V4L2_CTRL_TYPE_STRING);
+	if (WARN_ON(ctrl->type != V4L2_CTRL_TYPE_STRING))
+		return -EINVAL;
 	strscpy(ctrl->p_new.p_char, s, ctrl->maximum + 1);
 	return set_ctrl(NULL, ctrl, 0);
 }
 EXPORT_SYMBOL(__v4l2_ctrl_s_ctrl_string);
+
+int __v4l2_ctrl_s_ctrl_compound(struct v4l2_ctrl *ctrl,
+				enum v4l2_ctrl_type type, const void *p)
+{
+	lockdep_assert_held(ctrl->handler->lock);
+
+	/* It's a driver bug if this happens. */
+	if (WARN_ON(ctrl->type != type))
+		return -EINVAL;
+	memcpy(ctrl->p_new.p, p, ctrl->elems * ctrl->elem_size);
+	return set_ctrl(NULL, ctrl, 0);
+}
+EXPORT_SYMBOL(__v4l2_ctrl_s_ctrl_compound);
 
 void v4l2_ctrl_request_complete(struct media_request *req,
 				struct v4l2_ctrl_handler *main_hdl)
@@ -4121,16 +4559,25 @@ void v4l2_ctrl_request_complete(struct media_request *req,
 			continue;
 
 		v4l2_ctrl_lock(ctrl);
-		if (ref->req)
+		if (ref->req) {
 			ptr_to_ptr(ctrl, ref->req->p_req, ref->p_req);
-		else
+		} else {
 			ptr_to_ptr(ctrl, ctrl->p_cur, ref->p_req);
+			/*
+			 * Set ref->req to ensure that when userspace wants to
+			 * obtain the controls of this request it will take
+			 * this value and not the current value of the control.
+			 */
+			ref->req = ref;
+		}
 		v4l2_ctrl_unlock(ctrl);
 	}
 
+	mutex_lock(main_hdl->lock);
 	WARN_ON(!hdl->request_is_queued);
 	list_del_init(&hdl->requests_queued);
 	hdl->request_is_queued = false;
+	mutex_unlock(main_hdl->lock);
 	media_request_object_complete(obj);
 	media_request_object_put(obj);
 }

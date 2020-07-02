@@ -25,6 +25,7 @@
 #endif
 
 #define KASAN_GLOBAL_REDZONE    0xFA  /* redzone for global variable */
+#define KASAN_VMALLOC_INVALID   0xF9  /* unallocated space in vmapped page */
 
 /*
  * Stack redzone shadow values
@@ -95,9 +96,19 @@ struct kasan_track {
 	depot_stack_handle_t stack;
 };
 
+#ifdef CONFIG_KASAN_SW_TAGS_IDENTIFY
+#define KASAN_NR_FREE_STACKS 5
+#else
+#define KASAN_NR_FREE_STACKS 1
+#endif
+
 struct kasan_alloc_meta {
 	struct kasan_track alloc_track;
-	struct kasan_track free_track;
+	struct kasan_track free_track[KASAN_NR_FREE_STACKS];
+#ifdef CONFIG_KASAN_SW_TAGS_IDENTIFY
+	u8 free_pointer_tag[KASAN_NR_FREE_STACKS];
+	u8 free_track_idx;
+#endif
 };
 
 struct qlist_node {
@@ -142,9 +153,11 @@ bool check_memory_region(unsigned long addr, size_t size, bool write,
 void *find_first_bad_addr(void *addr, size_t size);
 const char *get_bug_type(struct kasan_access_info *info);
 
-void kasan_report(unsigned long addr, size_t size,
+bool kasan_report(unsigned long addr, size_t size,
 		bool is_write, unsigned long ip);
 void kasan_report_invalid_free(void *object, unsigned long ip);
+
+struct page *kasan_addr_to_page(const void *addr);
 
 #if defined(CONFIG_KASAN_GENERIC) && \
 	(defined(CONFIG_SLAB) || defined(CONFIG_SLUB))
@@ -199,8 +212,6 @@ static inline const void *arch_kasan_set_tag(const void *addr, u8 tag)
 asmlinkage void kasan_unpoison_task_stack_below(const void *watermark);
 void __asan_register_globals(struct kasan_global *globals, size_t size);
 void __asan_unregister_globals(struct kasan_global *globals, size_t size);
-void __asan_loadN(unsigned long addr, size_t size);
-void __asan_storeN(unsigned long addr, size_t size);
 void __asan_handle_no_return(void);
 void __asan_alloca_poison(unsigned long addr, size_t size);
 void __asan_allocas_unpoison(const void *stack_top, const void *stack_bottom);
@@ -215,6 +226,8 @@ void __asan_load8(unsigned long addr);
 void __asan_store8(unsigned long addr);
 void __asan_load16(unsigned long addr);
 void __asan_store16(unsigned long addr);
+void __asan_loadN(unsigned long addr, size_t size);
+void __asan_storeN(unsigned long addr, size_t size);
 
 void __asan_load1_noabort(unsigned long addr);
 void __asan_store1_noabort(unsigned long addr);
@@ -226,6 +239,21 @@ void __asan_load8_noabort(unsigned long addr);
 void __asan_store8_noabort(unsigned long addr);
 void __asan_load16_noabort(unsigned long addr);
 void __asan_store16_noabort(unsigned long addr);
+void __asan_loadN_noabort(unsigned long addr, size_t size);
+void __asan_storeN_noabort(unsigned long addr, size_t size);
+
+void __asan_report_load1_noabort(unsigned long addr);
+void __asan_report_store1_noabort(unsigned long addr);
+void __asan_report_load2_noabort(unsigned long addr);
+void __asan_report_store2_noabort(unsigned long addr);
+void __asan_report_load4_noabort(unsigned long addr);
+void __asan_report_store4_noabort(unsigned long addr);
+void __asan_report_load8_noabort(unsigned long addr);
+void __asan_report_store8_noabort(unsigned long addr);
+void __asan_report_load16_noabort(unsigned long addr);
+void __asan_report_store16_noabort(unsigned long addr);
+void __asan_report_load_n_noabort(unsigned long addr, size_t size);
+void __asan_report_store_n_noabort(unsigned long addr, size_t size);
 
 void __asan_set_shadow_00(const void *addr, size_t size);
 void __asan_set_shadow_f1(const void *addr, size_t size);
@@ -233,5 +261,20 @@ void __asan_set_shadow_f2(const void *addr, size_t size);
 void __asan_set_shadow_f3(const void *addr, size_t size);
 void __asan_set_shadow_f5(const void *addr, size_t size);
 void __asan_set_shadow_f8(const void *addr, size_t size);
+
+void __hwasan_load1_noabort(unsigned long addr);
+void __hwasan_store1_noabort(unsigned long addr);
+void __hwasan_load2_noabort(unsigned long addr);
+void __hwasan_store2_noabort(unsigned long addr);
+void __hwasan_load4_noabort(unsigned long addr);
+void __hwasan_store4_noabort(unsigned long addr);
+void __hwasan_load8_noabort(unsigned long addr);
+void __hwasan_store8_noabort(unsigned long addr);
+void __hwasan_load16_noabort(unsigned long addr);
+void __hwasan_store16_noabort(unsigned long addr);
+void __hwasan_loadN_noabort(unsigned long addr, size_t size);
+void __hwasan_storeN_noabort(unsigned long addr, size_t size);
+
+void __hwasan_tag_memory(unsigned long addr, u8 tag, unsigned long size);
 
 #endif

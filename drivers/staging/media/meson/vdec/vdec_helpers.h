@@ -27,6 +27,12 @@ void amvdec_clear_dos_bits(struct amvdec_core *core, u32 reg, u32 val);
 u32 amvdec_read_parser(struct amvdec_core *core, u32 reg);
 void amvdec_write_parser(struct amvdec_core *core, u32 reg, u32 val);
 
+/* Helpers for the Amlogic compressed framebuffer format */
+u32 amvdec_amfbc_body_size(u32 width, u32 height, u32 is_10bit, u32 use_mmu);
+u32 amvdec_amfbc_head_size(u32 width, u32 height);
+u32 amvdec_amfbc_size(u32 width, u32 height, u32 is_10bit, u32 use_mmu);
+u32 amvdec_is_dst_fbc(struct amvdec_session *sess);
+
 /**
  * amvdec_dst_buf_done_idx() - Signal that a buffer is done decoding
  *
@@ -44,13 +50,15 @@ void amvdec_dst_buf_done_offset(struct amvdec_session *sess,
 				u32 offset, u32 field, bool allow_drop);
 
 /**
- * amvdec_add_ts_reorder() - Add a timestamp to the list in chronological order
+ * amvdec_add_ts() - Add a timestamp to the list
  *
  * @sess: current session
  * @ts: timestamp to add
  * @offset: offset in the VIFIFO where the associated packet was written
+ * @flags the vb2_v4l2_buffer flags
  */
-void amvdec_add_ts_reorder(struct amvdec_session *sess, u64 ts, u32 offset);
+void amvdec_add_ts(struct amvdec_session *sess, u64 ts,
+		   struct v4l2_timecode tc, u32 offset, u32 flags);
 void amvdec_remove_ts(struct amvdec_session *sess, u64 ts);
 
 /**
@@ -70,9 +78,10 @@ void amvdec_set_par_from_dar(struct amvdec_session *sess,
  * @width: picture width detected by the hardware
  * @height: picture height detected by the hardware
  * @dpb_size: Decoded Picture Buffer size (= amount of buffers for decoding)
+ * @bitdepth: Bit depth (usually 10 or 8) of the coded content
  */
 void amvdec_src_change(struct amvdec_session *sess, u32 width,
-		       u32 height, u32 dpb_size);
+		       u32 height, u32 dpb_size, u32 bitdepth);
 
 /**
  * amvdec_abort() - Abort the current decoding session

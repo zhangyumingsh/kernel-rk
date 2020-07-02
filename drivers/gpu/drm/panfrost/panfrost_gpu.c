@@ -9,7 +9,10 @@
 #include <linux/interrupt.h>
 #include <linux/io.h>
 #include <linux/iopoll.h>
+#include <linux/of.h>
 #include <linux/platform_device.h>
+#include <linux/pm_runtime.h>
+#include <linux/reset.h>
 
 #include "panfrost_device.h"
 #include "panfrost_features.h"
@@ -59,7 +62,16 @@ int panfrost_gpu_soft_reset(struct panfrost_device *pfdev)
 
 	gpu_write(pfdev, GPU_INT_MASK, 0);
 	gpu_write(pfdev, GPU_INT_CLEAR, GPU_IRQ_RESET_COMPLETED);
-	gpu_write(pfdev, GPU_CMD, GPU_CMD_SOFT_RESET);
+
+	if (of_device_is_compatible(pfdev->dev->of_node, "amlogic,meson-g12a-mali")) {
+		reset_control_assert(pfdev->rstc);
+		udelay(10);
+		reset_control_deassert(pfdev->rstc);
+
+		gpu_write(pfdev, GPU_PWR_KEY, 0x2968A819);
+		gpu_write(pfdev, GPU_PWR_OVERRIDE1, 0xfff | (0x20 << 16));
+	} else
+		gpu_write(pfdev, GPU_CMD, GPU_CMD_SOFT_RESET);
 
 	ret = readl_relaxed_poll_timeout(pfdev->iomem + GPU_INT_RAWSTAT,
 		val, val & GPU_IRQ_RESET_COMPLETED, 100, 10000);
@@ -208,6 +220,9 @@ static void panfrost_gpu_init_features(struct panfrost_device *pfdev)
 	pfdev->features.mem_features = gpu_read(pfdev, GPU_MEM_FEATURES);
 	pfdev->features.mmu_features = gpu_read(pfdev, GPU_MMU_FEATURES);
 	pfdev->features.thread_features = gpu_read(pfdev, GPU_THREAD_FEATURES);
+	pfdev->features.max_threads = gpu_read(pfdev, GPU_THREAD_MAX_THREADS);
+	pfdev->features.thread_max_workgroup_sz = gpu_read(pfdev, GPU_THREAD_MAX_WORKGROUP_SIZE);
+	pfdev->features.thread_max_barrier_sz = gpu_read(pfdev, GPU_THREAD_MAX_BARRIER_SIZE);
 	pfdev->features.coherency_features = gpu_read(pfdev, GPU_COHERENCY_FEATURES);
 	for (i = 0; i < 4; i++)
 		pfdev->features.texture_features[i] = gpu_read(pfdev, GPU_TEXTURE_FEATURES(i));
@@ -231,6 +246,8 @@ static void panfrost_gpu_init_features(struct panfrost_device *pfdev)
 
 	pfdev->features.stack_present = gpu_read(pfdev, GPU_STACK_PRESENT_LO);
 	pfdev->features.stack_present |= (u64)gpu_read(pfdev, GPU_STACK_PRESENT_HI) << 32;
+
+	pfdev->features.thread_tls_alloc = gpu_read(pfdev, GPU_THREAD_TLS_ALLOC);
 
 	gpu_id = gpu_read(pfdev, GPU_ID);
 	pfdev->features.revision = gpu_id & 0xffff;
@@ -303,28 +320,26 @@ void panfrost_gpu_power_on(struct panfrost_device *pfdev)
 	gpu_write(pfdev, L2_PWRON_LO, pfdev->features.l2_present);
 	ret = readl_relaxed_poll_timeout(pfdev->iomem + L2_READY_LO,
 		val, val == pfdev->features.l2_present, 100, 1000);
-
-	gpu_write(pfdev, STACK_PWRON_LO, pfdev->features.stack_present);
-	ret |= readl_relaxed_poll_timeout(pfdev->iomem + STACK_READY_LO,
-		val, val == pfdev->features.stack_present, 100, 1000);
+	if (ret)
+		dev_err(pfdev->dev, "error powering up gpu L2");
 
 	gpu_write(pfdev, SHADER_PWRON_LO, pfdev->features.shader_present);
-	ret |= readl_relaxed_poll_timeout(pfdev->iomem + SHADER_READY_LO,
+	ret = readl_relaxed_poll_timeout(pfdev->iomem + SHADER_READY_LO,
 		val, val == pfdev->features.shader_present, 100, 1000);
+	if (ret)
+		dev_err(pfdev->dev, "error powering up gpu shader");
 
 	gpu_write(pfdev, TILER_PWRON_LO, pfdev->features.tiler_present);
-	ret |= readl_relaxed_poll_timeout(pfdev->iomem + TILER_READY_LO,
+	ret = readl_relaxed_poll_timeout(pfdev->iomem + TILER_READY_LO,
 		val, val == pfdev->features.tiler_present, 100, 1000);
-
 	if (ret)
-		dev_err(pfdev->dev, "error powering up gpu");
+		dev_err(pfdev->dev, "error powering up gpu tiler");
 }
 
 void panfrost_gpu_power_off(struct panfrost_device *pfdev)
 {
 	gpu_write(pfdev, TILER_PWROFF_LO, 0);
 	gpu_write(pfdev, SHADER_PWROFF_LO, 0);
-	gpu_write(pfdev, STACK_PWROFF_LO, 0);
 	gpu_write(pfdev, L2_PWROFF_LO, 0);
 }
 
@@ -346,7 +361,7 @@ int panfrost_gpu_init(struct panfrost_device *pfdev)
 		return -ENODEV;
 
 	err = devm_request_irq(pfdev->dev, irq, panfrost_gpu_irq_handler,
-			       IRQF_SHARED, "gpu", pfdev);
+			       IRQF_SHARED, KBUILD_MODNAME "-gpu", pfdev);
 	if (err) {
 		dev_err(pfdev->dev, "failed to request gpu irq");
 		return err;
@@ -365,7 +380,16 @@ void panfrost_gpu_fini(struct panfrost_device *pfdev)
 
 u32 panfrost_gpu_get_latest_flush_id(struct panfrost_device *pfdev)
 {
-	if (panfrost_has_hw_feature(pfdev, HW_FEATURE_FLUSH_REDUCTION))
-		return gpu_read(pfdev, GPU_LATEST_FLUSH_ID);
+	u32 flush_id;
+
+	if (panfrost_has_hw_feature(pfdev, HW_FEATURE_FLUSH_REDUCTION)) {
+		/* Flush reduction only makes sense when the GPU is kept powered on between jobs */
+		if (pm_runtime_get_if_in_use(pfdev->dev)) {
+			flush_id = gpu_read(pfdev, GPU_LATEST_FLUSH_ID);
+			pm_runtime_put(pfdev->dev);
+			return flush_id;
+		}
+	}
+
 	return 0;
 }
