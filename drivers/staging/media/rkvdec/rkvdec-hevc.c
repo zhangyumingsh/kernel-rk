@@ -2328,11 +2328,10 @@ static void config_registers(struct rkvdec_ctx *ctx,
 
 	f = &ctx->decoded_fmt;
 	dst_fmt = &f->fmt.pix_mp;
-
 	hor_virstride = dst_fmt->plane_fmt[0].bytesperline;
 	ver_virstride = dst_fmt->height;
 	y_virstride = hor_virstride * ver_virstride;
-	uv_virstride = (hor_virstride * ver_virstride) / 2;
+	uv_virstride = y_virstride / 2;
 	yuv_virstride = y_virstride + uv_virstride;
 
 	reg = RKVDEC_Y_HOR_VIRSTRIDE(hor_virstride / 16) |
@@ -2402,6 +2401,8 @@ static void config_registers(struct rkvdec_ctx *ctx,
 	writel_relaxed(reg, rkvdec->regs + RKVDEC_REG_AXI_DDR_WDATA);
 }
 
+#define RKVDEC_HEVC_MAX_DEPTH_IN_BYTES		2
+
 static int rkvdec_hevc_adjust_fmt(struct rkvdec_ctx *ctx,
 				  struct v4l2_format *f)
 {
@@ -2409,8 +2410,19 @@ static int rkvdec_hevc_adjust_fmt(struct rkvdec_ctx *ctx,
 
 	fmt->num_planes = 1;
 	if (!fmt->plane_fmt[0].sizeimage)
-		fmt->plane_fmt[0].sizeimage = fmt->width * fmt->height * 2;
+		fmt->plane_fmt[0].sizeimage = fmt->width * fmt->height *
+					      RKVDEC_HEVC_MAX_DEPTH_IN_BYTES;
 	return 0;
+}
+
+static u32 rkvdec_hevc_valid_fmt(struct rkvdec_ctx *ctx, struct v4l2_ctrl *ctrl)
+{
+	const struct v4l2_ctrl_hevc_sps *sps = ctrl->p_new.p_hevc_sps;
+
+	if (sps->bit_depth_luma_minus8 == 2)
+		return V4L2_PIX_FMT_NV15;
+	else
+		return V4L2_PIX_FMT_NV12;
 }
 
 static int rkvdec_hevc_start(struct rkvdec_ctx *ctx)
@@ -2505,7 +2517,8 @@ static int rkvdec_hevc_run(struct rkvdec_ctx *ctx)
 	writel(1, rkvdec->regs + RKVDEC_REG_PREF_CHR_CACHE_COMMAND);
 
 	/* Start decoding! */
-	writel(RKVDEC_INTERRUPT_DEC_E | RKVDEC_TIMEOUT_E,
+	writel(RKVDEC_INTERRUPT_DEC_E | RKVDEC_CONFIG_DEC_CLK_GATE_E |
+	       RKVDEC_TIMEOUT_E | RKVDEC_BUF_EMPTY_E,
 	       rkvdec->regs + RKVDEC_REG_INTERRUPT);
 
 	return 0;
@@ -2513,6 +2526,7 @@ static int rkvdec_hevc_run(struct rkvdec_ctx *ctx)
 
 const struct rkvdec_coded_fmt_ops rkvdec_hevc_fmt_ops = {
 	.adjust_fmt = rkvdec_hevc_adjust_fmt,
+	.valid_fmt = rkvdec_hevc_valid_fmt,
 	.start = rkvdec_hevc_start,
 	.stop = rkvdec_hevc_stop,
 	.run = rkvdec_hevc_run,

@@ -53,18 +53,14 @@ static void hdmi_infoframe_set_checksum(void *buffer, size_t size)
 /**
  * hdmi_avi_infoframe_init() - initialize an HDMI AVI infoframe
  * @frame: HDMI AVI infoframe
- *
- * Returns 0 on success or a negative error code on failure.
  */
-int hdmi_avi_infoframe_init(struct hdmi_avi_infoframe *frame)
+void hdmi_avi_infoframe_init(struct hdmi_avi_infoframe *frame)
 {
 	memset(frame, 0, sizeof(*frame));
 
 	frame->type = HDMI_INFOFRAME_TYPE_AVI;
 	frame->version = 2;
 	frame->length = HDMI_AVI_INFOFRAME_SIZE;
-
-	return 0;
 }
 EXPORT_SYMBOL(hdmi_avi_infoframe_init);
 
@@ -499,7 +495,7 @@ int hdmi_vendor_infoframe_init(struct hdmi_vendor_infoframe *frame)
 	 * value
 	 */
 	frame->s3d_struct = HDMI_3D_STRUCTURE_INVALID;
-	frame->length = 4;
+	frame->length = HDMI_VENDOR_INFOFRAME_SIZE;
 
 	return 0;
 }
@@ -1419,27 +1415,6 @@ static void hdmi_audio_infoframe_log(const char *level,
 			frame->downmix_inhibit ? "Yes" : "No");
 }
 
-static const char *
-hdmi_eotf_get_name(enum hdmi_eotf eotf)
-{
-	if (eotf < 0 || eotf > 7)
-		return "Invalid";
-
-	switch (eotf) {
-	case HDMI_EOTF_TRADITIONAL_GAMMA_SDR:
-		return "Traditional Gamma - SDR";
-	case HDMI_EOTF_TRADITIONAL_GAMMA_HDR:
-		return "Traditional Gamma - HDR";
-	case HDMI_EOTF_SMPTE_ST2084:
-		return "SMPTE ST 2084";
-	case HDMI_EOTF_BT_2100_HLG:
-		return "Hybrid Log-Gamma (HLG)";
-	default:
-		break;
-	}
-	return "Reserved";
-}
-
 static void hdmi_drm_infoframe_log(const char *level,
 				   struct device *dev,
 				   const struct hdmi_drm_infoframe *frame)
@@ -1448,25 +1423,24 @@ static void hdmi_drm_infoframe_log(const char *level,
 
 	hdmi_infoframe_log_header(level, dev,
 				  (struct hdmi_any_infoframe *)frame);
-	hdmi_log("    metadata type: %d\n", frame->metadata_type);
-	hdmi_log("    eotf: %s\n", hdmi_eotf_get_name(frame->eotf));
-
-	hdmi_log("    display primaries:\n");
+	hdmi_log("length: %d\n", frame->length);
+	hdmi_log("metadata type: %d\n", frame->metadata_type);
+	hdmi_log("eotf: %d\n", frame->eotf);
 	for (i = 0; i < 3; i++) {
-		hdmi_log("      x[%d]: %d\n", i, frame->display_primaries[i].x);
-		hdmi_log("      y[%d]: %d\n", i, frame->display_primaries[i].y);
+		hdmi_log("x[%d]: %d\n", i, frame->display_primaries[i].x);
+		hdmi_log("y[%d]: %d\n", i, frame->display_primaries[i].y);
 	}
 
-	hdmi_log("    white point x: %d\n", frame->white_point.x);
-	hdmi_log("    white point y: %d\n", frame->white_point.y);
+	hdmi_log("white point x: %d\n", frame->white_point.x);
+	hdmi_log("white point y: %d\n", frame->white_point.y);
 
-	hdmi_log("    max display mastering luminance: %d\n",
+	hdmi_log("max_display_mastering_luminance: %d\n",
 		 frame->max_display_mastering_luminance);
-	hdmi_log("    min display mastering luminance: %d\n",
+	hdmi_log("min_display_mastering_luminance: %d\n",
 		 frame->min_display_mastering_luminance);
 
-	hdmi_log("    max cll: %d\n", frame->max_cll);
-	hdmi_log("    max fall: %d\n", frame->max_fall);
+	hdmi_log("max_cll: %d\n", frame->max_cll);
+	hdmi_log("max_fall: %d\n", frame->max_fall);
 }
 
 static const char *
@@ -1575,7 +1549,6 @@ static int hdmi_avi_infoframe_unpack(struct hdmi_avi_infoframe *frame,
 				     const void *buffer, size_t size)
 {
 	const u8 *ptr = buffer;
-	int ret;
 
 	if (size < HDMI_INFOFRAME_SIZE(AVI))
 		return -EINVAL;
@@ -1588,9 +1561,7 @@ static int hdmi_avi_infoframe_unpack(struct hdmi_avi_infoframe *frame,
 	if (hdmi_infoframe_checksum(buffer, HDMI_INFOFRAME_SIZE(AVI)) != 0)
 		return -EINVAL;
 
-	ret = hdmi_avi_infoframe_init(frame);
-	if (ret)
-		return ret;
+	hdmi_avi_infoframe_init(frame);
 
 	ptr += HDMI_INFOFRAME_HEADER_SIZE;
 
@@ -1797,20 +1768,21 @@ hdmi_vendor_any_infoframe_unpack(union hdmi_vendor_any_infoframe *frame,
 }
 
 /**
- * hdmi_drm_infoframe_unpack() - unpack binary buffer to a HDMI DRM infoframe
+ * hdmi_drm_infoframe_unpack_only() - unpack binary buffer of CTA-861-G DRM
+ *                                    infoframe DataBytes to a HDMI DRM
+ *                                    infoframe
  * @frame: HDMI DRM infoframe
  * @buffer: source buffer
  * @size: size of buffer
  *
- * Unpacks the information contained in binary @buffer into a structured
- * @frame of the HDMI Dynamic Range and Mastering (DRM) information frame.
- * Also verifies the checksum as required by section 5.3.5 of the HDMI 1.4
- * specification.
+ * Unpacks CTA-861-G DRM infoframe DataBytes contained in the binary @buffer
+ * into a structured @frame of the HDMI Dynamic Range and Mastering (DRM)
+ * infoframe.
  *
  * Returns 0 on success or a negative error code on failure.
  */
-static int hdmi_drm_infoframe_unpack(struct hdmi_drm_infoframe *frame,
-				     const void *buffer, size_t size)
+int hdmi_drm_infoframe_unpack_only(struct hdmi_drm_infoframe *frame,
+				   const void *buffer, size_t size)
 {
 	const u8 *ptr = buffer;
 	const u8 *temp;
@@ -1819,22 +1791,12 @@ static int hdmi_drm_infoframe_unpack(struct hdmi_drm_infoframe *frame,
 	int ret;
 	int i;
 
-	if (size < HDMI_INFOFRAME_SIZE(DRM))
-		return -EINVAL;
-
-	if (ptr[0] != HDMI_INFOFRAME_TYPE_DRM ||
-	    ptr[1] != 1 ||
-	    ptr[2] != HDMI_DRM_INFOFRAME_SIZE)
-		return -EINVAL;
-
-	if (hdmi_infoframe_checksum(buffer, HDMI_INFOFRAME_SIZE(DRM)) != 0)
+	if (size < HDMI_DRM_INFOFRAME_SIZE)
 		return -EINVAL;
 
 	ret = hdmi_drm_infoframe_init(frame);
 	if (ret)
 		return ret;
-
-	ptr += HDMI_INFOFRAME_HEADER_SIZE;
 
 	frame->eotf = ptr[0] & 0x7;
 	frame->metadata_type = ptr[1] & 0x7;
@@ -1843,7 +1805,7 @@ static int hdmi_drm_infoframe_unpack(struct hdmi_drm_infoframe *frame,
 	for (i = 0; i < 3; i++) {
 		x_lsb = *temp++;
 		x_msb = *temp++;
-		frame->display_primaries[i].x =  (x_msb << 8) | x_lsb;
+		frame->display_primaries[i].x = (x_msb << 8) | x_lsb;
 		y_lsb = *temp++;
 		y_msb = *temp++;
 		frame->display_primaries[i].y = (y_msb << 8) | y_lsb;
@@ -1858,6 +1820,42 @@ static int hdmi_drm_infoframe_unpack(struct hdmi_drm_infoframe *frame,
 	frame->max_fall = (ptr[25] << 8) | ptr[24];
 
 	return 0;
+}
+EXPORT_SYMBOL(hdmi_drm_infoframe_unpack_only);
+
+/**
+ * hdmi_drm_infoframe_unpack() - unpack binary buffer to a HDMI DRM infoframe
+ * @frame: HDMI DRM infoframe
+ * @buffer: source buffer
+ * @size: size of buffer
+ *
+ * Unpacks the CTA-861-G DRM infoframe contained in the binary @buffer into
+ * a structured @frame of the HDMI Dynamic Range and Mastering (DRM)
+ * infoframe. It also verifies the checksum as required by section 5.3.5 of
+ * the HDMI 1.4 specification.
+ *
+ * Returns 0 on success or a negative error code on failure.
+ */
+static int hdmi_drm_infoframe_unpack(struct hdmi_drm_infoframe *frame,
+				     const void *buffer, size_t size)
+{
+	const u8 *ptr = buffer;
+	int ret;
+
+	if (size < HDMI_INFOFRAME_SIZE(DRM))
+		return -EINVAL;
+
+	if (ptr[0] != HDMI_INFOFRAME_TYPE_DRM ||
+	    ptr[1] != 1 ||
+	    ptr[2] != HDMI_DRM_INFOFRAME_SIZE)
+		return -EINVAL;
+
+	if (hdmi_infoframe_checksum(buffer, HDMI_INFOFRAME_SIZE(DRM)) != 0)
+		return -EINVAL;
+
+	ret = hdmi_drm_infoframe_unpack_only(frame, ptr + HDMI_INFOFRAME_HEADER_SIZE,
+					     size - HDMI_INFOFRAME_HEADER_SIZE);
+	return ret;
 }
 
 /**

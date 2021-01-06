@@ -65,7 +65,6 @@
 #define SCLK_OTGPHY0		142
 #define SCLK_OTGPHY1		143
 #define SCLK_HDMI_PHY		144
-#define SCLK_DDRC		145
 
 /* dclk gates */
 #define DCLK_VOP		190
@@ -116,7 +115,6 @@
 #define PCLK_HDMI_CTRL		364
 #define PCLK_HDMI_PHY		365
 #define PCLK_GMAC		367
-#define PCLK_ACODECPHY		368
 
 /* hclk gates */
 #define HCLK_I2S0_8CH		442

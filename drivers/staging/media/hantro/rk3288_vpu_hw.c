@@ -160,17 +160,16 @@ static irqreturn_t rk3288_vepu_irq(int irq, void *dev_id)
 {
 	struct hantro_dev *vpu = dev_id;
 	enum vb2_buffer_state state;
-	u32 status, bytesused;
+	u32 status;
 
 	status = vepu_read(vpu, H1_REG_INTERRUPT);
-	bytesused = vepu_read(vpu, H1_REG_STR_BUF_LIMIT) / 8;
 	state = (status & H1_REG_INTERRUPT_FRAME_RDY) ?
 		VB2_BUF_STATE_DONE : VB2_BUF_STATE_ERROR;
 
 	vepu_write(vpu, 0, H1_REG_INTERRUPT);
 	vepu_write(vpu, 0, H1_REG_AXI_CTRL);
 
-	hantro_irq_done(vpu, bytesused, state);
+	hantro_irq_done(vpu, state);
 
 	return IRQ_HANDLED;
 }
@@ -188,9 +187,16 @@ static irqreturn_t rk3288_vdpu_irq(int irq, void *dev_id)
 	vdpu_write(vpu, 0, G1_REG_INTERRUPT);
 	vdpu_write(vpu, G1_REG_CONFIG_DEC_CLK_GATE_E, G1_REG_CONFIG);
 
-	hantro_irq_done(vpu, 0, state);
+	hantro_irq_done(vpu, state);
 
 	return IRQ_HANDLED;
+}
+
+static int rk3036_vpu_hw_init(struct hantro_dev *vpu)
+{
+	/* Bump ACLK to max. possible freq. to improve performance. */
+	clk_set_rate(vpu->clocks[0].clk, RK3188_ACLK_MAX_FREQ);
+	return 0;
 }
 
 static int rk3188_vpu_hw_init(struct hantro_dev *vpu)
@@ -271,6 +277,7 @@ static const struct hantro_codec_ops rk3288_vpu_codec_ops[] = {
 		.run = hantro_h1_jpeg_enc_run,
 		.reset = rk3288_vpu_enc_reset,
 		.init = hantro_jpeg_enc_init,
+		.done = hantro_jpeg_enc_done,
 		.exit = hantro_jpeg_enc_exit,
 	},
 	[HANTRO_MODE_H264_DEC] = {
@@ -309,6 +316,26 @@ static const char * const rk3188_clk_names[] = {
 
 static const char * const rk3288_clk_names[] = {
 	"aclk", "hclk"
+};
+
+const struct hantro_variant rk3036_vpu_variant = {
+	.enc_offset = 0x0,
+	.enc_fmts = rk3288_vpu_enc_fmts,
+	.num_enc_fmts = ARRAY_SIZE(rk3288_vpu_enc_fmts),
+	.dec_offset = 0x400,
+	.dec_fmts = rk3188_vpu_dec_fmts,
+	.num_dec_fmts = ARRAY_SIZE(rk3188_vpu_dec_fmts),
+	.postproc_fmts = rk3288_vpu_postproc_fmts,
+	.num_postproc_fmts = ARRAY_SIZE(rk3288_vpu_postproc_fmts),
+	.postproc_regs = &hantro_g1_postproc_regs,
+	.codec = HANTRO_JPEG_ENCODER | HANTRO_MPEG2_DECODER |
+		 HANTRO_VP8_DECODER | HANTRO_H264_DECODER,
+	.codec_ops = rk3288_vpu_codec_ops,
+	.irqs = rk3288_irqs,
+	.num_irqs = ARRAY_SIZE(rk3288_irqs),
+	.init = rk3036_vpu_hw_init,
+	.clk_names = rk3288_clk_names,
+	.num_clocks = ARRAY_SIZE(rk3288_clk_names)
 };
 
 const struct hantro_variant rk3188_vpu_variant = {

@@ -13,6 +13,8 @@
  * Marek Szyprowski, <m.szyprowski@samsung.com>
  */
 
+#include <linux/pm_runtime.h>
+
 #include <media/videobuf2-dma-contig.h>
 #include <media/v4l2-device.h>
 #include <media/v4l2-ioctl.h>
@@ -91,7 +93,7 @@ static struct cedrus_format *cedrus_find_format(u32 pixelformat, u32 directions,
 	return &cedrus_formats[i];
 }
 
-void cedrus_prepare_format(struct v4l2_pix_format *pix_fmt, int extended)
+void cedrus_prepare_format(struct v4l2_pix_format *pix_fmt)
 {
 	unsigned int width = pix_fmt->width;
 	unsigned int height = pix_fmt->height;
@@ -143,17 +145,6 @@ void cedrus_prepare_format(struct v4l2_pix_format *pix_fmt, int extended)
 		sizeimage += bytesperline * height / 2;
 
 		break;
-	}
-
-	if (extended) {
-		unsigned int extra_size;
-
-		extra_size = DIV_ROUND_UP(pix_fmt->width, 4);
-		extra_size = ALIGN(extra_size, 32);
-		extra_size *= ALIGN(pix_fmt->height, 16) * 3;
-		extra_size /= 2;
-
-		sizeimage += extra_size;
 	}
 
 	pix_fmt->width = width;
@@ -248,25 +239,17 @@ static int cedrus_try_fmt_vid_cap(struct file *file, void *priv,
 	struct cedrus_ctx *ctx = cedrus_file2ctx(file);
 	struct cedrus_dev *dev = ctx->dev;
 	struct v4l2_pix_format *pix_fmt = &f->fmt.pix;
-	const struct v4l2_ctrl_hevc_sps *sps;
 	struct cedrus_format *fmt =
 		cedrus_find_format(pix_fmt->pixelformat, CEDRUS_DECODE_DST,
 				   dev->capabilities);
-	int extended;
 
 	if (!fmt)
 		return -EINVAL;
 
-	sps = cedrus_find_control_data(ctx, V4L2_CID_MPEG_VIDEO_HEVC_SPS);
-
-	/* The 10-bitHEVC decoder needs extra size on the output buffer. */
-	extended = ctx->src_fmt.pixelformat == V4L2_PIX_FMT_HEVC_SLICE &&
-	sps->bit_depth_luma_minus8 == 2;
-
 	pix_fmt->pixelformat = fmt->pixelformat;
-
-	pix_fmt->pixelformat = fmt->pixelformat;
-	cedrus_prepare_format(pix_fmt, extended);
+	pix_fmt->width = ctx->src_fmt.width;
+	pix_fmt->height = ctx->src_fmt.height;
+	cedrus_prepare_format(pix_fmt);
 
 	return 0;
 }
@@ -284,7 +267,8 @@ static int cedrus_try_fmt_vid_out(struct file *file, void *priv,
 	if (!fmt)
 		return -EINVAL;
 
-	cedrus_prepare_format(pix_fmt, 0);
+	pix_fmt->pixelformat = fmt->pixelformat;
+	cedrus_prepare_format(pix_fmt);
 
 	return 0;
 }
@@ -293,7 +277,6 @@ static int cedrus_s_fmt_vid_cap(struct file *file, void *priv,
 				struct v4l2_format *f)
 {
 	struct cedrus_ctx *ctx = cedrus_file2ctx(file);
-	struct cedrus_dev *dev = ctx->dev;
 	struct vb2_queue *vq;
 	int ret;
 
@@ -307,8 +290,6 @@ static int cedrus_s_fmt_vid_cap(struct file *file, void *priv,
 
 	ctx->dst_fmt = f->fmt.pix;
 
-	cedrus_dst_format_set(dev, &ctx->dst_fmt);
-
 	return 0;
 }
 
@@ -317,10 +298,30 @@ static int cedrus_s_fmt_vid_out(struct file *file, void *priv,
 {
 	struct cedrus_ctx *ctx = cedrus_file2ctx(file);
 	struct vb2_queue *vq;
+	struct vb2_queue *peer_vq;
 	int ret;
 
+	ret = cedrus_try_fmt_vid_out(file, priv, f);
+	if (ret)
+		return ret;
+
 	vq = v4l2_m2m_get_vq(ctx->fh.m2m_ctx, f->type);
-	if (vb2_is_busy(vq))
+	/*
+	 * In order to support dynamic resolution change,
+	 * the decoder admits a resolution change, as long
+	 * as the pixelformat remains. Can't be done if streaming.
+	 */
+	if (vb2_is_streaming(vq) || (vb2_is_busy(vq) &&
+	    f->fmt.pix.pixelformat != ctx->src_fmt.pixelformat))
+		return -EBUSY;
+	/*
+	 * Since format change on the OUTPUT queue will reset
+	 * the CAPTURE queue, we can't allow doing so
+	 * when the CAPTURE queue has buffers allocated.
+	 */
+	peer_vq = v4l2_m2m_get_vq(ctx->fh.m2m_ctx,
+				  V4L2_BUF_TYPE_VIDEO_CAPTURE);
+	if (vb2_is_busy(peer_vq))
 		return -EBUSY;
 
 	ret = cedrus_try_fmt_vid_out(file, priv, f);
@@ -331,7 +332,6 @@ static int cedrus_s_fmt_vid_out(struct file *file, void *priv,
 
 	switch (ctx->src_fmt.pixelformat) {
 	case V4L2_PIX_FMT_H264_SLICE:
-	case V4L2_PIX_FMT_HEVC_SLICE:
 		vq->subsystem_flags |=
 			VB2_V4L2_FL_SUPPORTS_M2M_HOLD_CAPTURE_BUF;
 		break;
@@ -341,11 +341,14 @@ static int cedrus_s_fmt_vid_out(struct file *file, void *priv,
 		break;
 	}
 
-	/* Propagate colorspace information to capture. */
+	/* Propagate format information to capture. */
 	ctx->dst_fmt.colorspace = f->fmt.pix.colorspace;
 	ctx->dst_fmt.xfer_func = f->fmt.pix.xfer_func;
 	ctx->dst_fmt.ycbcr_enc = f->fmt.pix.ycbcr_enc;
 	ctx->dst_fmt.quantization = f->fmt.pix.quantization;
+	ctx->dst_fmt.width = ctx->src_fmt.width;
+	ctx->dst_fmt.height = ctx->src_fmt.height;
+	cedrus_prepare_format(&ctx->dst_fmt);
 
 	return 0;
 }
@@ -451,18 +454,6 @@ static int cedrus_buf_prepare(struct vb2_buffer *vb)
 	return 0;
 }
 
-static void cedrus_buf_cleanup(struct vb2_buffer *vb)
-{
-	struct vb2_queue *vq = vb->vb2_queue;
-	struct cedrus_ctx *ctx = vb2_get_drv_priv(vq);
-	struct cedrus_dev *dev = ctx->dev;
-	struct cedrus_dec_ops *ops = dev->dec_ops[ctx->current_codec];
-
-	if (!V4L2_TYPE_IS_OUTPUT(vq->type) && ops->buf_cleanup)
-		ops->buf_cleanup(ctx,
-				 vb2_to_cedrus_buffer(vq->bufs[vb->index]));
-}
-
 static int cedrus_start_streaming(struct vb2_queue *vq, unsigned int count)
 {
 	struct cedrus_ctx *ctx = vb2_get_drv_priv(vq);
@@ -486,12 +477,26 @@ static int cedrus_start_streaming(struct vb2_queue *vq, unsigned int count)
 		return -EINVAL;
 	}
 
-	if (V4L2_TYPE_IS_OUTPUT(vq->type) &&
-	    dev->dec_ops[ctx->current_codec]->start)
-		ret = dev->dec_ops[ctx->current_codec]->start(ctx);
+	if (V4L2_TYPE_IS_OUTPUT(vq->type)) {
+		ret = pm_runtime_get_sync(dev->dev);
+		if (ret < 0) {
+			pm_runtime_put_noidle(dev->dev);
+			goto err_cleanup;
+		}
 
-	if (ret)
-		cedrus_queue_cleanup(vq, VB2_BUF_STATE_QUEUED);
+		if (dev->dec_ops[ctx->current_codec]->start) {
+			ret = dev->dec_ops[ctx->current_codec]->start(ctx);
+			if (ret)
+				goto err_pm;
+		}
+	}
+
+	return 0;
+
+err_pm:
+	pm_runtime_put(dev->dev);
+err_cleanup:
+	cedrus_queue_cleanup(vq, VB2_BUF_STATE_QUEUED);
 
 	return ret;
 }
@@ -501,9 +506,12 @@ static void cedrus_stop_streaming(struct vb2_queue *vq)
 	struct cedrus_ctx *ctx = vb2_get_drv_priv(vq);
 	struct cedrus_dev *dev = ctx->dev;
 
-	if (V4L2_TYPE_IS_OUTPUT(vq->type) &&
-	    dev->dec_ops[ctx->current_codec]->stop)
-		dev->dec_ops[ctx->current_codec]->stop(ctx);
+	if (V4L2_TYPE_IS_OUTPUT(vq->type)) {
+		if (dev->dec_ops[ctx->current_codec]->stop)
+			dev->dec_ops[ctx->current_codec]->stop(ctx);
+
+		pm_runtime_put(dev->dev);
+	}
 
 	cedrus_queue_cleanup(vq, VB2_BUF_STATE_ERROR);
 }
@@ -526,7 +534,6 @@ static void cedrus_buf_request_complete(struct vb2_buffer *vb)
 static struct vb2_ops cedrus_qops = {
 	.queue_setup		= cedrus_queue_setup,
 	.buf_prepare		= cedrus_buf_prepare,
-	.buf_cleanup		= cedrus_buf_cleanup,
 	.buf_queue		= cedrus_buf_queue,
 	.buf_out_validate	= cedrus_buf_out_validate,
 	.buf_request_complete	= cedrus_buf_request_complete,

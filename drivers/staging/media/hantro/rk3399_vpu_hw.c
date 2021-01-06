@@ -92,17 +92,16 @@ static irqreturn_t rk3399_vepu_irq(int irq, void *dev_id)
 {
 	struct hantro_dev *vpu = dev_id;
 	enum vb2_buffer_state state;
-	u32 status, bytesused;
+	u32 status;
 
 	status = vepu_read(vpu, VEPU_REG_INTERRUPT);
-	bytesused = vepu_read(vpu, VEPU_REG_STR_BUF_LIMIT) / 8;
 	state = (status & VEPU_REG_INTERRUPT_FRAME_READY) ?
 		VB2_BUF_STATE_DONE : VB2_BUF_STATE_ERROR;
 
 	vepu_write(vpu, 0, VEPU_REG_INTERRUPT);
 	vepu_write(vpu, 0, VEPU_REG_AXI_CTRL);
 
-	hantro_irq_done(vpu, bytesused, state);
+	hantro_irq_done(vpu, state);
 
 	return IRQ_HANDLED;
 }
@@ -120,7 +119,7 @@ static irqreturn_t rk3399_vdpu_irq(int irq, void *dev_id)
 	vdpu_write(vpu, 0, VDPU_REG_INTERRUPT);
 	vdpu_write(vpu, 0, VDPU_REG_AXI_CTRL);
 
-	hantro_irq_done(vpu, 0, state);
+	hantro_irq_done(vpu, state);
 
 	return IRQ_HANDLED;
 }
@@ -220,21 +219,4 @@ const struct hantro_variant rk3328_vpu_variant = {
 	.init = rk3399_vpu_hw_init,
 	.clk_names = rk3399_clk_names,
 	.num_clocks = ARRAY_SIZE(rk3399_clk_names),
-};
-
-const struct hantro_variant rk322x_vpu_variant = {
-	.enc_offset = 0x0,
-	.enc_fmts = rk3399_vpu_enc_fmts,
-	.num_enc_fmts = ARRAY_SIZE(rk3399_vpu_enc_fmts),
-	.dec_offset = 0x400,
-	.dec_fmts = rk3399_vpu_dec_fmts,
-	.num_dec_fmts = ARRAY_SIZE(rk3399_vpu_dec_fmts),
-	.codec = HANTRO_MPEG2_DECODER | HANTRO_VP8_DECODER |
-		 HANTRO_H264_DECODER,
-	.codec_ops = rk3399_vpu_codec_ops,
-	.irqs = rk3399_irqs,
-	.num_irqs = ARRAY_SIZE(rk3399_irqs),
-	.init = rk3399_vpu_hw_init,
-	.clk_names = rk3399_clk_names,
-	.num_clocks = ARRAY_SIZE(rk3399_clk_names)
 };

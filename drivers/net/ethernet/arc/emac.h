@@ -91,6 +91,20 @@ struct arc_emac_bd {
 #define RX_RING_SZ	(RX_BD_NUM * sizeof(struct arc_emac_bd))
 #define TX_RING_SZ	(TX_BD_NUM * sizeof(struct arc_emac_bd))
 
+/* PHY fixups */
+#define RTL_8201F_PHY_ID  		0x001cc816
+
+#define RTL_8201F_PG_SELECT_REG 	0x1f
+#define RTL_8201F_PG4_EEE_REG		0x10
+#define RTL_8201F_PG4_EEE_RX_QUIET_EN		BIT(8)
+#define RTL_8201F_PG4_EEE_TX_QUIET_EN		BIT(9)
+#define RTL_8201F_PG4_EEE_NWAY_EN		BIT(12)
+#define RTL_8201F_PG4_EEE_10M_CAP		BIT(13)
+#define RTL_8201F_PG7_RMSR_REG		0x10
+#define RTL_8201F_PG7_RMSR_CLK_DIR_IN		BIT(12)
+#define RTL_8201F_PG0_PSMR_REG		0x18
+#define RTL_8201F_PG0_PSMR_PWRSVE_EN		BIT(15)
+
 /**
  * struct buffer_state - Stores Rx/Tx buffer state.
  * @sk_buff:	Pointer to socket buffer.
@@ -130,7 +144,6 @@ struct arc_emac_mdio_bus_data {
  */
 struct arc_emac_priv {
 	const char *drv_name;
-	const char *drv_version;
 	void (*set_mac_speed)(void *priv, unsigned int speed);
 
 	/* Devices */

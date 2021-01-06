@@ -92,7 +92,6 @@ static void arc_emac_get_drvinfo(struct net_device *ndev,
 	struct arc_emac_priv *priv = netdev_priv(ndev);
 
 	strlcpy(info->driver, priv->drv_name, sizeof(info->driver));
-	strlcpy(info->version, priv->drv_version, sizeof(info->version));
 }
 
 static const struct ethtool_ops arc_emac_ethtool_ops = {
@@ -141,7 +140,7 @@ static void arc_emac_tx_clean(struct net_device *ndev)
 			stats->tx_bytes += skb->len;
 		}
 
-		dma_unmap_single(&ndev->dev, dma_unmap_addr(tx_buff, addr),
+		dma_unmap_single(ndev->dev.parent, dma_unmap_addr(tx_buff, addr),
 				 dma_unmap_len(tx_buff, len), DMA_TO_DEVICE);
 
 		/* return the sk_buff to system */
@@ -224,9 +223,9 @@ static int arc_emac_rx(struct net_device *ndev, int budget)
 			continue;
 		}
 
-		addr = dma_map_single(&ndev->dev, (void *)skb->data,
+		addr = dma_map_single(ndev->dev.parent, (void *)skb->data,
 				      EMAC_BUFFER_SIZE, DMA_FROM_DEVICE);
-		if (dma_mapping_error(&ndev->dev, addr)) {
+		if (dma_mapping_error(ndev->dev.parent, addr)) {
 			if (net_ratelimit())
 				netdev_err(ndev, "cannot map dma buffer\n");
 			dev_kfree_skb(skb);
@@ -238,7 +237,7 @@ static int arc_emac_rx(struct net_device *ndev, int budget)
 		}
 
 		/* unmap previosly mapped skb */
-		dma_unmap_single(&ndev->dev, dma_unmap_addr(rx_buff, addr),
+		dma_unmap_single(ndev->dev.parent, dma_unmap_addr(rx_buff, addr),
 				 dma_unmap_len(rx_buff, len), DMA_FROM_DEVICE);
 
 		pktlen = info & LEN_MASK;
@@ -446,9 +445,9 @@ static int arc_emac_open(struct net_device *ndev)
 		if (unlikely(!rx_buff->skb))
 			return -ENOMEM;
 
-		addr = dma_map_single(&ndev->dev, (void *)rx_buff->skb->data,
+		addr = dma_map_single(ndev->dev.parent, (void *)rx_buff->skb->data,
 				      EMAC_BUFFER_SIZE, DMA_FROM_DEVICE);
-		if (dma_mapping_error(&ndev->dev, addr)) {
+		if (dma_mapping_error(ndev->dev.parent, addr)) {
 			netdev_err(ndev, "cannot dma map\n");
 			dev_kfree_skb(rx_buff->skb);
 			return -ENOMEM;
@@ -556,7 +555,7 @@ static void arc_free_tx_queue(struct net_device *ndev)
 		struct buffer_state *tx_buff = &priv->tx_buff[i];
 
 		if (tx_buff->skb) {
-			dma_unmap_single(&ndev->dev,
+			dma_unmap_single(ndev->dev.parent,
 					 dma_unmap_addr(tx_buff, addr),
 					 dma_unmap_len(tx_buff, len),
 					 DMA_TO_DEVICE);
@@ -587,7 +586,7 @@ static void arc_free_rx_queue(struct net_device *ndev)
 		struct buffer_state *rx_buff = &priv->rx_buff[i];
 
 		if (rx_buff->skb) {
-			dma_unmap_single(&ndev->dev,
+			dma_unmap_single(ndev->dev.parent,
 					 dma_unmap_addr(rx_buff, addr),
 					 dma_unmap_len(rx_buff, len),
 					 DMA_FROM_DEVICE);
@@ -674,7 +673,7 @@ static struct net_device_stats *arc_emac_stats(struct net_device *ndev)
  *
  * This function is invoked from upper layers to initiate transmission.
  */
-static int arc_emac_tx(struct sk_buff *skb, struct net_device *ndev)
+static netdev_tx_t arc_emac_tx(struct sk_buff *skb, struct net_device *ndev)
 {
 	struct arc_emac_priv *priv = netdev_priv(ndev);
 	unsigned int len, *txbd_curr = &priv->txbd_curr;
@@ -693,10 +692,10 @@ static int arc_emac_tx(struct sk_buff *skb, struct net_device *ndev)
 		return NETDEV_TX_BUSY;
 	}
 
-	addr = dma_map_single(&ndev->dev, (void *)skb->data, len,
+	addr = dma_map_single(ndev->dev.parent, (void *)skb->data, len,
 			      DMA_TO_DEVICE);
 
-	if (unlikely(dma_mapping_error(&ndev->dev, addr))) {
+	if (unlikely(dma_mapping_error(ndev->dev.parent, addr))) {
 		stats->tx_dropped++;
 		stats->tx_errors++;
 		dev_kfree_skb_any(skb);
@@ -851,6 +850,62 @@ static const struct net_device_ops arc_emac_netdev_ops = {
 #endif
 };
 
+/**
+ * arc_emac_rtl8201f_phy_fixup
+ * @phydev: Pointer to phy_device structure.
+ *
+ * This function registers a fixup in case RTL8201F's phy
+ * clockout is used as reference for the mac interface
+ * and disable EEE, since emac can't handle it
+ */
+static int arc_emac_rtl8201f_phy_fixup(struct phy_device *phydev)
+{
+	unsigned int reg, curr_pg;
+	int err = 0;
+
+	curr_pg = phy_read(phydev, RTL_8201F_PG_SELECT_REG);
+	err = phy_write(phydev, RTL_8201F_PG_SELECT_REG, 4);
+	if (err)
+		goto out_err;
+	mdelay(10);
+
+	/* disable EEE */
+	reg = phy_read(phydev, RTL_8201F_PG4_EEE_REG);
+	reg &=  ~RTL_8201F_PG4_EEE_RX_QUIET_EN &
+		~RTL_8201F_PG4_EEE_TX_QUIET_EN &
+		~RTL_8201F_PG4_EEE_NWAY_EN &
+		~RTL_8201F_PG4_EEE_10M_CAP;
+	err = phy_write(phydev, RTL_8201F_PG4_EEE_REG, reg);
+	if (err)
+		goto out_err;
+
+	if (phydev->interface == PHY_INTERFACE_MODE_RMII) {
+		err = phy_write(phydev, RTL_8201F_PG_SELECT_REG, 7);
+		if (err)
+			goto out_err;
+		mdelay(10);
+
+		reg = phy_read(phydev, RTL_8201F_PG7_RMSR_REG);
+		err = phy_write(phydev, RTL_8201F_PG_SELECT_REG, 0);
+		if (err)
+			goto out_err;
+		mdelay(10);
+
+		if (!(reg & RTL_8201F_PG7_RMSR_CLK_DIR_IN)) {
+			/* disable powersave if phy's clock output is used */
+			reg = phy_read(phydev, RTL_8201F_PG0_PSMR_REG);
+			reg &= ~RTL_8201F_PG0_PSMR_PWRSVE_EN & 0xffff;
+			err = phy_write(phydev, RTL_8201F_PG0_PSMR_REG, reg);
+		}
+	}
+
+out_err:
+	phy_write(phydev, RTL_8201F_PG_SELECT_REG, curr_pg);
+	mdelay(10);
+
+	return err;
+};
+
 int arc_emac_probe(struct net_device *ndev, int interface)
 {
 	struct device *dev = ndev->dev.parent;
@@ -974,6 +1029,11 @@ int arc_emac_probe(struct net_device *ndev, int interface)
 		dev_err(dev, "failed to probe MII bus\n");
 		goto out_clken;
 	}
+
+	err = phy_register_fixup_for_uid(RTL_8201F_PHY_ID, 0xfffff0,
+					 arc_emac_rtl8201f_phy_fixup);
+	if (err)
+		dev_warn(dev, "Cannot register PHY board fixup.\n");
 
 	phydev = of_phy_connect(ndev, phy_node, arc_emac_adjust_link, 0,
 				interface);

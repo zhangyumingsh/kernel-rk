@@ -23,6 +23,15 @@
 		};
 	};
 
+	openvfd {
+		compatible = "open,vfd";
+		dev_name = "openvfd";
+		openvfd_gpio_clk = <&gpio0 RK_PA0 GPIO_ACTIVE_HIGH>;
+		openvfd_gpio_dat = <&gpio0 RK_PA1 GPIO_ACTIVE_HIGH>;
+		openvfd_display_type = <0x06000100>;
+		openvfd_dot_bits = [00 01 03 02 04 05 06];
+	};
+
 };
 
 &emmc {

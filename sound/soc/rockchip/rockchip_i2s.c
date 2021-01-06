@@ -272,20 +272,17 @@ static int rockchip_i2s_hw_params(struct snd_pcm_substream *substream,
 				  struct snd_soc_dai *dai)
 {
 	struct rk_i2s_dev *i2s = to_info(dai);
-	struct snd_soc_pcm_runtime *rtd = substream->private_data;
+	struct snd_soc_pcm_runtime *rtd = asoc_substream_to_rtd(substream);
 	unsigned int val = 0;
 	unsigned int mclk_rate, bclk_rate, div_bclk, div_lrck;
 
 	if (i2s->is_master_mode) {
 		mclk_rate = clk_get_rate(i2s->mclk);
 		bclk_rate = 2 * 32 * params_rate(params);
-		if (!bclk_rate) {
-			dev_err(i2s->dev, "invalid bclk_rate: %d\n",
-				bclk_rate);
+		if (bclk_rate == 0 || mclk_rate % bclk_rate)
 			return -EINVAL;
-		}
 
-		div_bclk = DIV_ROUND_CLOSEST(mclk_rate, bclk_rate);
+		div_bclk = mclk_rate / bclk_rate;
 		div_lrck = bclk_rate / params_rate(params);
 		regmap_update_bits(i2s->regmap, I2S_CKR,
 				   I2S_CKR_MDIV_MASK,
@@ -315,8 +312,6 @@ static int rockchip_i2s_hw_params(struct snd_pcm_substream *substream,
 		val |= I2S_TXCR_VDW(32);
 		break;
 	default:
-		dev_err(i2s->dev, "invalid format: %d\n",
-			params_format(params));
 		return -EINVAL;
 	}
 

@@ -56,14 +56,12 @@ struct hantro_jpeg_enc_hw_ctx {
  * struct hantro_h264_dec_ctrls
  * @decode:	Decode params
  * @scaling:	Scaling info
- * @slice:	Slice params
  * @sps:	SPS info
  * @pps:	PPS info
  */
 struct hantro_h264_dec_ctrls {
 	const struct v4l2_ctrl_h264_decode_params *decode;
 	const struct v4l2_ctrl_h264_scaling_matrix *scaling;
-	const struct v4l2_ctrl_h264_slice_params *slices;
 	const struct v4l2_ctrl_h264_sps *sps;
 	const struct v4l2_ctrl_h264_pps *pps;
 };
@@ -92,6 +90,8 @@ struct hantro_h264_dec_hw_ctx {
 	struct v4l2_h264_dpb_entry dpb[HANTRO_H264_DPB_SIZE];
 	struct hantro_h264_dec_reflists reflists;
 	struct hantro_h264_dec_ctrls ctrls;
+	u32 dpb_longterm;
+	u32 dpb_valid;
 };
 
 /**
@@ -138,7 +138,7 @@ struct hantro_codec_ops {
 	int (*init)(struct hantro_ctx *ctx);
 	void (*exit)(struct hantro_ctx *ctx);
 	void (*run)(struct hantro_ctx *ctx);
-	void (*done)(struct hantro_ctx *ctx, enum vb2_buffer_state);
+	void (*done)(struct hantro_ctx *ctx);
 	void (*reset)(struct hantro_ctx *ctx);
 };
 
@@ -152,11 +152,11 @@ enum hantro_enc_fmt {
 	RK3288_VPU_ENC_FMT_UYVY422 = 3,
 };
 
+extern const struct hantro_variant rk3036_vpu_variant;
 extern const struct hantro_variant rk3188_vpu_variant;
 extern const struct hantro_variant rk3399_vpu_variant;
 extern const struct hantro_variant rk3328_vpu_variant;
 extern const struct hantro_variant rk3288_vpu_variant;
-extern const struct hantro_variant rk322x_vpu_variant;
 extern const struct hantro_variant imx8mq_vpu_variant;
 
 extern const struct hantro_postproc_regs hantro_g1_postproc_regs;
@@ -165,7 +165,7 @@ extern const u32 hantro_vp8_dec_mc_filter[8][6];
 
 void hantro_watchdog(struct work_struct *work);
 void hantro_run(struct hantro_ctx *ctx);
-void hantro_irq_done(struct hantro_dev *vpu, unsigned int bytesused,
+void hantro_irq_done(struct hantro_dev *vpu,
 		     enum vb2_buffer_state result);
 void hantro_start_prepare_run(struct hantro_ctx *ctx);
 void hantro_end_prepare_run(struct hantro_ctx *ctx);
@@ -174,6 +174,7 @@ void hantro_h1_jpeg_enc_run(struct hantro_ctx *ctx);
 void rk3399_vpu_jpeg_enc_run(struct hantro_ctx *ctx);
 int hantro_jpeg_enc_init(struct hantro_ctx *ctx);
 void hantro_jpeg_enc_exit(struct hantro_ctx *ctx);
+void hantro_jpeg_enc_done(struct hantro_ctx *ctx);
 
 dma_addr_t hantro_h264_get_ref_buf(struct hantro_ctx *ctx,
 				   unsigned int dpb_idx);

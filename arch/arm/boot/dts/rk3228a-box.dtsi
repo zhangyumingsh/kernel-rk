@@ -2,7 +2,7 @@
 
 /dts-v1/;
 
-#include "rk322x-box.dtsi"
+#include "rk322x-box-dcdc.dtsi"
 
 / {
 

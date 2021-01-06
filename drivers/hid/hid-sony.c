@@ -837,6 +837,25 @@ static int ds4_mapping(struct hid_device *hdev, struct hid_input *hi,
 	return 0;
 }
 
+static int ps3remote_setup_repeat(struct hid_device *hdev)
+{
+	struct hid_input *hidinput = list_first_entry(&hdev->inputs,
+						 struct hid_input, list);
+	struct input_dev *input = hidinput->input;
+
+	/*
+	 * Set up autorepeat defaults per the remote control subsystem;
+	 * this must be done after hid_hw_start(), as having these non-zero
+	 * at the time of input_register_device() tells the input system that
+	 * the hardware does the autorepeat, and the PS3 remote does not.
+	*/
+	set_bit(EV_REP, input->evbit);
+	input->rep[REP_DELAY]  = 500;
+	input->rep[REP_PERIOD] = 125;
+
+	return 0;
+}
+
 static u8 *sony_report_fixup(struct hid_device *hdev, u8 *rdesc,
 		unsigned int *rsize)
 {
@@ -866,6 +885,23 @@ static u8 *sony_report_fixup(struct hid_device *hdev, u8 *rdesc,
 
 	if (sc->quirks & PS3REMOTE)
 		return ps3remote_fixup(hdev, rdesc, rsize);
+
+	/*
+	 * Some knock-off USB dongles incorrectly report their button count
+	 * as 13 instead of 16 causing three non-functional buttons.
+	 */
+	if ((sc->quirks & SIXAXIS_CONTROLLER_USB) && *rsize >= 45 &&
+		/* Report Count (13) */
+		rdesc[23] == 0x95 && rdesc[24] == 0x0D &&
+		/* Usage Maximum (13) */
+		rdesc[37] == 0x29 && rdesc[38] == 0x0D &&
+		/* Report Count (3) */
+		rdesc[43] == 0x95 && rdesc[44] == 0x03) {
+		hid_info(hdev, "Fixing up USB dongle report descriptor\n");
+		rdesc[24] = 0x10;
+		rdesc[38] = 0x10;
+		rdesc[44] = 0x00;
+	}
 
 	return rdesc;
 }
@@ -2771,6 +2807,8 @@ static int sony_input_configured(struct hid_device *hdev,
 
 	} else if (sc->quirks & MOTION_CONTROLLER) {
 		sony_init_output_report(sc, motion_send_output_report);
+	} else if (sc->quirks & PS3REMOTE) {
+		ret = ps3remote_setup_repeat(hdev);
 	} else {
 		ret = 0;
 	}

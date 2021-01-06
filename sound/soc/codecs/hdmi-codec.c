@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
  * ALSA SoC codec for HDMI encoder drivers
- * Copyright (C) 2015 Texas Instruments Incorporated - http://www.ti.com/
+ * Copyright (C) 2015 Texas Instruments Incorporated - https://www.ti.com/
  * Author: Jyri Sarha <jsarha@ti.com>
  */
 #include <linux/module.h>
@@ -189,75 +189,84 @@ static const struct snd_pcm_chmap_elem hdmi_codec_8ch_chmaps[] = {
 /*
  * hdmi_codec_channel_alloc: speaker configuration available for CEA
  *
- * This is an ordered list where ca_id must exist in hdmi_codec_8ch_chmaps
+ * This is an ordered list that must match with hdmi_codec_8ch_chmaps struct
  * The preceding ones have better chances to be selected by
  * hdmi_codec_get_ch_alloc_table_idx().
  */
 static const struct hdmi_codec_cea_spk_alloc hdmi_codec_channel_alloc[] = {
 	{ .ca_id = 0x00, .n_ch = 2,
-	  .mask = FL | FR },
-	{ .ca_id = 0x03, .n_ch = 4,
-	  .mask = FL | FR | LFE | FC },
+	  .mask = FL | FR},
+	/* 2.1 */
+	{ .ca_id = 0x01, .n_ch = 4,
+	  .mask = FL | FR | LFE},
+	/* Dolby Surround */
 	{ .ca_id = 0x02, .n_ch = 4,
 	  .mask = FL | FR | FC },
-	{ .ca_id = 0x01, .n_ch = 4,
-	  .mask = FL | FR | LFE },
+	/* surround51 */
 	{ .ca_id = 0x0b, .n_ch = 6,
-	  .mask = FL | FR | LFE | FC | RL | RR },
-	{ .ca_id = 0x0a, .n_ch = 6,
-	  .mask = FL | FR | FC | RL | RR },
-	{ .ca_id = 0x09, .n_ch = 6,
-	  .mask = FL | FR | LFE | RL | RR },
+	  .mask = FL | FR | LFE | FC | RL | RR},
+	/* surround40 */
 	{ .ca_id = 0x08, .n_ch = 6,
 	  .mask = FL | FR | RL | RR },
-	{ .ca_id = 0x07, .n_ch = 6,
-	  .mask = FL | FR | LFE | FC | RC },
-	{ .ca_id = 0x06, .n_ch = 6,
-	  .mask = FL | FR | FC | RC },
-	{ .ca_id = 0x05, .n_ch = 6,
-	  .mask = FL | FR | LFE | RC },
-	{ .ca_id = 0x04, .n_ch = 6,
-	  .mask = FL | FR | RC },
-	{ .ca_id = 0x13, .n_ch = 8,
-	  .mask = FL | FR | LFE | FC | RL | RR | RLC | RRC },
-	{ .ca_id = 0x1f, .n_ch = 8,
-	  .mask = FL | FR | LFE | FC | RL | RR | FLC | FRC },
-	{ .ca_id = 0x12, .n_ch = 8,
-	  .mask = FL | FR | FC | RL | RR | RLC | RRC },
-	{ .ca_id = 0x1e, .n_ch = 8,
-	  .mask = FL | FR | FC | RL | RR | FLC | FRC },
-	{ .ca_id = 0x11, .n_ch = 8,
-	  .mask = FL | FR | LFE | RL | RR | RLC | RRC },
-	{ .ca_id = 0x1d, .n_ch = 8,
-	  .mask = FL | FR | LFE | RL | RR | FLC | FRC },
-	{ .ca_id = 0x10, .n_ch = 8,
-	  .mask = FL | FR | RL | RR | RLC | RRC },
-	{ .ca_id = 0x1c, .n_ch = 8,
-	  .mask = FL | FR | RL | RR | FLC | FRC },
+	/* surround41 */
+	{ .ca_id = 0x09, .n_ch = 6,
+	  .mask = FL | FR | LFE | RL | RR },
+	/* surround50 */
+	{ .ca_id = 0x0a, .n_ch = 6,
+	  .mask = FL | FR | FC | RL | RR },
+	/* 6.1 */
 	{ .ca_id = 0x0f, .n_ch = 8,
 	  .mask = FL | FR | LFE | FC | RL | RR | RC },
-	{ .ca_id = 0x1b, .n_ch = 8,
-	  .mask = FL | FR | LFE | RC | FC | FLC | FRC },
-	{ .ca_id = 0x0e, .n_ch = 8,
-	  .mask = FL | FR | FC | RL | RR | RC },
-	{ .ca_id = 0x1a, .n_ch = 8,
-	  .mask = FL | FR | RC | FC | FLC | FRC },
-	{ .ca_id = 0x0d, .n_ch = 8,
-	  .mask = FL | FR | LFE | RL | RR | RC },
-	{ .ca_id = 0x19, .n_ch = 8,
-	  .mask = FL | FR | LFE | RC | FLC | FRC },
+	/* surround71 */
+	{ .ca_id = 0x13, .n_ch = 8,
+	  .mask = FL | FR | LFE | FC | RL | RR | RLC | RRC },
+	/* others */
+	{ .ca_id = 0x03, .n_ch = 8,
+	  .mask = FL | FR | LFE | FC },
+	{ .ca_id = 0x04, .n_ch = 8,
+	  .mask = FL | FR | RC},
+	{ .ca_id = 0x05, .n_ch = 8,
+	  .mask = FL | FR | LFE | RC },
+	{ .ca_id = 0x06, .n_ch = 8,
+	  .mask = FL | FR | FC | RC },
+	{ .ca_id = 0x07, .n_ch = 8,
+	  .mask = FL | FR | LFE | FC | RC },
 	{ .ca_id = 0x0c, .n_ch = 8,
 	  .mask = FL | FR | RC | RL | RR },
-	{ .ca_id = 0x18, .n_ch = 8,
-	  .mask = FL | FR | RC | FLC | FRC },
-	{ .ca_id = 0x17, .n_ch = 8,
-	  .mask = FL | FR | LFE | FC | FLC | FRC },
-	{ .ca_id = 0x16, .n_ch = 8,
-	  .mask = FL | FR | FC | FLC | FRC },
-	{ .ca_id = 0x15, .n_ch = 8,
-	  .mask = FL | FR | LFE | FLC | FRC },
+	{ .ca_id = 0x0d, .n_ch = 8,
+	  .mask = FL | FR | LFE | RL | RR | RC },
+	{ .ca_id = 0x0e, .n_ch = 8,
+	  .mask = FL | FR | FC | RL | RR | RC },
+	{ .ca_id = 0x10, .n_ch = 8,
+	  .mask = FL | FR | RL | RR | RLC | RRC },
+	{ .ca_id = 0x11, .n_ch = 8,
+	  .mask = FL | FR | LFE | RL | RR | RLC | RRC },
+	{ .ca_id = 0x12, .n_ch = 8,
+	  .mask = FL | FR | FC | RL | RR | RLC | RRC },
 	{ .ca_id = 0x14, .n_ch = 8,
 	  .mask = FL | FR | FLC | FRC },
+	{ .ca_id = 0x15, .n_ch = 8,
+	  .mask = FL | FR | LFE | FLC | FRC },
+	{ .ca_id = 0x16, .n_ch = 8,
+	  .mask = FL | FR | FC | FLC | FRC },
+	{ .ca_id = 0x17, .n_ch = 8,
+	  .mask = FL | FR | LFE | FC | FLC | FRC },
+	{ .ca_id = 0x18, .n_ch = 8,
+	  .mask = FL | FR | RC | FLC | FRC },
+	{ .ca_id = 0x19, .n_ch = 8,
+	  .mask = FL | FR | LFE | RC | FLC | FRC },
+	{ .ca_id = 0x1a, .n_ch = 8,
+	  .mask = FL | FR | RC | FC | FLC | FRC },
+	{ .ca_id = 0x1b, .n_ch = 8,
+	  .mask = FL | FR | LFE | RC | FC | FLC | FRC },
+	{ .ca_id = 0x1c, .n_ch = 8,
+	  .mask = FL | FR | RL | RR | FLC | FRC },
+	{ .ca_id = 0x1d, .n_ch = 8,
+	  .mask = FL | FR | LFE | RL | RR | FLC | FRC },
+	{ .ca_id = 0x1e, .n_ch = 8,
+	  .mask = FL | FR | FC | RL | RR | FLC | FRC },
+	{ .ca_id = 0x1f, .n_ch = 8,
+	  .mask = FL | FR | LFE | FC | RL | RR | FLC | FRC },
 };
 
 struct hdmi_codec_priv {
@@ -549,15 +558,24 @@ static int hdmi_codec_i2s_set_fmt(struct snd_soc_dai *dai,
 	return 0;
 }
 
-static int hdmi_codec_digital_mute(struct snd_soc_dai *dai, int mute)
+static int hdmi_codec_mute(struct snd_soc_dai *dai, int mute, int direction)
 {
 	struct hdmi_codec_priv *hcp = snd_soc_dai_get_drvdata(dai);
 
-	if (hcp->hcd.ops->digital_mute)
-		return hcp->hcd.ops->digital_mute(dai->dev->parent,
-						  hcp->hcd.data, mute);
+	/*
+	 * ignore if direction was CAPTURE
+	 * and it had .no_capture_mute flag
+	 * see
+	 *	snd_soc_dai_digital_mute()
+	 */
+	if (hcp->hcd.ops->mute_stream &&
+	    (direction == SNDRV_PCM_STREAM_PLAYBACK ||
+	     !hcp->hcd.ops->no_capture_mute))
+		return hcp->hcd.ops->mute_stream(dai->dev->parent,
+						 hcp->hcd.data,
+						 mute, direction);
 
-	return 0;
+	return -ENOTSUPP;
 }
 
 static const struct snd_soc_dai_ops hdmi_codec_i2s_dai_ops = {
@@ -565,14 +583,14 @@ static const struct snd_soc_dai_ops hdmi_codec_i2s_dai_ops = {
 	.shutdown	= hdmi_codec_shutdown,
 	.hw_params	= hdmi_codec_hw_params,
 	.set_fmt	= hdmi_codec_i2s_set_fmt,
-	.digital_mute	= hdmi_codec_digital_mute,
+	.mute_stream	= hdmi_codec_mute,
 };
 
 static const struct snd_soc_dai_ops hdmi_codec_spdif_dai_ops = {
 	.startup	= hdmi_codec_startup,
 	.shutdown	= hdmi_codec_shutdown,
 	.hw_params	= hdmi_codec_hw_params,
-	.digital_mute	= hdmi_codec_digital_mute,
+	.mute_stream	= hdmi_codec_mute,
 };
 
 #define HDMI_RATES	(SNDRV_PCM_RATE_32000 | SNDRV_PCM_RATE_44100 |\
@@ -680,13 +698,9 @@ static void plugged_cb(struct device *dev, bool plugged)
 		hdmi_codec_jack_report(hcp, 0);
 }
 
-/**
- * hdmi_codec_set_jack_detect - register HDMI plugged callback
- * @component: the hdmi-codec instance
- * @jack: ASoC jack to report (dis)connection events on
- */
-int hdmi_codec_set_jack_detect(struct snd_soc_component *component,
-			       struct snd_soc_jack *jack)
+static int hdmi_codec_set_jack(struct snd_soc_component *component,
+			       struct snd_soc_jack *jack,
+			       void *data)
 {
 	struct hdmi_codec_priv *hcp = snd_soc_component_get_drvdata(component);
 	int ret = -EOPNOTSUPP;
@@ -702,7 +716,6 @@ int hdmi_codec_set_jack_detect(struct snd_soc_component *component,
 	}
 	return ret;
 }
-EXPORT_SYMBOL_GPL(hdmi_codec_set_jack_detect);
 
 static int hdmi_dai_spdif_probe(struct snd_soc_dai *dai)
 {
@@ -788,6 +801,7 @@ static const struct snd_soc_component_driver hdmi_driver = {
 	.use_pmdown_time	= 1,
 	.endianness		= 1,
 	.non_legacy_dai_naming	= 1,
+	.set_jack		= hdmi_codec_set_jack,
 };
 
 static int hdmi_codec_probe(struct platform_device *pdev)

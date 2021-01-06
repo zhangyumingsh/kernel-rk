@@ -575,6 +575,7 @@ static int drm_atomic_plane_check(const struct drm_plane_state *old_plane_state,
 					   fb->modifier);
 	if (ret) {
 		struct drm_format_name_buf format_name;
+
 		DRM_DEBUG_ATOMIC("[PLANE:%d:%s] invalid pixel format %s, modifier 0x%llx\n",
 				 plane->base.id, plane->name,
 				 drm_get_format_name(fb->format->format,
@@ -1019,14 +1020,88 @@ static void drm_atomic_connector_print_state(struct drm_printer *p,
 }
 
 /**
+ * drm_atomic_get_bridge_state - get bridge state
+ * @state: global atomic state object
+ * @bridge: bridge to get state object for
+ *
+ * This function returns the bridge state for the given bridge, allocating it
+ * if needed. It will also grab the relevant bridge lock to make sure that the
+ * state is consistent.
+ *
+ * Returns:
+ *
+ * Either the allocated state or the error code encoded into the pointer. When
+ * the error is EDEADLK then the w/w mutex code has detected a deadlock and the
+ * entire atomic sequence must be restarted.
+ */
+struct drm_bridge_state *
+drm_atomic_get_bridge_state(struct drm_atomic_state *state,
+			    struct drm_bridge *bridge)
+{
+	struct drm_private_state *obj_state;
+
+	obj_state = drm_atomic_get_private_obj_state(state, &bridge->base);
+	if (IS_ERR(obj_state))
+		return ERR_CAST(obj_state);
+
+	return drm_priv_to_bridge_state(obj_state);
+}
+EXPORT_SYMBOL(drm_atomic_get_bridge_state);
+
+/**
+ * drm_atomic_get_old_bridge_state - get old bridge state, if it exists
+ * @state: global atomic state object
+ * @bridge: bridge to grab
+ *
+ * This function returns the old bridge state for the given bridge, or NULL if
+ * the bridge is not part of the global atomic state.
+ */
+struct drm_bridge_state *
+drm_atomic_get_old_bridge_state(struct drm_atomic_state *state,
+				struct drm_bridge *bridge)
+{
+	struct drm_private_state *obj_state;
+
+	obj_state = drm_atomic_get_old_private_obj_state(state, &bridge->base);
+	if (!obj_state)
+		return NULL;
+
+	return drm_priv_to_bridge_state(obj_state);
+}
+EXPORT_SYMBOL(drm_atomic_get_old_bridge_state);
+
+/**
+ * drm_atomic_get_new_bridge_state - get new bridge state, if it exists
+ * @state: global atomic state object
+ * @bridge: bridge to grab
+ *
+ * This function returns the new bridge state for the given bridge, or NULL if
+ * the bridge is not part of the global atomic state.
+ */
+struct drm_bridge_state *
+drm_atomic_get_new_bridge_state(struct drm_atomic_state *state,
+				struct drm_bridge *bridge)
+{
+	struct drm_private_state *obj_state;
+
+	obj_state = drm_atomic_get_new_private_obj_state(state, &bridge->base);
+	if (!obj_state)
+		return NULL;
+
+	return drm_priv_to_bridge_state(obj_state);
+}
+EXPORT_SYMBOL(drm_atomic_get_new_bridge_state);
+
+/**
  * drm_atomic_add_encoder_bridges - add bridges attached to an encoder
  * @state: atomic state
  * @encoder: DRM encoder
  *
  * This function adds all bridges attached to @encoder. This is needed to add
  * bridge states to @state and make them available when
- * &bridge_funcs.atomic_{check,pre_enable,enable,disable_post_disable}() are
- * called
+ * &drm_bridge_funcs.atomic_check(), &drm_bridge_funcs.atomic_pre_enable(),
+ * &drm_bridge_funcs.atomic_enable(),
+ * &drm_bridge_funcs.atomic_disable_post_disable() are called.
  *
  * Returns:
  * 0 on success or can fail with -EDEADLK or -ENOMEM. When the error is EDEADLK
@@ -1047,6 +1122,10 @@ drm_atomic_add_encoder_bridges(struct drm_atomic_state *state,
 			 encoder->base.id, encoder->name, state);
 
 	drm_for_each_bridge_in_chain(encoder, bridge) {
+		/* Skip bridges that don't implement the atomic state hooks. */
+		if (!bridge->funcs->atomic_duplicate_state)
+			continue;
+
 		bridge_state = drm_atomic_get_bridge_state(state, bridge);
 		if (IS_ERR(bridge_state))
 			return PTR_ERR(bridge_state);
@@ -1563,10 +1642,10 @@ static const struct drm_info_list drm_atomic_debugfs_list[] = {
 	{"state", drm_state_info, 0},
 };
 
-int drm_atomic_debugfs_init(struct drm_minor *minor)
+void drm_atomic_debugfs_init(struct drm_minor *minor)
 {
-	return drm_debugfs_create_files(drm_atomic_debugfs_list,
-			ARRAY_SIZE(drm_atomic_debugfs_list),
-			minor->debugfs_root, minor);
+	drm_debugfs_create_files(drm_atomic_debugfs_list,
+				 ARRAY_SIZE(drm_atomic_debugfs_list),
+				 minor->debugfs_root, minor);
 }
 #endif

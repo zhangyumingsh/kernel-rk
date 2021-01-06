@@ -26,7 +26,7 @@ static unsigned int get_reboot_mode_magic(struct reboot_mode_driver *reboot,
 	int magic = 0;
 	struct mode_info *info;
 
-	if (!cmd || !cmd[0])
+	if (!cmd)
 		cmd = normal;
 
 	list_for_each_entry(info, &reboot->head, list) {
@@ -47,8 +47,6 @@ static int reboot_mode_notify(struct notifier_block *this,
 
 	reboot = container_of(this, struct reboot_mode_driver, reboot_notifier);
 	magic = get_reboot_mode_magic(reboot, cmd);
-	if (!magic)
-		magic = get_reboot_mode_magic(reboot, NULL);
 	if (magic)
 		reboot->write(reboot, magic);
 

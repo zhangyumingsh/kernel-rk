@@ -50,7 +50,7 @@ enum v4l2_vp9_loop_filter_flags {
  *		the chosen reference frame
  * @mode_deltas: contains the adjustment needed for the filter level based on
  *		 the chosen mode
- * @lvl_lookup: level lookup table
+ * @level_lookup: level lookup table
  *
  * This structure contains all loop filter related parameters. See sections
  * '7.2.8 Loop filter semantics' and '8.8.1 Loop filter frame init process'
@@ -62,7 +62,8 @@ struct v4l2_vp9_loop_filter {
 	__u8 sharpness;
 	__s8 ref_deltas[4];
 	__s8 mode_deltas[2];
-	__u8 lvl_lookup[8][4][2];
+	__u8 level_lookup[8][4][2];
+	__u8 padding;
 };
 
 /**
@@ -144,10 +145,12 @@ enum v4l2_vp9_segment_feature {
  * struct v4l2_vp9_segmentation - VP9 segmentation parameters
  *
  * @flags: combination of V4L2_VP9_SEGMENTATION_FLAG_* flags
- * @tree_probs: specify the probability values to be used when decoding
- *		segment_id
- * @pred_prob: specify the probability values to be used when decoding
- *	       seg_id_predicte
+ * @tree_probs: specifies the probability values to be used when
+ *              decoding a Segment-ID. See '5.15. Segmentation map'
+ *              section of the VP9 specification for more details.
+ * @pred_prob: specifies the probability values to be used when decoding a
+ *	       Predicted-Segment-ID. See '6.4.14. Get segment id syntax'
+ *	       section of :ref:`vp9` for more details..
  * @padding: padding used to make things aligned on 64 bits. Shall be zero
  *	     filled
  * @feature_enabled: bitmask defining which features are enabled in each
@@ -197,6 +200,30 @@ enum v4l2_vp9_intra_prediction_mode {
 };
 
 /**
+ * struct v4l2_vp9_mv_probabilities - VP9 Motion vector probabilities
+ * @joint: motion vector joint probabilities
+ * @sign: motion vector sign probabilities
+ * @class: motion vector class probabilities
+ * @class0_bit: motion vector class0 bit probabilities
+ * @bits: motion vector bits probabilities
+ * @class0_fr: motion vector class0 fractional bit probabilities
+ * @fr: motion vector fractional bit probabilities
+ * @class0_hp: motion vector class0 high precision fractional bit probabilities
+ * @hp: motion vector high precision fractional bit probabilities
+ */
+struct v4l2_vp9_mv_probabilities {
+	__u8 joint[3];
+	__u8 sign[2];
+	__u8 class[2][10];
+	__u8 class0_bit[2];
+	__u8 bits[2][10];
+	__u8 class0_fr[2][2][3];
+	__u8 fr[2][3];
+	__u8 class0_hp[2];
+	__u8 hp[2];
+};
+
+/**
  * struct v4l2_vp9_probabilities - VP9 Probabilities
  *
  * @tx8: TX 8x8 probabilities
@@ -213,16 +240,6 @@ enum v4l2_vp9_intra_prediction_mode {
  * @y_mode: Y prediction mode probabilities
  * @uv_mode: UV prediction mode probabilities
  * @partition: partition probabilities
- * @mv.joint: motion vector joint probabilities
- * @mv.sign: motion vector sign probabilities
- * @mv.class: motion vector class probabilities
- * @mv.class0_bit: motion vector class0 bit probabilities
- * @mv.bits: motion vector bits probabilities
- * @mv.class0_fr: motion vector class0 fractional bit probabilities
- * @mv.fr: motion vector fractional bit probabilities
- * @mv.class0_hp: motion vector class0 high precision fractional bit
- *		  probabilities
- * @mv.hp: motion vector high precision fractional bit probabilities
  * @mv: motion vector probabilities
  *
  * Structure containing most VP9 probabilities. See the VP9 specification
@@ -243,17 +260,8 @@ struct v4l2_vp9_probabilities {
 	__u8 y_mode[4][9];
 	__u8 uv_mode[10][9];
 	__u8 partition[16][3];
-	struct {
-		__u8 joint[3];
-		__u8 sign[2];
-		__u8 class[2][10];
-		__u8 class0_bit[2];
-		__u8 bits[2][10];
-		__u8 class0_fr[2][2][3];
-		__u8 fr[2][3];
-		__u8 class0_hp[2];
-		__u8 hp[2];
-	} mv;
+
+	struct v4l2_vp9_mv_probabilities mv;
 };
 
 /**
@@ -272,35 +280,6 @@ enum v4l2_vp9_reset_frame_context {
 	V4L2_VP9_RESET_FRAME_CTX_NONE,
 	V4L2_VP9_RESET_FRAME_CTX_SPEC,
 	V4L2_VP9_RESET_FRAME_CTX_ALL,
-};
-
-/**
- * enum v4l2_vp9_color_space - Valid values for
- *			&v4l2_ctrl_vp9_frame_decode_params->color_space
- *
- * @V4L2_VP9_COLOR_SPACE_UNKNOWN: unknown color space. In this case the color
- *				  space must be signaled outside the VP9
- *				  bitstream
- * @V4L2_VP9_COLOR_SPACE_BT_601: Rec. ITU-R BT.601-7
- * @V4L2_VP9_COLOR_SPACE_BT_709: Rec. ITU-R BT.709-6
- * @V4L2_VP9_COLOR_SPACE_SMPTE_170: SMPTE-170
- * @V4L2_VP9_COLOR_SPACE_SMPTE_240: SMPTE-240
- * @V4L2_VP9_COLOR_SPACE_BT_2020: Rec. ITU-R BT.2020-2
- * @V4L2_VP9_COLOR_SPACE_RESERVED: reserved. This value should never be passed
- * @V4L2_VP9_COLOR_SPACE_SRGB: sRGB (IEC 61966-2-1)
- *
- * See section '7.2.2 Color config semantics' of the VP9 specification for more
- * details.
- */
-enum v4l2_vp9_color_space {
-	V4L2_VP9_COLOR_SPACE_UNKNOWN,
-	V4L2_VP9_COLOR_SPACE_BT_601,
-	V4L2_VP9_COLOR_SPACE_BT_709,
-	V4L2_VP9_COLOR_SPACE_SMPTE_170,
-	V4L2_VP9_COLOR_SPACE_SMPTE_240,
-	V4L2_VP9_COLOR_SPACE_BT_2020,
-	V4L2_VP9_COLOR_SPACE_RESERVED,
-	V4L2_VP9_COLOR_SPACE_SRGB,
 };
 
 /**
@@ -428,8 +407,6 @@ enum v4l2_vp9_frame_flags {
  * @frame_context_idx: frame context that should be used/updated
  * @bit_depth: bits per components. Can be 8, 10 or 12. Note that not all
  *	       profiles support 10 and/or 12 bits depths
- * @color_space: specifies the color space of the stream. See
- *		 &v4l2_vp9_color_space for more details
  * @interpolation_filter: specifies the filter selection used for performing
  *			  inter prediction. See &v4l2_vp9_interpolation_filter
  *			  for more details
@@ -455,7 +432,7 @@ enum v4l2_vp9_frame_flags {
  *			 expressed in pixels. This is not used during the
  *			 decoding process but might be used by HW scalers to
  *			 prepare a frame that's ready for scanout
- * @refs: array of reference frames. See &v4l2_vp9_ref_id for more details
+ * @refs: array of ref frames timestamps. See &v4l2_vp9_ref_id for more details
  * @lf: loop filter parameters. See &v4l2_vp9_loop_filter for more details
  * @quant: quantization parameters. See &v4l2_vp9_quantization for more details
  * @seg: segmentation parameters. See &v4l2_vp9_segmentation for more details
@@ -469,13 +446,12 @@ struct v4l2_ctrl_vp9_frame_decode_params {
 	__u8 reset_frame_context;
 	__u8 frame_context_idx;
 	__u8 bit_depth;
-	__u8 color_space;
 	__u8 interpolation_filter;
 	__u8 tile_cols_log2;
 	__u8 tile_rows_log2;
 	__u8 tx_mode;
 	__u8 reference_mode;
-	__u8 padding[6];
+	__u8 padding[7];
 	__u16 frame_width_minus_1;
 	__u16 frame_height_minus_1;
 	__u16 render_width_minus_1;

@@ -4,15 +4,6 @@
 #define RKVDEC_REGS_H_
 
 /* rkvcodec registers */
-#define RKVDEC_REG_HW_INFO				0x000
-#define RKVDEC_HW_ID					0x6876
-#define RKVDEC_HW_CAP_UHD				BIT(8)
-#define RKVDEC_HW_CAP_VP9				BIT(9)
-#define RKVDEC_HW_CAP_H264				BIT(10)
-#define RKVDEC_HW_CAP_HEVC				BIT(11)
-#define RKVDEC_HW_CAP_MAIN10				BIT(12)
-#define RKVDEC_HW_CAP_ENCODER				BIT(13)
-
 #define RKVDEC_REG_INTERRUPT				0x004
 #define RKVDEC_INTERRUPT_DEC_E				BIT(0)
 #define RKVDEC_CONFIG_DEC_CLK_GATE_E			BIT(1)

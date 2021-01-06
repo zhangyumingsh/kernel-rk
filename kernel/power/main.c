@@ -80,22 +80,22 @@ int unregister_pm_notifier(struct notifier_block *nb)
 }
 EXPORT_SYMBOL_GPL(unregister_pm_notifier);
 
-int __pm_notifier_call_chain(unsigned long val, int nr_to_call, int *nr_calls)
+int pm_notifier_call_chain_robust(unsigned long val_up, unsigned long val_down)
 {
 	int ret;
 
-	ret = __blocking_notifier_call_chain(&pm_chain_head, val, NULL,
-						nr_to_call, nr_calls);
+	ret = blocking_notifier_call_chain_robust(&pm_chain_head, val_up, val_down, NULL);
 
 	return notifier_to_errno(ret);
 }
+
 int pm_notifier_call_chain(unsigned long val)
 {
-	return __pm_notifier_call_chain(val, -1, NULL);
+	return blocking_notifier_call_chain(&pm_chain_head, val, NULL);
 }
 
 /* If set, devices may be suspended and resumed asynchronously. */
-int pm_async_enabled = 1;
+int pm_async_enabled = 0;
 
 static ssize_t pm_async_show(struct kobject *kobj, struct kobj_attribute *attr,
 			     char *buf)
@@ -534,6 +534,13 @@ static ssize_t pm_debug_messages_store(struct kobject *kobj,
 }
 
 power_attr(pm_debug_messages);
+
+static int __init pm_debug_messages_setup(char *str)
+{
+	pm_debug_messages_on = true;
+	return 1;
+}
+__setup("pm_debug_messages", pm_debug_messages_setup);
 
 /**
  * __pm_pr_dbg - Print a suspend debug message to the kernel log.

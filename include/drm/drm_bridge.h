@@ -23,8 +23,9 @@
 #ifndef __DRM_BRIDGE_H__
 #define __DRM_BRIDGE_H__
 
-#include <linux/list.h>
 #include <linux/ctype.h>
+#include <linux/list.h>
+#include <linux/mutex.h>
 
 #include <drm/drm_atomic.h>
 #include <drm/drm_encoder.h>
@@ -33,66 +34,22 @@
 
 struct drm_bridge;
 struct drm_bridge_timings;
+struct drm_connector;
+struct drm_display_info;
 struct drm_panel;
+struct edid;
+struct i2c_adapter;
 
 /**
- * struct drm_bus_cfg - bus configuration
- *
- * This structure stores the configuration of a physical bus between two
- * components in an output pipeline, usually between two bridges, an encoder
- * and a bridge, or a bridge and a connector.
- *
- * The bus configuration is stored in &drm_bridge_state separately for the
- * input and output buses, as seen from the point of view of each bridge. The
- * bus configuration of a bridge output is usually identical to the
- * configuration of the next bridge's input, but may differ if the signals are
- * modified between the two bridges, for instance by an inverter on the board.
- * The input and output configurations of a bridge may differ if the bridge
- * modifies the signals internally, for instance by performing format
- * conversion, or modifying signals polarities.
+ * enum drm_bridge_attach_flags - Flags for &drm_bridge_funcs.attach
  */
-struct drm_bus_cfg {
+enum drm_bridge_attach_flags {
 	/**
-	 * @fmt: format used on this bus (one of the MEDIA_BUS_FMT_* format)
-	 *
-	 * This field should not be directly modified by drivers
-	 * (&drm_atomic_bridge_chain_select_bus_fmts() takes care of the bus
-	 * format negotiation).
+	 * @DRM_BRIDGE_ATTACH_NO_CONNECTOR: When this flag is set the bridge
+	 * shall not create a drm_connector.
 	 */
-	u32 format;
-
-	/**
-	 * @flags: DRM_BUS_* flags used on this bus
-	 */
-	u32 flags;
+	DRM_BRIDGE_ATTACH_NO_CONNECTOR = BIT(0),
 };
-
-/**
- * struct drm_bridge_state - Atomic bridge state object
- * @base: inherit from &drm_private_state
- * @bridge: the bridge this state refers to
- */
-struct drm_bridge_state {
-	struct drm_private_state base;
-
-	struct drm_bridge *bridge;
-
-	/**
-	 * @input_bus_cfg: input bus configuration
-	 */
-	struct drm_bus_cfg input_bus_cfg;
-
-	/**
-	 * @output_bus_cfg: input bus configuration
-	 */
-	struct drm_bus_cfg output_bus_cfg;
-};
-
-static inline struct drm_bridge_state *
-drm_priv_to_bridge_state(struct drm_private_state *priv)
-{
-	return container_of(priv, struct drm_bridge_state, base);
-}
 
 /**
  * struct drm_bridge_funcs - drm_bridge control functions
@@ -102,7 +59,8 @@ struct drm_bridge_funcs {
 	 * @attach:
 	 *
 	 * This callback is invoked whenever our bridge is being attached to a
-	 * &drm_encoder.
+	 * &drm_encoder. The flags argument tunes the behaviour of the attach
+	 * operation (see DRM_BRIDGE_ATTACH_*).
 	 *
 	 * The @attach callback is optional.
 	 *
@@ -110,7 +68,8 @@ struct drm_bridge_funcs {
 	 *
 	 * Zero on success, error code on failure.
 	 */
-	int (*attach)(struct drm_bridge *bridge);
+	int (*attach)(struct drm_bridge *bridge,
+		      enum drm_bridge_attach_flags flags);
 
 	/**
 	 * @detach:
@@ -154,6 +113,7 @@ struct drm_bridge_funcs {
 	 * drm_mode_status Enum
 	 */
 	enum drm_mode_status (*mode_valid)(struct drm_bridge *bridge,
+					   const struct drm_display_info *info,
 					   const struct drm_display_mode *mode);
 
 	/**
@@ -408,9 +368,11 @@ struct drm_bridge_funcs {
 	 * Duplicate the current bridge state object (which is guaranteed to be
 	 * non-NULL).
 	 *
-	 * The atomic_duplicate_state() is optional. When not implemented the
-	 * core allocates a drm_bridge_state object and calls
-	 * &__drm_atomic_helper_bridge_duplicate_state() to initialize it.
+	 * The atomic_duplicate_state hook is mandatory if the bridge
+	 * implements any of the atomic hooks, and should be left unassigned
+	 * otherwise. For bridges that don't subclass &drm_bridge_state, the
+	 * drm_atomic_helper_bridge_duplicate_state() helper function shall be
+	 * used to implement this hook.
 	 *
 	 * RETURNS:
 	 * A valid drm_bridge_state object or NULL if the allocation fails.
@@ -423,8 +385,11 @@ struct drm_bridge_funcs {
 	 * Destroy a bridge state object previously allocated by
 	 * &drm_bridge_funcs.atomic_duplicate_state().
 	 *
-	 * The atomic_destroy_state hook is optional. When not implemented the
-	 * core calls kfree() on the state.
+	 * The atomic_destroy_state hook is mandatory if the bridge implements
+	 * any of the atomic hooks, and should be left unassigned otherwise.
+	 * For bridges that don't subclass &drm_bridge_state, the
+	 * drm_atomic_helper_bridge_destroy_state() helper function shall be
+	 * used to implement this hook.
 	 */
 	void (*atomic_destroy_state)(struct drm_bridge *bridge,
 				     struct drm_bridge_state *state);
@@ -466,11 +431,11 @@ struct drm_bridge_funcs {
 	 * Formats listed in the returned array should be listed in decreasing
 	 * preference order (the core will try all formats until it finds one
 	 * that works). When the format is not supported NULL should be
-	 * returned and *num_output_fmts should be set to 0.
+	 * returned and num_output_fmts should be set to 0.
 	 *
 	 * This method is called on all elements of the bridge chain as part of
 	 * the bus format negotiation process that happens in
-	 * &drm_atomic_bridge_chain_select_bus_fmts().
+	 * drm_atomic_bridge_chain_select_bus_fmts().
 	 * This method is optional. When not implemented, the core will bypass
 	 * bus format negotiation on this element of the bridge without
 	 * failing, and the previous element in the chain will be passed
@@ -510,7 +475,7 @@ struct drm_bridge_funcs {
 	 * one of them should be provided.
 	 *
 	 * If drivers need to tweak &drm_bridge_state.input_bus_cfg.flags or
-	 * &drm_bridge_state.output_bus_cfg.flags it should should happen in
+	 * &drm_bridge_state.output_bus_cfg.flags it should happen in
 	 * this function. By default the &drm_bridge_state.output_bus_cfg.flags
 	 * field is set to the next bridge
 	 * &drm_bridge_state.input_bus_cfg.flags value or
@@ -532,14 +497,138 @@ struct drm_bridge_funcs {
 	 * state) and return a &drm_bridge_state object matching this state.
 	 * This function is called at attach time.
 	 *
-	 * The atomic_reset hook is optional. When not implemented the core
-	 * allocates a new state and calls &__drm_atomic_helper_bridge_reset().
+	 * The atomic_reset hook is mandatory if the bridge implements any of
+	 * the atomic hooks, and should be left unassigned otherwise. For
+	 * bridges that don't subclass &drm_bridge_state, the
+	 * drm_atomic_helper_bridge_reset() helper function shall be used to
+	 * implement this hook.
+	 *
+	 * Note that the atomic_reset() semantics is not exactly matching the
+	 * reset() semantics found on other components (connector, plane, ...).
+	 *
+	 * 1. The reset operation happens when the bridge is attached, not when
+	 *    drm_mode_config_reset() is called
+	 * 2. It's meant to be used exclusively on bridges that have been
+	 *    converted to the ATOMIC API
 	 *
 	 * RETURNS:
 	 * A valid drm_bridge_state object in case of success, an ERR_PTR()
 	 * giving the reason of the failure otherwise.
 	 */
 	struct drm_bridge_state *(*atomic_reset)(struct drm_bridge *bridge);
+
+	/**
+	 * @detect:
+	 *
+	 * Check if anything is attached to the bridge output.
+	 *
+	 * This callback is optional, if not implemented the bridge will be
+	 * considered as always having a component attached to its output.
+	 * Bridges that implement this callback shall set the
+	 * DRM_BRIDGE_OP_DETECT flag in their &drm_bridge->ops.
+	 *
+	 * RETURNS:
+	 *
+	 * drm_connector_status indicating the bridge output status.
+	 */
+	enum drm_connector_status (*detect)(struct drm_bridge *bridge);
+
+	/**
+	 * @get_modes:
+	 *
+	 * Fill all modes currently valid for the sink into the &drm_connector
+	 * with drm_mode_probed_add().
+	 *
+	 * The @get_modes callback is mostly intended to support non-probeable
+	 * displays such as many fixed panels. Bridges that support reading
+	 * EDID shall leave @get_modes unimplemented and implement the
+	 * &drm_bridge_funcs->get_edid callback instead.
+	 *
+	 * This callback is optional. Bridges that implement it shall set the
+	 * DRM_BRIDGE_OP_MODES flag in their &drm_bridge->ops.
+	 *
+	 * The connector parameter shall be used for the sole purpose of
+	 * filling modes, and shall not be stored internally by bridge drivers
+	 * for future usage.
+	 *
+	 * RETURNS:
+	 *
+	 * The number of modes added by calling drm_mode_probed_add().
+	 */
+	int (*get_modes)(struct drm_bridge *bridge,
+			 struct drm_connector *connector);
+
+	/**
+	 * @get_edid:
+	 *
+	 * Read and parse the EDID data of the connected display.
+	 *
+	 * The @get_edid callback is the preferred way of reporting mode
+	 * information for a display connected to the bridge output. Bridges
+	 * that support reading EDID shall implement this callback and leave
+	 * the @get_modes callback unimplemented.
+	 *
+	 * The caller of this operation shall first verify the output
+	 * connection status and refrain from reading EDID from a disconnected
+	 * output.
+	 *
+	 * This callback is optional. Bridges that implement it shall set the
+	 * DRM_BRIDGE_OP_EDID flag in their &drm_bridge->ops.
+	 *
+	 * The connector parameter shall be used for the sole purpose of EDID
+	 * retrieval and parsing, and shall not be stored internally by bridge
+	 * drivers for future usage.
+	 *
+	 * RETURNS:
+	 *
+	 * An edid structure newly allocated with kmalloc() (or similar) on
+	 * success, or NULL otherwise. The caller is responsible for freeing
+	 * the returned edid structure with kfree().
+	 */
+	struct edid *(*get_edid)(struct drm_bridge *bridge,
+				 struct drm_connector *connector);
+
+	/**
+	 * @hpd_notify:
+	 *
+	 * Notify the bridge of hot plug detection.
+	 *
+	 * This callback is optional, it may be implemented by bridges that
+	 * need to be notified of display connection or disconnection for
+	 * internal reasons. One use case is to reset the internal state of CEC
+	 * controllers for HDMI bridges.
+	 */
+	void (*hpd_notify)(struct drm_bridge *bridge,
+			   enum drm_connector_status status);
+
+	/**
+	 * @hpd_enable:
+	 *
+	 * Enable hot plug detection. From now on the bridge shall call
+	 * drm_bridge_hpd_notify() each time a change is detected in the output
+	 * connection status, until hot plug detection gets disabled with
+	 * @hpd_disable.
+	 *
+	 * This callback is optional and shall only be implemented by bridges
+	 * that support hot-plug notification without polling. Bridges that
+	 * implement it shall also implement the @hpd_disable callback and set
+	 * the DRM_BRIDGE_OP_HPD flag in their &drm_bridge->ops.
+	 */
+	void (*hpd_enable)(struct drm_bridge *bridge);
+
+	/**
+	 * @hpd_disable:
+	 *
+	 * Disable hot plug detection. Once this function returns the bridge
+	 * shall not call drm_bridge_hpd_notify() when a change in the output
+	 * connection status occurs.
+	 *
+	 * This callback is optional and shall only be implemented by bridges
+	 * that support hot-plug notification without polling. Bridges that
+	 * implement it shall also implement the @hpd_enable callback and set
+	 * the DRM_BRIDGE_OP_HPD flag in their &drm_bridge->ops.
+	 */
+	void (*hpd_disable)(struct drm_bridge *bridge);
 };
 
 /**
@@ -579,6 +668,39 @@ struct drm_bridge_timings {
 };
 
 /**
+ * enum drm_bridge_ops - Bitmask of operations supported by the bridge
+ */
+enum drm_bridge_ops {
+	/**
+	 * @DRM_BRIDGE_OP_DETECT: The bridge can detect displays connected to
+	 * its output. Bridges that set this flag shall implement the
+	 * &drm_bridge_funcs->detect callback.
+	 */
+	DRM_BRIDGE_OP_DETECT = BIT(0),
+	/**
+	 * @DRM_BRIDGE_OP_EDID: The bridge can retrieve the EDID of the display
+	 * connected to its output. Bridges that set this flag shall implement
+	 * the &drm_bridge_funcs->get_edid callback.
+	 */
+	DRM_BRIDGE_OP_EDID = BIT(1),
+	/**
+	 * @DRM_BRIDGE_OP_HPD: The bridge can detect hot-plug and hot-unplug
+	 * without requiring polling. Bridges that set this flag shall
+	 * implement the &drm_bridge_funcs->hpd_enable and
+	 * &drm_bridge_funcs->hpd_disable callbacks if they support enabling
+	 * and disabling hot-plug detection dynamically.
+	 */
+	DRM_BRIDGE_OP_HPD = BIT(2),
+	/**
+	 * @DRM_BRIDGE_OP_MODES: The bridge can retrieve the modes supported
+	 * by the display at its output. This does not include reading EDID
+	 * which is separately covered by @DRM_BRIDGE_OP_EDID. Bridges that set
+	 * this flag shall implement the &drm_bridge_funcs->get_modes callback.
+	 */
+	DRM_BRIDGE_OP_MODES = BIT(3),
+};
+
+/**
  * struct drm_bridge - central DRM bridge control structure
  */
 struct drm_bridge {
@@ -606,6 +728,38 @@ struct drm_bridge {
 	const struct drm_bridge_funcs *funcs;
 	/** @driver_private: pointer to the bridge driver's internal context */
 	void *driver_private;
+	/** @ops: bitmask of operations supported by the bridge */
+	enum drm_bridge_ops ops;
+	/**
+	 * @type: Type of the connection at the bridge output
+	 * (DRM_MODE_CONNECTOR_*). For bridges at the end of this chain this
+	 * identifies the type of connected display.
+	 */
+	int type;
+	/**
+	 * @interlace_allowed: Indicate that the bridge can handle interlaced
+	 * modes.
+	 */
+	bool interlace_allowed;
+	/**
+	 * @ddc: Associated I2C adapter for DDC access, if any.
+	 */
+	struct i2c_adapter *ddc;
+	/** private: */
+	/**
+	 * @hpd_mutex: Protects the @hpd_cb and @hpd_data fields.
+	 */
+	struct mutex hpd_mutex;
+	/**
+	 * @hpd_cb: Hot plug detection callback, registered with
+	 * drm_bridge_hpd_enable().
+	 */
+	void (*hpd_cb)(void *data, enum drm_connector_status status);
+	/**
+	 * @hpd_data: Private data passed to the Hot plug detection callback
+	 * @hpd_cb.
+	 */
+	void *hpd_data;
 };
 
 static inline struct drm_bridge *
@@ -618,7 +772,8 @@ void drm_bridge_add(struct drm_bridge *bridge);
 void drm_bridge_remove(struct drm_bridge *bridge);
 struct drm_bridge *of_drm_find_bridge(struct device_node *np);
 int drm_bridge_attach(struct drm_encoder *encoder, struct drm_bridge *bridge,
-		      struct drm_bridge *previous);
+		      struct drm_bridge *previous,
+		      enum drm_bridge_attach_flags flags);
 
 /**
  * drm_bridge_get_next_bridge() - Get the next bridge in the chain
@@ -683,6 +838,7 @@ bool drm_bridge_chain_mode_fixup(struct drm_bridge *bridge,
 				 struct drm_display_mode *adjusted_mode);
 enum drm_mode_status
 drm_bridge_chain_mode_valid(struct drm_bridge *bridge,
+			    const struct drm_display_info *info,
 			    const struct drm_display_mode *mode);
 void drm_bridge_chain_disable(struct drm_bridge *bridge);
 void drm_bridge_chain_post_disable(struct drm_bridge *bridge);
@@ -712,55 +868,18 @@ drm_atomic_helper_bridge_propagate_bus_fmt(struct drm_bridge *bridge,
 					u32 output_fmt,
 					unsigned int *num_input_fmts);
 
-void __drm_atomic_helper_bridge_reset(struct drm_bridge *bridge,
-				      struct drm_bridge_state *state);
-void drm_atomic_helper_bridge_destroy_state(struct drm_bridge *bridge,
-					    struct drm_bridge_state *state);
-struct drm_bridge_state *
-drm_atomic_helper_bridge_reset(struct drm_bridge *bridge);
-void __drm_atomic_helper_bridge_duplicate_state(struct drm_bridge *bridge,
-						struct drm_bridge_state *new);
-struct drm_bridge_state *
-drm_atomic_helper_bridge_duplicate_state(struct drm_bridge *bridge);
-
-static inline struct drm_bridge_state *
-drm_atomic_get_bridge_state(struct drm_atomic_state *state,
-			    struct drm_bridge *bridge)
-{
-	struct drm_private_state *obj_state;
-
-	obj_state = drm_atomic_get_private_obj_state(state, &bridge->base);
-	if (IS_ERR(obj_state))
-		return ERR_CAST(obj_state);
-
-	return drm_priv_to_bridge_state(obj_state);
-}
-
-static inline struct drm_bridge_state *
-drm_atomic_get_old_bridge_state(struct drm_atomic_state *state,
-				struct drm_bridge *bridge)
-{
-	struct drm_private_state *obj_state;
-
-	obj_state = drm_atomic_get_old_private_obj_state(state, &bridge->base);
-	if (!obj_state)
-		return NULL;
-
-	return drm_priv_to_bridge_state(obj_state);
-}
-
-static inline struct drm_bridge_state *
-drm_atomic_get_new_bridge_state(struct drm_atomic_state *state,
-				struct drm_bridge *bridge)
-{
-	struct drm_private_state *obj_state;
-
-	obj_state = drm_atomic_get_new_private_obj_state(state, &bridge->base);
-	if (!obj_state)
-		return NULL;
-
-	return drm_priv_to_bridge_state(obj_state);
-}
+enum drm_connector_status drm_bridge_detect(struct drm_bridge *bridge);
+int drm_bridge_get_modes(struct drm_bridge *bridge,
+			 struct drm_connector *connector);
+struct edid *drm_bridge_get_edid(struct drm_bridge *bridge,
+				 struct drm_connector *connector);
+void drm_bridge_hpd_enable(struct drm_bridge *bridge,
+			   void (*cb)(void *data,
+				      enum drm_connector_status status),
+			   void *data);
+void drm_bridge_hpd_disable(struct drm_bridge *bridge);
+void drm_bridge_hpd_notify(struct drm_bridge *bridge,
+			   enum drm_connector_status status);
 
 #ifdef CONFIG_DRM_PANEL_BRIDGE
 struct drm_bridge *drm_panel_bridge_add(struct drm_panel *panel);

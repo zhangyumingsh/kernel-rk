@@ -17,7 +17,7 @@ properties:
   compatible:
     enum:
       - rockchip,rk3188-vpu
-      - rockchip,rk322x-vpu
+      - rockchip,rk3228-vpu
       - rockchip,rk3288-vpu
       - rockchip,rk3328-vpu
       - rockchip,rk3399-vpu
@@ -26,20 +26,27 @@ properties:
     maxItems: 1
 
   interrupts:
+    minItems: 1
     maxItems: 2
 
   interrupt-names:
-    items:
-      - const: vepu
+    oneOf:
       - const: vdpu
+      - items:
+          - const: vepu
+          - const: vdpu
 
   clocks:
-    maxItems: 2
+    maxItems: 4
 
   clock-names:
     items:
       - const: aclk
+      - const: aclk_vdpu
+      - const: aclk_vepu
       - const: hclk
+      - const: hclk_vdpu
+      - const: hclk_vepu
 
   power-domains:
     maxItems: 1
@@ -55,30 +62,22 @@ required:
   - clocks
   - clock-names
 
+additionalProperties: false
+
 examples:
   - |
         #include <dt-bindings/clock/rk3288-cru.h>
         #include <dt-bindings/interrupt-controller/arm-gic.h>
+        #include <dt-bindings/power/rk3288-power.h>
 
         vpu: video-codec@ff9a0000 {
                 compatible = "rockchip,rk3288-vpu";
-                reg = <0x0 0xff9a0000 0x0 0x800>;
+                reg = <0xff9a0000 0x800>;
                 interrupts = <GIC_SPI 9 IRQ_TYPE_LEVEL_HIGH>,
                              <GIC_SPI 10 IRQ_TYPE_LEVEL_HIGH>;
                 interrupt-names = "vepu", "vdpu";
                 clocks = <&cru ACLK_VCODEC>, <&cru HCLK_VCODEC>;
                 clock-names = "aclk", "hclk";
                 power-domains = <&power RK3288_PD_VIDEO>;
-                iommus = <&vpu_mmu>;
-        };
-
-        vpu: video-codec@ff350000 {
-                compatible = "rockchip,rk3328-vpu";
-                reg = <0x0 0xff350000 0x0 0x800>;
-                interrupts = <GIC_SPI 9 IRQ_TYPE_LEVEL_HIGH>;
-                interrupt-names = "vdpu";
-                clocks = <&cru ACLK_VPU>, <&cru HCLK_VPU>;
-                clock-names = "aclk", "hclk";
-                power-domains = <&power RK3328_PD_VPU>;
                 iommus = <&vpu_mmu>;
         };

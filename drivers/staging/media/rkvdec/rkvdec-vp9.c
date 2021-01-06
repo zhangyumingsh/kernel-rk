@@ -154,7 +154,7 @@ struct rkvdec_vp9_ctx {
 
 static u32 rkvdec_fastdiv(u32 dividend, u16 divisor)
 {
-#define DIV_INV(d)	(u32)(((1ULL << 32) + ((d) - 1)) / (d))
+#define DIV_INV(d)	((u32)(((1ULL << 32) + ((d) - 1)) / (d)))
 #define DIVS_INV(d0, d1, d2, d3, d4, d5, d6, d7, d8, d9)	\
 	DIV_INV(d0), DIV_INV(d1), DIV_INV(d2), DIV_INV(d3),	\
 	DIV_INV(d4), DIV_INV(d5), DIV_INV(d6), DIV_INV(d7),	\

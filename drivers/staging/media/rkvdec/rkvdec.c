@@ -30,41 +30,126 @@
 #include "rkvdec.h"
 #include "rkvdec-regs.h"
 
+static void rkvdec_fill_decoded_pixfmt(struct rkvdec_ctx *ctx,
+				       struct v4l2_pix_format_mplane *pix_mp)
+{
+	v4l2_fill_pixfmt_mp(pix_mp, pix_mp->pixelformat,
+			    ALIGN(pix_mp->width, 64), pix_mp->height);
+	pix_mp->plane_fmt[0].sizeimage += 128 *
+		DIV_ROUND_UP(pix_mp->width, 16) *
+		DIV_ROUND_UP(pix_mp->height, 16);
+	pix_mp->field = V4L2_FIELD_NONE;
+}
+
+static u32 rkvdec_valid_fmt(struct rkvdec_ctx *ctx, struct v4l2_ctrl *ctrl)
+{
+	const struct rkvdec_coded_fmt_desc *coded_desc = ctx->coded_fmt_desc;
+
+	if (coded_desc->ops->valid_fmt)
+		return coded_desc->ops->valid_fmt(ctx, ctrl);
+
+	return ctx->valid_fmt;
+}
+
+static int rkvdec_try_ctrl(struct v4l2_ctrl *ctrl)
+{
+	struct rkvdec_ctx *ctx = container_of(ctrl->handler, struct rkvdec_ctx, ctrl_hdl);
+
+	if (ctrl->id == V4L2_CID_MPEG_VIDEO_H264_SPS) {
+		const struct v4l2_ctrl_h264_sps *sps = ctrl->p_new.p_h264_sps;
+		unsigned int width, height;
+
+		if (sps->chroma_format_idc > 2)
+			/* Only 4:0:0, 4:2:0 and 4:2:2 are supported */
+			return -EINVAL;
+		if (sps->bit_depth_luma_minus8 != sps->bit_depth_chroma_minus8)
+			/* Luma and chroma bit depth mismatch */
+			return -EINVAL;
+		if (sps->bit_depth_luma_minus8 != 0 && sps->bit_depth_luma_minus8 != 2)
+			/* Only 8-bit and 10-bit is supported */
+			return -EINVAL;
+
+		if (ctx->valid_fmt && ctx->valid_fmt != rkvdec_valid_fmt(ctx, ctrl))
+			/* Only current valid format */
+			return -EINVAL;
+
+		width = (sps->pic_width_in_mbs_minus1 + 1) * 16;
+		height = (sps->pic_height_in_map_units_minus1 + 1) * 16;
+
+		if (width > ctx->coded_fmt.fmt.pix_mp.width ||
+		    height > ctx->coded_fmt.fmt.pix_mp.height)
+			return -EINVAL;
+	} else if (ctrl->id == V4L2_CID_MPEG_VIDEO_HEVC_SPS) {
+		const struct v4l2_ctrl_hevc_sps *sps = ctrl->p_new.p_hevc_sps;
+
+		if (sps->chroma_format_idc > 1)
+			/* Only 4:0:0 and 4:2:0 are supported */
+			return -EINVAL;
+		if (sps->bit_depth_luma_minus8 != sps->bit_depth_chroma_minus8)
+			/* Luma and chroma bit depth mismatch */
+			return -EINVAL;
+		if (sps->bit_depth_luma_minus8 != 0 && sps->bit_depth_luma_minus8 != 2)
+			/* Only 8-bit and 10-bit is supported */
+			return -EINVAL;
+
+		if (ctx->valid_fmt && ctx->valid_fmt != rkvdec_valid_fmt(ctx, ctrl))
+			/* Only current valid format */
+			return -EINVAL;
+
+		if (sps->pic_width_in_luma_samples > ctx->coded_fmt.fmt.pix_mp.width ||
+		    sps->pic_height_in_luma_samples > ctx->coded_fmt.fmt.pix_mp.height)
+			return -EINVAL;
+	}
+	return 0;
+}
+
+static int rkvdec_s_ctrl(struct v4l2_ctrl *ctrl)
+{
+	struct rkvdec_ctx *ctx = container_of(ctrl->handler, struct rkvdec_ctx, ctrl_hdl);
+
+	if (!ctx->valid_fmt) {
+		ctx->valid_fmt = rkvdec_valid_fmt(ctx, ctrl);
+		if (ctx->valid_fmt) {
+			struct v4l2_pix_format_mplane *pix_mp;
+
+			pix_mp = &ctx->decoded_fmt.fmt.pix_mp;
+			pix_mp->pixelformat = ctx->valid_fmt;
+			rkvdec_fill_decoded_pixfmt(ctx, pix_mp);
+		}
+	}
+
+	return 0;
+}
+
+static const struct v4l2_ctrl_ops rkvdec_ctrl_ops = {
+	.try_ctrl = rkvdec_try_ctrl,
+	.s_ctrl = rkvdec_s_ctrl,
+};
+
 static const struct rkvdec_ctrl_desc rkvdec_h264_ctrl_descs[] = {
 	{
-		.per_request = true,
 		.mandatory = true,
 		.cfg.id = V4L2_CID_MPEG_VIDEO_H264_DECODE_PARAMS,
 	},
 	{
-		.per_request = true,
-		.mandatory = true,
-		.cfg.id = V4L2_CID_MPEG_VIDEO_H264_SLICE_PARAMS,
-	},
-	{
-		.per_request = true,
 		.mandatory = true,
 		.cfg.id = V4L2_CID_MPEG_VIDEO_H264_SPS,
+		.cfg.ops = &rkvdec_ctrl_ops,
 	},
 	{
-		.per_request = true,
 		.mandatory = true,
 		.cfg.id = V4L2_CID_MPEG_VIDEO_H264_PPS,
 	},
 	{
-		.per_request = true,
-		.mandatory = true,
 		.cfg.id = V4L2_CID_MPEG_VIDEO_H264_SCALING_MATRIX,
 	},
 	{
-		.mandatory = true,
 		.cfg.id = V4L2_CID_MPEG_VIDEO_H264_DECODE_MODE,
 		.cfg.min = V4L2_MPEG_VIDEO_H264_DECODE_MODE_FRAME_BASED,
 		.cfg.max = V4L2_MPEG_VIDEO_H264_DECODE_MODE_FRAME_BASED,
 		.cfg.def = V4L2_MPEG_VIDEO_H264_DECODE_MODE_FRAME_BASED,
 	},
 	{
-		.mandatory = true,
 		.cfg.id = V4L2_CID_MPEG_VIDEO_H264_START_CODE,
 		.cfg.min = V4L2_MPEG_VIDEO_H264_START_CODE_ANNEX_B,
 		.cfg.def = V4L2_MPEG_VIDEO_H264_START_CODE_ANNEX_B,
@@ -72,7 +157,7 @@ static const struct rkvdec_ctrl_desc rkvdec_h264_ctrl_descs[] = {
 	},
 	{
 		.cfg.id = V4L2_CID_MPEG_VIDEO_H264_PROFILE,
-		.cfg.min = V4L2_MPEG_VIDEO_H264_PROFILE_BASELINE,
+		.cfg.min = V4L2_MPEG_VIDEO_H264_PROFILE_CONSTRAINED_BASELINE,
 		.cfg.max = V4L2_MPEG_VIDEO_H264_PROFILE_HIGH_422,
 		.cfg.menu_skip_mask =
 			BIT(V4L2_MPEG_VIDEO_H264_PROFILE_EXTENDED),
@@ -99,7 +184,6 @@ static const u32 rkvdec_h264_decoded_fmts[] = {
 
 static const struct rkvdec_ctrl_desc rkvdec_hevc_ctrl_descs[] = {
 	{
-		.per_request = true,
 		.mandatory = true,
 		.cfg.id = V4L2_CID_MPEG_VIDEO_HEVC_SLICE_PARAMS,
 		// HACK: match ffmpeg v4l2 request api hwaccel size,
@@ -107,33 +191,40 @@ static const struct rkvdec_ctrl_desc rkvdec_hevc_ctrl_descs[] = {
 		.cfg.dims = { 16 },
 	},
 	{
-		.per_request = true,
 		.mandatory = true,
 		.cfg.id = V4L2_CID_MPEG_VIDEO_HEVC_SPS,
+		.cfg.ops = &rkvdec_ctrl_ops,
 	},
 	{
-		.per_request = true,
 		.mandatory = true,
 		.cfg.id = V4L2_CID_MPEG_VIDEO_HEVC_PPS,
 	},
 	{
-		.per_request = true,
 		.mandatory = true,
 		.cfg.id = V4L2_CID_MPEG_VIDEO_HEVC_SCALING_MATRIX,
 	},
 	{
-		.mandatory = true,
 		.cfg.id = V4L2_CID_MPEG_VIDEO_HEVC_DECODE_MODE,
 		.cfg.min = V4L2_MPEG_VIDEO_HEVC_DECODE_MODE_FRAME_BASED,
 		.cfg.max = V4L2_MPEG_VIDEO_HEVC_DECODE_MODE_FRAME_BASED,
 		.cfg.def = V4L2_MPEG_VIDEO_HEVC_DECODE_MODE_FRAME_BASED,
 	},
 	{
-		.mandatory = true,
 		.cfg.id = V4L2_CID_MPEG_VIDEO_HEVC_START_CODE,
 		.cfg.min = V4L2_MPEG_VIDEO_HEVC_START_CODE_ANNEX_B,
 		.cfg.def = V4L2_MPEG_VIDEO_HEVC_START_CODE_ANNEX_B,
 		.cfg.max = V4L2_MPEG_VIDEO_HEVC_START_CODE_ANNEX_B,
+	},
+	{
+		.cfg.id = V4L2_CID_MPEG_VIDEO_HEVC_PROFILE,
+		.cfg.min = V4L2_MPEG_VIDEO_HEVC_PROFILE_MAIN,
+		.cfg.max = V4L2_MPEG_VIDEO_HEVC_PROFILE_MAIN_10,
+		.cfg.def = V4L2_MPEG_VIDEO_HEVC_PROFILE_MAIN,
+	},
+	{
+		.cfg.id = V4L2_CID_MPEG_VIDEO_HEVC_LEVEL,
+		.cfg.min = V4L2_MPEG_VIDEO_HEVC_LEVEL_1,
+		.cfg.max = V4L2_MPEG_VIDEO_HEVC_LEVEL_5_1,
 	},
 };
 
@@ -149,24 +240,19 @@ static const u32 rkvdec_hevc_decoded_fmts[] = {
 
 static const struct rkvdec_ctrl_desc rkvdec_vp9_ctrl_descs[] = {
 	{
-		.per_request = true,
 		.mandatory = true,
 		.cfg.id = V4L2_CID_MPEG_VIDEO_VP9_FRAME_DECODE_PARAMS,
 	},
 	{
-		.mandatory = true,
 		.cfg.id = V4L2_CID_MPEG_VIDEO_VP9_FRAME_CONTEXT(0),
 	},
 	{
-		.mandatory = true,
 		.cfg.id = V4L2_CID_MPEG_VIDEO_VP9_FRAME_CONTEXT(1),
 	},
 	{
-		.mandatory = true,
 		.cfg.id = V4L2_CID_MPEG_VIDEO_VP9_FRAME_CONTEXT(2),
 	},
 	{
-		.mandatory = true,
 		.cfg.id = V4L2_CID_MPEG_VIDEO_VP9_FRAME_CONTEXT(3),
 	},
 	{
@@ -177,23 +263,23 @@ static const struct rkvdec_ctrl_desc rkvdec_vp9_ctrl_descs[] = {
 	},
 };
 
-static const u32 rkvdec_vp9_decoded_fmts[] = {
-	V4L2_PIX_FMT_NV12,
-};
-
 static const struct rkvdec_ctrls rkvdec_vp9_ctrls = {
 	.ctrls = rkvdec_vp9_ctrl_descs,
 	.num_ctrls = ARRAY_SIZE(rkvdec_vp9_ctrl_descs),
+};
+
+static const u32 rkvdec_vp9_decoded_fmts[] = {
+	V4L2_PIX_FMT_NV12,
 };
 
 static const struct rkvdec_coded_fmt_desc rkvdec_coded_fmts[] = {
 	{
 		.fourcc = V4L2_PIX_FMT_H264_SLICE,
 		.frmsize = {
-			.min_width = 64,
+			.min_width = 48,
 			.max_width = 4096,
-			.step_width = 64,
-			.min_height = 64,
+			.step_width = 16,
+			.min_height = 48,
 			.max_height = 2304,
 			.step_height = 16,
 		},
@@ -278,15 +364,12 @@ static void rkvdec_reset_decoded_fmt(struct rkvdec_ctx *ctx)
 {
 	struct v4l2_format *f = &ctx->decoded_fmt;
 
+	ctx->valid_fmt = 0;
 	rkvdec_reset_fmt(ctx, f, ctx->coded_fmt_desc->decoded_fmts[0]);
 	f->type = V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
-	v4l2_fill_pixfmt_mp(&f->fmt.pix_mp,
-			    ctx->coded_fmt_desc->decoded_fmts[0],
-			    ctx->coded_fmt.fmt.pix_mp.width,
-			    ctx->coded_fmt.fmt.pix_mp.height);
-	f->fmt.pix_mp.plane_fmt[0].sizeimage += 256 *
-		DIV_ROUND_UP(f->fmt.pix_mp.width, 16) *
-		DIV_ROUND_UP(f->fmt.pix_mp.height, 16);
+	f->fmt.pix_mp.width = ctx->coded_fmt.fmt.pix_mp.width;
+	f->fmt.pix_mp.height = ctx->coded_fmt.fmt.pix_mp.height;
+	rkvdec_fill_decoded_pixfmt(ctx, &f->fmt.pix_mp);
 }
 
 static int rkvdec_enum_framesizes(struct file *file, void *priv,
@@ -337,26 +420,26 @@ static int rkvdec_try_capture_fmt(struct file *file, void *priv,
 	if (WARN_ON(!coded_desc))
 		return -EINVAL;
 
-	for (i = 0; i < coded_desc->num_decoded_fmts; i++) {
-		if (coded_desc->decoded_fmts[i] == pix_mp->pixelformat)
-			break;
+	if (ctx->valid_fmt) {
+		pix_mp->pixelformat = ctx->valid_fmt;
+	} else {
+		for (i = 0; i < coded_desc->num_decoded_fmts; i++) {
+			if (coded_desc->decoded_fmts[i] == pix_mp->pixelformat)
+				break;
+		}
+
+		if (i == coded_desc->num_decoded_fmts)
+			pix_mp->pixelformat = coded_desc->decoded_fmts[0];
 	}
 
-	if (i == coded_desc->num_decoded_fmts)
-		pix_mp->pixelformat = coded_desc->decoded_fmts[0];
-
 	/* Always apply the frmsize constraint of the coded end. */
+	pix_mp->width = max(pix_mp->width, ctx->coded_fmt.fmt.pix_mp.width);
+	pix_mp->height = max(pix_mp->height, ctx->coded_fmt.fmt.pix_mp.height);
 	v4l2_apply_frmsize_constraints(&pix_mp->width,
 				       &pix_mp->height,
 				       &coded_desc->frmsize);
 
-	v4l2_fill_pixfmt_mp(pix_mp, pix_mp->pixelformat,
-			    pix_mp->width, pix_mp->height);
-	pix_mp->plane_fmt[0].sizeimage +=
-		256 *
-		DIV_ROUND_UP(pix_mp->width, 16) *
-		DIV_ROUND_UP(pix_mp->height, 16);
-	pix_mp->field = V4L2_FIELD_NONE;
+	rkvdec_fill_decoded_pixfmt(ctx, pix_mp);
 
 	return 0;
 }
@@ -422,6 +505,7 @@ static int rkvdec_s_capture_fmt(struct file *file, void *priv,
 		return ret;
 
 	ctx->decoded_fmt = *f;
+	ctx->valid_fmt = f->fmt.pix_mp.pixelformat;
 	return 0;
 }
 
@@ -432,7 +516,7 @@ static int rkvdec_s_output_fmt(struct file *file, void *priv,
 	struct v4l2_m2m_ctx *m2m_ctx = ctx->fh.m2m_ctx;
 	const struct rkvdec_coded_fmt_desc *desc;
 	struct v4l2_format *cap_fmt;
-	struct vb2_queue *peer_vq;
+	struct vb2_queue *peer_vq, *vq;
 	int ret;
 
 	/*
@@ -443,6 +527,15 @@ static int rkvdec_s_output_fmt(struct file *file, void *priv,
 	peer_vq = v4l2_m2m_get_vq(m2m_ctx, V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE);
 	if (vb2_is_busy(peer_vq))
 		return -EBUSY;
+
+	/*
+	 * Some codecs like VP9 can contain dynamic resolution changes which
+	 * are currently not supported by the V4L2 API or driver, so return
+	 * an error if userspace tries to reconfigure the output format.
+	 */
+	vq = v4l2_m2m_get_vq(m2m_ctx, V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE);
+	if (vb2_is_busy(vq))
+		return -EINVAL;
 
 	ret = rkvdec_s_fmt(file, priv, f, rkvdec_try_output_fmt);
 	if (ret)
@@ -510,6 +603,14 @@ static int rkvdec_enum_capture_fmt(struct file *file, void *priv,
 
 	if (WARN_ON(!ctx->coded_fmt_desc))
 		return -EINVAL;
+
+	if (ctx->valid_fmt) {
+		if (f->index)
+			return -EINVAL;
+
+		f->pixelformat = ctx->valid_fmt;
+		return 0;
+	}
 
 	if (f->index >= ctx->coded_fmt_desc->num_decoded_fmts)
 		return -EINVAL;
@@ -596,13 +697,13 @@ static int rkvdec_buf_prepare(struct vb2_buffer *vb)
 	}
 
 	/*
-	 * Buffer's bytesused is written by the driver for CAPTURE buffers,
-	 * or if the application passed zero bytesused on an OUTPUT buffer.
+	 * Buffer bytesused is written by driver for CAPTURE buffers.
+	 * (if userspace passes 0 bytesused for OUTPUT buffers, v4l2-core sets
+	 * it to buffer length).
 	 */
-	if (!V4L2_TYPE_IS_OUTPUT(vq->type) ||
-	    (V4L2_TYPE_IS_OUTPUT(vq->type) && !vb2_get_plane_payload(vb, 0)))
-		vb2_set_plane_payload(vb, 0,
-				      f->fmt.pix_mp.plane_fmt[0].sizeimage);
+	if (!V4L2_TYPE_IS_OUTPUT(vq->type))
+		vb2_set_plane_payload(vb, 0, f->fmt.pix_mp.plane_fmt[0].sizeimage);
+
 	return 0;
 }
 
@@ -635,7 +736,7 @@ static int rkvdec_start_streaming(struct vb2_queue *q, unsigned int count)
 	const struct rkvdec_coded_fmt_desc *desc;
 	int ret;
 
-	if (!V4L2_TYPE_IS_OUTPUT(q->type))
+	if (V4L2_TYPE_IS_CAPTURE(q->type))
 		return 0;
 
 	desc = ctx->coded_fmt_desc;
@@ -739,7 +840,7 @@ static int rkvdec_request_validate(struct media_request *req)
 		u32 id = ctrls->ctrls[i].cfg.id;
 		struct v4l2_ctrl *ctrl;
 
-		if (!ctrls->ctrls[i].per_request || !ctrls->ctrls[i].mandatory)
+		if (!ctrls->ctrls[i].mandatory)
 			continue;
 
 		ctrl = v4l2_ctrl_request_hdl_ctrl_find(hdl, id);
@@ -1122,7 +1223,8 @@ static irqreturn_t rkvdec_irq_handler(int irq, void *priv)
 	state = (status & RKVDEC_RDY_STA) ?
 		VB2_BUF_STATE_DONE : VB2_BUF_STATE_ERROR;
 
-	writel(0, rkvdec->regs + RKVDEC_REG_INTERRUPT);
+	writel(RKVDEC_CONFIG_DEC_CLK_GATE_E,
+	       rkvdec->regs + RKVDEC_REG_INTERRUPT);
 	if (cancel_delayed_work(&rkvdec->watchdog_work)) {
 		struct rkvdec_ctx *ctx;
 
@@ -1149,7 +1251,8 @@ static void rkvdec_watchdog_func(struct work_struct *work)
 	if (ctx) {
 		dev_err(rkvdec->dev, "Frame processing timed out!\n");
 		rkvdec->reset_mask |= RESET_HARD;
-		writel(RKVDEC_IRQ_DIS, rkvdec->regs + RKVDEC_REG_INTERRUPT);
+		writel(RKVDEC_CONFIG_DEC_CLK_GATE_E | RKVDEC_IRQ_DIS,
+		       rkvdec->regs + RKVDEC_REG_INTERRUPT);
 		writel(0, rkvdec->regs + RKVDEC_REG_SYSCTRL);
 		rkvdec_job_finish(ctx, VB2_BUF_STATE_ERROR);
 	}
@@ -1171,7 +1274,6 @@ static int rkvdec_probe(struct platform_device *pdev)
 	struct resource *res;
 	unsigned int i;
 	int ret, irq;
-	u32 hw_info_reg;
 
 	rkvdec = devm_kzalloc(&pdev->dev, sizeof(*rkvdec), GFP_KERNEL);
 	if (!rkvdec)
@@ -1205,24 +1307,6 @@ static int rkvdec_probe(struct platform_device *pdev)
 	rkvdec->regs = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(rkvdec->regs))
 		return PTR_ERR(rkvdec->regs);
-
-	hw_info_reg = readl(rkvdec->regs + RKVDEC_REG_HW_INFO);
-	if ((hw_info_reg >> 16) == RKVDEC_HW_ID) {
-		dev_info(&pdev->dev, "HEVC %s%s%s %s decoder%s minor version \
-			              0x%02x detected",
-			 ((hw_info_reg & RKVDEC_HW_CAP_MAIN10)
-			   ? "Main10" : "Main"),
-			 ((hw_info_reg & RKVDEC_HW_CAP_H264)
-			   ? "/H264" : ""),
-			 ((hw_info_reg & RKVDEC_HW_CAP_VP9)
-			   ? "/VP9" : ""),
-			 ((hw_info_reg & RKVDEC_HW_CAP_UHD)
-			   ? "UHD" : "FHD"),
-			 ((hw_info_reg & RKVDEC_HW_CAP_ENCODER)
-			   ? "/encoder" : ""),
-			 (hw_info_reg & 0x000000ff));
-	} else
-		dev_info(&pdev->dev, "Unknown version: 0x%x", hw_info_reg);
 
 	ret = dma_set_coherent_mask(&pdev->dev, DMA_BIT_MASK(32));
 	if (ret) {
