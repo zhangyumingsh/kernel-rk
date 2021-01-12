@@ -1,19 +1,12 @@
 // SPDX-License-Identifier: (GPL-2.0+ OR MIT)
-/*
- * Copyright (c) 2016 Heiko Stuebner <heiko@sntech.de>
- */
 
 /dts-v1/;
-#include <dt-bindings/input/input.h>
 #include "rk3288.dtsi"
 
 / {
-	model = "mqmaker MiQi";
-	compatible = "mqmaker,miqi", "rockchip,rk3288";
 
-	chosen {
-		stdout-path = "serial2:115200n8";
-	};
+	model = "Rikomagic MK902II TV Box";
+	compatible = "rikomagic,mk902ii", "rockchip,rk3288";
 
 	memory@0 {
 		device_type = "memory";
@@ -27,35 +20,64 @@
 		clock-output-names = "ext_gmac";
 	};
 
-	leds {
-		compatible = "gpio-leds";
+	hdmi-sound {
+		compatible = "simple-audio-card";
+		simple-audio-card,format = "i2s";
+		simple-audio-card,name = "HDMI";
+		simple-audio-card,mclk-fs = <256>;
 
-		work_led: led-0 {
-			gpios = <&gpio7 RK_PA2 GPIO_ACTIVE_HIGH>;
-			label = "miqi:green:user";
-			linux,default-trigger = "timer";
+		simple-audio-card,codec {
+			sound-dai = <&hdmi>;
+		};
+
+		simple-audio-card,cpu {
+			sound-dai = <&i2s>;
 		};
 	};
 
-	vcc_flash: flash-regulator {
-		compatible = "regulator-fixed";
-		regulator-name = "vcc_flash";
-		regulator-min-microvolt = <1800000>;
-		regulator-max-microvolt = <1800000>;
-		vin-supply = <&vcc_io>;
+	ir-receiver {
+		compatible = "gpio-ir-receiver";
+		gpios = <&gpio7 RK_PA0 GPIO_ACTIVE_LOW>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&ir_int>;
 	};
 
-	vcc_host: usb-host-regulator {
-		compatible = "regulator-fixed";
-		enable-active-high;
-		gpio = <&gpio0 RK_PB6 GPIO_ACTIVE_HIGH>;
+	sdio_pwrseq: sdio-pwrseq {
+		compatible = "mmc-pwrseq-simple";
+		clocks = <&hym8563>;
+		clock-names = "ext_clock";
 		pinctrl-names = "default";
-		pinctrl-0 = <&host_vbus_drv>;
-		regulator-name = "vcc_host";
+		pinctrl-0 = <&wifi_enable>;
+		reset-gpios = <&gpio4 RK_PD4 GPIO_ACTIVE_LOW>;
+	};
+
+	sdif-sound {
+		compatible = "simple-audio-card";
+		simple-audio-card,name = "SPDIF";
+
+		simple-audio-card,dai-link@1 {
+			cpu {
+				sound-dai = <&spdif>;
+			};
+
+			codec {
+				sound-dai = <&spdif_dit>;
+			};
+		};
+	};
+
+	spdif_dit: spdif-dit {
+		compatible = "linux,spdif-dit";
+		#sound-dai-cells = <0>;
+	};
+
+	vbat_wl: vcc_sys: vsys-regulator {
+		compatible = "regulator-fixed";
+		regulator-name = "vcc_sys";
 		regulator-min-microvolt = <5000000>;
 		regulator-max-microvolt = <5000000>;
 		regulator-always-on;
-		vin-supply = <&vcc_sys>;
+		regulator-boot-on;
 	};
 
 	vcc_sd: sdmmc-regulator {
@@ -70,47 +92,67 @@
 		vin-supply = <&vcc_io>;
 	};
 
-	vcc_sys: vsys-regulator {
+	vcc_flash: flash-regulator {
 		compatible = "regulator-fixed";
-		regulator-name = "vcc_sys";
+		regulator-name = "vcc_flash";
+		regulator-min-microvolt = <1800000>;
+		regulator-max-microvolt = <1800000>;
+		vin-supply = <&vcc_io>;
+	};
+
+	vcc_5v: usb-regulator {
+		compatible = "regulator-fixed";
+		regulator-name = "vcc_5v";
 		regulator-min-microvolt = <5000000>;
 		regulator-max-microvolt = <5000000>;
 		regulator-always-on;
 		regulator-boot-on;
+		vin-supply = <&vcc_sys>;
 	};
+
+	vcc_host_5v: usb-host-regulator {
+		compatible = "regulator-fixed";
+		enable-active-high;
+		gpio = <&gpio0 RK_PB6 GPIO_ACTIVE_HIGH>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&host_vbus_drv>;
+		regulator-name = "vcc_host_5v";
+		regulator-min-microvolt = <5000000>;
+		regulator-max-microvolt = <5000000>;
+		regulator-always-on;
+		vin-supply = <&vcc_5v>;
+	};
+
+	vcc_otg_5v: usb-otg-regulator {
+		compatible = "regulator-fixed";
+		enable-active-high;
+		gpio = <&gpio0 RK_PB4 GPIO_ACTIVE_HIGH>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&otg_vbus_drv>;
+		regulator-name = "vcc_otg_5v";
+		regulator-min-microvolt = <5000000>;
+		regulator-max-microvolt = <5000000>;
+		regulator-always-on;
+		vin-supply = <&vcc_5v>;
+	};
+
 };
 
 &cpu0 {
-	cpu-supply = <&vdd_cpu>;
-};
-
-&cpu1 {
-	cpu-supply = <&vdd_cpu>;
-};
-
-&cpu2 {
-	cpu-supply = <&vdd_cpu>;
-};
-
-&cpu3 {
-	cpu-supply = <&vdd_cpu>;
-};
-
-&cpu_opp_table {
-        opp-1704000000 {
-        opp-hz = /bits/ 64 <1704000000>;
-        opp-microvolt = <1350000>;
-    };
+	cpu0-supply = <&vdd_cpu>;
 };
 
 &emmc {
 	bus-width = <8>;
-	cap-mmc-highspeed;
 	non-removable;
 	pinctrl-names = "default";
-	pinctrl-0 = <&emmc_clk>, <&emmc_cmd>, <&emmc_pwr>, <&emmc_bus8>;
+	pinctrl-0 = <&emmc_clk>, <&emmc_cmd>,
+		    <&emmc_pwr>, <&emmc_bus8>;
 	vmmc-supply = <&vcc_io>;
 	vqmmc-supply = <&vcc_flash>;
+	cap-mmc-highspeed;
+	disable-wp;
+	mmc-hs200-1_8v;
 	status = "okay";
 };
 
@@ -119,14 +161,15 @@
 	assigned-clock-parents = <&ext_gmac>;
 	clock_in_out = "input";
 	pinctrl-names = "default";
-	pinctrl-0 = <&rgmii_pins>, <&phy_rst>, <&phy_pmeb>, <&phy_int>;
+	pinctrl-0 = <&rgmii_pins>, <&phy_rst>,
+		    <&phy_pmeb>, <&phy_int>;
 	phy-supply = <&vcc_lan>;
 	phy-mode = "rgmii";
 	snps,reset-active-low;
 	snps,reset-delays-us = <0 10000 1000000>;
 	snps,reset-gpio = <&gpio4 RK_PB0 GPIO_ACTIVE_LOW>;
-	tx_delay = <0x30>;
-	rx_delay = <0x10>;
+	tx_delay = <48>;
+	rx_delay = <32>;
 	status = "okay";
 };
 
@@ -175,13 +218,17 @@
 		#clock-cells = <0>;
 		clock-frequency = <32768>;
 		clock-output-names = "xin32k";
+		interrupt-parent = <&gpio7>;
+		interrupts = <RK_PA4 IRQ_TYPE_EDGE_FALLING>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&rtc_int>;
 	};
 
 	act8846: act8846@5a {
 		compatible = "active-semi,act8846";
 		reg = <0x5a>;
 		pinctrl-names = "default";
-		pinctrl-0 = <&pmic_vsel>;
+		pinctrl-0 = <&pmic_vsel>, <&pwr_hold>;
 		system-power-controller;
 
 		vp1-supply = <&vcc_sys>;
@@ -195,6 +242,8 @@
 		regulators {
 			vcc_ddr: REG1 {
 				regulator-name = "vcc_ddr";
+				regulator-min-microvolt = <1200000>;
+				regulator-max-microvolt = <1200000>;
 				regulator-always-on;
 			};
 
@@ -221,7 +270,7 @@
 
 			vccio_sd: REG5 {
 				regulator-name = "vccio_sd";
-				regulator-min-microvolt = <3300000>;
+				regulator-min-microvolt = <1800000>;
 				regulator-max-microvolt = <3300000>;
 				regulator-always-on;
 			};
@@ -258,7 +307,7 @@
 				regulator-always-on;
 			};
 
-			vcc_18: REG11 {
+			vccio_wl: vcc_18: REG11 {
 				regulator-name = "vcc_18";
 				regulator-min-microvolt = <1800000>;
 				regulator-max-microvolt = <1800000>;
@@ -275,19 +324,11 @@
 	};
 };
 
-&i2c1 {
-	status = "okay";
-};
-
-&i2c2 {
-	status = "okay";
-};
-
-&i2c4 {
-	status = "okay";
-};
-
 &i2c5 {
+	status = "okay";
+};
+
+&i2s {
 	status = "okay";
 };
 
@@ -295,13 +336,14 @@
 	status = "okay";
 
 	audio-supply = <&vcca_33>;
+	bb-supply = <&vcc_io>;
 	flash0-supply = <&vcc_flash>;
 	flash1-supply = <&vcc_lan>;
 	gpio30-supply = <&vcc_io>;
 	gpio1830-supply = <&vcc_io>;
 	lcdc-supply = <&vcc_io>;
 	sdcard-supply = <&vccio_sd>;
-	wifi-supply = <&vcc_18>;
+	wifi-supply = <&vccio_wl>;
 };
 
 &pinctrl {
@@ -319,16 +361,38 @@
 	};
 
 	act8846 {
-		pmic_int: pmic-int {
-			rockchip,pins = <0 RK_PA4 RK_FUNC_GPIO &pcfg_pull_up>;
-		};
-
-		pmic_sleep: pmic-sleep {
-			rockchip,pins = <0 RK_PA0 RK_FUNC_GPIO &pcfg_output_low>;
+		pwr_hold: pwr-hold {
+			rockchip,pins = <0 RK_PA1 RK_FUNC_GPIO &pcfg_output_high>;
 		};
 
 		pmic_vsel: pmic-vsel {
 			rockchip,pins = <7 RK_PA1 RK_FUNC_GPIO &pcfg_output_low>;
+		};
+	};
+
+	bt {
+		bt_enable_l: bt-enable-l {
+			rockchip,pins = <4 RK_PD5 RK_FUNC_GPIO &pcfg_pull_none>;
+		};
+
+		bt_host_wake: bt-host-wake {
+			rockchip,pins = <4 RK_PD7 RK_FUNC_GPIO &pcfg_pull_down>;
+		};
+
+		bt_host_wake_l: bt-host-wake-l {
+			rockchip,pins = <4 RK_PD7 RK_FUNC_GPIO &pcfg_pull_none>;
+		};
+
+		bt_dev_wake_sleep: bt-dev-wake-sleep {
+			rockchip,pins = <4 RK_PD2 RK_FUNC_GPIO &pcfg_output_low>;
+		};
+
+		bt_dev_wake_awake: bt-dev-wake-awake {
+			rockchip,pins = <4 RK_PD2 RK_FUNC_GPIO &pcfg_output_high>;
+		};
+
+		bt_dev_wake: bt-dev-wake {
+			rockchip,pins = <4 RK_PD2 RK_FUNC_GPIO &pcfg_pull_none>;
 		};
 	};
 
@@ -346,11 +410,25 @@
 		};
 	};
 
+	hym8563 {
+		rtc_int: rtc-int {
+			rockchip,pins = <7 RK_PA4 RK_FUNC_GPIO &pcfg_pull_up>;
+		};
+	};
+
+	ir {
+		ir_int: ir-int {
+			rockchip,pins = <7 RK_PA0 RK_FUNC_GPIO &pcfg_pull_up>;
+		};
+	};
+
+	sdio {
+		wifi_enable: wifi-enable {
+			rockchip,pins = <4 RK_PD4 RK_FUNC_GPIO &pcfg_pull_none>;
+		};
+	};
+
 	sdmmc {
-		/*
-		 * Default drive strength isn't enough to achieve even
-		 * high-speed mode on firefly board so bump up to 12ma.
-		 */
 		sdmmc_bus4: sdmmc-bus4 {
 			rockchip,pins = <6 RK_PC0 1 &pcfg_pull_up_drv_12ma>,
 					<6 RK_PC1 1 &pcfg_pull_up_drv_12ma>,
@@ -375,6 +453,16 @@
 		host_vbus_drv: host-vbus-drv {
 			rockchip,pins = <0 RK_PB6 RK_FUNC_GPIO &pcfg_pull_none>;
 		};
+
+		usbhub_rst: usbhub-rst {
+			rockchip,pins = <8 RK_PA3 RK_FUNC_GPIO &pcfg_output_high>;
+		};
+	};
+
+	usb_otg {
+		otg_vbus_drv: otg-vbus-drv {
+			rockchip,pins = <0 RK_PB4 RK_FUNC_GPIO &pcfg_pull_none>;
+		};
 	};
 };
 
@@ -383,16 +471,52 @@
 	status = "okay";
 };
 
-&sdmmc {
+&sdio0 {
 	bus-width = <4>;
-	cap-mmc-highspeed;
-	cap-sd-highspeed;
-	card-detect-delay = <200>;
 	disable-wp;
 	pinctrl-names = "default";
-	pinctrl-0 = <&sdmmc_clk>, <&sdmmc_cmd>, <&sdmmc_cd>, <&sdmmc_bus4>;
+	pinctrl-0 = <&sdio0_bus4>, <&sdio0_cmd>,
+		    <&sdio0_clk>, <&sdio0_int>;
+	mmc-pwrseq = <&sdio_pwrseq>;
+	vmmc-supply = <&vbat_wl>;
+	vqmmc-supply = <&vcc_io>;
+	cap-sd-highspeed;
+	cap-sdio-irq;
+	keep-power-in-suspend;
+	non-removable;
+	status = "okay";
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	wifi@0 {
+		reg = <0>;
+		compatible = "brcm,bcm4329-fmac";
+		interrupt-parent = <&gpio4>;
+		interrupts = <RK_PD6 IRQ_TYPE_LEVEL_LOW>;
+		interrupt-names = "host-wake";
+	};
+
+};
+
+&sdmmc {
+	bus-width = <4>;
+	card-detect-delay = <200>;
+	pinctrl-names = "default";
+	pinctrl-0 = <&sdmmc_clk>, <&sdmmc_cmd>,
+		    <&sdmmc_cd>, <&sdmmc_bus4>;
 	vmmc-supply = <&vcc_sd>;
 	vqmmc-supply = <&vccio_sd>;
+	cap-mmc-highspeed;
+	cap-sd-highspeed;
+	disable-wp;
+	sd-uhs-sdr12;
+	sd-uhs-sdr25;
+	sd-uhs-sdr50;
+	sd-uhs-sdr104;
+	status = "okay";
+};
+
+&spdif {
 	status = "okay";
 };
 
@@ -402,11 +526,29 @@
 	status = "okay";
 };
 
-&uart2 {
+&uart0 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&uart0_xfer>, <&uart0_cts>,
+		    <&uart0_rts>;
+	/delete-property/ dmas;
+	/delete-property/ dma-names;
 	status = "okay";
+
+	bluetooth {
+		compatible = "brcm,bcm43540-bt";
+		host-wakeup-gpios = <&gpio4 RK_PD7 GPIO_ACTIVE_HIGH>;
+		shutdown-gpios = <&gpio4 RK_PD5 GPIO_ACTIVE_HIGH>;
+		device-wakeup-gpios = <&gpio4 RK_PD2 GPIO_ACTIVE_HIGH>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&bt_host_wake_l>, <&bt_enable_l>,
+			    <&bt_dev_wake_awake>;
+		max-speed = <3000000>;
+		brcm,bt-pcm-int-params  = [01 02 00 01 01];
+	};
+
 };
 
-&uart3 {
+&uart2 {
 	status = "okay";
 };
 
@@ -415,15 +557,12 @@
 };
 
 &usb_host1 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&usbhub_rst>;
 	status = "okay";
 };
 
 &usb_otg {
-	/*
-	 * The otg controller is the only system power source,
-	 * so needs to always stay in device mode.
-	 */
-	dr_mode = "peripheral";
 	status = "okay";
 };
 
@@ -432,14 +571,6 @@
 };
 
 &vopb_mmu {
-	status = "okay";
-};
-
-&vopl {
-	status = "okay";
-};
-
-&vopl_mmu {
 	status = "okay";
 };
 

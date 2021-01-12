@@ -1,6 +1,6 @@
 #
 # Automatically generated file; DO NOT EDIT.
-# Linux/arm 5.10.5 Kernel Configuration
+# Linux/arm 5.10.6 Kernel Configuration
 #
 CONFIG_CC_VERSION_TEXT="arm-none-linux-gnueabihf-gcc.real (GNU Toolchain for the A-profile Architecture 9.2-2019.12 (arm-9.10)) 9.2.1 20191025"
 CONFIG_CC_IS_GCC=y
@@ -4848,6 +4848,7 @@ CONFIG_GENERIC_PHY=y
 CONFIG_PHY_ROCKCHIP_EMMC=y
 CONFIG_PHY_ROCKCHIP_INNO_HDMI=y
 CONFIG_PHY_ROCKCHIP_INNO_USB2=y
+# CONFIG_PHY_ROCKCHIP_INNO_USB3 is not set
 # CONFIG_PHY_ROCKCHIP_INNO_DSIDPHY is not set
 # CONFIG_PHY_ROCKCHIP_PCIE is not set
 # CONFIG_PHY_ROCKCHIP_TYPEC is not set

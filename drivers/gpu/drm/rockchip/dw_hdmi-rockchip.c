@@ -168,6 +168,86 @@ static const struct dw_hdmi_mpll_config rockchip_mpll_cfg[] = {
 	}
 };
 
+static const struct dw_hdmi_mpll_config rockchip_mpll_cfg_420[] = {
+	{
+		30666000, {
+			{ 0x00b7, 0x0000 },
+			{ 0x2157, 0x0000 },
+			{ 0x40f7, 0x0000 },
+		},
+	},  {
+		92000000, {
+			{ 0x00b7, 0x0000 },
+			{ 0x2143, 0x0001 },
+			{ 0x40a3, 0x0001 },
+		},
+	},  {
+		184000000, {
+			{ 0x0073, 0x0001 },
+			{ 0x2146, 0x0002 },
+			{ 0x4062, 0x0002 },
+		},
+	},  {
+		340000000, {
+			{ 0x0052, 0x0003 },
+			{ 0x214d, 0x0003 },
+			{ 0x4065, 0x0003 },
+		},
+	},  {
+		600000000, {
+			{ 0x0041, 0x0003 },
+			{ 0x3b4d, 0x0003 },
+			{ 0x5a65, 0x0003 },
+		},
+	},  {
+		~0UL, {
+			{ 0x0000, 0x0000 },
+			{ 0x0000, 0x0000 },
+			{ 0x0000, 0x0000 },
+		},
+	}
+};
+
+static const struct dw_hdmi_mpll_config rockchip_rk3288w_mpll_cfg_420[] = {
+	{
+		30666000, {
+			{ 0x00b7, 0x0000 },
+			{ 0x2157, 0x0000 },
+			{ 0x40f7, 0x0000 },
+		},
+	},  {
+		92000000, {
+			{ 0x00b7, 0x0000 },
+			{ 0x2143, 0x0001 },
+			{ 0x40a3, 0x0001 },
+		},
+	},  {
+		184000000, {
+			{ 0x0073, 0x0001 },
+			{ 0x2146, 0x0002 },
+			{ 0x4062, 0x0002 },
+		},
+	},  {
+		340000000, {
+			{ 0x0052, 0x0003 },
+			{ 0x214d, 0x0003 },
+			{ 0x4065, 0x0003 },
+		},
+	},  {
+		600000000, {
+			{ 0x0040, 0x0003 },
+			{ 0x3b4c, 0x0003 },
+			{ 0x5a65, 0x0003 },
+		},
+	},  {
+		~0UL, {
+			{ 0x0000, 0x0000 },
+			{ 0x0000, 0x0000 },
+			{ 0x0000, 0x0000 },
+		},
+	}
+};
+
 static const struct dw_hdmi_curr_ctrl rockchip_cur_ctr[] = {
 	/*      pixelclk    bpp8    bpp10   bpp12 */
 	{
@@ -225,15 +305,29 @@ dw_hdmi_rockchip_mode_valid(struct dw_hdmi *hdmi, void *data,
 			    const struct drm_display_mode *mode)
 {
 	struct dw_hdmi_plat_data *pdata = (struct dw_hdmi_plat_data *)data;
+	const struct dw_hdmi_mpll_config *mpll_cfg = pdata->mpll_cfg;
+
 	int clock = mode->clock;
+	int i = 0;
 
 	if (pdata->ycbcr_420_allowed && drm_mode_is_420(info, mode) &&
-	    (info->color_formats & DRM_COLOR_FORMAT_YCRCB420))
+	    (info->color_formats & DRM_COLOR_FORMAT_YCRCB420)) {
 		clock /= 2;
+		mpll_cfg = pdata->mpll_cfg_420;
+	}
 
-	if (clock > 340000 ||
+	if ((!mpll_cfg && clock > 340000) ||
 	    (info->max_tmds_clock && clock > info->max_tmds_clock))
 		return MODE_CLOCK_HIGH;
+
+	if (mpll_cfg) {
+		while ((clock * 1000) < mpll_cfg[i].mpixelclock &&
+		       mpll_cfg[i].mpixelclock != (~0UL))
+		       i++;
+
+		if (mpll_cfg[i].mpixelclock == (~0UL))
+			return MODE_CLOCK_HIGH;
+	}
 
 	return drm_mode_validate_size(mode, 3840, 2160);
 }
@@ -536,6 +630,7 @@ static struct rockchip_hdmi_chip_data rk3288_chip_data = {
 static const struct dw_hdmi_plat_data rk3288_hdmi_drv_data = {
 	.mode_valid = dw_hdmi_rockchip_mode_valid,
 	.mpll_cfg   = rockchip_mpll_cfg,
+	.mpll_cfg_420 = rockchip_rk3288w_mpll_cfg_420,
 	.cur_ctr    = rockchip_cur_ctr,
 	.phy_config = rockchip_phy_config,
 	.phy_data = &rk3288_chip_data,
@@ -568,17 +663,16 @@ static struct rockchip_hdmi_chip_data rk3399_chip_data = {
 	.lcdsel_grf_reg = RK3399_GRF_SOC_CON20,
 	.lcdsel_big = HIWORD_UPDATE(0, RK3399_HDMI_LCDC_SEL),
 	.lcdsel_lit = HIWORD_UPDATE(RK3399_HDMI_LCDC_SEL, RK3399_HDMI_LCDC_SEL),
-	.ycbcr_444_allowed = true,
 };
 
 static const struct dw_hdmi_plat_data rk3399_hdmi_drv_data = {
 	.mode_valid = dw_hdmi_rockchip_mode_valid,
 	.mpll_cfg   = rockchip_mpll_cfg,
+	.mpll_cfg_420 = rockchip_mpll_cfg_420,
 	.cur_ctr    = rockchip_cur_ctr,
 	.phy_config = rockchip_phy_config,
 	.phy_data = &rk3399_chip_data,
 	.use_drm_infoframe = true,
-	.ycbcr_420_allowed = true,
 };
 
 static const struct of_device_id dw_hdmi_rockchip_dt_ids[] = {
@@ -671,6 +765,11 @@ static int dw_hdmi_rockchip_bind(struct device *dev, struct device *master,
 	platform_set_drvdata(pdev, hdmi);
 
 	hdmi->hdmi = dw_hdmi_probe(pdev, plat_data);
+
+	/*
+	 * If dw_hdmi_probe() fails we'll never call dw_hdmi_remove(),
+	 * which would have called the encoder cleanup.  Do it manually.
+	 */
 	if (IS_ERR(hdmi->hdmi)) {
 		ret = PTR_ERR(hdmi->hdmi);
 		if (ret != -EPROBE_DEFER)

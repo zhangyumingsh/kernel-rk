@@ -182,31 +182,12 @@ static void rockchip_fractional_approximation(struct clk_hw *hw,
 	unsigned long p_rate, p_parent_rate;
 	struct clk_hw *p_parent;
 	unsigned long scale;
-	u32 div;
 
 	p_rate = clk_hw_get_rate(clk_hw_get_parent(hw));
-	if (((rate * 20 > p_rate) && (p_rate % rate != 0)) ||
-	    (fd->max_prate && fd->max_prate < p_rate)) {
+	if ((rate * 20 > p_rate) && (p_rate % rate != 0)) {
 		p_parent = clk_hw_get_parent(clk_hw_get_parent(hw));
-		if (!p_parent) {
-			*parent_rate = p_rate;
-		} else {
-			p_parent_rate = clk_hw_get_rate(p_parent);
-			*parent_rate = p_parent_rate;
-			if (fd->max_prate && p_parent_rate > fd->max_prate) {
-				div = DIV_ROUND_UP(p_parent_rate,
-						   fd->max_prate);
-				*parent_rate = p_parent_rate / div;
-			}
-		}
-
-		if (*parent_rate < rate * 20) {
-			pr_warn("%s p_rate(%ld) is low than rate(%ld)*20, use integer or half-div\n",
-				clk_hw_get_name(hw), *parent_rate, rate);
-			*m = 0;
-			*n = 1;
-			return;
-		}
+		p_parent_rate = clk_hw_get_rate(p_parent);
+		*parent_rate = p_parent_rate;
 	}
 
 	/*
@@ -229,7 +210,7 @@ static struct clk *rockchip_clk_register_frac_branch(
 		void __iomem *base, int muxdiv_offset, u8 div_flags,
 		int gate_offset, u8 gate_shift, u8 gate_flags,
 		unsigned long flags, struct rockchip_clk_branch *child,
-		unsigned long max_prate, spinlock_t *lock)
+		spinlock_t *lock)
 {
 	struct clk_hw *hw;
 	struct rockchip_clk_frac *frac;
@@ -270,7 +251,6 @@ static struct clk *rockchip_clk_register_frac_branch(
 	div->nmask = GENMASK(div->nwidth - 1, 0) << div->nshift;
 	div->lock = lock;
 	div->approximation = rockchip_fractional_approximation;
-	div->max_prate = max_prate;
 	div_ops = &clk_fractional_divider_ops;
 
 	hw = clk_hw_register_composite(NULL, name, parent_names, num_parents,
@@ -407,8 +387,6 @@ struct rockchip_clk_provider *rockchip_clk_init(struct device_node *np,
 
 	ctx->grf = syscon_regmap_lookup_by_phandle(ctx->cru_node,
 						   "rockchip,grf");
-	ctx->pmugrf = syscon_regmap_lookup_by_phandle(ctx->cru_node,
-						   "rockchip,pmugrf");
 
 	return ctx;
 
@@ -487,13 +465,6 @@ void rockchip_clk_register_branches(struct rockchip_clk_provider *ctx,
 				list->mux_shift, list->mux_width,
 				list->mux_flags);
 			break;
-		case branch_muxpmugrf:
-			clk = rockchip_clk_register_muxgrf(list->name,
-				list->parent_names, list->num_parents,
-				flags, ctx->pmugrf, list->muxdiv_offset,
-				list->mux_shift, list->mux_width,
-				list->mux_flags);
-			break;
 		case branch_divider:
 			if (list->div_table)
 				clk = clk_register_divider_table(NULL,
@@ -517,7 +488,7 @@ void rockchip_clk_register_branches(struct rockchip_clk_provider *ctx,
 				list->div_flags,
 				list->gate_offset, list->gate_shift,
 				list->gate_flags, flags, list->child,
-				list->max_prate, &ctx->lock);
+				&ctx->lock);
 			break;
 		case branch_half_divider:
 			clk = rockchip_clk_register_halfdiv(list->name,

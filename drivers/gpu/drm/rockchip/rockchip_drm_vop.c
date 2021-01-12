@@ -1199,6 +1199,28 @@ static void vop_crtc_disable_vblank(struct drm_crtc *crtc)
 	spin_unlock_irqrestore(&vop->irq_lock, flags);
 }
 
+static bool vop_crtc_is_tmds(struct drm_crtc *crtc)
+{
+	struct rockchip_crtc_state *s = to_rockchip_crtc_state(crtc->state);
+	struct drm_encoder *encoder;
+
+	switch (s->output_type) {
+	case DRM_MODE_CONNECTOR_LVDS:
+	case DRM_MODE_CONNECTOR_DSI:
+		return false;
+	case DRM_MODE_CONNECTOR_eDP:
+	case DRM_MODE_CONNECTOR_HDMIA:
+	case DRM_MODE_CONNECTOR_DisplayPort:
+		return true;
+	}
+
+	drm_for_each_encoder_mask(encoder, crtc->dev, crtc->state->encoder_mask)
+		if (encoder->encoder_type != DRM_MODE_ENCODER_TMDS)
+			return false;
+
+	return true;
+}
+
 /*
  * The VESA DMT standard specifies a 0.5% pixel clock frequency tolerance.
  * The CVT spec reuses that tolerance in its examples.
@@ -1210,11 +1232,10 @@ static enum drm_mode_status vop_crtc_mode_valid(struct drm_crtc *crtc,
 {
 	struct vop *vop = to_vop(crtc);
 	const struct vop_rect *max_output = &vop->data->max_output;
-	struct rockchip_crtc_state *s = to_rockchip_crtc_state(crtc->state);
 	long rounded_rate;
 	long lowest, highest;
 
-	if (s->output_type != DRM_MODE_CONNECTOR_HDMIA)
+	if (!vop_crtc_is_tmds(crtc))
 		return MODE_OK;
 
 	if (mode->flags & DRM_MODE_FLAG_INTERLACE)
@@ -1863,8 +1884,23 @@ out:
 	return ret;
 }
 
-static void vop_plane_add_properties(struct drm_plane *plane,
-				     const struct vop_win_data *win_data)
+static bool plane_supports_yuv_format(const struct drm_plane *plane)
+{
+	const struct drm_format_info *info;
+	int i;
+
+	for (i = 0; i < plane->format_count; i++) {
+		info = drm_format_info(plane->format_types[i]);
+		if (info->is_yuv)
+			return true;
+	}
+
+	return false;
+}
+
+static void vop_plane_add_properties(struct drm_plane *plane, int zpos,
+				     const struct vop_win_data *win_data,
+				     const struct vop_data *vop_data)
 {
 	unsigned int flags = 0;
 
@@ -1873,6 +1909,21 @@ static void vop_plane_add_properties(struct drm_plane *plane,
 	if (flags)
 		drm_plane_create_rotation_property(plane, DRM_MODE_ROTATE_0,
 						   DRM_MODE_ROTATE_0 | flags);
+
+	drm_plane_create_zpos_immutable_property(plane, zpos);
+
+	if (!plane_supports_yuv_format(plane))
+		return;
+
+	flags = BIT(DRM_COLOR_YCBCR_BT601) | BIT(DRM_COLOR_YCBCR_BT709);
+	if (vop_data->feature & VOP_FEATURE_OUTPUT_RGB10)
+		flags |= BIT(DRM_COLOR_YCBCR_BT2020);
+
+	drm_plane_create_color_properties(plane, flags,
+					  BIT(DRM_COLOR_YCBCR_LIMITED_RANGE) |
+					  BIT(DRM_COLOR_YCBCR_FULL_RANGE),
+					  DRM_COLOR_YCBCR_BT601,
+					  DRM_COLOR_YCBCR_LIMITED_RANGE);
 }
 
 static int vop_create_crtc(struct vop *vop)
@@ -1886,18 +1937,9 @@ static int vop_create_crtc(struct vop *vop)
 	int ret;
 	int i;
 
-	/*
-	 * Create drm_plane for primary and cursor planes first, since we need
-	 * to pass them to drm_crtc_init_with_planes, which sets the
-	 * "possible_crtcs" to the newly initialized crtc.
-	 */
 	for (i = 0; i < vop_data->win_size; i++) {
 		struct vop_win *vop_win = &vop->win[i];
 		const struct vop_win_data *win_data = vop_win->data;
-
-		if (win_data->type != DRM_PLANE_TYPE_PRIMARY &&
-		    win_data->type != DRM_PLANE_TYPE_CURSOR)
-			continue;
 
 		ret = drm_universal_plane_init(vop->drm_dev, &vop_win->base,
 					       0, &vop_plane_funcs,
@@ -1913,7 +1955,7 @@ static int vop_create_crtc(struct vop *vop)
 
 		plane = &vop_win->base;
 		drm_plane_helper_add(plane, &plane_helper_funcs);
-		vop_plane_add_properties(plane, win_data);
+		vop_plane_add_properties(plane, i, win_data, vop_data);
 		if (plane->type == DRM_PLANE_TYPE_PRIMARY)
 			primary = plane;
 		else if (plane->type == DRM_PLANE_TYPE_CURSOR)
@@ -1931,32 +1973,13 @@ static int vop_create_crtc(struct vop *vop)
 		drm_crtc_enable_color_mgmt(crtc, 0, false, vop_data->lut_size);
 	}
 
-	/*
-	 * Create drm_planes for overlay windows with possible_crtcs restricted
-	 * to the newly created crtc.
-	 */
+	/* Set possible_crtcs to the newly created crtc for overlay windows */
 	for (i = 0; i < vop_data->win_size; i++) {
 		struct vop_win *vop_win = &vop->win[i];
-		const struct vop_win_data *win_data = vop_win->data;
-		unsigned long possible_crtcs = drm_crtc_mask(crtc);
 
-		if (win_data->type != DRM_PLANE_TYPE_OVERLAY)
-			continue;
-
-		ret = drm_universal_plane_init(vop->drm_dev, &vop_win->base,
-					       possible_crtcs,
-					       &vop_plane_funcs,
-					       win_data->phy->data_formats,
-					       win_data->phy->nformats,
-					       win_data->phy->format_modifiers,
-					       win_data->type, NULL);
-		if (ret) {
-			DRM_DEV_ERROR(vop->dev, "failed to init overlay %d\n",
-				      ret);
-			goto err_cleanup_crtc;
-		}
-		drm_plane_helper_add(&vop_win->base, &plane_helper_funcs);
-		vop_plane_add_properties(&vop_win->base, win_data);
+		plane = &vop_win->base;
+		if (plane->type == DRM_PLANE_TYPE_OVERLAY)
+			plane->possible_crtcs = drm_crtc_mask(crtc);
 	}
 
 	port = of_get_child_by_name(dev->of_node, "port");
