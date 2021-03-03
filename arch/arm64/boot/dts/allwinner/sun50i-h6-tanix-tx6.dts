@@ -13,7 +13,9 @@
 	compatible = "oranth,tanix-tx6", "allwinner,sun50i-h6";
 
 	aliases {
+		ethernet0 = &emac;
 		serial0 = &uart0;
+		ethernet1 = &xr819;
 	};
 
 	chosen {
@@ -32,6 +34,13 @@
 		};
 	};
 
+	reg_vcc1v8: vcc1v8 {
+		compatible = "regulator-fixed";
+		regulator-name = "vcc1v8";
+		regulator-min-microvolt = <1800000>;
+		regulator-max-microvolt = <1800000>;
+	};
+
 	reg_vcc3v3: vcc3v3 {
 		compatible = "regulator-fixed";
 		regulator-name = "vcc3v3";
@@ -45,6 +54,19 @@
 		regulator-min-microvolt = <1135000>;
 		regulator-max-microvolt = <1135000>;
 	};
+
+	wifi_pwrseq: wifi_pwrseq {
+		compatible = "mmc-pwrseq-simple";
+		clocks = <&rtc 1>;
+		clock-names = "ext_clock";
+		reset-gpios = <&r_pio 1 3 GPIO_ACTIVE_LOW>; /* PM3 */
+		post-power-on-delay-ms = <200>;
+	};
+
+};
+
+&ac200_pwm_clk {
+	status = "okay";
 };
 
 &cpu0 {
@@ -67,6 +89,14 @@
 	status = "okay";
 };
 
+&emac {
+	pinctrl-names = "default";
+	pinctrl-0 = <&ext_rmii_pins>;
+	phy-mode = "rmii";
+	phy-handle = <&ext_rmii_phy>;
+	status = "okay";
+};
+
 &gpu {
 	mali-supply = <&reg_vdd_cpu_gpu>;
 	status = "okay";
@@ -82,6 +112,17 @@
 	};
 };
 
+&i2c3 {
+	status = "okay";
+};
+
+&mdio {
+	ext_rmii_phy: ethernet-phy@1 {
+		compatible = "ethernet-phy-ieee802.3-c22";
+		reg = <1>;
+	};
+};
+
 &mmc0 {
 	pinctrl-names = "default";
 	pinctrl-0 = <&mmc0_pins>;
@@ -91,11 +132,52 @@
 	status = "okay";
 };
 
+&mmc1 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&mmc1_pins>;
+	vmmc-supply = <&reg_vcc3v3>;
+	vqmmc-supply = <&reg_vcc1v8>;
+	mmc-pwrseq = <&wifi_pwrseq>;
+	bus-width = <4>;
+	non-removable;
+	status = "okay";
+
+       /*
+         * Explicitly define the sdio device, so that we can add an ethernet
+         * alias for it (which e.g. makes u-boot set a mac-address).
+         */
+        xr819: sdio_wifi@1 {
+                reg = <1>;
+		compatible = "xradio,xr819";
+		interrupt-parent = <&r_pio>;
+                local-mac-address = [dc 44 6d c0 ff ee];
+		interrupts = <1 0 IRQ_TYPE_EDGE_RISING>;	/* PM0 */
+		interrupt-names = "host-wake";
+        };
+};
+
+&mmc2 {
+	vmmc-supply = <&reg_vcc3v3>;
+	vqmmc-supply = <&reg_vcc1v8>;
+	non-removable;
+	cap-mmc-hw-reset;
+	bus-width = <8>;
+	status = "okay";
+};
+
 &ohci0 {
 	status = "okay";
 };
 
 &ohci3 {
+	status = "okay";
+};
+
+&pio {
+	vcc-pc-supply = <&reg_vcc1v8>;
+};
+
+&pwm {
 	status = "okay";
 };
 

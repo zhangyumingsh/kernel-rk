@@ -251,12 +251,8 @@ static int h5_close(struct hci_uart *hu)
 	if (h5->vnd && h5->vnd->close)
 		h5->vnd->close(h5);
 
-	if (hu->serdev)
-		serdev_device_close(hu->serdev);
-
-	kfree_skb(h5->rx_skb);
-	kfree(h5);
-	h5 = NULL;
+	if (!hu->serdev)
+		kfree(h5);
 
 	return 0;
 }
@@ -823,6 +819,9 @@ static int h5_serdev_probe(struct serdev_device *serdev)
 		data = of_device_get_match_data(dev);
 		if (!data)
 			return -ENODEV;
+
+		of_property_read_string(dev->of_node,
+					"firmware-postfix", &h5->id);
 
 		h5->vnd = (const struct h5_vnd *)data;
 	}
