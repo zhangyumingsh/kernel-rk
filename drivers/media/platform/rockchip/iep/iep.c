@@ -4,6 +4,9 @@
  *
  * Copyright (C) 2020 Alex Bee <knaerzche@gmail.com>
  *
+ * Based on Allwinner sun8i deinterlacer with scaler driver
+ *  Copyright (C) 2019 Jernej Skrabec <jernej.skrabec@siol.net>
+ *
  */
 
 #include <linux/clk.h>
@@ -37,7 +40,6 @@ static struct iep_fmt formats[] = {
 		.depth = 12,
 		.uv_factor = 4,
 	},
-
 	{
 		.fourcc = V4L2_PIX_FMT_NV21,
 		.color_swap = IEP_YUV_SWP_SP_VU,
@@ -115,7 +117,7 @@ static struct vb2_v4l2_buffer *iep_m2m_next_dst_buf(struct iep_ctx *ctx)
 {
 	struct vb2_v4l2_buffer *dst_buf = v4l2_m2m_next_dst_buf(ctx->fh.m2m_ctx);
 
-	/* applcication has set a sequence: take it as start point */
+	/* application has set a dst sequence: take it as start point */
 	if (ctx->dst_sequence == 0 && dst_buf->sequence > 0)
 		ctx->dst_sequence = dst_buf->sequence;
 
