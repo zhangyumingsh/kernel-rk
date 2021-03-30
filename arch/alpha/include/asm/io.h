@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef __ALPHA_IO_H
 #define __ALPHA_IO_H
 
@@ -92,6 +91,11 @@ static inline void * phys_to_virt(unsigned long address)
 #endif
 
 #define page_to_phys(page)	page_to_pa(page)
+
+static inline dma_addr_t __deprecated isa_page_to_bus(struct page *page)
+{
+	return page_to_phys(page);
+}
 
 /* Maximum PIO space address supported?  */
 #define IO_SPACE_LIMIT 0xffff
@@ -283,8 +287,19 @@ static inline void __iomem *ioremap(unsigned long port, unsigned long size)
 	return IO_CONCAT(__IO_PREFIX,ioremap) (port, size);
 }
 
-#define ioremap_wc ioremap
-#define ioremap_uc ioremap
+static inline void __iomem *__ioremap(unsigned long port, unsigned long size,
+				      unsigned long flags)
+{
+	return ioremap(port, size);
+}
+
+static inline void __iomem * ioremap_nocache(unsigned long offset,
+					     unsigned long size)
+{
+	return ioremap(offset, size);
+}
+
+#define ioremap_uc ioremap_nocache
 
 static inline void iounmap(volatile void __iomem *addr)
 {
@@ -324,14 +339,14 @@ extern inline unsigned int ioread16(void __iomem *addr)
 
 extern inline void iowrite8(u8 b, void __iomem *addr)
 {
+	IO_CONCAT(__IO_PREFIX,iowrite8)(b, addr);
 	mb();
-	IO_CONCAT(__IO_PREFIX, iowrite8)(b, addr);
 }
 
 extern inline void iowrite16(u16 b, void __iomem *addr)
 {
+	IO_CONCAT(__IO_PREFIX,iowrite16)(b, addr);
 	mb();
-	IO_CONCAT(__IO_PREFIX, iowrite16)(b, addr);
 }
 
 extern inline u8 inb(unsigned long port)
@@ -365,8 +380,8 @@ extern inline unsigned int ioread32(void __iomem *addr)
 
 extern inline void iowrite32(u32 b, void __iomem *addr)
 {
+	IO_CONCAT(__IO_PREFIX,iowrite32)(b, addr);
 	mb();
-	IO_CONCAT(__IO_PREFIX, iowrite32)(b, addr);
 }
 
 extern inline u32 inl(unsigned long port)
@@ -417,14 +432,14 @@ extern inline u16 readw(const volatile void __iomem *addr)
 
 extern inline void writeb(u8 b, volatile void __iomem *addr)
 {
-	mb();
 	__raw_writeb(b, addr);
+	mb();
 }
 
 extern inline void writew(u16 b, volatile void __iomem *addr)
 {
-	mb();
 	__raw_writew(b, addr);
+	mb();
 }
 #endif
 
@@ -465,14 +480,14 @@ extern inline u64 readq(const volatile void __iomem *addr)
 
 extern inline void writel(u32 b, volatile void __iomem *addr)
 {
-	mb();
 	__raw_writel(b, addr);
+	mb();
 }
 
 extern inline void writeq(u64 b, volatile void __iomem *addr)
 {
-	mb();
 	__raw_writeq(b, addr);
+	mb();
 }
 #endif
 
@@ -495,6 +510,8 @@ extern inline void writeq(u64 b, volatile void __iomem *addr)
 #define writew_relaxed(b, addr)	__raw_writew(b, addr)
 #define writel_relaxed(b, addr)	__raw_writel(b, addr)
 #define writeq_relaxed(b, addr)	__raw_writeq(b, addr)
+
+#define mmiowb()
 
 /*
  * String version of IO memory access ops:

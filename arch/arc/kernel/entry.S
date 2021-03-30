@@ -1,10 +1,13 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Common Low Level Interrupts/Traps/Exceptions(non-TLB) Handling for ARC
  * (included from entry-<isa>.S
  *
  * Copyright (C) 2014-15 Synopsys, Inc. (www.synopsys.com)
  * Copyright (C) 2004, 2007-2010, 2011-2012 Synopsys, Inc. (www.synopsys.com)
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  */
 
 /*------------------------------------------------------------------
@@ -32,20 +35,8 @@ ENTRY(sys_clone_wrapper)
 	btst r10, TIF_SYSCALL_TRACE
 	bnz  tracesys_exit
 
-	b .Lret_from_system_call
+	b ret_from_system_call
 END(sys_clone_wrapper)
-
-ENTRY(sys_clone3_wrapper)
-	SAVE_CALLEE_SAVED_USER
-	bl  @sys_clone3
-	DISCARD_CALLEE_SAVED_USER
-
-	GET_CURR_THR_INFO_FLAGS   r10
-	btst r10, TIF_SYSCALL_TRACE
-	bnz  tracesys_exit
-
-	b .Lret_from_system_call
-END(sys_clone3_wrapper)
 
 ENTRY(ret_from_fork)
 	; when the forked child comes here from the __switch_to function
@@ -69,6 +60,18 @@ ENTRY(ret_from_fork)
 	;    out whenever kernel_execve (now inline do_fork()) is involved
 	b    ret_from_exception
 END(ret_from_fork)
+
+#ifdef CONFIG_ARC_DW2_UNWIND
+; Workaround for bug 94179 (STAR ):
+; Despite -fasynchronous-unwind-tables, linker is not making dwarf2 unwinder
+; section (.debug_frame) as loadable. So we force it here.
+; This also fixes STAR 9000487933 where the prev-workaround (objcopy --setflag)
+; would not work after a clean build due to kernel build system dependencies.
+.section .debug_frame, "wa",@progbits
+
+; Reset to .text as this file is included in entry-<isa>.S
+.section .text, "ax",@progbits
+#endif
 
 ;################### Non TLB Exception Handling #############################
 
@@ -244,8 +247,8 @@ ENTRY(EV_Trap)
 	EXCEPTION_PROLOGUE
 
 	;============ TRAP 1   :breakpoints
-	; Check ECR for trap with arg (PROLOGUE ensures r10 has ECR)
-	bmsk.f 0, r10, 7
+	; Check ECR for trap with arg (PROLOGUE ensures r9 has ECR)
+	bmsk.f 0, r9, 7
 	bnz    trap_with_param
 
 	;============ TRAP  (no param): syscall top level
@@ -263,18 +266,20 @@ ENTRY(EV_Trap)
 	; syscall num shd not exceed the total system calls avail
 	cmp     r8,  NR_syscalls
 	mov.hi  r0, -ENOSYS
-	bhi     .Lret_from_system_call
+	bhi     ret_from_system_call
 
 	; Offset into the syscall_table and call handler
 	ld.as   r9,[sys_call_table, r8]
 	jl      [r9]        ; Entry into Sys Call Handler
 
-.Lret_from_system_call:
+	; fall through to ret_from_system_call
+END(EV_Trap)
+
+ENTRY(ret_from_system_call)
 
 	st  r0, [sp, PT_r0]     ; sys call return value in pt_regs
 
-	; fall through to ret_from_exception
-END(EV_Trap)
+	; fall through yet again to ret_from_exception
 
 ;############# Return from Intr/Excp/Trap (Linux Specifics) ##############
 ;
@@ -349,11 +354,11 @@ resume_user_mode_begin:
 resume_kernel_mode:
 
 	; Disable Interrupts from this point on
-	; CONFIG_PREEMPTION: This is a must for preempt_schedule_irq()
-	; !CONFIG_PREEMPTION: To ensure restore_regs is intr safe
+	; CONFIG_PREEMPT: This is a must for preempt_schedule_irq()
+	; !CONFIG_PREEMPT: To ensure restore_regs is intr safe
 	IRQ_DISABLE	r9
 
-#ifdef CONFIG_PREEMPTION
+#ifdef CONFIG_PREEMPT
 
 	; Can't preempt if preemption disabled
 	GET_CURR_THR_INFO_FROM_SP   r10

@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Haoyu HYM8563 RTC driver
  *
@@ -7,6 +6,15 @@
  *
  * based on rtc-HYM8563
  * Copyright (C) 2010 ROCKCHIP, Inc.
+ *
+ * This software is licensed under the terms of the GNU General Public
+ * License version 2, as published by the Free Software Foundation, and
+ * may be copied, distributed, and modified under those terms.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/module.h>
@@ -78,6 +86,7 @@
 struct hym8563 {
 	struct i2c_client	*client;
 	struct rtc_device	*rtc;
+	bool			valid;
 #ifdef CONFIG_COMMON_CLK
 	struct clk_hw		clkout_hw;
 #endif
@@ -90,18 +99,16 @@ struct hym8563 {
 static int hym8563_rtc_read_time(struct device *dev, struct rtc_time *tm)
 {
 	struct i2c_client *client = to_i2c_client(dev);
+	struct hym8563 *hym8563 = i2c_get_clientdata(client);
 	u8 buf[7];
 	int ret;
 
-	ret = i2c_smbus_read_i2c_block_data(client, HYM8563_SEC, 7, buf);
-	if (ret < 0)
-		return ret;
-
-	if (buf[0] & HYM8563_SEC_VL) {
-		dev_warn(&client->dev,
-			 "no valid clock/calendar values available\n");
-		return -EINVAL;
+	if (!hym8563->valid) {
+		dev_warn(&client->dev, "no valid clock/calendar values available\n");
+		return -EPERM;
 	}
+
+	ret = i2c_smbus_read_i2c_block_data(client, HYM8563_SEC, 7, buf);
 
 	tm->tm_sec = bcd2bin(buf[0] & HYM8563_SEC_MASK);
 	tm->tm_min = bcd2bin(buf[1] & HYM8563_MIN_MASK);
@@ -117,6 +124,7 @@ static int hym8563_rtc_read_time(struct device *dev, struct rtc_time *tm)
 static int hym8563_rtc_set_time(struct device *dev, struct rtc_time *tm)
 {
 	struct i2c_client *client = to_i2c_client(dev);
+	struct hym8563 *hym8563 = i2c_get_clientdata(client);
 	u8 buf[7];
 	int ret;
 
@@ -155,6 +163,8 @@ static int hym8563_rtc_set_time(struct device *dev, struct rtc_time *tm)
 	if (ret < 0)
 		return ret;
 
+	hym8563->valid = true;
+
 	return 0;
 }
 
@@ -188,7 +198,7 @@ static int hym8563_rtc_read_alarm(struct device *dev, struct rtc_wkalrm *alm)
 		return ret;
 
 	/* The alarm only has a minute accuracy */
-	alm_tm->tm_sec = 0;
+	alm_tm->tm_sec = -1;
 
 	alm_tm->tm_min = (buf[0] & HYM8563_ALM_BIT_DISABLE) ?
 					-1 :
@@ -202,6 +212,9 @@ static int hym8563_rtc_read_alarm(struct device *dev, struct rtc_wkalrm *alm)
 	alm_tm->tm_wday = (buf[3] & HYM8563_ALM_BIT_DISABLE) ?
 					-1 :
 					bcd2bin(buf[3] & HYM8563_WEEKDAY_MASK);
+
+	alm_tm->tm_mon = -1;
+	alm_tm->tm_year = -1;
 
 	ret = i2c_smbus_read_byte_data(client, HYM8563_CTL2);
 	if (ret < 0)
@@ -400,7 +413,7 @@ static struct clk *hym8563_clkout_register_clk(struct hym8563 *hym8563)
 
 	init.name = "hym8563-clkout";
 	init.ops = &hym8563_clkout_ops;
-	init.flags = 0;
+	init.flags = CLK_IS_ROOT;
 	init.parent_names = NULL;
 	init.num_parents = 0;
 	hym8563->clkout_hw.init = &init;
@@ -519,12 +532,23 @@ static int hym8563_probe(struct i2c_client *client,
 {
 	struct hym8563 *hym8563;
 	int ret;
+	/* hym8563 initial time,avoid hym8563 read time error */
+	struct rtc_time tm_read, tm = {
+		.tm_wday = 0,
+		.tm_year = 117,
+		.tm_mon = 0,
+		.tm_mday = 1,
+		.tm_hour = 12,
+		.tm_min = 0,
+		.tm_sec = 0,
+	};
 
 	hym8563 = devm_kzalloc(&client->dev, sizeof(*hym8563), GFP_KERNEL);
 	if (!hym8563)
 		return -ENOMEM;
 
 	hym8563->client = client;
+	hym8563->valid = true;
 	i2c_set_clientdata(client, hym8563);
 
 	device_set_wakeup_capable(&client->dev, true);
@@ -551,9 +575,19 @@ static int hym8563_probe(struct i2c_client *client,
 	ret = i2c_smbus_read_byte_data(client, HYM8563_SEC);
 	if (ret < 0)
 		return ret;
+	if (ret & HYM8563_SEC_VL)
+		hym8563_rtc_set_time(&client->dev, &tm);
 
+	hym8563_rtc_read_time(&client->dev, &tm_read);
+	if (((tm_read.tm_year < 70) | (tm_read.tm_year > 137)) | (tm_read.tm_mon == -1) | (rtc_valid_tm(&tm_read) != 0)) //if the hym8563 haven't initialized
+		hym8563_rtc_set_time(&client->dev, &tm);	//initialize the hym8563
+
+	if (ret & HYM8563_SEC_VL)
+		ret = i2c_smbus_read_byte_data(client, HYM8563_SEC);
+
+	hym8563->valid = !(ret & HYM8563_SEC_VL);
 	dev_dbg(&client->dev, "rtc information is %s\n",
-		(ret & HYM8563_SEC_VL) ? "invalid" : "valid");
+		hym8563->valid ? "valid" : "invalid");
 
 	hym8563->rtc = devm_rtc_device_register(&client->dev, client->name,
 						&hym8563_rtc_ops, THIS_MODULE);

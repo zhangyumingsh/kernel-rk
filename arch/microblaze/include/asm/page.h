@@ -90,18 +90,19 @@ typedef struct { unsigned long	pte; }		pte_t;
 typedef struct { unsigned long	pgprot; }	pgprot_t;
 /* FIXME this can depend on linux kernel version */
 #   ifdef CONFIG_MMU
+typedef struct { unsigned long pmd; } pmd_t;
 typedef struct { unsigned long pgd; } pgd_t;
 #   else /* CONFIG_MMU */
 typedef struct { unsigned long	ste[64]; }	pmd_t;
 typedef struct { pmd_t		pue[1]; }	pud_t;
-typedef struct { pud_t		p4e[1]; }	p4d_t;
-typedef struct { p4d_t		pge[1]; }	pgd_t;
+typedef struct { pud_t		pge[1]; }	pgd_t;
 #   endif /* CONFIG_MMU */
 
 # define pte_val(x)	((x).pte)
 # define pgprot_val(x)	((x).pgprot)
 
 #   ifdef CONFIG_MMU
+#   define pmd_val(x)      ((x).pmd)
 #   define pgd_val(x)      ((x).pgd)
 #   else  /* CONFIG_MMU */
 #   define pmd_val(x)	((x).ste[0])
@@ -110,6 +111,7 @@ typedef struct { p4d_t		pge[1]; }	pgd_t;
 #   endif  /* CONFIG_MMU */
 
 # define __pte(x)	((pte_t) { (x) })
+# define __pmd(x)	((pmd_t) { (x) })
 # define __pgd(x)	((pgd_t) { (x) })
 # define __pgprot(x)	((pgprot_t) { (x) })
 

@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0+
 /*
  * Xilinx USB peripheral controller driver
  *
@@ -9,6 +8,12 @@
  *
  * Some parts of this driver code is based on the driver for at91-series
  * USB peripheral controller (at91_udc.c).
+ *
+ * This program is free software; you can redistribute it
+ * and/or modify it under the terms of the GNU General Public
+ * License as published by the Free Software Foundation;
+ * either version 2 of the License, or (at your option) any
+ * later version.
  */
 
 #include <linux/delay.h>
@@ -963,11 +968,15 @@ static struct usb_request *xudc_ep_alloc_request(struct usb_ep *_ep,
 						 gfp_t gfp_flags)
 {
 	struct xusb_ep *ep = to_xusb_ep(_ep);
+	struct xusb_udc *udc;
 	struct xusb_req *req;
 
+	udc = ep->udc;
 	req = kzalloc(sizeof(*req), gfp_flags);
-	if (!req)
+	if (!req) {
+		dev_err(udc->dev, "%s:not enough memory", __func__);
 		return NULL;
+	}
 
 	req->ep = ep;
 	INIT_LIST_HEAD(&req->queue);
@@ -1078,7 +1087,7 @@ static int xudc_ep_queue(struct usb_ep *_ep, struct usb_request *_req,
 	unsigned long flags;
 
 	if (!ep->desc) {
-		dev_dbg(udc->dev, "%s: queuing request to disabled %s\n",
+		dev_dbg(udc->dev, "%s:queing request to disabled %s\n",
 			__func__, ep->name);
 		return -ESHUTDOWN;
 	}
@@ -1144,7 +1153,7 @@ static int xudc_ep_dequeue(struct usb_ep *_ep, struct usb_request *_req)
 			break;
 	}
 	if (&req->usb_req != _req) {
-		spin_unlock_irqrestore(&udc->lock, flags);
+		spin_unlock_irqrestore(&ep->udc->lock, flags);
 		return -EINVAL;
 	}
 	xudc_done(ep, req, -ECONNRESET);
@@ -1399,6 +1408,7 @@ err:
 /**
  * xudc_stop - stops the device.
  * @gadget: pointer to the usb gadget structure
+ * @driver: pointer to usb gadget driver structure
  *
  * Return: zero always
  */
@@ -2045,6 +2055,7 @@ static int xudc_probe(struct platform_device *pdev)
 	struct device_node *np = pdev->dev.of_node;
 	struct resource *res;
 	struct xusb_udc *udc;
+	struct xusb_ep *ep0;
 	int irq;
 	int ret;
 	u32 ier;
@@ -2073,8 +2084,10 @@ static int xudc_probe(struct platform_device *pdev)
 		return PTR_ERR(udc->addr);
 
 	irq = platform_get_irq(pdev, 0);
-	if (irq < 0)
+	if (irq < 0) {
+		dev_err(&pdev->dev, "unable to get irq\n");
 		return irq;
+	}
 	ret = devm_request_irq(&pdev->dev, irq, xudc_irq, 0,
 			       dev_name(&pdev->dev), udc);
 	if (ret < 0) {
@@ -2105,6 +2118,8 @@ static int xudc_probe(struct platform_device *pdev)
 	udc->write_fn(udc->addr, XUSB_TESTMODE_OFFSET, 0);
 
 	xudc_eps_init(udc);
+
+	ep0 = &udc->ep[0];
 
 	/* Set device address to 0.*/
 	udc->write_fn(udc->addr, XUSB_ADDRESS_OFFSET, 0);

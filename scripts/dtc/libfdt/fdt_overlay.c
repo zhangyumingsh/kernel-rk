@@ -1,9 +1,3 @@
-// SPDX-License-Identifier: (GPL-2.0-or-later OR BSD-2-Clause)
-/*
- * libfdt - Flat Device Tree manipulation
- * Copyright (C) 2016 Free Electrons
- * Copyright (C) 2016 NextThing Co.
- */
 #include "libfdt_env.h"
 
 #include <fdt.h>
@@ -48,11 +42,11 @@ static uint32_t overlay_get_target_phandle(const void *fdto, int fragment)
  * @pathp: pointer which receives the path of the target (or NULL)
  *
  * overlay_get_target() retrieves the target offset in the base
- * device tree of a fragment, no matter how the actual targeting is
+ * device tree of a fragment, no matter how the actual targetting is
  * done (through a phandle or a path)
  *
  * returns:
- *      the targeted node offset in the base device tree
+ *      the targetted node offset in the base device tree
  *      Negative error code on error
  */
 static int overlay_get_target(const void *fdt, const void *fdto,
@@ -652,7 +646,7 @@ static int get_path_len(const void *fdt, int nodeoffset)
 	int len = 0, namelen;
 	const char *name;
 
-	FDT_RO_PROBE(fdt);
+	FDT_CHECK_HEADER(fdt);
 
 	for (;;) {
 		name = fdt_get_name(fdt, nodeoffset, &namelen);
@@ -733,36 +727,26 @@ static int overlay_symbol_update(void *fdt, void *fdto)
 		/* keep end marker to avoid strlen() */
 		e = path + path_len;
 
+		/* format: /<fragment-name>/__overlay__/<relative-subnode-path> */
+
 		if (*path != '/')
 			return -FDT_ERR_BADVALUE;
 
 		/* get fragment name first */
 		s = strchr(path + 1, '/');
-		if (!s) {
-			/* Symbol refers to something that won't end
-			 * up in the target tree */
-			continue;
-		}
+		if (!s)
+			return -FDT_ERR_BADOVERLAY;
 
 		frag_name = path + 1;
 		frag_name_len = s - path - 1;
 
 		/* verify format; safe since "s" lies in \0 terminated prop */
 		len = sizeof("/__overlay__/") - 1;
-		if ((e - s) > len && (memcmp(s, "/__overlay__/", len) == 0)) {
-			/* /<fragment-name>/__overlay__/<relative-subnode-path> */
-			rel_path = s + len;
-			rel_path_len = e - rel_path - 1;
-		} else if ((e - s) == len
-			   && (memcmp(s, "/__overlay__", len - 1) == 0)) {
-			/* /<fragment-name>/__overlay__ */
-			rel_path = "";
-			rel_path_len = 0;
-		} else {
-			/* Symbol refers to something that won't end
-			 * up in the target tree */
-			continue;
-		}
+		if ((e - s) < len || memcmp(s, "/__overlay__/", len))
+			return -FDT_ERR_BADOVERLAY;
+
+		rel_path = s + len;
+		rel_path_len = e - rel_path;
 
 		/* find the fragment index in which the symbol lies */
 		ret = fdt_subnode_offset_namelen(fdto, 0, frag_name,
@@ -828,15 +812,11 @@ static int overlay_symbol_update(void *fdt, void *fdto)
 
 int fdt_overlay_apply(void *fdt, void *fdto)
 {
-	uint32_t delta;
+	uint32_t delta = fdt_get_max_phandle(fdt);
 	int ret;
 
-	FDT_RO_PROBE(fdt);
-	FDT_RO_PROBE(fdto);
-
-	ret = fdt_find_max_phandle(fdt, &delta);
-	if (ret)
-		goto err;
+	FDT_CHECK_HEADER(fdt);
+	FDT_CHECK_HEADER(fdto);
 
 	ret = overlay_adjust_local_phandles(fdto, delta);
 	if (ret)

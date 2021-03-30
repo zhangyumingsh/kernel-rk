@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *   ALSA soundcard driver for Miro miroSOUND PCM1 pro
  *                                  miroSOUND PCM12
@@ -7,6 +6,20 @@
  *   Copyright (C) 2004-2005 Martin Langer <martin-langer@gmx.de>
  *
  *   Based on OSS ACI and ALSA OPTi9xx drivers
+ *
+ *   This program is free software; you can redistribute it and/or modify
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation; either version 2 of the License, or
+ *   (at your option) any later version.
+ *
+ *   This program is distributed in the hope that it will be useful,
+ *   but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *   GNU General Public License for more details.
+ *
+ *   You should have received a copy of the GNU General Public License
+ *   along with this program; if not, write to the Free Software
+ *   Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
  */
 
 #include <linux/init.h>
@@ -56,19 +69,19 @@ module_param(index, int, 0444);
 MODULE_PARM_DESC(index, "Index value for miro soundcard.");
 module_param(id, charp, 0444);
 MODULE_PARM_DESC(id, "ID string for miro soundcard.");
-module_param_hw(port, long, ioport, 0444);
+module_param(port, long, 0444);
 MODULE_PARM_DESC(port, "WSS port # for miro driver.");
-module_param_hw(mpu_port, long, ioport, 0444);
+module_param(mpu_port, long, 0444);
 MODULE_PARM_DESC(mpu_port, "MPU-401 port # for miro driver.");
-module_param_hw(fm_port, long, ioport, 0444);
+module_param(fm_port, long, 0444);
 MODULE_PARM_DESC(fm_port, "FM Port # for miro driver.");
-module_param_hw(irq, int, irq, 0444);
+module_param(irq, int, 0444);
 MODULE_PARM_DESC(irq, "WSS irq # for miro driver.");
-module_param_hw(mpu_irq, int, irq, 0444);
+module_param(mpu_irq, int, 0444);
 MODULE_PARM_DESC(mpu_irq, "MPU-401 irq # for miro driver.");
-module_param_hw(dma1, int, dma, 0444);
+module_param(dma1, int, 0444);
 MODULE_PARM_DESC(dma1, "1st dma # for miro driver.");
-module_param_hw(dma2, int, dma, 0444);
+module_param(dma2, int, 0444);
 MODULE_PARM_DESC(dma2, "2nd dma # for miro driver.");
 module_param(wss, int, 0444);
 MODULE_PARM_DESC(wss, "wss mode");
@@ -119,7 +132,7 @@ struct snd_miro {
 
 static struct snd_miro_aci aci_device;
 
-static const char * const snd_opti9xx_names[] = {
+static char * snd_opti9xx_names[] = {
 	"unknown",
 	"82C928", "82C929",
 	"82C924", "82C925",
@@ -130,7 +143,7 @@ static int snd_miro_pnp_is_probed;
 
 #ifdef CONFIG_PNP
 
-static const struct pnp_card_device_id snd_miro_pnpids[] = {
+static struct pnp_card_device_id snd_miro_pnpids[] = {
 	/* PCM20 and PCM12 in PnP mode */
 	{ .id = "MIR0924",
 	  .devs = { { "MIR0000" }, { "MIR0002" }, { "MIR0005" } }, },
@@ -163,13 +176,10 @@ static int aci_busy_wait(struct snd_miro_aci *aci)
 			switch (timeout-ACI_MINTIME) {
 			case 0 ... 9:
 				out /= 10;
-				/* fall through */
 			case 10 ... 19:
 				out /= 10;
-				/* fall through */
 			case 20 ... 30:
 				out /= 10;
-				/* fall through */
 			default:
 				set_current_state(TASK_UNINTERRUPTIBLE);
 				schedule_timeout(out);
@@ -577,7 +587,7 @@ static int snd_miro_put_double(struct snd_kcontrol *kcontrol,
 	return change;
 }
 
-static const struct snd_kcontrol_new snd_miro_controls[] = {
+static struct snd_kcontrol_new snd_miro_controls[] = {
 MIRO_DOUBLE("Master Playback Volume", 0, ACI_GET_MASTER, ACI_SET_MASTER),
 MIRO_DOUBLE("Mic Playback Volume", 1, ACI_GET_MIC, ACI_SET_MIC),
 MIRO_DOUBLE("Line Playback Volume", 1, ACI_GET_LINE, ACI_SET_LINE),
@@ -589,7 +599,7 @@ MIRO_DOUBLE("Aux Playback Volume", 2, ACI_GET_LINE2, ACI_SET_LINE2),
 
 /* Equalizer with seven bands (only PCM20) 
    from -12dB up to +12dB on each band */
-static const struct snd_kcontrol_new snd_miro_eq_controls[] = {
+static struct snd_kcontrol_new snd_miro_eq_controls[] = {
 MIRO_DOUBLE("Tone Control - 28 Hz", 0, ACI_GET_EQ1, ACI_SET_EQ1),
 MIRO_DOUBLE("Tone Control - 160 Hz", 0, ACI_GET_EQ2, ACI_SET_EQ2),
 MIRO_DOUBLE("Tone Control - 400 Hz", 0, ACI_GET_EQ3, ACI_SET_EQ3),
@@ -599,15 +609,15 @@ MIRO_DOUBLE("Tone Control - 6.3 kHz", 0, ACI_GET_EQ6, ACI_SET_EQ6),
 MIRO_DOUBLE("Tone Control - 16 kHz", 0, ACI_GET_EQ7, ACI_SET_EQ7),
 };
 
-static const struct snd_kcontrol_new snd_miro_radio_control[] = {
+static struct snd_kcontrol_new snd_miro_radio_control[] = {
 MIRO_DOUBLE("Radio Playback Volume", 0, ACI_GET_LINE1, ACI_SET_LINE1),
 };
 
-static const struct snd_kcontrol_new snd_miro_line_control[] = {
+static struct snd_kcontrol_new snd_miro_line_control[] = {
 MIRO_DOUBLE("Line Playback Volume", 2, ACI_GET_LINE1, ACI_SET_LINE1),
 };
 
-static const struct snd_kcontrol_new snd_miro_preamp_control[] = {
+static struct snd_kcontrol_new snd_miro_preamp_control[] = {
 {
 	.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
 	.name = "Mic Boost",
@@ -617,7 +627,7 @@ static const struct snd_kcontrol_new snd_miro_preamp_control[] = {
 	.put = snd_miro_put_preamp,
 }};
 
-static const struct snd_kcontrol_new snd_miro_amp_control[] = {
+static struct snd_kcontrol_new snd_miro_amp_control[] = {
 {
 	.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
 	.name = "Line Boost",
@@ -627,7 +637,7 @@ static const struct snd_kcontrol_new snd_miro_amp_control[] = {
 	.put = snd_miro_put_amp,
 }};
 
-static const struct snd_kcontrol_new snd_miro_capture_control[] = {
+static struct snd_kcontrol_new snd_miro_capture_control[] = {
 {
 	.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
 	.name = "PCM Capture Switch",
@@ -637,7 +647,7 @@ static const struct snd_kcontrol_new snd_miro_capture_control[] = {
 	.put = snd_miro_put_capture,
 }};
 
-static const unsigned char aci_init_values[][2] = {
+static unsigned char aci_init_values[][2] = {
 	{ ACI_SET_MUTE, 0x00 },
 	{ ACI_SET_POWERAMP, 0x00 },
 	{ ACI_SET_PREAMP, 0x00 },
@@ -764,7 +774,7 @@ static int snd_miro_mixer(struct snd_card *card,
 static int snd_miro_init(struct snd_miro *chip,
 			 unsigned short hardware)
 {
-	static const int opti9xx_mc_size[] = {7, 7, 10, 10, 2, 2, 2};
+	static int opti9xx_mc_size[] = {7, 7, 10, 10, 2, 2, 2};
 
 	chip->hardware = hardware;
 	strcpy(chip->name, snd_opti9xx_names[hardware]);
@@ -824,7 +834,6 @@ static unsigned char snd_miro_read(struct snd_miro *chip,
 			retval = inb(chip->mc_base + 9);
 			break;
 		}
-		/* fall through */
 
 	case OPTi9XX_HW_82C929:
 		retval = inb(chip->mc_base + reg);
@@ -854,7 +863,6 @@ static void snd_miro_write(struct snd_miro *chip, unsigned char reg,
 			outb(value, chip->mc_base + 9);
 			break;
 		}
-		/* fall through */
 
 	case OPTi9XX_HW_82C929:
 		outb(value, chip->mc_base + reg);
@@ -984,7 +992,10 @@ static void snd_miro_proc_read(struct snd_info_entry * entry,
 static void snd_miro_proc_init(struct snd_card *card,
 			       struct snd_miro *miro)
 {
-	snd_card_ro_proc_new(card, "miro", miro, snd_miro_proc_read);
+	struct snd_info_entry *entry;
+
+	if (!snd_card_proc_new(card, "miro", &entry))
+		snd_info_set_text_ops(entry, miro, snd_miro_proc_read);
 }
 
 /*
@@ -1342,10 +1353,9 @@ static int snd_miro_probe(struct snd_card *card)
 	}
 
 	strcpy(card->driver, "miro");
-	snprintf(card->longname, sizeof(card->longname),
-		 "%s: OPTi%s, %s at 0x%lx, irq %d, dma %d&%d",
-		 card->shortname, miro->name, codec->pcm->name,
-		 miro->wss_base + 4, miro->irq, miro->dma1, miro->dma2);
+	sprintf(card->longname, "%s: OPTi%s, %s at 0x%lx, irq %d, dma %d&%d",
+		card->shortname, miro->name, codec->pcm->name,
+		miro->wss_base + 4, miro->irq, miro->dma1, miro->dma2);
 
 	if (mpu_port <= 0 || mpu_port == SNDRV_AUTO_PORT)
 		rmidi = NULL;
@@ -1387,12 +1397,12 @@ static int snd_miro_isa_match(struct device *devptr, unsigned int n)
 
 static int snd_miro_isa_probe(struct device *devptr, unsigned int n)
 {
-	static const long possible_ports[] = {0x530, 0xe80, 0xf40, 0x604, -1};
-	static const long possible_mpu_ports[] = {0x330, 0x300, 0x310, 0x320, -1};
-	static const int possible_irqs[] = {11, 9, 10, 7, -1};
-	static const int possible_mpu_irqs[] = {10, 5, 9, 7, -1};
-	static const int possible_dma1s[] = {3, 1, 0, -1};
-	static const int possible_dma2s[][2] = { {1, -1}, {0, -1}, {-1, -1},
+	static long possible_ports[] = {0x530, 0xe80, 0xf40, 0x604, -1};
+	static long possible_mpu_ports[] = {0x330, 0x300, 0x310, 0x320, -1};
+	static int possible_irqs[] = {11, 9, 10, 7, -1};
+	static int possible_mpu_irqs[] = {10, 5, 9, 7, -1};
+	static int possible_dma1s[] = {3, 1, 0, -1};
+	static int possible_dma2s[][2] = { {1, -1}, {0, -1}, {-1, -1},
 					   {0, -1} };
 
 	int error;

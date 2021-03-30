@@ -1,5 +1,8 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
+ *   This program is free software; you can redistribute it and/or
+ *   modify it under the terms of the GNU General Public License
+ *   as published by the Free Software Foundation; either version
+ *   2 of the License, or (at your option) any later version.
  *
  *   Robert Olsson <robert.olsson@its.uu.se> Uppsala Universitet
  *     & Swedish University of Agricultural Sciences.
@@ -15,10 +18,13 @@
  * Stefan Nilsson and Matti Tikkanen. Algorithmica, 33(1):19-33, 2002.
  * http://www.csc.kth.se/~snilsson/software/dyntrie2/
  *
+ *
  * IP-address lookup using LC-tries. Stefan Nilsson and Gunnar Karlsson
  * IEEE Journal on Selected Areas in Communications, 17(6):1083-1092, June 1999
  *
+ *
  * Code from fib_hash has been reused which includes the following header:
+ *
  *
  * INET		An implementation of the TCP/IP protocol suite for the LINUX
  *		operating system.  INET is implemented using the  BSD Socket
@@ -26,7 +32,13 @@
  *
  *		IPv4 FIB: lookup engine and maintenance routines.
  *
+ *
  * Authors:	Alexey Kuznetsov, <kuznet@ms2.inr.ac.ru>
+ *
+ *		This program is free software; you can redistribute it and/or
+ *		modify it under the terms of the GNU General Public License
+ *		as published by the Free Software Foundation; either version
+ *		2 of the License, or (at your option) any later version.
  *
  * Substantial contributions to this work comes from:
  *
@@ -38,8 +50,7 @@
 
 #define VERSION "0.409"
 
-#include <linux/cache.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <linux/bitops.h>
 #include <linux/types.h>
 #include <linux/kernel.h>
@@ -62,7 +73,6 @@
 #include <linux/slab.h>
 #include <linux/export.h>
 #include <linux/vmalloc.h>
-#include <linux/notifier.h>
 #include <net/net_namespace.h>
 #include <net/ip.h>
 #include <net/protocol.h>
@@ -70,43 +80,9 @@
 #include <net/tcp.h>
 #include <net/sock.h>
 #include <net/ip_fib.h>
-#include <net/fib_notifier.h>
+#include <net/switchdev.h>
 #include <trace/events/fib.h>
 #include "fib_lookup.h"
-
-static int call_fib_entry_notifier(struct notifier_block *nb,
-				   enum fib_event_type event_type, u32 dst,
-				   int dst_len, struct fib_alias *fa,
-				   struct netlink_ext_ack *extack)
-{
-	struct fib_entry_notifier_info info = {
-		.info.extack = extack,
-		.dst = dst,
-		.dst_len = dst_len,
-		.fi = fa->fa_info,
-		.tos = fa->fa_tos,
-		.type = fa->fa_type,
-		.tb_id = fa->tb_id,
-	};
-	return call_fib4_notifier(nb, event_type, &info.info);
-}
-
-static int call_fib_entry_notifiers(struct net *net,
-				    enum fib_event_type event_type, u32 dst,
-				    int dst_len, struct fib_alias *fa,
-				    struct netlink_ext_ack *extack)
-{
-	struct fib_entry_notifier_info info = {
-		.info.extack = extack,
-		.dst = dst,
-		.dst_len = dst_len,
-		.fi = fa->fa_info,
-		.tos = fa->fa_tos,
-		.type = fa->fa_type,
-		.tb_id = fa->tb_id,
-	};
-	return call_fib4_notifiers(net, event_type, &info.info);
-}
 
 #define MAX_STAT_DEPTH 32
 
@@ -173,19 +149,17 @@ struct trie {
 };
 
 static struct key_vector *resize(struct trie *t, struct key_vector *tn);
-static unsigned int tnode_free_size;
+static size_t tnode_free_size;
 
 /*
- * synchronize_rcu after call_rcu for outstanding dirty memory; it should be
- * especially useful before resizing the root node with PREEMPT_NONE configs;
- * the value was obtained experimentally, aiming to avoid visible slowdown.
+ * synchronize_rcu after call_rcu for that many pages; it should be especially
+ * useful before resizing the root node with PREEMPT_NONE configs; the value was
+ * obtained experimentally, aiming to avoid visible slowdown.
  */
-unsigned int sysctl_fib_sync_mem = 512 * 1024;
-unsigned int sysctl_fib_sync_mem_min = 64 * 1024;
-unsigned int sysctl_fib_sync_mem_max = 64 * 1024 * 1024;
+static const int sync_pages = 128;
 
-static struct kmem_cache *fn_alias_kmem __ro_after_init;
-static struct kmem_cache *trie_leaf_kmem __ro_after_init;
+static struct kmem_cache *fn_alias_kmem __read_mostly;
+static struct kmem_cache *trie_leaf_kmem __read_mostly;
 
 static inline struct tnode *tn_info(struct key_vector *kv)
 {
@@ -275,7 +249,7 @@ static inline unsigned long get_index(t_key key, struct key_vector *kv)
  * index into the parent's child array. That is, they will be used to find
  * 'n' among tp's children.
  *
- * The bits from (n->pos + n->bits) to (tp->pos - 1) - "S" - are skipped bits
+ * The bits from (n->pos + n->bits) to (tn->pos - 1) - "S" - are skipped bits
  * for the node n.
  *
  * All the bits we have seen so far are significant to the node n. The rest
@@ -284,7 +258,7 @@ static inline unsigned long get_index(t_key key, struct key_vector *kv)
  * The bits from (n->pos) to (n->pos + n->bits - 1) - "C" - are the index into
  * n's child array, and will of course be different for each child.
  *
- * The rest of the bits, from 0 to (n->pos -1) - "u" - are completely unknown
+ * The rest of the bits, from 0 to (n->pos + n->bits), are completely unknown
  * at this point.
  */
 
@@ -315,8 +289,10 @@ static void __node_free_rcu(struct rcu_head *head)
 
 	if (!n->tn_bits)
 		kmem_cache_free(trie_leaf_kmem, n);
+	else if (n->tn_bits <= TNODE_KMALLOC_MAX)
+		kfree(n);
 	else
-		kvfree(n);
+		vfree(n);
 }
 
 #define node_free(n) call_rcu(&tn_info(n)->rcu, __node_free_rcu)
@@ -340,18 +316,12 @@ static struct tnode *tnode_alloc(int bits)
 
 static inline void empty_child_inc(struct key_vector *n)
 {
-	tn_info(n)->empty_children++;
-
-	if (!tn_info(n)->empty_children)
-		tn_info(n)->full_children++;
+	++tn_info(n)->empty_children ? : ++tn_info(n)->full_children;
 }
 
 static inline void empty_child_dec(struct key_vector *n)
 {
-	if (!tn_info(n)->empty_children)
-		tn_info(n)->full_children--;
-
-	tn_info(n)->empty_children--;
+	tn_info(n)->empty_children-- ? : tn_info(n)->full_children--;
 }
 
 static struct key_vector *leaf_new(t_key key, struct fib_alias *fa)
@@ -502,7 +472,7 @@ static void tnode_free(struct key_vector *tn)
 		tn = container_of(head, struct tnode, rcu)->kv;
 	}
 
-	if (tnode_free_size >= sysctl_fib_sync_mem) {
+	if (tnode_free_size >= PAGE_SIZE * sync_pages) {
 		tnode_free_size = 0;
 		synchronize_rcu();
 	}
@@ -713,13 +683,6 @@ static unsigned char update_suffix(struct key_vector *tn)
 {
 	unsigned char slen = tn->pos;
 	unsigned long stride, i;
-	unsigned char slen_max;
-
-	/* only vector 0 can have a suffix length greater than or equal to
-	 * tn->pos + tn->bits, the second highest node will have a suffix
-	 * length at most of tn->pos + tn->bits - 1
-	 */
-	slen_max = min_t(unsigned char, tn->pos + tn->bits - 1, tn->slen);
 
 	/* search though the list of children looking for nodes that might
 	 * have a suffix greater than the one we currently have.  This is
@@ -737,8 +700,12 @@ static unsigned char update_suffix(struct key_vector *tn)
 		slen = n->slen;
 		i &= ~(stride - 1);
 
-		/* stop searching if we have hit the maximum possible value */
-		if (slen >= slen_max)
+		/* if slen covers all but the last bit we can stop here
+		 * there will be nothing longer than that since only node
+		 * 0 and 1 << (bits - 1) could have that as their suffix
+		 * length.
+		 */
+		if ((slen + 1) >= (tn->pos + tn->bits))
 			break;
 	}
 
@@ -910,27 +877,39 @@ static struct key_vector *resize(struct trie *t, struct key_vector *tn)
 		return collapse(t, tn);
 
 	/* update parent in case halve failed */
-	return node_parent(tn);
+	tp = node_parent(tn);
+
+	/* Return if at least one deflate was run */
+	if (max_work != MAX_WORK)
+		return tp;
+
+	/* push the suffix length to the parent node */
+	if (tn->slen > tn->pos) {
+		unsigned char slen = update_suffix(tn);
+
+		if (slen > tp->slen)
+			tp->slen = slen;
+	}
+
+	return tp;
 }
 
-static void node_pull_suffix(struct key_vector *tn, unsigned char slen)
+static void leaf_pull_suffix(struct key_vector *tp, struct key_vector *l)
 {
-	unsigned char node_slen = tn->slen;
-
-	while ((node_slen > tn->pos) && (node_slen > slen)) {
-		slen = update_suffix(tn);
-		if (node_slen == slen)
+	while ((tp->slen > tp->pos) && (tp->slen > l->slen)) {
+		if (update_suffix(tp) > l->slen)
 			break;
-
-		tn = node_parent(tn);
-		node_slen = tn->slen;
+		tp = node_parent(tp);
 	}
 }
 
-static void node_push_suffix(struct key_vector *tn, unsigned char slen)
+static void leaf_push_suffix(struct key_vector *tn, struct key_vector *l)
 {
-	while (tn->slen < slen) {
-		tn->slen = slen;
+	/* if this is a new leaf then tn will be NULL and we can sort
+	 * out parent suffix lengths as a part of trie_rebalance
+	 */
+	while (tn->slen < l->slen) {
+		tn->slen = l->slen;
 		tn = node_parent(tn);
 	}
 }
@@ -980,12 +959,9 @@ static struct key_vector *fib_find_node(struct trie *t,
 
 /* Return the first fib alias matching TOS with
  * priority less than or equal to PRIO.
- * If 'find_first' is set, return the first matching
- * fib alias, regardless of TOS and priority.
  */
 static struct fib_alias *fib_find_alias(struct hlist_head *fah, u8 slen,
-					u8 tos, u32 prio, u32 tb_id,
-					bool find_first)
+					u8 tos, u32 prio, u32 tb_id)
 {
 	struct fib_alias *fa;
 
@@ -1001,8 +977,6 @@ static struct fib_alias *fib_find_alias(struct hlist_head *fah, u8 slen,
 			continue;
 		if (fa->tb_id != tb_id)
 			break;
-		if (find_first)
-			return fa;
 		if (fa->fa_tos > tos)
 			continue;
 		if (fa->fa_info->fib_priority >= prio || fa->fa_tos < tos)
@@ -1011,52 +985,6 @@ static struct fib_alias *fib_find_alias(struct hlist_head *fah, u8 slen,
 
 	return NULL;
 }
-
-static struct fib_alias *
-fib_find_matching_alias(struct net *net, const struct fib_rt_info *fri)
-{
-	u8 slen = KEYLENGTH - fri->dst_len;
-	struct key_vector *l, *tp;
-	struct fib_table *tb;
-	struct fib_alias *fa;
-	struct trie *t;
-
-	tb = fib_get_table(net, fri->tb_id);
-	if (!tb)
-		return NULL;
-
-	t = (struct trie *)tb->tb_data;
-	l = fib_find_node(t, &tp, be32_to_cpu(fri->dst));
-	if (!l)
-		return NULL;
-
-	hlist_for_each_entry_rcu(fa, &l->leaf, fa_list) {
-		if (fa->fa_slen == slen && fa->tb_id == fri->tb_id &&
-		    fa->fa_tos == fri->tos && fa->fa_info == fri->fi &&
-		    fa->fa_type == fri->type)
-			return fa;
-	}
-
-	return NULL;
-}
-
-void fib_alias_hw_flags_set(struct net *net, const struct fib_rt_info *fri)
-{
-	struct fib_alias *fa_match;
-
-	rcu_read_lock();
-
-	fa_match = fib_find_matching_alias(net, fri);
-	if (!fa_match)
-		goto out;
-
-	fa_match->offload = fri->offload;
-	fa_match->trap = fri->trap;
-
-out:
-	rcu_read_unlock();
-}
-EXPORT_SYMBOL_GPL(fib_alias_hw_flags_set);
 
 static void trie_rebalance(struct trie *t, struct key_vector *tn)
 {
@@ -1102,7 +1030,6 @@ static int fib_insert_node(struct trie *t, struct key_vector *tp,
 	}
 
 	/* Case 3: n is NULL, and will just insert a new leaf */
-	node_push_suffix(tp, new->fa_slen);
 	NODE_INIT_PARENT(l, tp);
 	put_child_root(tp, key, l);
 	trie_rebalance(t, tp);
@@ -1144,39 +1071,19 @@ static int fib_insert_alias(struct trie *t, struct key_vector *tp,
 	/* if we added to the tail node then we need to update slen */
 	if (l->slen < new->fa_slen) {
 		l->slen = new->fa_slen;
-		node_push_suffix(tp, new->fa_slen);
+		leaf_push_suffix(tp, l);
 	}
 
 	return 0;
 }
 
-static bool fib_valid_key_len(u32 key, u8 plen, struct netlink_ext_ack *extack)
-{
-	if (plen > KEYLENGTH) {
-		NL_SET_ERR_MSG(extack, "Invalid prefix length");
-		return false;
-	}
-
-	if ((plen < KEYLENGTH) && (key << plen)) {
-		NL_SET_ERR_MSG(extack,
-			       "Invalid prefix for given prefix length");
-		return false;
-	}
-
-	return true;
-}
-
-static void fib_remove_alias(struct trie *t, struct key_vector *tp,
-			     struct key_vector *l, struct fib_alias *old);
-
 /* Caller must hold RTNL. */
-int fib_table_insert(struct net *net, struct fib_table *tb,
-		     struct fib_config *cfg, struct netlink_ext_ack *extack)
+int fib_table_insert(struct fib_table *tb, struct fib_config *cfg)
 {
 	struct trie *t = (struct trie *)tb->tb_data;
 	struct fib_alias *fa, *new_fa;
 	struct key_vector *l, *tp;
-	u16 nlflags = NLM_F_EXCL;
+	unsigned int nlflags = 0;
 	struct fib_info *fi;
 	u8 plen = cfg->fc_dst_len;
 	u8 slen = KEYLENGTH - plen;
@@ -1184,14 +1091,17 @@ int fib_table_insert(struct net *net, struct fib_table *tb,
 	u32 key;
 	int err;
 
-	key = ntohl(cfg->fc_dst);
-
-	if (!fib_valid_key_len(key, plen, extack))
+	if (plen > KEYLENGTH)
 		return -EINVAL;
+
+	key = ntohl(cfg->fc_dst);
 
 	pr_debug("Insert table=%u %08x/%d\n", tb->tb_id, key, plen);
 
-	fi = fib_create_info(cfg, extack);
+	if ((plen < KEYLENGTH) && (key << plen))
+		return -EINVAL;
+
+	fi = fib_create_info(cfg);
 	if (IS_ERR(fi)) {
 		err = PTR_ERR(fi);
 		goto err;
@@ -1199,7 +1109,7 @@ int fib_table_insert(struct net *net, struct fib_table *tb,
 
 	l = fib_find_node(t, &tp, key);
 	fa = l ? fib_find_alias(&l->leaf, slen, tos, fi->fib_priority,
-				tb->tb_id, false) : NULL;
+				tb->tb_id) : NULL;
 
 	/* Now fa, if non-NULL, points to the first fib alias
 	 * with the same keys [prefix,tos,priority], if such key already
@@ -1217,8 +1127,6 @@ int fib_table_insert(struct net *net, struct fib_table *tb,
 		err = -EEXIST;
 		if (cfg->fc_nlflags & NLM_F_EXCL)
 			goto out;
-
-		nlflags &= ~NLM_F_EXCL;
 
 		/* We have 2 goals:
 		 * 1. Find exact match for type, scope, fib_info to avoid
@@ -1245,7 +1153,6 @@ int fib_table_insert(struct net *net, struct fib_table *tb,
 			struct fib_info *fi_drop;
 			u8 state;
 
-			nlflags |= NLM_F_REPLACE;
 			fa = fa_first;
 			if (fa_match) {
 				if (fa == fa_match)
@@ -1266,34 +1173,27 @@ int fib_table_insert(struct net *net, struct fib_table *tb,
 			new_fa->fa_slen = fa->fa_slen;
 			new_fa->tb_id = tb->tb_id;
 			new_fa->fa_default = -1;
-			new_fa->offload = 0;
-			new_fa->trap = 0;
 
-			hlist_replace_rcu(&fa->fa_list, &new_fa->fa_list);
-
-			if (fib_find_alias(&l->leaf, fa->fa_slen, 0, 0,
-					   tb->tb_id, true) == new_fa) {
-				enum fib_event_type fib_event;
-
-				fib_event = FIB_EVENT_ENTRY_REPLACE;
-				err = call_fib_entry_notifiers(net, fib_event,
-							       key, plen,
-							       new_fa, extack);
-				if (err) {
-					hlist_replace_rcu(&new_fa->fa_list,
-							  &fa->fa_list);
-					goto out_free_new_fa;
-				}
+			err = switchdev_fib_ipv4_add(key, plen, fi,
+						     new_fa->fa_tos,
+						     cfg->fc_type,
+						     cfg->fc_nlflags,
+						     tb->tb_id);
+			if (err) {
+				switchdev_fib_ipv4_abort(fi);
+				kmem_cache_free(fn_alias_kmem, new_fa);
+				goto out;
 			}
 
-			rtmsg_fib(RTM_NEWROUTE, htonl(key), new_fa, plen,
-				  tb->tb_id, &cfg->fc_nlinfo, nlflags);
+			hlist_replace_rcu(&fa->fa_list, &new_fa->fa_list);
 
 			alias_free_mem_rcu(fa);
 
 			fib_release_info(fi_drop);
 			if (state & FA_S_ACCESSED)
 				rt_cache_flush(cfg->fc_nlinfo.nl_net);
+			rtmsg_fib(RTM_NEWROUTE, htonl(key), new_fa, plen,
+				tb->tb_id, &cfg->fc_nlinfo, NLM_F_REPLACE);
 
 			goto succeeded;
 		}
@@ -1305,7 +1205,7 @@ int fib_table_insert(struct net *net, struct fib_table *tb,
 			goto out;
 
 		if (cfg->fc_nlflags & NLM_F_APPEND)
-			nlflags |= NLM_F_APPEND;
+			nlflags = NLM_F_APPEND;
 		else
 			fa = fa_first;
 	}
@@ -1313,7 +1213,6 @@ int fib_table_insert(struct net *net, struct fib_table *tb,
 	if (!(cfg->fc_nlflags & NLM_F_CREATE))
 		goto out;
 
-	nlflags |= NLM_F_CREATE;
 	err = -ENOBUFS;
 	new_fa = kmem_cache_alloc(fn_alias_kmem, GFP_KERNEL);
 	if (!new_fa)
@@ -1326,29 +1225,19 @@ int fib_table_insert(struct net *net, struct fib_table *tb,
 	new_fa->fa_slen = slen;
 	new_fa->tb_id = tb->tb_id;
 	new_fa->fa_default = -1;
-	new_fa->offload = 0;
-	new_fa->trap = 0;
+
+	/* (Optionally) offload fib entry to switch hardware. */
+	err = switchdev_fib_ipv4_add(key, plen, fi, tos, cfg->fc_type,
+				     cfg->fc_nlflags, tb->tb_id);
+	if (err) {
+		switchdev_fib_ipv4_abort(fi);
+		goto out_free_new_fa;
+	}
 
 	/* Insert new entry to the list. */
 	err = fib_insert_alias(t, tp, l, new_fa, fa, key);
 	if (err)
-		goto out_free_new_fa;
-
-	/* The alias was already inserted, so the node must exist. */
-	l = l ? l : fib_find_node(t, &tp, key);
-	if (WARN_ON_ONCE(!l))
-		goto out_free_new_fa;
-
-	if (fib_find_alias(&l->leaf, new_fa->fa_slen, 0, 0, tb->tb_id, true) ==
-	    new_fa) {
-		enum fib_event_type fib_event;
-
-		fib_event = FIB_EVENT_ENTRY_REPLACE;
-		err = call_fib_entry_notifiers(net, fib_event, key, plen,
-					       new_fa, extack);
-		if (err)
-			goto out_remove_new_fa;
-	}
+		goto out_sw_fib_del;
 
 	if (!plen)
 		tb->tb_num_default++;
@@ -1359,8 +1248,8 @@ int fib_table_insert(struct net *net, struct fib_table *tb,
 succeeded:
 	return 0;
 
-out_remove_new_fa:
-	fib_remove_alias(t, tp, l, new_fa);
+out_sw_fib_del:
+	switchdev_fib_ipv4_del(key, plen, fi, tos, cfg->fc_type, tb->tb_id);
 out_free_new_fa:
 	kmem_cache_free(fn_alias_kmem, new_fa);
 out:
@@ -1390,14 +1279,14 @@ int fib_table_lookup(struct fib_table *tb, const struct flowi4 *flp,
 	unsigned long index;
 	t_key cindex;
 
+	trace_fib_table_lookup(tb->tb_id, flp);
+
 	pn = t->kv;
 	cindex = 0;
 
 	n = get_child_rcu(pn, cindex);
-	if (!n) {
-		trace_fib_table_lookup(tb->tb_id, flp, NULL, -EAGAIN);
+	if (!n)
 		return -EAGAIN;
-	}
 
 #ifdef CONFIG_IP_FIB_TRIE_STATS
 	this_cpu_inc(stats->gets);
@@ -1480,11 +1369,8 @@ backtrace:
 				 * nothing for us to do as we do not have any
 				 * further nodes to parse.
 				 */
-				if (IS_TRIE(pn)) {
-					trace_fib_table_lookup(tb->tb_id, flp,
-							       NULL, -EAGAIN);
+				if (IS_TRIE(pn))
 					return -EAGAIN;
-				}
 #ifdef CONFIG_IP_FIB_TRIE_STATS
 				this_cpu_inc(stats->backtrack);
 #endif
@@ -1510,10 +1396,9 @@ found:
 		struct fib_info *fi = fa->fa_info;
 		int nhsel, err;
 
-		if ((BITS_PER_LONG > KEYLENGTH) || (fa->fa_slen < KEYLENGTH)) {
-			if (index >= (1ul << fa->fa_slen))
-				continue;
-		}
+		if ((index >= (1ul << fa->fa_slen)) &&
+		    ((BITS_PER_LONG > KEYLENGTH) || (fa->fa_slen != KEYLENGTH)))
+			continue;
 		if (fa->fa_tos && fa->fa_tos != flp->flowi4_tos)
 			continue;
 		if (fi->fib_dead)
@@ -1523,43 +1408,35 @@ found:
 		fib_alias_accessed(fa);
 		err = fib_props[fa->fa_type].error;
 		if (unlikely(err < 0)) {
-out_reject:
 #ifdef CONFIG_IP_FIB_TRIE_STATS
 			this_cpu_inc(stats->semantic_match_passed);
 #endif
-			trace_fib_table_lookup(tb->tb_id, flp, NULL, err);
 			return err;
 		}
 		if (fi->fib_flags & RTNH_F_DEAD)
 			continue;
+		for (nhsel = 0; nhsel < fi->fib_nhs; nhsel++) {
+			const struct fib_nh *nh = &fi->fib_nh[nhsel];
+			struct in_device *in_dev = __in_dev_get_rcu(nh->nh_dev);
 
-		if (unlikely(fi->nh && nexthop_is_blackhole(fi->nh))) {
-			err = fib_props[RTN_BLACKHOLE].error;
-			goto out_reject;
-		}
-
-		for (nhsel = 0; nhsel < fib_info_num_path(fi); nhsel++) {
-			struct fib_nh_common *nhc = fib_info_nhc(fi, nhsel);
-
-			if (nhc->nhc_flags & RTNH_F_DEAD)
+			if (nh->nh_flags & RTNH_F_DEAD)
 				continue;
-			if (ip_ignore_linkdown(nhc->nhc_dev) &&
-			    nhc->nhc_flags & RTNH_F_LINKDOWN &&
+			if (in_dev &&
+			    IN_DEV_IGNORE_ROUTES_WITH_LINKDOWN(in_dev) &&
+			    nh->nh_flags & RTNH_F_LINKDOWN &&
 			    !(fib_flags & FIB_LOOKUP_IGNORE_LINKSTATE))
 				continue;
 			if (!(flp->flowi4_flags & FLOWI_FLAG_SKIP_NH_OIF)) {
 				if (flp->flowi4_oif &&
-				    flp->flowi4_oif != nhc->nhc_oif)
+				    flp->flowi4_oif != nh->nh_oif)
 					continue;
 			}
 
 			if (!(fib_flags & FIB_LOOKUP_NOREF))
-				refcount_inc(&fi->fib_clntref);
+				atomic_inc(&fi->fib_clntref);
 
-			res->prefix = htonl(n->key);
 			res->prefixlen = KEYLENGTH - fa->fa_slen;
 			res->nh_sel = nhsel;
-			res->nhc = nhc;
 			res->type = fa->fa_type;
 			res->scope = fi->fib_scope;
 			res->fi = fi;
@@ -1568,7 +1445,7 @@ out_reject:
 #ifdef CONFIG_IP_FIB_TRIE_STATS
 			this_cpu_inc(stats->semantic_match_passed);
 #endif
-			trace_fib_table_lookup(tb->tb_id, flp, nhc, err);
+			trace_fib_table_lookup_nh(nh);
 
 			return err;
 		}
@@ -1594,8 +1471,6 @@ static void fib_remove_alias(struct trie *t, struct key_vector *tp,
 	 * out parent suffix lengths as a part of trie_rebalance
 	 */
 	if (hlist_empty(&l->leaf)) {
-		if (tp->slen == l->slen)
-			node_pull_suffix(tp, tp->pos);
 		put_child_root(tp, l->key, NULL);
 		node_free(l);
 		trie_rebalance(t, tp);
@@ -1608,42 +1483,11 @@ static void fib_remove_alias(struct trie *t, struct key_vector *tp,
 
 	/* update the trie with the latest suffix length */
 	l->slen = fa->fa_slen;
-	node_pull_suffix(tp, fa->fa_slen);
-}
-
-static void fib_notify_alias_delete(struct net *net, u32 key,
-				    struct hlist_head *fah,
-				    struct fib_alias *fa_to_delete,
-				    struct netlink_ext_ack *extack)
-{
-	struct fib_alias *fa_next, *fa_to_notify;
-	u32 tb_id = fa_to_delete->tb_id;
-	u8 slen = fa_to_delete->fa_slen;
-	enum fib_event_type fib_event;
-
-	/* Do not notify if we do not care about the route. */
-	if (fib_find_alias(fah, slen, 0, 0, tb_id, true) != fa_to_delete)
-		return;
-
-	/* Determine if the route should be replaced by the next route in the
-	 * list.
-	 */
-	fa_next = hlist_entry_safe(fa_to_delete->fa_list.next,
-				   struct fib_alias, fa_list);
-	if (fa_next && fa_next->fa_slen == slen && fa_next->tb_id == tb_id) {
-		fib_event = FIB_EVENT_ENTRY_REPLACE;
-		fa_to_notify = fa_next;
-	} else {
-		fib_event = FIB_EVENT_ENTRY_DEL;
-		fa_to_notify = fa_to_delete;
-	}
-	call_fib_entry_notifiers(net, fib_event, key, KEYLENGTH - slen,
-				 fa_to_notify, extack);
+	leaf_pull_suffix(tp, l);
 }
 
 /* Caller must hold RTNL. */
-int fib_table_delete(struct net *net, struct fib_table *tb,
-		     struct fib_config *cfg, struct netlink_ext_ack *extack)
+int fib_table_delete(struct fib_table *tb, struct fib_config *cfg)
 {
 	struct trie *t = (struct trie *) tb->tb_data;
 	struct fib_alias *fa, *fa_to_delete;
@@ -1653,16 +1497,19 @@ int fib_table_delete(struct net *net, struct fib_table *tb,
 	u8 tos = cfg->fc_tos;
 	u32 key;
 
+	if (plen > KEYLENGTH)
+		return -EINVAL;
+
 	key = ntohl(cfg->fc_dst);
 
-	if (!fib_valid_key_len(key, plen, extack))
+	if ((plen < KEYLENGTH) && (key << plen))
 		return -EINVAL;
 
 	l = fib_find_node(t, &tp, key);
 	if (!l)
 		return -ESRCH;
 
-	fa = fib_find_alias(&l->leaf, slen, tos, 0, tb->tb_id, false);
+	fa = fib_find_alias(&l->leaf, slen, tos, 0, tb->tb_id);
 	if (!fa)
 		return -ESRCH;
 
@@ -1684,8 +1531,7 @@ int fib_table_delete(struct net *net, struct fib_table *tb,
 		     fi->fib_prefsrc == cfg->fc_prefsrc) &&
 		    (!cfg->fc_protocol ||
 		     fi->fib_protocol == cfg->fc_protocol) &&
-		    fib_nh_match(cfg, fi, extack) == 0 &&
-		    fib_metrics_match(cfg, fi)) {
+		    fib_nh_match(cfg, fi) == 0) {
 			fa_to_delete = fa;
 			break;
 		}
@@ -1694,7 +1540,9 @@ int fib_table_delete(struct net *net, struct fib_table *tb,
 	if (!fa_to_delete)
 		return -ESRCH;
 
-	fib_notify_alias_delete(net, key, &l->leaf, fa_to_delete, extack);
+	switchdev_fib_ipv4_del(key, plen, fa_to_delete->fa_info, tos,
+			       cfg->fc_type, tb->tb_id);
+
 	rtmsg_fib(RTM_DELROUTE, htonl(key), fa_to_delete, plen, tb->tb_id,
 		  &cfg->fc_nlinfo, 0);
 
@@ -1866,10 +1714,8 @@ struct fib_table *fib_trie_unmerge(struct fib_table *oldtb)
 				local_l = fib_find_node(lt, &local_tp, l->key);
 
 			if (fib_insert_alias(lt, local_tp, local_l, new_fa,
-					     NULL, l->key)) {
-				kmem_cache_free(fn_alias_kmem, new_fa);
+					     NULL, l->key))
 				goto out;
-			}
 		}
 
 		/* stop loop if key wrapped back to 0 */
@@ -1906,10 +1752,6 @@ void fib_table_flush_external(struct fib_table *tb)
 			if (IS_TRIE(pn))
 				break;
 
-			/* update the suffix to address pulled leaves */
-			if (pn->slen > pn->pos)
-				update_suffix(pn);
-
 			/* resize completed node */
 			pn = resize(t, pn);
 			cindex = get_index(pkey, pn);
@@ -1931,6 +1773,8 @@ void fib_table_flush_external(struct fib_table *tb)
 		}
 
 		hlist_for_each_entry_safe(fa, tmp, &n->leaf, fa_list) {
+			struct fib_info *fi = fa->fa_info;
+
 			/* if alias was cloned to local then we just
 			 * need to remove the local copy from main
 			 */
@@ -1942,6 +1786,13 @@ void fib_table_flush_external(struct fib_table *tb)
 
 			/* record local slen */
 			slen = fa->fa_slen;
+
+			if (!fi || !(fi->fib_flags & RTNH_F_OFFLOAD))
+				continue;
+
+			switchdev_fib_ipv4_del(n->key, KEYLENGTH - fa->fa_slen,
+					       fi, fa->fa_tos, fa->fa_type,
+					       tb->tb_id);
 		}
 
 		/* update leaf slen */
@@ -1955,7 +1806,7 @@ void fib_table_flush_external(struct fib_table *tb)
 }
 
 /* Caller must hold RTNL. */
-int fib_table_flush(struct net *net, struct fib_table *tb, bool flush_all)
+int fib_table_flush(struct fib_table *tb, bool flush_all)
 {
 	struct trie *t = (struct trie *)tb->tb_data;
 	struct key_vector *pn = t->kv;
@@ -1976,10 +1827,6 @@ int fib_table_flush(struct net *net, struct fib_table *tb, bool flush_all)
 			if (IS_TRIE(pn))
 				break;
 
-			/* update the suffix to address pulled leaves */
-			if (pn->slen > pn->pos)
-				update_suffix(pn);
-
 			/* resize completed node */
 			pn = resize(t, pn);
 			cindex = get_index(pkey, pn);
@@ -2003,7 +1850,7 @@ int fib_table_flush(struct net *net, struct fib_table *tb, bool flush_all)
 		hlist_for_each_entry_safe(fa, tmp, &n->leaf, fa_list) {
 			struct fib_info *fi = fa->fa_info;
 
-			if (!fi || tb->tb_id != fa->tb_id ||
+			if (!fi ||
 			    (!(fi->fib_flags & RTNH_F_DEAD) &&
 			     !fib_props[fa->fa_type].error)) {
 				slen = fa->fa_slen;
@@ -2018,8 +1865,9 @@ int fib_table_flush(struct net *net, struct fib_table *tb, bool flush_all)
 				continue;
 			}
 
-			fib_notify_alias_delete(net, n->key, &n->leaf, fa,
-						NULL);
+			switchdev_fib_ipv4_del(n->key, KEYLENGTH - fa->fa_slen,
+					       fi, fa->fa_tos, fa->fa_type,
+					       tb->tb_id);
 			hlist_del_rcu(&fa->fa_list);
 			fib_release_info(fa->fa_info);
 			alias_free_mem_rcu(fa);
@@ -2037,150 +1885,6 @@ int fib_table_flush(struct net *net, struct fib_table *tb, bool flush_all)
 
 	pr_debug("trie_flush found=%d\n", found);
 	return found;
-}
-
-/* derived from fib_trie_free */
-static void __fib_info_notify_update(struct net *net, struct fib_table *tb,
-				     struct nl_info *info)
-{
-	struct trie *t = (struct trie *)tb->tb_data;
-	struct key_vector *pn = t->kv;
-	unsigned long cindex = 1;
-	struct fib_alias *fa;
-
-	for (;;) {
-		struct key_vector *n;
-
-		if (!(cindex--)) {
-			t_key pkey = pn->key;
-
-			if (IS_TRIE(pn))
-				break;
-
-			pn = node_parent(pn);
-			cindex = get_index(pkey, pn);
-			continue;
-		}
-
-		/* grab the next available node */
-		n = get_child(pn, cindex);
-		if (!n)
-			continue;
-
-		if (IS_TNODE(n)) {
-			/* record pn and cindex for leaf walking */
-			pn = n;
-			cindex = 1ul << n->bits;
-
-			continue;
-		}
-
-		hlist_for_each_entry(fa, &n->leaf, fa_list) {
-			struct fib_info *fi = fa->fa_info;
-
-			if (!fi || !fi->nh_updated || fa->tb_id != tb->tb_id)
-				continue;
-
-			rtmsg_fib(RTM_NEWROUTE, htonl(n->key), fa,
-				  KEYLENGTH - fa->fa_slen, tb->tb_id,
-				  info, NLM_F_REPLACE);
-
-			/* call_fib_entry_notifiers will be removed when
-			 * in-kernel notifier is implemented and supported
-			 * for nexthop objects
-			 */
-			call_fib_entry_notifiers(net, FIB_EVENT_ENTRY_REPLACE,
-						 n->key,
-						 KEYLENGTH - fa->fa_slen, fa,
-						 NULL);
-		}
-	}
-}
-
-void fib_info_notify_update(struct net *net, struct nl_info *info)
-{
-	unsigned int h;
-
-	for (h = 0; h < FIB_TABLE_HASHSZ; h++) {
-		struct hlist_head *head = &net->ipv4.fib_table_hash[h];
-		struct fib_table *tb;
-
-		hlist_for_each_entry_rcu(tb, head, tb_hlist)
-			__fib_info_notify_update(net, tb, info);
-	}
-}
-
-static int fib_leaf_notify(struct key_vector *l, struct fib_table *tb,
-			   struct notifier_block *nb,
-			   struct netlink_ext_ack *extack)
-{
-	struct fib_alias *fa;
-	int last_slen = -1;
-	int err;
-
-	hlist_for_each_entry_rcu(fa, &l->leaf, fa_list) {
-		struct fib_info *fi = fa->fa_info;
-
-		if (!fi)
-			continue;
-
-		/* local and main table can share the same trie,
-		 * so don't notify twice for the same entry.
-		 */
-		if (tb->tb_id != fa->tb_id)
-			continue;
-
-		if (fa->fa_slen == last_slen)
-			continue;
-
-		last_slen = fa->fa_slen;
-		err = call_fib_entry_notifier(nb, FIB_EVENT_ENTRY_REPLACE,
-					      l->key, KEYLENGTH - fa->fa_slen,
-					      fa, extack);
-		if (err)
-			return err;
-	}
-	return 0;
-}
-
-static int fib_table_notify(struct fib_table *tb, struct notifier_block *nb,
-			    struct netlink_ext_ack *extack)
-{
-	struct trie *t = (struct trie *)tb->tb_data;
-	struct key_vector *l, *tp = t->kv;
-	t_key key = 0;
-	int err;
-
-	while ((l = leaf_walk_rcu(&tp, key)) != NULL) {
-		err = fib_leaf_notify(l, tb, nb, extack);
-		if (err)
-			return err;
-
-		key = l->key + 1;
-		/* stop in case of wrap around */
-		if (key < l->key)
-			break;
-	}
-	return 0;
-}
-
-int fib_notify(struct net *net, struct notifier_block *nb,
-	       struct netlink_ext_ack *extack)
-{
-	unsigned int h;
-	int err;
-
-	for (h = 0; h < FIB_TABLE_HASHSZ; h++) {
-		struct hlist_head *head = &net->ipv4.fib_table_hash[h];
-		struct fib_table *tb;
-
-		hlist_for_each_entry_rcu(tb, head, tb_hlist) {
-			err = fib_table_notify(tb, nb, extack);
-			if (err)
-				return err;
-		}
-	}
-	return 0;
 }
 
 static void __trie_free_rcu(struct rcu_head *head)
@@ -2201,93 +1905,48 @@ void fib_free_table(struct fib_table *tb)
 }
 
 static int fn_trie_dump_leaf(struct key_vector *l, struct fib_table *tb,
-			     struct sk_buff *skb, struct netlink_callback *cb,
-			     struct fib_dump_filter *filter)
+			     struct sk_buff *skb, struct netlink_callback *cb)
 {
-	unsigned int flags = NLM_F_MULTI;
 	__be32 xkey = htonl(l->key);
-	int i, s_i, i_fa, s_fa, err;
 	struct fib_alias *fa;
-
-	if (filter->filter_set ||
-	    !filter->dump_exceptions || !filter->dump_routes)
-		flags |= NLM_F_DUMP_FILTERED;
+	int i, s_i;
 
 	s_i = cb->args[4];
-	s_fa = cb->args[5];
 	i = 0;
 
 	/* rcu_read_lock is hold by caller */
 	hlist_for_each_entry_rcu(fa, &l->leaf, fa_list) {
-		struct fib_info *fi = fa->fa_info;
+		int err;
 
-		if (i < s_i)
-			goto next;
-
-		i_fa = 0;
-
-		if (tb->tb_id != fa->tb_id)
-			goto next;
-
-		if (filter->filter_set) {
-			if (filter->rt_type && fa->fa_type != filter->rt_type)
-				goto next;
-
-			if ((filter->protocol &&
-			     fi->fib_protocol != filter->protocol))
-				goto next;
-
-			if (filter->dev &&
-			    !fib_info_nh_uses_dev(fi, filter->dev))
-				goto next;
+		if (i < s_i) {
+			i++;
+			continue;
 		}
 
-		if (filter->dump_routes) {
-			if (!s_fa) {
-				struct fib_rt_info fri;
-
-				fri.fi = fi;
-				fri.tb_id = tb->tb_id;
-				fri.dst = xkey;
-				fri.dst_len = KEYLENGTH - fa->fa_slen;
-				fri.tos = fa->fa_tos;
-				fri.type = fa->fa_type;
-				fri.offload = fa->offload;
-				fri.trap = fa->trap;
-				err = fib_dump_info(skb,
-						    NETLINK_CB(cb->skb).portid,
-						    cb->nlh->nlmsg_seq,
-						    RTM_NEWROUTE, &fri, flags);
-				if (err < 0)
-					goto stop;
-			}
-
-			i_fa++;
+		if (tb->tb_id != fa->tb_id) {
+			i++;
+			continue;
 		}
 
-		if (filter->dump_exceptions) {
-			err = fib_dump_info_fnhe(skb, cb, tb->tb_id, fi,
-						 &i_fa, s_fa, flags);
-			if (err < 0)
-				goto stop;
+		err = fib_dump_info(skb, NETLINK_CB(cb->skb).portid,
+				    cb->nlh->nlmsg_seq, RTM_NEWROUTE,
+				    tb->tb_id, fa->fa_type,
+				    xkey, KEYLENGTH - fa->fa_slen,
+				    fa->fa_tos, fa->fa_info, NLM_F_MULTI);
+		if (err < 0) {
+			cb->args[4] = i;
+			return err;
 		}
-
-next:
 		i++;
 	}
 
 	cb->args[4] = i;
 	return skb->len;
-
-stop:
-	cb->args[4] = i;
-	cb->args[5] = i_fa;
-	return err;
 }
 
 /* rcu_read_lock needs to be hold by caller from readside */
 int fib_table_dump(struct fib_table *tb, struct sk_buff *skb,
-		   struct netlink_callback *cb, struct fib_dump_filter *filter)
+		   struct netlink_callback *cb)
 {
 	struct trie *t = (struct trie *)tb->tb_data;
 	struct key_vector *l, *tp = t->kv;
@@ -2297,16 +1956,10 @@ int fib_table_dump(struct fib_table *tb, struct sk_buff *skb,
 	int count = cb->args[2];
 	t_key key = cb->args[3];
 
-	/* First time here, count and key are both always 0. Count > 0
-	 * and key == 0 means the dump has wrapped around and we are done.
-	 */
-	if (count && !key)
-		return skb->len;
-
 	while ((l = leaf_walk_rcu(&tp, key)) != NULL) {
 		int err;
 
-		err = fn_trie_dump_leaf(l, tb, skb, cb, filter);
+		err = fn_trie_dump_leaf(l, tb, skb, cb);
 		if (err < 0) {
 			cb->args[3] = key;
 			cb->args[2] = count;
@@ -2574,10 +2227,9 @@ static int fib_triestat_seq_show(struct seq_file *seq, void *v)
 
 	seq_printf(seq,
 		   "Basic info: size of leaf:"
-		   " %zd bytes, size of tnode: %zd bytes.\n",
+		   " %Zd bytes, size of tnode: %Zd bytes.\n",
 		   LEAF_SIZE, TNODE_SIZE(0));
 
-	rcu_read_lock();
 	for (h = 0; h < FIB_TABLE_HASHSZ; h++) {
 		struct hlist_head *head = &net->ipv4.fib_table_hash[h];
 		struct fib_table *tb;
@@ -2597,12 +2249,23 @@ static int fib_triestat_seq_show(struct seq_file *seq, void *v)
 			trie_show_usage(seq, t->stats);
 #endif
 		}
-		cond_resched_rcu();
 	}
-	rcu_read_unlock();
 
 	return 0;
 }
+
+static int fib_triestat_seq_open(struct inode *inode, struct file *file)
+{
+	return single_open_net(inode, file, fib_triestat_seq_show);
+}
+
+static const struct file_operations fib_triestat_fops = {
+	.owner	= THIS_MODULE,
+	.open	= fib_triestat_seq_open,
+	.read	= seq_read,
+	.llseek	= seq_lseek,
+	.release = single_release_net,
+};
 
 static struct key_vector *fib_trie_get_idx(struct seq_file *seq, loff_t pos)
 {
@@ -2777,6 +2440,20 @@ static const struct seq_operations fib_trie_seq_ops = {
 	.show   = fib_trie_seq_show,
 };
 
+static int fib_trie_seq_open(struct inode *inode, struct file *file)
+{
+	return seq_open_net(inode, file, &fib_trie_seq_ops,
+			    sizeof(struct fib_trie_iter));
+}
+
+static const struct file_operations fib_trie_fops = {
+	.owner  = THIS_MODULE,
+	.open   = fib_trie_seq_open,
+	.read   = seq_read,
+	.llseek = seq_lseek,
+	.release = seq_release_net,
+};
+
 struct fib_route_iter {
 	struct seq_net_private p;
 	struct fib_table *main_tb;
@@ -2873,18 +2550,14 @@ static void fib_route_seq_stop(struct seq_file *seq, void *v)
 	rcu_read_unlock();
 }
 
-static unsigned int fib_flag_trans(int type, __be32 mask, struct fib_info *fi)
+static unsigned int fib_flag_trans(int type, __be32 mask, const struct fib_info *fi)
 {
 	unsigned int flags = 0;
 
 	if (type == RTN_UNREACHABLE || type == RTN_PROHIBIT)
 		flags = RTF_REJECT;
-	if (fi) {
-		const struct fib_nh_common *nhc = fib_info_nhc(fi, 0);
-
-		if (nhc->nhc_gw.ipv4)
-			flags |= RTF_GATEWAY;
-	}
+	if (fi && fi->fib_nh->nh_gw)
+		flags |= RTF_GATEWAY;
 	if (mask == htonl(0xFFFFFFFF))
 		flags |= RTF_HOST;
 	flags |= RTF_UP;
@@ -2915,7 +2588,7 @@ static int fib_route_seq_show(struct seq_file *seq, void *v)
 	prefix = htonl(l->key);
 
 	hlist_for_each_entry_rcu(fa, &l->leaf, fa_list) {
-		struct fib_info *fi = fa->fa_info;
+		const struct fib_info *fi = fa->fa_info;
 		__be32 mask = inet_make_mask(KEYLENGTH - fa->fa_slen);
 		unsigned int flags = fib_flag_trans(fa->fa_type, mask, fi);
 
@@ -2928,31 +2601,26 @@ static int fib_route_seq_show(struct seq_file *seq, void *v)
 
 		seq_setwidth(seq, 127);
 
-		if (fi) {
-			struct fib_nh_common *nhc = fib_info_nhc(fi, 0);
-			__be32 gw = 0;
-
-			if (nhc->nhc_gw_family == AF_INET)
-				gw = nhc->nhc_gw.ipv4;
-
+		if (fi)
 			seq_printf(seq,
 				   "%s\t%08X\t%08X\t%04X\t%d\t%u\t"
 				   "%d\t%08X\t%d\t%u\t%u",
-				   nhc->nhc_dev ? nhc->nhc_dev->name : "*",
-				   prefix, gw, flags, 0, 0,
+				   fi->fib_dev ? fi->fib_dev->name : "*",
+				   prefix,
+				   fi->fib_nh->nh_gw, flags, 0, 0,
 				   fi->fib_priority,
 				   mask,
 				   (fi->fib_advmss ?
 				    fi->fib_advmss + 40 : 0),
 				   fi->fib_window,
 				   fi->fib_rtt >> 3);
-		} else {
+		else
 			seq_printf(seq,
 				   "*\t%08X\t%08X\t%04X\t%d\t%u\t"
 				   "%d\t%08X\t%d\t%u\t%u",
 				   prefix, 0, flags, 0, 0, 0,
 				   mask, 0, 0, 0);
-		}
+
 		seq_pad(seq, '\n');
 	}
 
@@ -2966,18 +2634,30 @@ static const struct seq_operations fib_route_seq_ops = {
 	.show   = fib_route_seq_show,
 };
 
+static int fib_route_seq_open(struct inode *inode, struct file *file)
+{
+	return seq_open_net(inode, file, &fib_route_seq_ops,
+			    sizeof(struct fib_route_iter));
+}
+
+static const struct file_operations fib_route_fops = {
+	.owner  = THIS_MODULE,
+	.open   = fib_route_seq_open,
+	.read   = seq_read,
+	.llseek = seq_lseek,
+	.release = seq_release_net,
+};
+
 int __net_init fib_proc_init(struct net *net)
 {
-	if (!proc_create_net("fib_trie", 0444, net->proc_net, &fib_trie_seq_ops,
-			sizeof(struct fib_trie_iter)))
+	if (!proc_create("fib_trie", S_IRUGO, net->proc_net, &fib_trie_fops))
 		goto out1;
 
-	if (!proc_create_net_single("fib_triestat", 0444, net->proc_net,
-			fib_triestat_seq_show, NULL))
+	if (!proc_create("fib_triestat", S_IRUGO, net->proc_net,
+			 &fib_triestat_fops))
 		goto out2;
 
-	if (!proc_create_net("route", 0444, net->proc_net, &fib_route_seq_ops,
-			sizeof(struct fib_route_iter)))
+	if (!proc_create("route", S_IRUGO, net->proc_net, &fib_route_fops))
 		goto out3;
 
 	return 0;

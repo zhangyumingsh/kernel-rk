@@ -41,19 +41,6 @@
 #include <linux/slab.h>
 #include "pm8001_sas.h"
 #include "pm8001_chips.h"
-#include "pm80xx_hwi.h"
-
-static ulong logging_level = PM8001_FAIL_LOGGING | PM8001_IOERR_LOGGING;
-module_param(logging_level, ulong, 0644);
-MODULE_PARM_DESC(logging_level, " bits for enabling logging info.");
-
-static ulong link_rate = LINKRATE_15 | LINKRATE_30 | LINKRATE_60 | LINKRATE_120;
-module_param(link_rate, ulong, 0644);
-MODULE_PARM_DESC(link_rate, "Enable link rate.\n"
-		" 1: Link rate 1.5G\n"
-		" 2: Link rate 3.0G\n"
-		" 4: Link rate 6.0G\n"
-		" 8: Link rate 12.0G\n");
 
 static struct scsi_transport_template *pm8001_stt;
 
@@ -97,13 +84,11 @@ static struct scsi_host_template pm8001_sht = {
 	.this_id		= -1,
 	.sg_tablesize		= SG_ALL,
 	.max_sectors		= SCSI_DEFAULT_MAX_SECTORS,
+	.use_clustering		= ENABLE_CLUSTERING,
 	.eh_device_reset_handler = sas_eh_device_reset_handler,
-	.eh_target_reset_handler = sas_eh_target_reset_handler,
+	.eh_bus_reset_handler	= sas_eh_bus_reset_handler,
 	.target_destroy		= sas_target_destroy,
 	.ioctl			= sas_ioctl,
-#ifdef CONFIG_COMPAT
-	.compat_ioctl		= sas_ioctl,
-#endif
 	.shost_attrs		= pm8001_host_attrs,
 	.track_queue_depth	= 1,
 };
@@ -136,7 +121,7 @@ static void pm8001_phy_init(struct pm8001_hba_info *pm8001_ha, int phy_id)
 {
 	struct pm8001_phy *phy = &pm8001_ha->phy[phy_id];
 	struct asd_sas_phy *sas_phy = &phy->sas_phy;
-	phy->phy_state = PHY_LINK_DISABLE;
+	phy->phy_state = 0;
 	phy->pm8001_ha = pm8001_ha;
 	sas_phy->enabled = (phy_id < pm8001_ha->chip->n_phy) ? 1 : 0;
 	sas_phy->class = SAS;
@@ -147,7 +132,7 @@ static void pm8001_phy_init(struct pm8001_hba_info *pm8001_ha, int phy_id)
 	sas_phy->oob_mode = OOB_NOT_CONNECTED;
 	sas_phy->linkrate = SAS_LINK_RATE_UNKNOWN;
 	sas_phy->id = phy_id;
-	sas_phy->sas_addr = (u8 *)&phy->dev_sas_addr;
+	sas_phy->sas_addr = &pm8001_ha->sas_addr[0];
 	sas_phy->frame_rcvd = &phy->frame_rcvd[0];
 	sas_phy->ha = (struct sas_ha_struct *)pm8001_ha->shost->hostdata;
 	sas_phy->lldd_phy = phy;
@@ -167,7 +152,7 @@ static void pm8001_free(struct pm8001_hba_info *pm8001_ha)
 
 	for (i = 0; i < USI_MAX_MEMCNT; i++) {
 		if (pm8001_ha->memoryMap.region[i].virt_ptr != NULL) {
-			dma_free_coherent(&pm8001_ha->pdev->dev,
+			pci_free_consistent(pm8001_ha->pdev,
 				(pm8001_ha->memoryMap.region[i].total_len +
 				pm8001_ha->memoryMap.region[i].alignment),
 				pm8001_ha->memoryMap.region[i].virt_ptr,
@@ -175,6 +160,8 @@ static void pm8001_free(struct pm8001_hba_info *pm8001_ha)
 			}
 	}
 	PM8001_CHIP_DISP->chip_iounmap(pm8001_ha);
+	if (pm8001_ha->shost)
+		scsi_host_put(pm8001_ha->shost);
 	flush_workqueue(pm8001_wq);
 	kfree(pm8001_ha->tags);
 	kfree(pm8001_ha);
@@ -217,7 +204,7 @@ static irqreturn_t pm8001_interrupt_handler_msix(int irq, void *opaque)
 
 	if (unlikely(!pm8001_ha))
 		return IRQ_NONE;
-	if (!PM8001_CHIP_DISP->is_our_interrupt(pm8001_ha))
+	if (!PM8001_CHIP_DISP->is_our_interupt(pm8001_ha))
 		return IRQ_NONE;
 #ifdef PM8001_USE_TASKLET
 	tasklet_schedule(&pm8001_ha->tasklet[irq_vector->irq_id]);
@@ -240,7 +227,7 @@ static irqreturn_t pm8001_interrupt_handler_intx(int irq, void *dev_id)
 	pm8001_ha = sha->lldd_ha;
 	if (unlikely(!pm8001_ha))
 		return IRQ_NONE;
-	if (!PM8001_CHIP_DISP->is_our_interrupt(pm8001_ha))
+	if (!PM8001_CHIP_DISP->is_our_interupt(pm8001_ha))
 		return IRQ_NONE;
 
 #ifdef PM8001_USE_TASKLET
@@ -417,7 +404,7 @@ static int pm8001_ioremap(struct pm8001_hba_info *pm8001_ha)
 
 	pdev = pm8001_ha->pdev;
 	/* map pci mem (PMC pci base 0-3)*/
-	for (bar = 0; bar < PCI_STD_NUM_BARS; bar++) {
+	for (bar = 0; bar < 6; bar++) {
 		/*
 		** logical BARs for SPC:
 		** bar 0 and 1 - logical BAR0
@@ -431,6 +418,8 @@ static int pm8001_ioremap(struct pm8001_hba_info *pm8001_ha)
 		if (pci_resource_flags(pdev, bar) & IORESOURCE_MEM) {
 			pm8001_ha->io_mem[logicalBar].membase =
 				pci_resource_start(pdev, bar);
+			pm8001_ha->io_mem[logicalBar].membase &=
+				(u32)PCI_BASE_ADDRESS_MEM_MASK;
 			pm8001_ha->io_mem[logicalBar].memsize =
 				pci_resource_len(pdev, bar);
 			pm8001_ha->io_mem[logicalBar].memvirtaddr =
@@ -448,7 +437,7 @@ static int pm8001_ioremap(struct pm8001_hba_info *pm8001_ha)
 		} else {
 			pm8001_ha->io_mem[logicalBar].membase	= 0;
 			pm8001_ha->io_mem[logicalBar].memsize	= 0;
-			pm8001_ha->io_mem[logicalBar].memvirtaddr = NULL;
+			pm8001_ha->io_mem[logicalBar].memvirtaddr = 0;
 		}
 		logicalBar++;
 	}
@@ -482,15 +471,7 @@ static struct pm8001_hba_info *pm8001_pci_alloc(struct pci_dev *pdev,
 	pm8001_ha->sas = sha;
 	pm8001_ha->shost = shost;
 	pm8001_ha->id = pm8001_id++;
-	pm8001_ha->logging_level = logging_level;
-	if (link_rate >= 1 && link_rate <= 15)
-		pm8001_ha->link_rate = (link_rate << 8);
-	else {
-		pm8001_ha->link_rate = LINKRATE_15 | LINKRATE_30 |
-			LINKRATE_60 | LINKRATE_120;
-		PM8001_FAIL_DBG(pm8001_ha, pm8001_printk(
-			"Setting link rate to default value\n"));
-	}
+	pm8001_ha->logging_level = 0x01;
 	sprintf(pm8001_ha->name, "%s%d", DRV_NAME, pm8001_ha->id);
 	/* IOMB size is 128 for 8088/89 controllers */
 	if (pm8001_ha->chip_id != chip_8001)
@@ -524,12 +505,30 @@ static int pci_go_44(struct pci_dev *pdev)
 {
 	int rc;
 
-	rc = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(44));
-	if (rc) {
-		rc = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32));
-		if (rc)
+	if (!pci_set_dma_mask(pdev, DMA_BIT_MASK(44))) {
+		rc = pci_set_consistent_dma_mask(pdev, DMA_BIT_MASK(44));
+		if (rc) {
+			rc = pci_set_consistent_dma_mask(pdev,
+				DMA_BIT_MASK(32));
+			if (rc) {
+				dev_printk(KERN_ERR, &pdev->dev,
+					"44-bit DMA enable failed\n");
+				return rc;
+			}
+		}
+	} else {
+		rc = pci_set_dma_mask(pdev, DMA_BIT_MASK(32));
+		if (rc) {
 			dev_printk(KERN_ERR, &pdev->dev,
 				"32-bit DMA enable failed\n");
+			return rc;
+		}
+		rc = pci_set_consistent_dma_mask(pdev, DMA_BIT_MASK(32));
+		if (rc) {
+			dev_printk(KERN_ERR, &pdev->dev,
+				"32-bit consistent DMA enable failed\n");
+			return rc;
+		}
 	}
 	return rc;
 }
@@ -596,12 +595,10 @@ static void  pm8001_post_sas_ha_init(struct Scsi_Host *shost,
 	for (i = 0; i < chip_info->n_phy; i++) {
 		sha->sas_phy[i] = &pm8001_ha->phy[i].sas_phy;
 		sha->sas_port[i] = &pm8001_ha->port[i].sas_port;
-		sha->sas_phy[i]->sas_addr =
-			(u8 *)&pm8001_ha->phy[i].dev_sas_addr;
 	}
 	sha->sas_ha_name = DRV_NAME;
 	sha->dev = pm8001_ha->dev;
-	sha->strict_wide_ports = 1;
+
 	sha->lldd_module = THIS_MODULE;
 	sha->sas_addr = &pm8001_ha->sas_addr[0];
 	sha->num_phys = chip_info->n_phy;
@@ -618,7 +615,6 @@ static void  pm8001_post_sas_ha_init(struct Scsi_Host *shost,
 static void pm8001_init_sas_add(struct pm8001_hba_info *pm8001_ha)
 {
 	u8 i, j;
-	u8 sas_add[8];
 #ifdef PM8001_READ_VPD
 	/* For new SPC controllers WWN is stored in flash vpd
 	*  For SPC/SPCve controllers WWN is stored in EEPROM
@@ -680,12 +676,10 @@ static void pm8001_init_sas_add(struct pm8001_hba_info *pm8001_ha)
 			pm8001_ha->sas_addr[j] =
 					payload.func_specific[0x804 + i];
 	}
-	memcpy(sas_add, pm8001_ha->sas_addr, SAS_ADDR_SIZE);
+
 	for (i = 0; i < pm8001_ha->chip->n_phy; i++) {
-		if (i && ((i % 4) == 0))
-			sas_add[7] = sas_add[7] + 4;
 		memcpy(&pm8001_ha->phy[i].dev_sas_addr,
-			sas_add, SAS_ADDR_SIZE);
+			pm8001_ha->sas_addr, SAS_ADDR_SIZE);
 		PM8001_INIT_DBG(pm8001_ha,
 			pm8001_printk("phy %d sas_addr = %016llx\n", i,
 			pm8001_ha->phy[i].dev_sas_addr));
@@ -896,7 +890,9 @@ static u32 pm8001_setup_msix(struct pm8001_hba_info *pm8001_ha)
 	u32 i = 0, j = 0;
 	u32 number_of_intr;
 	int flag = 0;
+	u32 max_entry;
 	int rc;
+	static char intr_drvname[PM8001_MAX_MSIX_VEC][sizeof(DRV_NAME)+3];
 
 	/* SPCv controllers supports 64 msi-x */
 	if (pm8001_ha->chip_id == chip_8001) {
@@ -906,33 +902,35 @@ static u32 pm8001_setup_msix(struct pm8001_hba_info *pm8001_ha)
 		flag &= ~IRQF_SHARED;
 	}
 
-	rc = pci_alloc_irq_vectors(pm8001_ha->pdev, number_of_intr,
-			number_of_intr, PCI_IRQ_MSIX);
-	if (rc < 0)
-		return rc;
+	max_entry = sizeof(pm8001_ha->msix_entries) /
+		sizeof(pm8001_ha->msix_entries[0]);
+	for (i = 0; i < max_entry ; i++)
+		pm8001_ha->msix_entries[i].entry = i;
+	rc = pci_enable_msix_exact(pm8001_ha->pdev, pm8001_ha->msix_entries,
+		number_of_intr);
 	pm8001_ha->number_of_intr = number_of_intr;
+	if (rc)
+		return rc;
 
 	PM8001_INIT_DBG(pm8001_ha, pm8001_printk(
-		"pci_alloc_irq_vectors request ret:%d no of intr %d\n",
+		"pci_enable_msix_exact request ret:%d no of intr %d\n",
 				rc, pm8001_ha->number_of_intr));
 
 	for (i = 0; i < number_of_intr; i++) {
-		snprintf(pm8001_ha->intr_drvname[i],
-			sizeof(pm8001_ha->intr_drvname[0]),
-			"%s-%d", pm8001_ha->name, i);
+		snprintf(intr_drvname[i], sizeof(intr_drvname[0]),
+				DRV_NAME"%d", i);
 		pm8001_ha->irq_vector[i].irq_id = i;
 		pm8001_ha->irq_vector[i].drv_inst = pm8001_ha;
 
-		rc = request_irq(pci_irq_vector(pm8001_ha->pdev, i),
+		rc = request_irq(pm8001_ha->msix_entries[i].vector,
 			pm8001_interrupt_handler_msix, flag,
-			pm8001_ha->intr_drvname[i],
-			&(pm8001_ha->irq_vector[i]));
+			intr_drvname[i], &(pm8001_ha->irq_vector[i]));
 		if (rc) {
 			for (j = 0; j < i; j++) {
-				free_irq(pci_irq_vector(pm8001_ha->pdev, i),
+				free_irq(pm8001_ha->msix_entries[j].vector,
 					&(pm8001_ha->irq_vector[i]));
 			}
-			pci_free_irq_vectors(pm8001_ha->pdev);
+			pci_disable_msix(pm8001_ha->pdev);
 			break;
 		}
 	}
@@ -967,7 +965,7 @@ intx:
 	pm8001_ha->irq_vector[0].irq_id = 0;
 	pm8001_ha->irq_vector[0].drv_inst = pm8001_ha;
 	rc = request_irq(pdev->irq, pm8001_interrupt_handler_intx, IRQF_SHARED,
-		pm8001_ha->name, SHOST_TO_SAS_HA(pm8001_ha->shost));
+		DRV_NAME, SHOST_TO_SAS_HA(pm8001_ha->shost));
 	return rc;
 }
 
@@ -1073,7 +1071,6 @@ static int pm8001_pci_probe(struct pci_dev *pdev,
 	if (rc)
 		goto err_out_shost;
 	scsi_scan_host(pm8001_ha->shost);
-	pm8001_ha->flags = PM8001F_RUN_TIME;
 	return 0;
 
 err_out_shost:
@@ -1083,7 +1080,7 @@ err_out_ha_free:
 err_out_free:
 	kfree(SHOST_TO_SAS_HA(shost));
 err_out_free_host:
-	scsi_host_put(shost);
+	kfree(shost);
 err_out_regions:
 	pci_release_regions(pdev);
 err_out_disable:
@@ -1098,6 +1095,7 @@ static void pm8001_pci_remove(struct pci_dev *pdev)
 	struct pm8001_hba_info *pm8001_ha;
 	int i, j;
 	pm8001_ha = sha->lldd_ha;
+	scsi_remove_host(pm8001_ha->shost);
 	sas_unregister_ha(sha);
 	sas_remove_host(pm8001_ha->shost);
 	list_del(&pm8001_ha->list);
@@ -1106,10 +1104,11 @@ static void pm8001_pci_remove(struct pci_dev *pdev)
 
 #ifdef PM8001_USE_MSIX
 	for (i = 0; i < pm8001_ha->number_of_intr; i++)
-		synchronize_irq(pci_irq_vector(pdev, i));
+		synchronize_irq(pm8001_ha->msix_entries[i].vector);
 	for (i = 0; i < pm8001_ha->number_of_intr; i++)
-		free_irq(pci_irq_vector(pdev, i), &pm8001_ha->irq_vector[i]);
-	pci_free_irq_vectors(pdev);
+		free_irq(pm8001_ha->msix_entries[i].vector,
+				&(pm8001_ha->irq_vector[i]));
+	pci_disable_msix(pdev);
 #else
 	free_irq(pm8001_ha->irq, sha);
 #endif
@@ -1122,7 +1121,6 @@ static void pm8001_pci_remove(struct pci_dev *pdev)
 		for (j = 0; j < PM8001_MAX_MSIX_VEC; j++)
 			tasklet_kill(&pm8001_ha->tasklet[j]);
 #endif
-	scsi_host_put(pm8001_ha->shost);
 	pm8001_free(pm8001_ha);
 	kfree(sha->sas_phy);
 	kfree(sha->sas_port);
@@ -1156,10 +1154,11 @@ static int pm8001_pci_suspend(struct pci_dev *pdev, pm_message_t state)
 	PM8001_CHIP_DISP->chip_soft_rst(pm8001_ha);
 #ifdef PM8001_USE_MSIX
 	for (i = 0; i < pm8001_ha->number_of_intr; i++)
-		synchronize_irq(pci_irq_vector(pdev, i));
+		synchronize_irq(pm8001_ha->msix_entries[i].vector);
 	for (i = 0; i < pm8001_ha->number_of_intr; i++)
-		free_irq(pci_irq_vector(pdev, i), &pm8001_ha->irq_vector[i]);
-	pci_free_irq_vectors(pdev);
+		free_irq(pm8001_ha->msix_entries[i].vector,
+				&(pm8001_ha->irq_vector[i]));
+	pci_disable_msix(pdev);
 #else
 	free_irq(pm8001_ha->irq, sha);
 #endif
@@ -1252,7 +1251,7 @@ static int pm8001_pci_resume(struct pci_dev *pdev)
 
 	/* Chip documentation for the 8070 and 8072 SPCv    */
 	/* states that a 500ms minimum delay is required    */
-	/* before issuing commands. Otherwise, the firmware */
+	/* before issuing commands.  Otherwise, the firmare */
 	/* will enter an unrecoverable state.               */
 
 	if (pm8001_ha->chip_id == chip_8070 ||

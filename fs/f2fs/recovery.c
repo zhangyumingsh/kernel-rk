@@ -204,8 +204,8 @@ static int recover_quota_data(struct inode *inode, struct page *page)
 
 	memset(&attr, 0, sizeof(attr));
 
-	attr.ia_uid = make_kuid(inode->i_sb->s_user_ns, i_uid);
-	attr.ia_gid = make_kgid(inode->i_sb->s_user_ns, i_gid);
+	attr.ia_uid = make_kuid(&init_user_ns, i_uid);
+	attr.ia_gid = make_kgid(&init_user_ns, i_gid);
 
 	if (!uid_eq(attr.ia_uid, inode->i_uid))
 		attr.ia_valid |= ATTR_UID;
@@ -253,18 +253,10 @@ static int recover_inode(struct inode *inode, struct page *page)
 			F2FS_FITS_IN_INODE(raw, le16_to_cpu(raw->i_extra_isize),
 								i_projid)) {
 			projid_t i_projid;
-			kprojid_t kprojid;
 
 			i_projid = (projid_t)le32_to_cpu(raw->i_projid);
-			kprojid = make_kprojid(&init_user_ns, i_projid);
-
-			if (!projid_eq(kprojid, F2FS_I(inode)->i_projid)) {
-				err = f2fs_transfer_project_quota(inode,
-								kprojid);
-				if (err)
-					return err;
-				F2FS_I(inode)->i_projid = kprojid;
-			}
+			F2FS_I(inode)->i_projid =
+				make_kprojid(&init_user_ns, i_projid);
 		}
 	}
 
@@ -711,7 +703,7 @@ next:
 		f2fs_put_page(page, 1);
 	}
 	if (!err)
-		f2fs_allocate_new_segments(sbi, NO_CHECK_TYPE);
+		f2fs_allocate_new_segments(sbi);
 	return err;
 }
 
@@ -723,21 +715,20 @@ int f2fs_recover_fsync_data(struct f2fs_sb_info *sbi, bool check_only)
 	int ret = 0;
 	unsigned long s_flags = sbi->sb->s_flags;
 	bool need_writecp = false;
-	bool fix_curseg_write_pointer = false;
 #ifdef CONFIG_QUOTA
 	int quota_enabled;
 #endif
 
-	if (s_flags & SB_RDONLY) {
+	if (s_flags & MS_RDONLY) {
 		f2fs_info(sbi, "recover fsync data on readonly fs");
-		sbi->sb->s_flags &= ~SB_RDONLY;
+		sbi->sb->s_flags &= ~MS_RDONLY;
 	}
 
 #ifdef CONFIG_QUOTA
 	/* Needed for iput() to work correctly and not trash data */
-	sbi->sb->s_flags |= SB_ACTIVE;
+	sbi->sb->s_flags |= MS_ACTIVE;
 	/* Turn on quotas so that they are updated correctly */
-	quota_enabled = f2fs_enable_quota_files(sbi, s_flags & SB_RDONLY);
+	quota_enabled = f2fs_enable_quota_files(sbi, s_flags & MS_RDONLY);
 #endif
 
 	fsync_entry_slab = f2fs_kmem_cache_create("f2fs_fsync_inode_entry",
@@ -775,8 +766,6 @@ int f2fs_recover_fsync_data(struct f2fs_sb_info *sbi, bool check_only)
 		sbi->sb->s_flags = s_flags;
 	}
 skip:
-	fix_curseg_write_pointer = !check_only || list_empty(&inode_list);
-
 	destroy_fsync_dnodes(&inode_list, err);
 	destroy_fsync_dnodes(&tmp_inode_list, err);
 
@@ -787,22 +776,9 @@ skip:
 	if (err) {
 		truncate_inode_pages_final(NODE_MAPPING(sbi));
 		truncate_inode_pages_final(META_MAPPING(sbi));
-	}
-
-	/*
-	 * If fsync data succeeds or there is no fsync data to recover,
-	 * and the f2fs is not read only, check and fix zoned block devices'
-	 * write pointer consistency.
-	 */
-	if (!err && fix_curseg_write_pointer && !f2fs_readonly(sbi->sb) &&
-			f2fs_sb_has_blkzoned(sbi)) {
-		err = f2fs_fix_curseg_write_pointer(sbi);
-		ret = err;
-	}
-
-	if (!err)
+	} else {
 		clear_sbi_flag(sbi, SBI_POR_DOING);
-
+	}
 	mutex_unlock(&sbi->cp_mutex);
 
 	/* let's drop all the directory inodes for clean checkpoint */
@@ -826,7 +802,7 @@ out:
 	if (quota_enabled)
 		f2fs_quota_off_umount(sbi->sb);
 #endif
-	sbi->sb->s_flags = s_flags; /* Restore SB_RDONLY status */
+	sbi->sb->s_flags = s_flags; /* Restore MS_RDONLY status */
 
 	return ret ? ret: err;
 }

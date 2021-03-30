@@ -1,7 +1,15 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Intel Baytrail SST PCM Support
  * Copyright (c) 2014, Intel Corporation.
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms and conditions of the GNU General Public License,
+ * version 2, as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
+ * more details.
  */
 
 #include <linux/module.h>
@@ -15,7 +23,6 @@
 #include "../common/sst-dsp-priv.h"
 #include "../common/sst-dsp.h"
 
-#define DRV_NAME "byt-dai"
 #define BYT_PCM_COUNT		2
 
 static const struct snd_pcm_hardware sst_byt_pcm_hardware = {
@@ -58,12 +65,12 @@ struct sst_byt_priv_data {
 };
 
 /* this may get called several times by oss emulation */
-static int sst_byt_pcm_hw_params(struct snd_soc_component *component,
-				 struct snd_pcm_substream *substream,
+static int sst_byt_pcm_hw_params(struct snd_pcm_substream *substream,
 				 struct snd_pcm_hw_params *params)
 {
 	struct snd_soc_pcm_runtime *rtd = substream->private_data;
-	struct sst_byt_priv_data *pdata = snd_soc_component_get_drvdata(component);
+	struct sst_byt_priv_data *pdata =
+		snd_soc_platform_get_drvdata(rtd->platform);
 	struct sst_byt_pcm_data *pcm_data = &pdata->pcm[substream->stream];
 	struct sst_byt *byt = pdata->byt;
 	u32 rate, bits;
@@ -102,6 +109,8 @@ static int sst_byt_pcm_hw_params(struct snd_soc_component *component,
 		return ret;
 	}
 
+	snd_pcm_lib_malloc_pages(substream, params_buffer_bytes(params));
+
 	ret = sst_byt_stream_buffer(byt, pcm_data->stream,
 				    substream->dma_buffer.addr,
 				    params_buffer_bytes(params));
@@ -119,11 +128,21 @@ static int sst_byt_pcm_hw_params(struct snd_soc_component *component,
 	return 0;
 }
 
+static int sst_byt_pcm_hw_free(struct snd_pcm_substream *substream)
+{
+	struct snd_soc_pcm_runtime *rtd = substream->private_data;
+
+	dev_dbg(rtd->dev, "PCM: hw_free\n");
+	snd_pcm_lib_free_pages(substream);
+
+	return 0;
+}
+
 static int sst_byt_pcm_restore_stream_context(struct snd_pcm_substream *substream)
 {
 	struct snd_soc_pcm_runtime *rtd = substream->private_data;
-	struct snd_soc_component *component = snd_soc_rtdcom_lookup(rtd, DRV_NAME);
-	struct sst_byt_priv_data *pdata = snd_soc_component_get_drvdata(component);
+	struct sst_byt_priv_data *pdata =
+		snd_soc_platform_get_drvdata(rtd->platform);
 	struct sst_byt_pcm_data *pcm_data = &pdata->pcm[substream->stream];
 	struct sst_byt *byt = pdata->byt;
 	int ret;
@@ -152,11 +171,11 @@ static void sst_byt_pcm_work(struct work_struct *work)
 		sst_byt_pcm_restore_stream_context(pcm_data->substream);
 }
 
-static int sst_byt_pcm_trigger(struct snd_soc_component *component,
-			       struct snd_pcm_substream *substream, int cmd)
+static int sst_byt_pcm_trigger(struct snd_pcm_substream *substream, int cmd)
 {
 	struct snd_soc_pcm_runtime *rtd = substream->private_data;
-	struct sst_byt_priv_data *pdata = snd_soc_component_get_drvdata(component);
+	struct sst_byt_priv_data *pdata =
+		snd_soc_platform_get_drvdata(rtd->platform);
 	struct sst_byt_pcm_data *pcm_data = &pdata->pcm[substream->stream];
 	struct sst_byt *byt = pdata->byt;
 
@@ -168,7 +187,7 @@ static int sst_byt_pcm_trigger(struct snd_soc_component *component,
 		sst_byt_stream_start(byt, pcm_data->stream, 0);
 		break;
 	case SNDRV_PCM_TRIGGER_RESUME:
-		if (pdata->restore_stream)
+		if (pdata->restore_stream == true)
 			schedule_work(&pcm_data->work);
 		else
 			sst_byt_stream_resume(byt, pcm_data->stream);
@@ -181,7 +200,6 @@ static int sst_byt_pcm_trigger(struct snd_soc_component *component,
 		break;
 	case SNDRV_PCM_TRIGGER_SUSPEND:
 		pdata->restore_stream = false;
-		/* fallthrough */
 	case SNDRV_PCM_TRIGGER_PAUSE_PUSH:
 		sst_byt_stream_pause(byt, pcm_data->stream);
 		break;
@@ -198,8 +216,8 @@ static u32 byt_notify_pointer(struct sst_byt_stream *stream, void *data)
 	struct snd_pcm_substream *substream = pcm_data->substream;
 	struct snd_pcm_runtime *runtime = substream->runtime;
 	struct snd_soc_pcm_runtime *rtd = substream->private_data;
-	struct snd_soc_component *component = snd_soc_rtdcom_lookup(rtd, DRV_NAME);
-	struct sst_byt_priv_data *pdata = snd_soc_component_get_drvdata(component);
+	struct sst_byt_priv_data *pdata =
+		snd_soc_platform_get_drvdata(rtd->platform);
 	struct sst_byt *byt = pdata->byt;
 	u32 pos, hw_pos;
 
@@ -216,12 +234,12 @@ static u32 byt_notify_pointer(struct sst_byt_stream *stream, void *data)
 	return pos;
 }
 
-static snd_pcm_uframes_t sst_byt_pcm_pointer(struct snd_soc_component *component,
-					     struct snd_pcm_substream *substream)
+static snd_pcm_uframes_t sst_byt_pcm_pointer(struct snd_pcm_substream *substream)
 {
 	struct snd_soc_pcm_runtime *rtd = substream->private_data;
 	struct snd_pcm_runtime *runtime = substream->runtime;
-	struct sst_byt_priv_data *pdata = snd_soc_component_get_drvdata(component);
+	struct sst_byt_priv_data *pdata =
+		snd_soc_platform_get_drvdata(rtd->platform);
 	struct sst_byt_pcm_data *pcm_data = &pdata->pcm[substream->stream];
 
 	dev_dbg(rtd->dev, "PCM: DMA pointer %u bytes\n", pcm_data->hw_ptr);
@@ -229,11 +247,11 @@ static snd_pcm_uframes_t sst_byt_pcm_pointer(struct snd_soc_component *component
 	return bytes_to_frames(runtime, pcm_data->hw_ptr);
 }
 
-static int sst_byt_pcm_open(struct snd_soc_component *component,
-			    struct snd_pcm_substream *substream)
+static int sst_byt_pcm_open(struct snd_pcm_substream *substream)
 {
 	struct snd_soc_pcm_runtime *rtd = substream->private_data;
-	struct sst_byt_priv_data *pdata = snd_soc_component_get_drvdata(component);
+	struct sst_byt_priv_data *pdata =
+		snd_soc_platform_get_drvdata(rtd->platform);
 	struct sst_byt_pcm_data *pcm_data = &pdata->pcm[substream->stream];
 	struct sst_byt *byt = pdata->byt;
 
@@ -257,11 +275,11 @@ static int sst_byt_pcm_open(struct snd_soc_component *component,
 	return 0;
 }
 
-static int sst_byt_pcm_close(struct snd_soc_component *component,
-			     struct snd_pcm_substream *substream)
+static int sst_byt_pcm_close(struct snd_pcm_substream *substream)
 {
 	struct snd_soc_pcm_runtime *rtd = substream->private_data;
-	struct sst_byt_priv_data *pdata = snd_soc_component_get_drvdata(component);
+	struct sst_byt_priv_data *pdata =
+		snd_soc_platform_get_drvdata(rtd->platform);
 	struct sst_byt_pcm_data *pcm_data = &pdata->pcm[substream->stream];
 	struct sst_byt *byt = pdata->byt;
 	int ret;
@@ -282,8 +300,7 @@ out:
 	return ret;
 }
 
-static int sst_byt_pcm_mmap(struct snd_soc_component *component,
-			    struct snd_pcm_substream *substream,
+static int sst_byt_pcm_mmap(struct snd_pcm_substream *substream,
 			    struct vm_area_struct *vma)
 {
 	struct snd_soc_pcm_runtime *rtd = substream->private_data;
@@ -292,21 +309,40 @@ static int sst_byt_pcm_mmap(struct snd_soc_component *component,
 	return snd_pcm_lib_default_mmap(substream, vma);
 }
 
-static int sst_byt_pcm_new(struct snd_soc_component *component,
-			   struct snd_soc_pcm_runtime *rtd)
+static struct snd_pcm_ops sst_byt_pcm_ops = {
+	.open		= sst_byt_pcm_open,
+	.close		= sst_byt_pcm_close,
+	.ioctl		= snd_pcm_lib_ioctl,
+	.hw_params	= sst_byt_pcm_hw_params,
+	.hw_free	= sst_byt_pcm_hw_free,
+	.trigger	= sst_byt_pcm_trigger,
+	.pointer	= sst_byt_pcm_pointer,
+	.mmap		= sst_byt_pcm_mmap,
+};
+
+static int sst_byt_pcm_new(struct snd_soc_pcm_runtime *rtd)
 {
 	struct snd_pcm *pcm = rtd->pcm;
 	size_t size;
-	struct sst_pdata *pdata = dev_get_platdata(component->dev);
+	struct snd_soc_platform *platform = rtd->platform;
+	struct sst_pdata *pdata = dev_get_platdata(platform->dev);
+	int ret = 0;
 
 	if (pcm->streams[SNDRV_PCM_STREAM_PLAYBACK].substream ||
 	    pcm->streams[SNDRV_PCM_STREAM_CAPTURE].substream) {
 		size = sst_byt_pcm_hardware.buffer_bytes_max;
-		snd_pcm_set_managed_buffer_all(pcm, SNDRV_DMA_TYPE_DEV,
-					       pdata->dma_dev, size, size);
+		ret = snd_pcm_lib_preallocate_pages_for_all(pcm,
+							    SNDRV_DMA_TYPE_DEV,
+							    pdata->dma_dev,
+							    size, size);
+		if (ret) {
+			dev_err(rtd->dev, "dma buffer allocation failed %d\n",
+				ret);
+			return ret;
+		}
 	}
 
-	return 0;
+	return ret;
 }
 
 static struct snd_soc_dai_driver byt_dais[] = {
@@ -330,21 +366,19 @@ static struct snd_soc_dai_driver byt_dais[] = {
 	},
 };
 
-static int sst_byt_pcm_probe(struct snd_soc_component *component)
+static int sst_byt_pcm_probe(struct snd_soc_platform *platform)
 {
-	struct sst_pdata *plat_data = dev_get_platdata(component->dev);
+	struct sst_pdata *plat_data = dev_get_platdata(platform->dev);
 	struct sst_byt_priv_data *priv_data;
 	int i;
 
 	if (!plat_data)
 		return -ENODEV;
 
-	priv_data = devm_kzalloc(component->dev, sizeof(*priv_data),
+	priv_data = devm_kzalloc(platform->dev, sizeof(*priv_data),
 				 GFP_KERNEL);
-	if (!priv_data)
-		return -ENOMEM;
 	priv_data->byt = plat_data->dsp;
-	snd_soc_component_set_drvdata(component, priv_data);
+	snd_soc_platform_set_drvdata(platform, priv_data);
 
 	for (i = 0; i < BYT_PCM_COUNT; i++) {
 		mutex_init(&priv_data->pcm[i].mutex);
@@ -354,16 +388,20 @@ static int sst_byt_pcm_probe(struct snd_soc_component *component)
 	return 0;
 }
 
-static const struct snd_soc_component_driver byt_dai_component = {
-	.name		= DRV_NAME,
+static int sst_byt_pcm_remove(struct snd_soc_platform *platform)
+{
+	return 0;
+}
+
+static struct snd_soc_platform_driver byt_soc_platform = {
 	.probe		= sst_byt_pcm_probe,
-	.open		= sst_byt_pcm_open,
-	.close		= sst_byt_pcm_close,
-	.hw_params	= sst_byt_pcm_hw_params,
-	.trigger	= sst_byt_pcm_trigger,
-	.pointer	= sst_byt_pcm_pointer,
-	.mmap		= sst_byt_pcm_mmap,
-	.pcm_construct	= sst_byt_pcm_new,
+	.remove		= sst_byt_pcm_remove,
+	.ops		= &sst_byt_pcm_ops,
+	.pcm_new	= sst_byt_pcm_new,
+};
+
+static const struct snd_soc_component_driver byt_dai_component = {
+	.name		= "byt-dai",
 };
 
 #ifdef CONFIG_PM
@@ -421,13 +459,19 @@ static int sst_byt_pcm_dev_probe(struct platform_device *pdev)
 	if (ret < 0)
 		return -ENODEV;
 
-	ret = devm_snd_soc_register_component(&pdev->dev, &byt_dai_component,
-					 byt_dais, ARRAY_SIZE(byt_dais));
+	ret = snd_soc_register_platform(&pdev->dev, &byt_soc_platform);
 	if (ret < 0)
 		goto err_plat;
 
+	ret = snd_soc_register_component(&pdev->dev, &byt_dai_component,
+					 byt_dais, ARRAY_SIZE(byt_dais));
+	if (ret < 0)
+		goto err_comp;
+
 	return 0;
 
+err_comp:
+	snd_soc_unregister_platform(&pdev->dev);
 err_plat:
 	sst_byt_dsp_free(&pdev->dev, sst_pdata);
 	return ret;
@@ -437,6 +481,8 @@ static int sst_byt_pcm_dev_remove(struct platform_device *pdev)
 {
 	struct sst_pdata *sst_pdata = dev_get_platdata(&pdev->dev);
 
+	snd_soc_unregister_platform(&pdev->dev);
+	snd_soc_unregister_component(&pdev->dev);
 	sst_byt_dsp_free(&pdev->dev, sst_pdata);
 
 	return 0;

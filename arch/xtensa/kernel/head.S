@@ -59,6 +59,10 @@ ENTRY(_start)
 
 	.align	4
 	.literal_position
+.Lstartup:
+	.word	_startup
+
+	.align	4
 _SetupOCD:
 	/*
 	 * Initialize WB, WS, and clear PS.EXCM (to allow loop instructions).
@@ -95,12 +99,12 @@ _SetupMMU:
 1:
 #endif
 #endif
+	.end	no-absolute-literals
 
-	movi	a0, _startup
+	l32r	a0, .Lstartup
 	jx	a0
 
 ENDPROC(_start)
-	.end	no-absolute-literals
 
 	__REF
 	.literal_position
@@ -112,7 +116,7 @@ ENTRY(_startup)
 	movi	a0, 0
 
 #if XCHAL_HAVE_VECBASE
-	movi    a2, VECBASE_VADDR
+	movi    a2, VECBASE_RESET_VADDR
 	wsr	a2, vecbase
 #endif
 
@@ -180,8 +184,6 @@ ENTRY(_startup)
 
 	isync
 
-	initialize_cacheattr
-
 #ifdef CONFIG_HAVE_SMP
 	movi	a2, CCON	# MX External Register to Configure Cache
 	movi	a3, 1
@@ -193,10 +195,15 @@ ENTRY(_startup)
 	movi	a1, start_info
 	l32i	a1, a1, 0
 
-	movi	a2, PS_WOE_MASK | LOCKLEVEL
+	movi	a2, (1 << PS_WOE_BIT) | LOCKLEVEL
 					# WOE=1, INTLEVEL=LOCKLEVEL, UM=0
 	wsr	a2, ps			# (enable reg-windows; progmode stack)
 	rsync
+
+	/* Set up EXCSAVE[DEBUGLEVEL] to point to the Debug Exception Handler.*/
+
+	movi	a2, debug_exception
+	wsr	a2, SREG_EXCSAVE + XCHAL_DEBUGLEVEL
 
 #ifdef CONFIG_SMP
 	/*
@@ -260,20 +267,16 @@ ENTRY(_startup)
 	___invalidate_icache_all a2 a3
 	isync
 
-#ifdef CONFIG_XIP_KERNEL
-	/* Setup bootstrap CPU stack in XIP kernel */
-
-	movi	a1, start_info
-	l32i	a1, a1, 0
-#endif
-
 	movi	a6, 0
 	xsr	a6, excsave1
 
 	/* init_arch kick-starts the linux kernel */
 
-	call4	init_arch
-	call4	start_kernel
+	movi	a4, init_arch
+	callx4	a4
+
+	movi	a4, start_kernel
+	callx4	a4
 
 should_never_return:
 	j	should_never_return
@@ -300,7 +303,8 @@ should_never_return:
 	movi	a6, 0
 	wsr	a6, excsave1
 
-	call4	secondary_start_kernel
+	movi	a4, secondary_start_kernel
+	callx4	a4
 	j	should_never_return
 
 #endif  /* CONFIG_SMP */
@@ -362,10 +366,10 @@ ENDPROC(cpu_restart)
  * DATA section
  */
 
-	__REFDATA
-	.align  4
+        .section ".data.init.refok"
+        .align  4
 ENTRY(start_info)
-	.long	init_thread_union + KERNEL_STACK_SIZE
+        .long   init_thread_union + KERNEL_STACK_SIZE
 
 /*
  * BSS section

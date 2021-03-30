@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Accelerated GHASH implementation with Intel PCLMULQDQ-NI
  * instructions. This file contains accelerated part of ghash
@@ -11,13 +10,17 @@
  *	     Vinodh Gopal
  *	     Erdinc Ozturk
  *	     Deniz Karakoyunlu
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License version 2 as published
+ * by the Free Software Foundation.
  */
 
 #include <linux/linkage.h>
 #include <asm/inst.h>
-#include <asm/frame.h>
 
-.section	.rodata.cst16.bswap_mask, "aM", @progbits, 16
+.data
+
 .align 16
 .Lbswap_mask:
 	.octa 0x000102030405060708090a0b0c0d0e0f
@@ -44,7 +47,7 @@
  *	T2
  *	T3
  */
-SYM_FUNC_START_LOCAL(__clmul_gf128mul_ble)
+__clmul_gf128mul_ble:
 	movaps DATA, T1
 	pshufd $0b01001110, DATA, T2
 	pshufd $0b01001110, SHASH, T3
@@ -87,11 +90,10 @@ SYM_FUNC_START_LOCAL(__clmul_gf128mul_ble)
 	pxor T2, T1
 	pxor T1, DATA
 	ret
-SYM_FUNC_END(__clmul_gf128mul_ble)
+ENDPROC(__clmul_gf128mul_ble)
 
 /* void clmul_ghash_mul(char *dst, const u128 *shash) */
-SYM_FUNC_START(clmul_ghash_mul)
-	FRAME_BEGIN
+ENTRY(clmul_ghash_mul)
 	movups (%rdi), DATA
 	movups (%rsi), SHASH
 	movaps .Lbswap_mask, BSWAP
@@ -99,16 +101,14 @@ SYM_FUNC_START(clmul_ghash_mul)
 	call __clmul_gf128mul_ble
 	PSHUFB_XMM BSWAP DATA
 	movups DATA, (%rdi)
-	FRAME_END
 	ret
-SYM_FUNC_END(clmul_ghash_mul)
+ENDPROC(clmul_ghash_mul)
 
 /*
  * void clmul_ghash_update(char *dst, const char *src, unsigned int srclen,
  *			   const u128 *shash);
  */
-SYM_FUNC_START(clmul_ghash_update)
-	FRAME_BEGIN
+ENTRY(clmul_ghash_update)
 	cmp $16, %rdx
 	jb .Lupdate_just_ret	# check length
 	movaps .Lbswap_mask, BSWAP
@@ -128,6 +128,5 @@ SYM_FUNC_START(clmul_ghash_update)
 	PSHUFB_XMM BSWAP DATA
 	movups DATA, (%rdi)
 .Lupdate_just_ret:
-	FRAME_END
 	ret
-SYM_FUNC_END(clmul_ghash_update)
+ENDPROC(clmul_ghash_update)

@@ -1,11 +1,14 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  *  Ralink RT288x SoC PCI register definitions
  *
- *  Copyright (C) 2009 John Crispin <john@phrozen.org>
+ *  Copyright (C) 2009 John Crispin <blogic@openwrt.org>
  *  Copyright (C) 2009 Gabor Juhos <juhosg@openwrt.org>
  *
  *  Parts of this file are based on Ralink's 2.6.21 BSP
+ *
+ *  This program is free software; you can redistribute it and/or modify it
+ *  under the terms of the GNU General Public License version 2 as published
+ *  by the Free Software Foundation.
  */
 
 #include <linux/delay.h>
@@ -13,6 +16,7 @@
 #include <linux/pci.h>
 #include <linux/io.h>
 #include <linux/init.h>
+#include <linux/module.h>
 #include <linux/of_platform.h>
 #include <linux/of_irq.h>
 #include <linux/of_pci.h>
@@ -178,7 +182,7 @@ static inline void rt2880_pci_write_u32(unsigned long reg, u32 val)
 	spin_unlock_irqrestore(&rt2880_pci_lock, flags);
 }
 
-int pcibios_map_irq(const struct pci_dev *dev, u8 slot, u8 pin)
+int __init pcibios_map_irq(const struct pci_dev *dev, u8 slot, u8 pin)
 {
 	u16 cmd;
 	int irq = -1;
@@ -218,7 +222,7 @@ static int rt288x_pci_probe(struct platform_device *pdev)
 {
 	void __iomem *io_map_base;
 
-	rt2880_pci_base = ioremap(RT2880_PCI_BASE, PAGE_SIZE);
+	rt2880_pci_base = ioremap_nocache(RT2880_PCI_BASE, PAGE_SIZE);
 
 	io_map_base = ioremap(RT2880_PCI_IO_BASE, RT2880_PCI_IO_SIZE);
 	rt2880_pci_controller.io_map_base = (unsigned long) io_map_base;
@@ -243,8 +247,6 @@ static int rt288x_pci_probe(struct platform_device *pdev)
 	rt2880_pci_write_u32(PCI_BASE_ADDRESS_0, 0x08000000);
 	(void) rt2880_pci_read_u32(PCI_BASE_ADDRESS_0);
 
-	rt2880_pci_controller.of_node = pdev->dev.of_node;
-
 	register_pci_controller(&rt2880_pci_controller);
 	return 0;
 }
@@ -258,6 +260,7 @@ static const struct of_device_id rt288x_pci_match[] = {
 	{ .compatible = "ralink,rt288x-pci" },
 	{},
 };
+MODULE_DEVICE_TABLE(of, rt288x_pci_match);
 
 static struct platform_driver rt288x_pci_driver = {
 	.probe = rt288x_pci_probe,

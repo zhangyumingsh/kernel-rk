@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *  Acer WMI Laptop Extras
  *
@@ -7,6 +6,20 @@
  *  Based on acer_acpi:
  *    Copyright (C) 2005-2007	E.M. Smith
  *    Copyright (C) 2007-2008	Carlos Corbacho <cathectic@gmail.com>
+ *
+ *  This program is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License as published by
+ *  the Free Software Foundation; either version 2 of the License, or
+ *  (at your option) any later version.
+ *
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License
+ *  along with this program; if not, write to the Free Software
+ *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -115,8 +128,6 @@ static const struct key_entry acer_wmi_keymap[] __initconst = {
 	{KE_KEY, KEY_TOUCHPAD_OFF, {KEY_TOUCHPAD_OFF} },
 	{KE_IGNORE, 0x83, {KEY_TOUCHPAD_TOGGLE} },
 	{KE_KEY, 0x85, {KEY_TOUCHPAD_TOGGLE} },
-	{KE_KEY, 0x86, {KEY_WLAN} },
-	{KE_KEY, 0x87, {KEY_POWER} },
 	{KE_END, 0}
 };
 
@@ -137,34 +148,17 @@ struct event_return_value {
 #define ACER_WMID3_GDS_THREEG		(1<<6)	/* 3G */
 #define ACER_WMID3_GDS_WIMAX		(1<<7)	/* WiMAX */
 #define ACER_WMID3_GDS_BLUETOOTH	(1<<11)	/* BT */
-#define ACER_WMID3_GDS_RFBTN		(1<<14)	/* RF Button */
-
 #define ACER_WMID3_GDS_TOUCHPAD		(1<<1)	/* Touchpad */
 
-/* Hotkey Customized Setting and Acer Application Status.
- * Set Device Default Value and Report Acer Application Status.
- * When Acer Application starts, it will run this method to inform
- * BIOS/EC that Acer Application is on.
- * App Status
- *	Bit[0]: Launch Manager Status
- *	Bit[1]: ePM Status
- *	Bit[2]: Device Control Status
- *	Bit[3]: Acer Power Button Utility Status
- *	Bit[4]: RF Button Status
- *	Bit[5]: ODD PM Status
- *	Bit[6]: Device Default Value Control
- *	Bit[7]: Hall Sensor Application Status
- */
-struct func_input_params {
+struct lm_input_params {
 	u8 function_num;        /* Function Number */
 	u16 commun_devices;     /* Communication type devices default status */
 	u16 devices;            /* Other type devices default status */
-	u8 app_status;          /* Acer Device Status. LM, ePM, RF Button... */
-	u8 app_mask;		/* Bit mask to app_status */
-	u8 reserved;
+	u8 lm_status;           /* Launch Manager Status */
+	u16 reserved;
 } __attribute__((packed));
 
-struct func_return_value {
+struct lm_return_value {
 	u8 error_code;          /* Error Code */
 	u8 ec_return_value;     /* EC Return Value */
 	u16 reserved;
@@ -211,7 +205,6 @@ struct hotkey_function_type_aa {
 #define ACER_CAP_BRIGHTNESS		(1<<3)
 #define ACER_CAP_THREEG			(1<<4)
 #define ACER_CAP_ACCEL			(1<<5)
-#define ACER_CAP_RFBTN			(1<<6)
 #define ACER_CAP_ANY			(0xFFFFFFFF)
 
 /*
@@ -259,6 +252,7 @@ struct acer_data {
 
 struct acer_debug {
 	struct dentry *root;
+	struct dentry *devices;
 	u32 wmid_devices;
 };
 
@@ -361,32 +355,6 @@ static const struct dmi_system_id acer_blacklist[] __initconst = {
 	{}
 };
 
-static const struct dmi_system_id amw0_whitelist[] __initconst = {
-	{
-		.ident = "Acer",
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "Acer"),
-		},
-	},
-	{
-		.ident = "Gateway",
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "Gateway"),
-		},
-	},
-	{
-		.ident = "Packard Bell",
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "Packard Bell"),
-		},
-	},
-	{}
-};
-
-/*
- * This quirk table is only for Acer/Gateway/Packard Bell family
- * that those machines are supported by acer-wmi driver.
- */
 static const struct dmi_system_id acer_quirks[] __initconst = {
 	{
 		.callback = dmi_matched,
@@ -496,17 +464,6 @@ static const struct dmi_system_id acer_quirks[] __initconst = {
 		},
 		.driver_data = &quirk_acer_travelmate_2490,
 	},
-	{}
-};
-
-/*
- * This quirk list is for those non-acer machines that have AMW0_GUID1
- * but supported by acer-wmi in past days. Keeping this quirk list here
- * is only for backward compatible. Please do not add new machine to
- * here anymore. Those non-acer machines should be supported by
- * appropriate wmi drivers.
- */
-static const struct dmi_system_id non_acer_quirks[] __initconst = {
 	{
 		.callback = dmi_matched,
 		.ident = "Fujitsu Siemens Amilo Li 1718",
@@ -641,7 +598,6 @@ static void __init find_quirks(void)
 {
 	if (!force_series) {
 		dmi_check_system(acer_quirks);
-		dmi_check_system(non_acer_quirks);
 	} else if (force_series == 2490) {
 		quirks = &quirk_acer_travelmate_2490;
 	}
@@ -658,7 +614,10 @@ static void __init find_quirks(void)
 
 static bool has_cap(u32 cap)
 {
-	return interface->capability & cap;
+	if ((interface->capability & cap) != 0)
+		return 1;
+
+	return 0;
 }
 
 /*
@@ -687,7 +646,7 @@ struct acpi_buffer *result)
 	input.length = sizeof(struct wmab_args);
 	input.pointer = (u8 *)regbuf;
 
-	status = wmi_evaluate_method(AMW0_GUID1, 0, 1, &input, result);
+	status = wmi_evaluate_method(AMW0_GUID1, 1, 1, &input, result);
 
 	return status;
 }
@@ -834,6 +793,15 @@ static acpi_status __init AMW0_find_mailled(void)
 	return AE_OK;
 }
 
+static int AMW0_set_cap_acpi_check_device_found __initdata;
+
+static acpi_status __init AMW0_set_cap_acpi_check_device_cb(acpi_handle handle,
+	u32 level, void *context, void **retval)
+{
+	AMW0_set_cap_acpi_check_device_found = 1;
+	return AE_OK;
+}
+
 static const struct acpi_device_id norfkill_ids[] __initconst = {
 	{ "VPC2004", 0},
 	{ "IBM0068", 0},
@@ -848,10 +816,9 @@ static int __init AMW0_set_cap_acpi_check_device(void)
 	const struct acpi_device_id *id;
 
 	for (id = norfkill_ids; id->id[0]; id++)
-		if (acpi_dev_found(id->id))
-			return true;
-
-	return false;
+		acpi_get_devices(id->id, AMW0_set_cap_acpi_check_device_cb,
+				NULL, NULL);
+	return AMW0_set_cap_acpi_check_device_found;
 }
 
 static acpi_status __init AMW0_set_capabilities(void)
@@ -952,7 +919,7 @@ WMI_execute_u32(u32 method_id, u32 in, u32 *out)
 	u32 tmp = 0;
 	acpi_status status;
 
-	status = wmi_evaluate_method(WMID_GUID1, 0, method_id, &input, &result);
+	status = wmi_evaluate_method(WMID_GUID1, 1, method_id, &input, &result);
 
 	if (ACPI_FAILURE(status))
 		return status;
@@ -1001,7 +968,6 @@ static acpi_status WMID_get_u32(u32 *value, u32 cap)
 			*value = tmp & 0x1;
 			return 0;
 		}
-		/* fall through */
 	default:
 		return AE_ERROR;
 	}
@@ -1252,10 +1218,6 @@ static void __init type_aa_dmi_decode(const struct dmi_header *header, void *d)
 		interface->capability |= ACER_CAP_THREEG;
 	if (type_aa->commun_func_bitmap & ACER_WMID3_GDS_BLUETOOTH)
 		interface->capability |= ACER_CAP_BLUETOOTH;
-	if (type_aa->commun_func_bitmap & ACER_WMID3_GDS_RFBTN) {
-		interface->capability |= ACER_CAP_RFBTN;
-		commun_func_bitmap &= ~ACER_WMID3_GDS_RFBTN;
-	}
 
 	commun_fn_key_number = type_aa->commun_fn_key_number;
 }
@@ -1267,7 +1229,7 @@ static acpi_status __init WMID_set_capabilities(void)
 	acpi_status status;
 	u32 devices;
 
-	status = wmi_query_block(WMID_GUID2, 0, &out);
+	status = wmi_query_block(WMID_GUID2, 1, &out);
 	if (ACPI_FAILURE(status))
 		return status;
 
@@ -1328,7 +1290,6 @@ static acpi_status get_u32(u32 *value, u32 cap)
 			status = AMW0_get_u32(value, cap);
 			break;
 		}
-		/* fall through */
 	case ACER_WMID:
 		status = WMID_get_u32(value, cap);
 		break;
@@ -1371,7 +1332,6 @@ static acpi_status set_u32(u32 value, u32 cap)
 
 				return AMW0_set_u32(value, cap);
 			}
-			/* fall through */
 		case ACER_WMID:
 			return WMID_set_u32(value, cap);
 		case ACER_WMID_v2:
@@ -1381,7 +1341,6 @@ static acpi_status set_u32(u32 value, u32 cap)
 				return wmid_v2_set_u32(value, cap);
 			else if (wmi_has_guid(WMID_GUID2))
 				return WMID_set_u32(value, cap);
-			/* fall through */
 		default:
 			return AE_BAD_PARAMETER;
 		}
@@ -1780,13 +1739,13 @@ static void acer_wmi_notify(u32 value, void *context)
 }
 
 static acpi_status __init
-wmid3_set_function_mode(struct func_input_params *params,
-			struct func_return_value *return_value)
+wmid3_set_lm_mode(struct lm_input_params *params,
+		  struct lm_return_value *return_value)
 {
 	acpi_status status;
 	union acpi_object *obj;
 
-	struct acpi_buffer input = { sizeof(struct func_input_params), params };
+	struct acpi_buffer input = { sizeof(struct lm_input_params), params };
 	struct acpi_buffer output = { ACPI_ALLOCATE_BUFFER, NULL };
 
 	status = wmi_evaluate_method(WMID_GUID3, 0, 0x1, &input, &output);
@@ -1807,7 +1766,7 @@ wmid3_set_function_mode(struct func_input_params *params,
 		return AE_ERROR;
 	}
 
-	*return_value = *((struct func_return_value *)obj->buffer.pointer);
+	*return_value = *((struct lm_return_value *)obj->buffer.pointer);
 	kfree(obj);
 
 	return status;
@@ -1815,17 +1774,16 @@ wmid3_set_function_mode(struct func_input_params *params,
 
 static int __init acer_wmi_enable_ec_raw(void)
 {
-	struct func_return_value return_value;
+	struct lm_return_value return_value;
 	acpi_status status;
-	struct func_input_params params = {
+	struct lm_input_params params = {
 		.function_num = 0x1,
 		.commun_devices = 0xFFFF,
 		.devices = 0xFFFF,
-		.app_status = 0x00,		/* Launch Manager Deactive */
-		.app_mask = 0x01,
+		.lm_status = 0x00,            /* Launch Manager Deactive */
 	};
 
-	status = wmid3_set_function_mode(&params, &return_value);
+	status = wmid3_set_lm_mode(&params, &return_value);
 
 	if (return_value.error_code || return_value.ec_return_value)
 		pr_warn("Enabling EC raw mode failed: 0x%x - 0x%x\n",
@@ -1839,17 +1797,16 @@ static int __init acer_wmi_enable_ec_raw(void)
 
 static int __init acer_wmi_enable_lm(void)
 {
-	struct func_return_value return_value;
+	struct lm_return_value return_value;
 	acpi_status status;
-	struct func_input_params params = {
+	struct lm_input_params params = {
 		.function_num = 0x1,
 		.commun_devices = 0xFFFF,
 		.devices = 0xFFFF,
-		.app_status = 0x01,            /* Launch Manager Active */
-		.app_mask = 0x01,
+		.lm_status = 0x01,            /* Launch Manager Active */
 	};
 
-	status = wmid3_set_function_mode(&params, &return_value);
+	status = wmid3_set_lm_mode(&params, &return_value);
 
 	if (return_value.error_code || return_value.ec_return_value)
 		pr_warn("Enabling Launch Manager failed: 0x%x - 0x%x\n",
@@ -1859,39 +1816,53 @@ static int __init acer_wmi_enable_lm(void)
 	return status;
 }
 
-static int __init acer_wmi_enable_rf_button(void)
+#define ACER_WMID_ACCEL_HID	"BST0001"
+
+static acpi_status __init acer_wmi_get_handle_cb(acpi_handle ah, u32 level,
+						void *ctx, void **retval)
 {
-	struct func_return_value return_value;
+	struct acpi_device *dev;
+
+	if (!strcmp(ctx, "SENR")) {
+		if (acpi_bus_get_device(ah, &dev))
+			return AE_OK;
+		if (!strcmp(ACER_WMID_ACCEL_HID, acpi_device_hid(dev)))
+			return AE_OK;
+	} else
+		return AE_OK;
+
+	*(acpi_handle *)retval = ah;
+
+	return AE_CTRL_TERMINATE;
+}
+
+static int __init acer_wmi_get_handle(const char *name, const char *prop,
+					acpi_handle *ah)
+{
 	acpi_status status;
-	struct func_input_params params = {
-		.function_num = 0x1,
-		.commun_devices = 0xFFFF,
-		.devices = 0xFFFF,
-		.app_status = 0x10,            /* RF Button Active */
-		.app_mask = 0x10,
-	};
+	acpi_handle handle;
 
-	status = wmid3_set_function_mode(&params, &return_value);
+	BUG_ON(!name || !ah);
 
-	if (return_value.error_code || return_value.ec_return_value)
-		pr_warn("Enabling RF Button failed: 0x%x - 0x%x\n",
-			return_value.error_code,
-			return_value.ec_return_value);
+	handle = NULL;
+	status = acpi_get_devices(prop, acer_wmi_get_handle_cb,
+					(void *)name, &handle);
 
-	return status;
+	if (ACPI_SUCCESS(status)) {
+		*ah = handle;
+		return 0;
+	} else {
+		return -ENODEV;
+	}
 }
 
 static int __init acer_wmi_accel_setup(void)
 {
-	struct acpi_device *adev;
 	int err;
 
-	adev = acpi_dev_get_first_match_dev("BST0001", NULL, -1);
-	if (!adev)
-		return -ENODEV;
-
-	gsensor_handle = acpi_device_handle(adev);
-	acpi_dev_put(adev);
+	err = acer_wmi_get_handle("SENR", ACER_WMID_ACCEL_HID, &gsensor_handle);
+	if (err)
+		return err;
 
 	interface->capability |= ACER_CAP_ACCEL;
 
@@ -1946,7 +1917,7 @@ static int __init acer_wmi_input_setup(void)
 						acer_wmi_notify, NULL);
 	if (ACPI_FAILURE(status)) {
 		err = -EIO;
-		goto err_free_dev;
+		goto err_free_keymap;
 	}
 
 	err = input_register_device(acer_wmi_input_dev);
@@ -1957,6 +1928,8 @@ static int __init acer_wmi_input_setup(void)
 
 err_uninstall_notifier:
 	wmi_remove_notify_handler(ACERWMID_EVENT_GUID);
+err_free_keymap:
+	sparse_keymap_free(acer_wmi_input_dev);
 err_free_dev:
 	input_free_device(acer_wmi_input_dev);
 	return err;
@@ -1965,6 +1938,7 @@ err_free_dev:
 static void acer_wmi_input_destroy(void)
 {
 	wmi_remove_notify_handler(ACERWMID_EVENT_GUID);
+	sparse_keymap_free(acer_wmi_input_dev);
 	input_unregister_device(acer_wmi_input_dev);
 }
 
@@ -1978,7 +1952,7 @@ static u32 get_wmid_devices(void)
 	acpi_status status;
 	u32 devices = 0;
 
-	status = wmi_query_block(WMID_GUID2, 0, &out);
+	status = wmi_query_block(WMID_GUID2, 1, &out);
 	if (ACPI_FAILURE(status))
 		return 0;
 
@@ -2116,15 +2090,29 @@ static struct platform_device *acer_platform_device;
 
 static void remove_debugfs(void)
 {
-	debugfs_remove_recursive(interface->debug.root);
+	debugfs_remove(interface->debug.devices);
+	debugfs_remove(interface->debug.root);
 }
 
-static void __init create_debugfs(void)
+static int __init create_debugfs(void)
 {
 	interface->debug.root = debugfs_create_dir("acer-wmi", NULL);
+	if (!interface->debug.root) {
+		pr_err("Failed to create debugfs directory");
+		return -ENOMEM;
+	}
 
-	debugfs_create_u32("devices", S_IRUGO, interface->debug.root,
-			   &interface->debug.wmid_devices);
+	interface->debug.devices = debugfs_create_u32("devices", S_IRUGO,
+					interface->debug.root,
+					&interface->debug.wmid_devices);
+	if (!interface->debug.devices)
+		goto error_debugfs;
+
+	return 0;
+
+error_debugfs:
+	remove_debugfs();
+	return -ENOMEM;
 }
 
 static int __init acer_wmi_init(void)
@@ -2139,24 +2127,6 @@ static int __init acer_wmi_init(void)
 	}
 
 	find_quirks();
-
-	/*
-	 * The AMW0_GUID1 wmi is not only found on Acer family but also other
-	 * machines like Lenovo, Fujitsu and Medion. In the past days,
-	 * acer-wmi driver handled those non-Acer machines by quirks list.
-	 * But actually acer-wmi driver was loaded on any machines that have
-	 * AMW0_GUID1. This behavior is strange because those machines should
-	 * be supported by appropriate wmi drivers. e.g. fujitsu-laptop,
-	 * ideapad-laptop. So, here checks the machine that has AMW0_GUID1
-	 * should be in Acer/Gateway/Packard Bell white list, or it's already
-	 * in the past quirk list.
-	 */
-	if (wmi_has_guid(AMW0_GUID1) &&
-	    !dmi_check_system(amw0_whitelist) &&
-	    quirks == &quirk_unknown) {
-		pr_debug("Unsupported machine has AMW0_GUID1, unable to load\n");
-		return -ENODEV;
-	}
 
 	/*
 	 * Detect which ACPI-WMI interface we're using.
@@ -2211,9 +2181,6 @@ static int __init acer_wmi_init(void)
 		interface->capability &= ~ACER_CAP_BRIGHTNESS;
 
 	if (wmi_has_guid(WMID_GUID3)) {
-		if (ACPI_FAILURE(acer_wmi_enable_rf_button()))
-			pr_warn("Cannot enable RF Button Driver\n");
-
 		if (ec_raw_mode) {
 			if (ACPI_FAILURE(acer_wmi_enable_ec_raw())) {
 				pr_err("Cannot enable EC raw mode\n");
@@ -2232,8 +2199,8 @@ static int __init acer_wmi_init(void)
 		if (err)
 			return err;
 		err = acer_wmi_accel_setup();
-		if (err && err != -ENODEV)
-			pr_warn("Cannot enable accelerometer\n");
+		if (err)
+			return err;
 	}
 
 	err = platform_driver_register(&acer_platform_driver);
@@ -2254,7 +2221,9 @@ static int __init acer_wmi_init(void)
 
 	if (wmi_has_guid(WMID_GUID2)) {
 		interface->debug.wmid_devices = get_wmid_devices();
-		create_debugfs();
+		err = create_debugfs();
+		if (err)
+			goto error_create_debugfs;
 	}
 
 	/* Override any initial settings with values from the commandline */
@@ -2262,6 +2231,8 @@ static int __init acer_wmi_init(void)
 
 	return 0;
 
+error_create_debugfs:
+	platform_device_del(acer_platform_device);
 error_device_add:
 	platform_device_put(acer_platform_device);
 error_device_alloc:

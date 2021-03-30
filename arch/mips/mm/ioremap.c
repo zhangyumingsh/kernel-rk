@@ -6,14 +6,13 @@
  * (C) Copyright 1995 1996 Linus Torvalds
  * (C) Copyright 2001, 2002 Ralf Baechle
  */
-#include <linux/export.h>
+#include <linux/module.h>
 #include <asm/addrspace.h>
 #include <asm/byteorder.h>
 #include <linux/ioport.h>
 #include <linux/sched.h>
 #include <linux/slab.h>
 #include <linux/vmalloc.h>
-#include <linux/mm_types.h>
 #include <asm/cacheflush.h>
 #include <asm/io.h>
 #include <asm/tlbflush.h>
@@ -78,15 +77,11 @@ static int remap_area_pages(unsigned long address, phys_addr_t phys_addr,
 	flush_cache_all();
 	BUG_ON(address >= end);
 	do {
-		p4d_t *p4d;
 		pud_t *pud;
 		pmd_t *pmd;
 
 		error = -ENOMEM;
-		p4d = p4d_alloc(&init_mm, dir, address);
-		if (!p4d)
-			break;
-		pud = pud_alloc(&init_mm, p4d, address);
+		pud = pud_alloc(&init_mm, dir, address);
 		if (!pud)
 			break;
 		pmd = pmd_alloc(&init_mm, pud, address);

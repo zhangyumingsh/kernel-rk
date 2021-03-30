@@ -1,5 +1,8 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
+ * This file is subject to the terms and conditions of the GNU General Public
+ * License.  See the file "COPYING" in the main directory of this archive
+ * for more details.
+ *
  * Derived from many drivers using generic_serial interface.
  *
  * Copyright (C) 2008 Maxime Bizon <mbizon@freebox.fr>
@@ -9,6 +12,10 @@
  * Hardware flow control was _not_ tested since I only have RX/TX on
  * my board.
  */
+
+#if defined(CONFIG_SERIAL_BCM63XX_CONSOLE) && defined(CONFIG_MAGIC_SYSRQ)
+#define SUPPORT_SYSRQ
+#endif
 
 #include <linux/kernel.h>
 #include <linux/platform_device.h>
@@ -500,13 +507,8 @@ static void bcm_uart_set_termios(struct uart_port *port,
 {
 	unsigned int ctl, baud, quot, ier;
 	unsigned long flags;
-	int tries;
 
 	spin_lock_irqsave(&port->lock, flags);
-
-	/* Drain the hot tub fully before we power it off for the winter. */
-	for (tries = 3; !bcm_uart_tx_empty(port) && tries; tries--)
-		mdelay(10);
 
 	/* disable uart while changing speed */
 	bcm_uart_disable(port);
@@ -629,7 +631,7 @@ static int bcm_uart_verify_port(struct uart_port *port,
 }
 
 /* serial core callbacks */
-static const struct uart_ops bcm_uart_ops = {
+static struct uart_ops bcm_uart_ops = {
 	.tx_empty	= bcm_uart_tx_empty,
 	.get_mctrl	= bcm_uart_get_mctrl,
 	.set_mctrl	= bcm_uart_set_mctrl,
@@ -651,7 +653,7 @@ static const struct uart_ops bcm_uart_ops = {
 
 
 #ifdef CONFIG_SERIAL_BCM63XX_CONSOLE
-static void wait_for_xmitr(struct uart_port *port)
+static inline void wait_for_xmitr(struct uart_port *port)
 {
 	unsigned int tmout;
 
@@ -811,12 +813,8 @@ static int bcm_uart_probe(struct platform_device *pdev)
 	struct clk *clk;
 	int ret;
 
-	if (pdev->dev.of_node) {
-		pdev->id = of_alias_get_id(pdev->dev.of_node, "serial");
-
-		if (pdev->id < 0)
-			pdev->id = of_alias_get_id(pdev->dev.of_node, "uart");
-	}
+	if (pdev->dev.of_node)
+		pdev->id = of_alias_get_id(pdev->dev.of_node, "uart");
 
 	if (pdev->id < 0 || pdev->id >= BCM63XX_NR_UARTS)
 		return -EINVAL;
@@ -839,10 +837,8 @@ static int bcm_uart_probe(struct platform_device *pdev)
 	if (!res_irq)
 		return -ENODEV;
 
-	clk = clk_get(&pdev->dev, "refclk");
-	if (IS_ERR(clk) && pdev->dev.of_node)
-		clk = of_clk_get(pdev->dev.of_node, 0);
-
+	clk = pdev->dev.of_node ? of_clk_get(pdev->dev.of_node, 0) :
+				  clk_get(&pdev->dev, "periph");
 	if (IS_ERR(clk))
 		return -ENODEV;
 
@@ -854,7 +850,6 @@ static int bcm_uart_probe(struct platform_device *pdev)
 	port->fifosize = 16;
 	port->uartclk = clk_get_rate(clk) / 2;
 	port->line = pdev->id;
-	port->has_sysrq = IS_ENABLED(CONFIG_SERIAL_BCM63XX_CONSOLE);
 	clk_put(clk);
 
 	ret = uart_add_one_port(&bcm_uart_driver, port);

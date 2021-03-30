@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * SCSI Media Changer device driver for Linux 2.6
  *
@@ -106,7 +105,6 @@ do {									\
 static struct class * ch_sysfs_class;
 
 typedef struct {
-	struct kref         ref;
 	struct list_head    list;
 	int                 minor;
 	char                name[8];
@@ -200,7 +198,7 @@ ch_do_scsi(scsi_changer *ch, unsigned char *cmd, int cmd_len,
 				  buflength, &sshdr, timeout * HZ,
 				  MAX_RETRIES, NULL);
 
-	if (driver_byte(result) == DRIVER_SENSE) {
+	if (driver_byte(result) & DRIVER_SENSE) {
 		if (debug)
 			scsi_print_sense_hdr(ch->device, ch->name, &sshdr);
 		errno = ch_find_errno(&sshdr);
@@ -565,14 +563,6 @@ static int ch_gstatus(scsi_changer *ch, int type, unsigned char __user *dest)
 
 /* ------------------------------------------------------------------------ */
 
-static void ch_destroy(struct kref *ref)
-{
-	scsi_changer *ch = container_of(ref, scsi_changer, ref);
-
-	kfree(ch->dt);
-	kfree(ch);
-}
-
 static int
 ch_release(struct inode *inode, struct file *file)
 {
@@ -580,7 +570,6 @@ ch_release(struct inode *inode, struct file *file)
 
 	scsi_device_put(ch->device);
 	file->private_data = NULL;
-	kref_put(&ch->ref, ch_destroy);
 	return 0;
 }
 
@@ -599,7 +588,6 @@ ch_open(struct inode *inode, struct file *file)
 		mutex_unlock(&ch_mutex);
 		return -ENXIO;
 	}
-	kref_get(&ch->ref);
 	spin_unlock(&ch_index_lock);
 
 	file->private_data = ch;
@@ -872,10 +860,6 @@ static long ch_ioctl_compat(struct file * file,
 			    unsigned int cmd, unsigned long arg)
 {
 	scsi_changer *ch = file->private_data;
-	int retval = scsi_ioctl_block_when_processing_errors(ch->device, cmd,
-							file->f_flags & O_NDELAY);
-	if (retval)
-		return retval;
 
 	switch (cmd) {
 	case CHIOGPARAMS:
@@ -887,7 +871,7 @@ static long ch_ioctl_compat(struct file * file,
 	case CHIOINITELEM:
 	case CHIOSVOLTAG:
 		/* compatible */
-		return ch_ioctl(file, cmd, (unsigned long)compat_ptr(arg));
+		return ch_ioctl(file, cmd, arg);
 	case CHIOGSTATUS32:
 	{
 		struct changer_element_status32 ces32;
@@ -902,7 +886,8 @@ static long ch_ioctl_compat(struct file * file,
 		return ch_gstatus(ch, ces32.ces_type, data);
 	}
 	default:
-		return scsi_compat_ioctl(ch->device, cmd, compat_ptr(arg));
+		// return scsi_ioctl_compat(ch->device, cmd, (void*)arg);
+		return -ENOIOCTLCMD;
 
 	}
 }
@@ -950,11 +935,8 @@ static int ch_probe(struct device *dev)
 	}
 
 	mutex_init(&ch->lock);
-	kref_init(&ch->ref);
 	ch->device = sd;
-	ret = ch_readconfig(ch);
-	if (ret)
-		goto destroy_dev;
+	ch_readconfig(ch);
 	if (init)
 		ch_init_elem(ch);
 
@@ -962,8 +944,6 @@ static int ch_probe(struct device *dev)
 	sdev_printk(KERN_INFO, sd, "Attached scsi changer %s\n", ch->name);
 
 	return 0;
-destroy_dev:
-	device_destroy(ch_sysfs_class, MKDEV(SCSI_CHANGER_MAJOR, ch->minor));
 remove_idr:
 	idr_remove(&ch_index_idr, ch->minor);
 free_ch:
@@ -980,7 +960,8 @@ static int ch_remove(struct device *dev)
 	spin_unlock(&ch_index_lock);
 
 	device_destroy(ch_sysfs_class, MKDEV(SCSI_CHANGER_MAJOR,ch->minor));
-	kref_put(&ch->ref, ch_destroy);
+	kfree(ch->dt);
+	kfree(ch);
 	return 0;
 }
 

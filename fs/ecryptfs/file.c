@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /**
  * eCryptfs: Linux filesystem encryption layer
  *
@@ -7,6 +6,21 @@
  * Copyright (C) 2004-2007 International Business Machines Corp.
  *   Author(s): Michael A. Halcrow <mhalcrow@us.ibm.com>
  *   		Michael C. Thompson <mcthomps@us.ibm.com>
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License as
+ * published by the Free Software Foundation; either version 2 of the
+ * License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA
+ * 02111-1307, USA.
  */
 
 #include <linux/file.h>
@@ -68,28 +82,17 @@ ecryptfs_filldir(struct dir_context *ctx, const char *lower_name,
 						  buf->sb, lower_name,
 						  lower_namelen);
 	if (rc) {
-		if (rc != -EINVAL) {
-			ecryptfs_printk(KERN_DEBUG,
-					"%s: Error attempting to decode and decrypt filename [%s]; rc = [%d]\n",
-					__func__, lower_name, rc);
-			return rc;
-		}
-
-		/* Mask -EINVAL errors as these are most likely due a plaintext
-		 * filename present in the lower filesystem despite filename
-		 * encryption being enabled. One unavoidable example would be
-		 * the "lost+found" dentry in the root directory of an Ext4
-		 * filesystem.
-		 */
-		return 0;
+		printk(KERN_ERR "%s: Error attempting to decode and decrypt "
+		       "filename [%s]; rc = [%d]\n", __func__, lower_name,
+		       rc);
+		goto out;
 	}
-
 	buf->caller->pos = buf->ctx.pos;
 	rc = !dir_emit(buf->caller, name, name_size, ino, d_type);
 	kfree(name);
 	if (!rc)
 		buf->entries_written++;
-
+out:
 	return rc;
 }
 
@@ -181,7 +184,7 @@ static int ecryptfs_mmap(struct file *file, struct vm_area_struct *vma)
 
 /**
  * ecryptfs_open
- * @inode: inode specifying file to open
+ * @inode: inode speciying file to open
  * @file: Structure to return filled in
  *
  * Opens the file specified by inode.
@@ -250,7 +253,7 @@ out:
 
 /**
  * ecryptfs_dir_open
- * @inode: inode specifying file to open
+ * @inode: inode speciying file to open
  * @file: Structure to return filled in
  *
  * Opens the file specified by inode.
@@ -325,7 +328,7 @@ ecryptfs_fsync(struct file *file, loff_t start, loff_t end, int datasync)
 {
 	int rc;
 
-	rc = file_write_and_wait(file);
+	rc = filemap_write_and_wait(file->f_mapping);
 	if (rc)
 		return rc;
 
@@ -378,7 +381,6 @@ ecryptfs_compat_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		return rc;
 
 	switch (cmd) {
-	case FITRIM:
 	case FS_IOC32_GETFLAGS:
 	case FS_IOC32_SETFLAGS:
 	case FS_IOC32_GETVERSION:
@@ -394,7 +396,7 @@ ecryptfs_compat_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 #endif
 
 const struct file_operations ecryptfs_dir_fops = {
-	.iterate_shared = ecryptfs_readdir,
+	.iterate = ecryptfs_readdir,
 	.read = generic_read_dir,
 	.unlocked_ioctl = ecryptfs_unlocked_ioctl,
 #ifdef CONFIG_COMPAT

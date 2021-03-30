@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * IBM/3270 Driver - fullscreen driver.
  *
@@ -8,17 +7,17 @@
  *     Copyright IBM Corp. 2003, 2009
  */
 
-#include <linux/memblock.h>
+#include <linux/bootmem.h>
 #include <linux/console.h>
 #include <linux/init.h>
 #include <linux/interrupt.h>
 #include <linux/compat.h>
-#include <linux/sched/signal.h>
 #include <linux/module.h>
 #include <linux/list.h>
 #include <linux/slab.h>
 #include <linux/types.h>
 
+#include <asm/compat.h>
 #include <asm/ccwdev.h>
 #include <asm/cio.h>
 #include <asm/ebcdic.h>
@@ -218,7 +217,7 @@ fs3270_deactivate(struct raw3270_view *view)
 		fp->init->callback(fp->init, NULL);
 }
 
-static void
+static int
 fs3270_irq(struct fs3270 *fp, struct raw3270_request *rq, struct irb *irb)
 {
 	/* Handle ATTN. Set indication and wake waiters for attention. */
@@ -234,6 +233,7 @@ fs3270_irq(struct fs3270 *fp, struct raw3270_request *rq, struct irb *irb)
 			/* Normal end. Copy residual count. */
 			rq->rescnt = irb->scsw.cmd.count;
 	}
+	return RAW3270_IO_DONE;
 }
 
 /*
@@ -486,7 +486,7 @@ fs3270_open(struct inode *inode, struct file *filp)
 		raw3270_del_view(&fp->view);
 		goto out;
 	}
-	stream_open(inode, filp);
+	nonseekable_open(inode, filp);
 	filp->private_data = fp;
 out:
 	mutex_unlock(&fs3270_mutex);

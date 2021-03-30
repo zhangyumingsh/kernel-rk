@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * PCI Dynamic LPAR, PCI Hot Plug and PCI EEH recovery code
  * for RPA-compliant PPC64 platform.
@@ -7,6 +6,23 @@
  *
  * Updates, 2005, John Rose <johnrose@austin.ibm.com>
  * Updates, 2005, Linas Vepstas <linas@austin.ibm.com>
+ *
+ * All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or (at
+ * your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE, GOOD TITLE or
+ * NON INFRINGEMENT.  See the GNU General Public License for more
+ * details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
 #include <linux/pci.h>
@@ -18,11 +34,43 @@
 
 #include "pseries.h"
 
+static struct pci_bus *
+find_bus_among_children(struct pci_bus *bus,
+                        struct device_node *dn)
+{
+	struct pci_bus *child = NULL;
+	struct pci_bus *tmp;
+	struct device_node *busdn;
+
+	busdn = pci_bus_to_OF_node(bus);
+	if (busdn == dn)
+		return bus;
+
+	list_for_each_entry(tmp, &bus->children, node) {
+		child = find_bus_among_children(tmp, dn);
+		if (child)
+			break;
+	};
+	return child;
+}
+
+struct pci_bus *
+pcibios_find_pci_bus(struct device_node *dn)
+{
+	struct pci_dn *pdn = dn->data;
+
+	if (!pdn  || !pdn->phb || !pdn->phb->bus)
+		return NULL;
+
+	return find_bus_among_children(pdn->phb->bus, dn);
+}
+EXPORT_SYMBOL_GPL(pcibios_find_pci_bus);
+
 struct pci_controller *init_phb_dynamic(struct device_node *dn)
 {
 	struct pci_controller *phb;
 
-	pr_debug("PCI: Initializing new hotplug PHB %pOF\n", dn);
+	pr_debug("PCI: Initializing new hotplug PHB %s\n", dn->full_name);
 
 	phb = pcibios_alloc_controller(dn);
 	if (!phb)
@@ -90,11 +138,8 @@ int remove_phb_dynamic(struct pci_controller *phb)
 		release_resource(res);
 	}
 
-	/*
-	 * The pci_controller data structure is freed by
-	 * the pcibios_free_controller_deferred() callback;
-	 * see pseries_root_bridge_prepare().
-	 */
+	/* Free pci_controller data structure */
+	pcibios_free_controller(phb);
 
 	return 0;
 }

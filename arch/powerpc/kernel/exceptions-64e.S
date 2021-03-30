@@ -1,8 +1,12 @@
-/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  *  Boot code and exception vectors for Book3E processors
  *
  *  Copyright (C) 2007 Ben. Herrenschmidt (benh@kernel.crashing.org), IBM Corp.
+ *
+ *  This program is free software; you can redistribute it and/or
+ *  modify it under the terms of the GNU General Public License
+ *  as published by the Free Software Foundation; either version
+ *  2 of the License, or (at your option) any later version.
  */
 
 #include <linux/threads.h>
@@ -23,7 +27,6 @@
 #include <asm/hw_irq.h>
 #include <asm/kvm_asm.h>
 #include <asm/kvm_booke_hv_asm.h>
-#include <asm/feature-fixups.h>
 
 /* XXX This will ultimately add space for a special exception save
  *     structure used to save things like SRR0/SRR1, SPRGs, MAS, etc...
@@ -72,6 +75,17 @@ special_reg_save:
 	ld	r3,_MSR(r1)
 	andi.	r3,r3,MSR_PR
 	bnelr
+
+	/* Copy info into temporary exception thread info */
+	ld	r11,PACAKSAVE(r13)
+	CURRENT_THREAD_INFO(r11, r11)
+	CURRENT_THREAD_INFO(r12, r1)
+	ld	r10,TI_FLAGS(r11)
+	std	r10,TI_FLAGS(r12)
+	ld	r10,TI_PREEMPT(r11)
+	std	r10,TI_PREEMPT(r12)
+	ld	r10,TI_TASK(r11)
+	std	r10,TI_TASK(r12)
 
 	/*
 	 * Advance to the next TLB exception frame for handler
@@ -125,7 +139,7 @@ END_FTR_SECTION_IFSET(CPU_FTR_EMB_HV)
 	mfspr	r10,SPRN_ESR
 	SPECIAL_EXC_STORE(r10,ESR)
 
-	lbz	r10,PACAIRQSOFTMASK(r13)
+	lbz	r10,PACASOFTIRQEN(r13)
 	SPECIAL_EXC_STORE(r10,SOFTE)
 	ld	r10,_NIP(r1)
 	SPECIAL_EXC_STORE(r10,CSRR0)
@@ -192,17 +206,17 @@ BEGIN_FTR_SECTION
 	mtspr	SPRN_MAS8,r10
 END_FTR_SECTION_IFSET(CPU_FTR_EMB_HV)
 
-	lbz	r6,PACAIRQSOFTMASK(r13)
+	lbz	r6,PACASOFTIRQEN(r13)
 	ld	r5,SOFTE(r1)
 
 	/* Interrupts had better not already be enabled... */
-	tweqi	r6,IRQS_ENABLED
+	twnei	r6,0
 
-	andi.	r6,r5,IRQS_DISABLED
-	bne	1f
+	cmpwi	cr0,r5,0
+	beq	1f
 
 	TRACE_ENABLE_INTS
-	stb	r5,PACAIRQSOFTMASK(r13)
+	stb	r5,PACASOFTIRQEN(r13)
 1:
 	/*
 	 * Restore PACAIRQHAPPENED rather than setting it based on
@@ -362,9 +376,9 @@ ret_from_mc_except:
 #define PROLOG_ADDITION_NONE_MC(n)
 
 #define PROLOG_ADDITION_MASKABLE_GEN(n)					    \
-	lbz	r10,PACAIRQSOFTMASK(r13);	/* are irqs soft-masked? */ \
-	andi.	r10,r10,IRQS_DISABLED;	/* yes -> go out of line */ \
-	bne	masked_interrupt_book3e_##n
+	lbz	r10,PACASOFTIRQEN(r13); /* are irqs soft-disabled ? */	    \
+	cmpwi	cr0,r10,0;		/* yes -> go out of line */	    \
+	beq	masked_interrupt_book3e_##n
 
 #define PROLOG_ADDITION_2REGS_GEN(n)					    \
 	std	r14,PACA_EXGEN+EX_R14(r13);				    \
@@ -397,7 +411,7 @@ exc_##n##_common:							    \
 	std	r10,_NIP(r1);		/* save SRR0 to stackframe */	    \
 	std	r11,_MSR(r1);		/* save SRR1 to stackframe */	    \
 	beq	2f;			/* if from kernel mode */	    \
-	ACCOUNT_CPU_USER_ENTRY(r13,r10,r11);/* accounting (uses cr0+eq) */  \
+	ACCOUNT_CPU_USER_ENTRY(r10,r11);/* accounting (uses cr0+eq) */	    \
 2:	ld	r3,excf+EX_R10(r13);	/* get back r10 */		    \
 	ld	r4,excf+EX_R11(r13);	/* get back r11 */		    \
 	mfspr	r5,scratch;		/* get back r13 */		    \
@@ -408,7 +422,7 @@ exc_##n##_common:							    \
 	mfspr	r8,SPRN_XER;		/* save XER in stackframe */	    \
 	ld	r9,excf+EX_R1(r13);	/* load orig r1 back from PACA */   \
 	lwz	r10,excf+EX_CR(r13);	/* load orig CR back from PACA	*/  \
-	lbz	r11,PACAIRQSOFTMASK(r13); /* get current IRQ softe */	    \
+	lbz	r11,PACASOFTIRQEN(r13);	/* get current IRQ softe */	    \
 	ld	r12,exception_marker@toc(r2);				    \
 	li	r0,0;							    \
 	std	r3,GPR10(r1);		/* save r10 to stackframe */	    \
@@ -464,7 +478,7 @@ exc_##n##_bad_stack:							    \
 	sth	r1,PACA_TRAP_SAVE(r13);	/* store trap */		    \
 	b	bad_stack_book3e;	/* bad stack error */
 
-/* WARNING: If you change the layout of this stub, make sure you check
+/* WARNING: If you change the layout of this stub, make sure you chcek
 	*   the debug exception handler which handles single stepping
 	*   into exceptions from userspace, and the MM code in
 	*   arch/powerpc/mm/tlb_nohash.c which patches the branch here
@@ -490,7 +504,7 @@ exc_##n##_bad_stack:							    \
  * interrupts happen before the wait instruction.
  */
 #define CHECK_NAPPING()							\
-	ld	r11, PACA_THREAD_INFO(r13);				\
+	CURRENT_THREAD_INFO(r11, r1);					\
 	ld	r10,TI_LOCAL_FLAGS(r11);				\
 	andi.	r9,r10,_TLF_NAPPING;					\
 	beq+	1f;							\
@@ -750,14 +764,12 @@ END_FTR_SECTION_IFSET(CPU_FTR_ALTIVEC)
 	ld	r15,PACATOC(r13)
 	ld	r14,interrupt_base_book3e@got(r15)
 	ld	r15,__end_interrupts@got(r15)
+#else
+	LOAD_REG_IMMEDIATE(r14,interrupt_base_book3e)
+	LOAD_REG_IMMEDIATE(r15,__end_interrupts)
+#endif
 	cmpld	cr0,r10,r14
 	cmpld	cr1,r10,r15
-#else
-	LOAD_REG_IMMEDIATE_SYM(r14, r15, interrupt_base_book3e)
-	cmpld	cr0, r10, r14
-	LOAD_REG_IMMEDIATE_SYM(r14, r15, __end_interrupts)
-	cmpld	cr1, r10, r14
-#endif
 	blt+	cr0,1f
 	bge+	cr1,1f
 
@@ -822,14 +834,12 @@ kernel_dbg_exc:
 	ld	r15,PACATOC(r13)
 	ld	r14,interrupt_base_book3e@got(r15)
 	ld	r15,__end_interrupts@got(r15)
+#else
+	LOAD_REG_IMMEDIATE(r14,interrupt_base_book3e)
+	LOAD_REG_IMMEDIATE(r15,__end_interrupts)
+#endif
 	cmpld	cr0,r10,r14
 	cmpld	cr1,r10,r15
-#else
-	LOAD_REG_IMMEDIATE_SYM(r14, r15, interrupt_base_book3e)
-	cmpld	cr0, r10, r14
-	LOAD_REG_IMMEDIATE_SYM(r14, r15,__end_interrupts)
-	cmpld	cr1, r10, r14
-#endif
 	blt+	cr0,1f
 	bge+	cr1,1f
 
@@ -950,25 +960,19 @@ kernel_dbg_exc:
 			        PROLOG_ADDITION_NONE)
 	EXCEPTION_COMMON(0x340)
 	addi	r3,r1,STACK_FRAME_OVERHEAD
-	bl	save_nvgprs
+	bl	.save_nvgprs
 	INTS_RESTORE_HARD
-	bl	unknown_exception
-	b	ret_from_except
+	bl	.unknown_exception
+	b	.ret_from_except
 
 /*
  * An interrupt came in while soft-disabled; We mark paca->irq_happened
  * accordingly and if the interrupt is level sensitive, we hard disable
- * hard disable (full_mask) corresponds to PACA_IRQ_MUST_HARD_MASK, so
- * keep these in synch.
  */
 
 .macro masked_interrupt_book3e paca_irq full_mask
 	lbz	r10,PACAIRQHAPPENED(r13)
-	.if \full_mask == 1
-	ori	r10,r10,\paca_irq | PACA_IRQ_HARD_DIS
-	.else
 	ori	r10,r10,\paca_irq
-	.endif
 	stb	r10,PACAIRQHAPPENED(r13)
 
 	.if \full_mask == 1
@@ -1092,7 +1096,7 @@ fast_exception_return:
 	andi.	r6,r10,MSR_PR
 	REST_2GPRS(6, r1)
 	beq	1f
-	ACCOUNT_CPU_USER_EXIT(r13, r10, r11)
+	ACCOUNT_CPU_USER_EXIT(r10, r11)
 	ld	r0,GPR13(r1)
 
 1:	stdcx.	r0,0,r1		/* to clear the reservation */
@@ -1346,6 +1350,16 @@ skpinv:	addi	r6,r6,1				/* Increment */
 	sync
 	isync
 
+/*
+ * The mapping only needs to be cache-coherent on SMP, except on
+ * Freescale e500mc derivatives where it's also needed for coherent DMA.
+ */
+#if defined(CONFIG_SMP) || defined(CONFIG_PPC_E500MC)
+#define M_IF_NEEDED	MAS2_M
+#else
+#define M_IF_NEEDED	0
+#endif
+
 /* 6. Setup KERNELBASE mapping in TLB[0]
  *
  * r3 = MAS0 w/TLBSEL & ESEL for the entry we started in
@@ -1358,7 +1372,7 @@ skpinv:	addi	r6,r6,1				/* Increment */
 	ori	r6,r6,(MAS1_TSIZE(BOOK3E_PAGESZ_1GB))@l
 	mtspr	SPRN_MAS1,r6
 
-	LOAD_REG_IMMEDIATE(r6, PAGE_OFFSET | MAS2_M_IF_NEEDED)
+	LOAD_REG_IMMEDIATE(r6, PAGE_OFFSET | M_IF_NEEDED)
 	mtspr	SPRN_MAS2,r6
 
 	rlwinm	r5,r5,0,0,25
@@ -1443,7 +1457,7 @@ a2_tlbinit_code_start:
 a2_tlbinit_after_linear_map:
 
 	/* Now we branch the new virtual address mapped by this entry */
-	LOAD_REG_IMMEDIATE_SYM(r3, r5, 1f)
+	LOAD_REG_IMMEDIATE(r3,1f)
 	mtctr	r3
 	bctr
 

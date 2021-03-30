@@ -78,34 +78,20 @@ cifs_prime_dcache(struct dentry *parent, struct qstr *name,
 {
 	struct dentry *dentry, *alias;
 	struct inode *inode;
-	struct super_block *sb = parent->d_sb;
+	struct super_block *sb = d_inode(parent)->i_sb;
 	struct cifs_sb_info *cifs_sb = CIFS_SB(sb);
-	DECLARE_WAIT_QUEUE_HEAD_ONSTACK(wq);
 
 	cifs_dbg(FYI, "%s: for %s\n", __func__, name->name);
 
 	dentry = d_hash_and_lookup(parent, name);
-	if (!dentry) {
-		/*
-		 * If we know that the inode will need to be revalidated
-		 * immediately, then don't create a new dentry for it.
-		 * We'll end up doing an on the wire call either way and
-		 * this spares us an invalidation.
-		 */
-		if (fattr->cf_flags & CIFS_FATTR_NEED_REVAL)
-			return;
-retry:
-		dentry = d_alloc_parallel(parent, name, &wq);
-	}
 	if (IS_ERR(dentry))
 		return;
-	if (!d_in_lookup(dentry)) {
+
+	if (dentry) {
 		inode = d_inode(dentry);
 		if (inode) {
-			if (d_mountpoint(dentry)) {
-				dput(dentry);
-				return;
-			}
+			if (d_mountpoint(dentry))
+				goto out;
 			/*
 			 * If we're generating inode numbers, then we don't
 			 * want to clobber the existing one with the one that
@@ -120,45 +106,34 @@ retry:
 			    (inode->i_mode & S_IFMT) ==
 			    (fattr->cf_mode & S_IFMT)) {
 				cifs_fattr_to_inode(inode, fattr);
-				dput(dentry);
-				return;
+				goto out;
 			}
 		}
 		d_invalidate(dentry);
 		dput(dentry);
-		goto retry;
-	} else {
-		inode = cifs_iget(sb, fattr);
-		if (!inode)
-			inode = ERR_PTR(-ENOMEM);
-		alias = d_splice_alias(inode, dentry);
-		d_lookup_done(dentry);
-		if (alias && !IS_ERR(alias))
-			dput(alias);
 	}
-	dput(dentry);
-}
 
-static bool reparse_file_needs_reval(const struct cifs_fattr *fattr)
-{
-	if (!(fattr->cf_cifsattrs & ATTR_REPARSE))
-		return false;
 	/*
-	 * The DFS tags should be only intepreted by server side as per
-	 * MS-FSCC 2.1.2.1, but let's include them anyway.
-	 *
-	 * Besides, if cf_cifstag is unset (0), then we still need it to be
-	 * revalidated to know exactly what reparse point it is.
+	 * If we know that the inode will need to be revalidated immediately,
+	 * then don't create a new dentry for it. We'll end up doing an on
+	 * the wire call either way and this spares us an invalidation.
 	 */
-	switch (fattr->cf_cifstag) {
-	case IO_REPARSE_TAG_DFS:
-	case IO_REPARSE_TAG_DFSR:
-	case IO_REPARSE_TAG_SYMLINK:
-	case IO_REPARSE_TAG_NFS:
-	case 0:
-		return true;
-	}
-	return false;
+	if (fattr->cf_flags & CIFS_FATTR_NEED_REVAL)
+		return;
+
+	dentry = d_alloc(parent, name);
+	if (!dentry)
+		return;
+
+	inode = cifs_iget(sb, fattr);
+	if (!inode)
+		goto out;
+
+	alias = d_splice_alias(inode, dentry);
+	if (alias && !IS_ERR(alias))
+		dput(alias);
+out:
+	dput(dentry);
 }
 
 static void
@@ -180,7 +155,7 @@ cifs_fill_common_info(struct cifs_fattr *fattr, struct cifs_sb_info *cifs_sb)
 	 * is a symbolic link, DFS referral or a reparse point with a direct
 	 * access like junctions, deduplicated files, NFS symlinks.
 	 */
-	if (reparse_file_needs_reval(fattr))
+	if (fattr->cf_cifsattrs & ATTR_REPARSE)
 		fattr->cf_flags |= CIFS_FATTR_NEED_REVAL;
 
 	/* non-unix readdir doesn't provide nlink */
@@ -196,8 +171,7 @@ cifs_fill_common_info(struct cifs_fattr *fattr, struct cifs_sb_info *cifs_sb)
 	 * may look wrong since the inodes may not have timed out by the time
 	 * "ls" does a stat() call on them.
 	 */
-	if ((cifs_sb->mnt_cifs_flags & CIFS_MOUNT_CIFS_ACL) ||
-	    (cifs_sb->mnt_cifs_flags & CIFS_MOUNT_MODE_FROM_SID))
+	if (cifs_sb->mnt_cifs_flags & CIFS_MOUNT_CIFS_ACL)
 		fattr->cf_flags |= CIFS_FATTR_NEED_REVAL;
 
 	if (cifs_sb->mnt_cifs_flags & CIFS_MOUNT_UNX_EMUL &&
@@ -217,37 +191,19 @@ cifs_fill_common_info(struct cifs_fattr *fattr, struct cifs_sb_info *cifs_sb)
 	}
 }
 
-static void __dir_info_to_fattr(struct cifs_fattr *fattr, const void *info)
-{
-	const FILE_DIRECTORY_INFO *fi = info;
-
-	memset(fattr, 0, sizeof(*fattr));
-	fattr->cf_cifsattrs = le32_to_cpu(fi->ExtFileAttributes);
-	fattr->cf_eof = le64_to_cpu(fi->EndOfFile);
-	fattr->cf_bytes = le64_to_cpu(fi->AllocationSize);
-	fattr->cf_createtime = le64_to_cpu(fi->CreationTime);
-	fattr->cf_atime = cifs_NTtimeToUnix(fi->LastAccessTime);
-	fattr->cf_ctime = cifs_NTtimeToUnix(fi->ChangeTime);
-	fattr->cf_mtime = cifs_NTtimeToUnix(fi->LastWriteTime);
-}
-
 void
 cifs_dir_info_to_fattr(struct cifs_fattr *fattr, FILE_DIRECTORY_INFO *info,
 		       struct cifs_sb_info *cifs_sb)
 {
-	__dir_info_to_fattr(fattr, info);
-	cifs_fill_common_info(fattr, cifs_sb);
-}
+	memset(fattr, 0, sizeof(*fattr));
+	fattr->cf_cifsattrs = le32_to_cpu(info->ExtFileAttributes);
+	fattr->cf_eof = le64_to_cpu(info->EndOfFile);
+	fattr->cf_bytes = le64_to_cpu(info->AllocationSize);
+	fattr->cf_createtime = le64_to_cpu(info->CreationTime);
+	fattr->cf_atime = cifs_NTtimeToUnix(info->LastAccessTime);
+	fattr->cf_ctime = cifs_NTtimeToUnix(info->ChangeTime);
+	fattr->cf_mtime = cifs_NTtimeToUnix(info->LastWriteTime);
 
-static void cifs_fulldir_info_to_fattr(struct cifs_fattr *fattr,
-				       SEARCH_ID_FULL_DIR_INFO *info,
-				       struct cifs_sb_info *cifs_sb)
-{
-	__dir_info_to_fattr(fattr, info);
-
-	/* See MS-FSCC 2.4.18 FileIdFullDirectoryInformation */
-	if (fattr->cf_cifsattrs & ATTR_REPARSE)
-		fattr->cf_cifstag = le32_to_cpu(info->EaSize);
 	cifs_fill_common_info(fattr, cifs_sb);
 }
 
@@ -345,7 +301,7 @@ initiate_cifs_search(const unsigned int xid, struct file *file)
 	cifsFile->invalidHandle = true;
 	cifsFile->srch_inf.endOfSearch = false;
 
-	full_path = build_path_from_dentry(file_dentry(file));
+	full_path = build_path_from_dentry(file->f_path.dentry);
 	if (full_path == NULL) {
 		rc = -ENOMEM;
 		goto error_exit;
@@ -705,8 +661,7 @@ find_cifs_entry(const unsigned int xid, struct cifs_tcon *tcon, loff_t pos,
 
 		end_of_smb = cfile->srch_inf.ntwrk_buf_start +
 			server->ops->calc_smb_size(
-					cfile->srch_inf.ntwrk_buf_start,
-					server);
+					cfile->srch_inf.ntwrk_buf_start);
 
 		cur_ent = cfile->srch_inf.srch_entries_start;
 		first_entry_in_buffer = cfile->srch_inf.index_of_last_entry
@@ -796,11 +751,6 @@ static int cifs_filldir(char *find_entry, struct file *file,
 				       (FIND_FILE_STANDARD_INFO *)find_entry,
 				       cifs_sb);
 		break;
-	case SMB_FIND_FILE_ID_FULL_DIR_INFO:
-		cifs_fulldir_info_to_fattr(&fattr,
-					   (SEARCH_ID_FULL_DIR_INFO *)find_entry,
-					   cifs_sb);
-		break;
 	default:
 		cifs_dir_info_to_fattr(&fattr,
 				       (FILE_DIRECTORY_INFO *)find_entry,
@@ -824,7 +774,7 @@ static int cifs_filldir(char *find_entry, struct file *file,
 		 */
 		fattr.cf_flags |= CIFS_FATTR_NEED_REVAL;
 
-	cifs_prime_dcache(file_dentry(file), &name, &fattr);
+	cifs_prime_dcache(file->f_path.dentry, &name, &fattr);
 
 	ino = cifs_uniqueid_to_ino_t(fattr.cf_uniqueid);
 	return !dir_emit(ctx, name.name, name.len, ino, fattr.cf_dtype);
@@ -892,8 +842,7 @@ int cifs_readdir(struct file *file, struct dir_context *ctx)
 	cifs_dbg(FYI, "loop through %d times filling dir for net buf %p\n",
 		 num_to_fill, cifsFile->srch_inf.ntwrk_buf_start);
 	max_len = tcon->ses->server->ops->calc_smb_size(
-			cifsFile->srch_inf.ntwrk_buf_start,
-			tcon->ses->server);
+			cifsFile->srch_inf.ntwrk_buf_start);
 	end_of_smb = cifsFile->srch_inf.ntwrk_buf_start + max_len;
 
 	tmp_buf = kmalloc(UNICODE_NAME_MAX, GFP_KERNEL);

@@ -279,7 +279,7 @@ static void set_clock_divider(struct pxa168fb_info *fbi,
 
 	/* check whether divisor is too small. */
 	if (divider_int < 2) {
-		dev_warn(fbi->dev, "Warning: clock source is too slow. "
+		dev_warn(fbi->dev, "Warning: clock source is too slow."
 				"Try smaller resolution\n");
 		divider_int = 2;
 	}
@@ -405,6 +405,9 @@ static int pxa168fb_set_par(struct fb_info *info)
 	struct fb_var_screeninfo *var = &info->var;
 	struct fb_videomode mode;
 	u32 x;
+	struct pxa168fb_mach_info *mi;
+
+	mi = dev_get_platdata(fbi->dev);
 
 	/*
 	 * Set additional mode info.
@@ -545,7 +548,7 @@ static irqreturn_t pxa168fb_handle_irq(int irq, void *dev_id)
 	return IRQ_NONE;
 }
 
-static const struct fb_ops pxa168fb_ops = {
+static struct fb_ops pxa168fb_ops = {
 	.owner		= THIS_MODULE,
 	.fb_check_var	= pxa168fb_check_var,
 	.fb_set_par	= pxa168fb_set_par,
@@ -665,7 +668,7 @@ static int pxa168fb_probe(struct platform_device *pdev)
 	/*
 	 * Map LCD controller registers.
 	 */
-	fbi->reg_base = devm_ioremap(&pdev->dev, res->start,
+	fbi->reg_base = devm_ioremap_nocache(&pdev->dev, res->start,
 					     resource_size(res));
 	if (fbi->reg_base == NULL) {
 		ret = -ENOMEM;
@@ -677,8 +680,8 @@ static int pxa168fb_probe(struct platform_device *pdev)
 	 */
 	info->fix.smem_len = PAGE_ALIGN(DEFAULT_FB_SIZE);
 
-	info->screen_base = dma_alloc_wc(fbi->dev, info->fix.smem_len,
-					 &fbi->fb_start_dma, GFP_KERNEL);
+	info->screen_base = dma_alloc_writecombine(fbi->dev, info->fix.smem_len,
+						&fbi->fb_start_dma, GFP_KERNEL);
 	if (info->screen_base == NULL) {
 		ret = -ENOMEM;
 		goto failed_free_info;
@@ -766,8 +769,8 @@ failed_free_cmap:
 failed_free_clk:
 	clk_disable_unprepare(fbi->clk);
 failed_free_fbmem:
-	dma_free_wc(fbi->dev, info->fix.smem_len,
-		    info->screen_base, fbi->fb_start_dma);
+	dma_free_coherent(fbi->dev, info->fix.smem_len,
+			info->screen_base, fbi->fb_start_dma);
 failed_free_info:
 	kfree(info);
 
@@ -801,8 +804,8 @@ static int pxa168fb_remove(struct platform_device *pdev)
 
 	irq = platform_get_irq(pdev, 0);
 
-	dma_free_wc(fbi->dev, info->fix.smem_len,
-		    info->screen_base, info->fix.smem_start);
+	dma_free_writecombine(fbi->dev, PAGE_ALIGN(info->fix.smem_len),
+				info->screen_base, info->fix.smem_start);
 
 	clk_disable_unprepare(fbi->clk);
 

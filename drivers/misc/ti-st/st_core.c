@@ -1,9 +1,22 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  *  Shared Transport Line discipline driver Core
  *	This hooks up ST KIM driver and ST LL driver
  *  Copyright (C) 2009-2010 Texas Instruments
  *  Author: Pavan Savoy <pavan_savoy@ti.com>
+ *
+ *  This program is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License version 2 as
+ *  published by the Free Software Foundation.
+ *
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License
+ *  along with this program; if not, write to the Free Software
+ *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ *
  */
 
 #define pr_fmt(fmt)	"(stc): " fmt
@@ -128,7 +141,7 @@ static void st_send_frame(unsigned char chnl_id, struct st_data_s *st_gdata)
  * This function is being called with spin lock held, protocol drivers are
  * only expected to complete their waits and do nothing more than that.
  */
-static void st_reg_complete(struct st_data_s *st_gdata, int err)
+static void st_reg_complete(struct st_data_s *st_gdata, char err)
 {
 	unsigned char i = 0;
 	pr_info(" %s ", __func__);
@@ -249,7 +262,7 @@ void st_int_recv(void *disc_data,
 	while (count) {
 		if (st_gdata->rx_count) {
 			len = min_t(unsigned int, st_gdata->rx_count, count);
-			skb_put_data(st_gdata->rx_skb, ptr, len);
+			memcpy(skb_put(st_gdata->rx_skb, len), ptr, len);
 			st_gdata->rx_count -= len;
 			count -= len;
 			ptr += len;
@@ -619,6 +632,7 @@ long st_register(struct st_proto_s *new_proto)
 		spin_unlock_irqrestore(&st_gdata->lock, flags);
 		return err;
 	}
+	pr_debug("done %s(%d) ", __func__, new_proto->chnl_id);
 }
 EXPORT_SYMBOL_GPL(st_register);
 
@@ -708,6 +722,7 @@ EXPORT_SYMBOL_GPL(st_unregister);
  */
 static int st_tty_open(struct tty_struct *tty)
 {
+	int err = 0;
 	struct st_data_s *st_gdata;
 	pr_info("%s ", __func__);
 
@@ -730,14 +745,13 @@ static int st_tty_open(struct tty_struct *tty)
 	 */
 	st_kim_complete(st_gdata->kim_data);
 	pr_debug("done %s", __func__);
-
-	return 0;
+	return err;
 }
 
 static void st_tty_close(struct tty_struct *tty)
 {
-	unsigned char i;
-	unsigned long flags;
+	unsigned char i = ST_MAX_CHANNELS;
+	unsigned long flags = 0;
 	struct	st_data_s *st_gdata = tty->disc_data;
 
 	pr_info("%s ", __func__);

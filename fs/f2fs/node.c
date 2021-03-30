@@ -100,7 +100,7 @@ bool f2fs_available_free_memory(struct f2fs_sb_info *sbi, int type)
 static void clear_node_page_dirty(struct page *page)
 {
 	if (PageDirty(page)) {
-		f2fs_clear_page_cache_dirty_tag(page);
+		f2fs_clear_radix_tree_dirty_tag(page);
 		clear_page_dirty_for_io(page);
 		dec_page_count(F2FS_P_SB(page), F2FS_DIRTY_NODES);
 	}
@@ -621,10 +621,8 @@ pgoff_t f2fs_get_next_page_offset(struct dnode_of_data *dn, pgoff_t pgofs)
 	switch (dn->max_level) {
 	case 3:
 		base += 2 * indirect_blks;
-		/* fall through */
 	case 2:
 		base += 2 * direct_blks;
-		/* fall through */
 	case 1:
 		base += direct_index;
 		break;
@@ -875,7 +873,7 @@ static int truncate_dnode(struct dnode_of_data *dn)
 
 	/* get direct node */
 	page = f2fs_get_node_page(F2FS_I_SB(dn->inode), dn->nid);
-	if (PTR_ERR(page) == -ENOENT)
+	if (IS_ERR(page) && PTR_ERR(page) == -ENOENT)
 		return 1;
 	else if (IS_ERR(page))
 		return PTR_ERR(page);
@@ -1320,7 +1318,9 @@ void f2fs_ra_node_page(struct f2fs_sb_info *sbi, nid_t nid)
 	if (f2fs_check_nid_range(sbi, nid))
 		return;
 
-	apage = xa_load(&NODE_MAPPING(sbi)->i_pages, nid);
+	rcu_read_lock();
+	apage = radix_tree_lookup(&NODE_MAPPING(sbi)->page_tree, nid);
+	rcu_read_unlock();
 	if (apage)
 		return;
 
@@ -1347,7 +1347,7 @@ repeat:
 	if (!page)
 		return ERR_PTR(-ENOMEM);
 
-	err = read_node_page(page, 0);
+	err = read_node_page(page, REQ_SYNC);
 	if (err < 0) {
 		f2fs_put_page(page, 1);
 		return ERR_PTR(err);
@@ -1446,7 +1446,7 @@ static struct page *last_fsync_dnode(struct f2fs_sb_info *sbi, nid_t ino)
 	struct page *last_page = NULL;
 	int nr_pages;
 
-	pagevec_init(&pvec);
+	pagevec_init(&pvec, 0);
 	index = 0;
 
 	while ((nr_pages = pagevec_lookup_tag(&pvec, NODE_MAPPING(sbi), &index,
@@ -1524,8 +1524,7 @@ static int __write_node_page(struct page *page, bool atomic, bool *submitted,
 	if (unlikely(is_sbi_flag_set(sbi, SBI_POR_DOING)))
 		goto redirty_out;
 
-	if (!is_sbi_flag_set(sbi, SBI_CP_DISABLED) &&
-			wbc->sync_mode == WB_SYNC_NONE &&
+	if (wbc->sync_mode == WB_SYNC_NONE &&
 			IS_DNODE(page) && is_cold_node(page))
 		goto redirty_out;
 
@@ -1560,7 +1559,7 @@ static int __write_node_page(struct page *page, bool atomic, bool *submitted,
 	}
 
 	if (atomic && !test_opt(sbi, NOBARRIER))
-		fio.op_flags |= REQ_PREFLUSH | REQ_FUA;
+		fio.op_flags |= WRITE_FLUSH_FUA;
 
 	set_page_writeback(page);
 	ClearPageError(page);
@@ -1664,7 +1663,7 @@ int f2fs_fsync_node_pages(struct f2fs_sb_info *sbi, struct inode *inode,
 			return PTR_ERR_OR_ZERO(last_page);
 	}
 retry:
-	pagevec_init(&pvec);
+	pagevec_init(&pvec, 0);
 	index = 0;
 
 	while ((nr_pages = pagevec_lookup_tag(&pvec, NODE_MAPPING(sbi), &index,
@@ -1763,47 +1762,6 @@ out:
 	return ret ? -EIO: 0;
 }
 
-static int f2fs_match_ino(struct inode *inode, unsigned long ino, void *data)
-{
-	struct f2fs_sb_info *sbi = F2FS_I_SB(inode);
-	bool clean;
-
-	if (inode->i_ino != ino)
-		return 0;
-
-	if (!is_inode_flag_set(inode, FI_DIRTY_INODE))
-		return 0;
-
-	spin_lock(&sbi->inode_lock[DIRTY_META]);
-	clean = list_empty(&F2FS_I(inode)->gdirty_list);
-	spin_unlock(&sbi->inode_lock[DIRTY_META]);
-
-	if (clean)
-		return 0;
-
-	inode = igrab(inode);
-	if (!inode)
-		return 0;
-	return 1;
-}
-
-static bool flush_dirty_inode(struct page *page)
-{
-	struct f2fs_sb_info *sbi = F2FS_P_SB(page);
-	struct inode *inode;
-	nid_t ino = ino_of_node(page);
-
-	inode = find_inode_nowait(sbi->sb, ino, f2fs_match_ino, NULL);
-	if (!inode)
-		return false;
-
-	f2fs_update_inode(inode, page);
-	unlock_page(page);
-
-	iput(inode);
-	return true;
-}
-
 int f2fs_sync_node_pages(struct f2fs_sb_info *sbi,
 				struct writeback_control *wbc,
 				bool do_balance, enum iostat_type io_type)
@@ -1815,7 +1773,7 @@ int f2fs_sync_node_pages(struct f2fs_sb_info *sbi,
 	int ret = 0;
 	int nr_pages, done = 0;
 
-	pagevec_init(&pvec);
+	pagevec_init(&pvec, 0);
 
 next_step:
 	index = 0;
@@ -1827,7 +1785,6 @@ next_step:
 		for (i = 0; i < nr_pages; i++) {
 			struct page *page = pvec.pages[i];
 			bool submitted = false;
-			bool may_dirty = true;
 
 			/* give a priority to WB_SYNC threads */
 			if (atomic_read(&sbi->wb_sync_req[NODE]) &&
@@ -1875,13 +1832,6 @@ continue_unlock:
 				goto lock_node;
 			}
 
-			/* flush dirty inode */
-			if (IS_INODE(page) && may_dirty) {
-				may_dirty = false;
-				if (flush_dirty_inode(page))
-					goto lock_node;
-			}
-
 			f2fs_wait_on_page_writeback(page, NODE, true, true);
 
 			if (!clear_page_dirty_for_io(page))
@@ -1910,8 +1860,7 @@ continue_unlock:
 	}
 
 	if (step < 2) {
-		if (!is_sbi_flag_set(sbi, SBI_CP_DISABLED) &&
-				wbc->sync_mode == WB_SYNC_NONE && step == 1)
+		if (wbc->sync_mode == WB_SYNC_NONE && step == 1)
 			goto out;
 		step++;
 		goto next_step;
@@ -1933,7 +1882,7 @@ int f2fs_wait_on_node_pages_writeback(struct f2fs_sb_info *sbi,
 	struct list_head *head = &sbi->fsync_node_list;
 	unsigned long flags;
 	unsigned int cur_seq_id = 0;
-	int ret2, ret = 0;
+	int ret2 = 0, ret = 0;
 
 	while (seq_id && cur_seq_id < seq_id) {
 		spin_lock_irqsave(&sbi->fsync_node_lock, flags);
@@ -1961,7 +1910,10 @@ int f2fs_wait_on_node_pages_writeback(struct f2fs_sb_info *sbi,
 			break;
 	}
 
-	ret2 = filemap_check_errors(NODE_MAPPING(sbi));
+	if (unlikely(test_and_clear_bit(AS_ENOSPC, &NODE_MAPPING(sbi)->flags)))
+		ret2 = -ENOSPC;
+	if (unlikely(test_and_clear_bit(AS_EIO, &NODE_MAPPING(sbi)->flags)))
+		ret2 = -EIO;
 	if (!ret)
 		ret = ret2;
 
@@ -2349,6 +2301,7 @@ static int __f2fs_build_free_nids(struct f2fs_sb_info *sbi,
 
 			if (ret) {
 				up_read(&nm_i->nat_tree_lock);
+				f2fs_bug_on(sbi, !mount);
 				f2fs_err(sbi, "NAT is corrupt, run fsck to fix it");
 				return ret;
 			}
@@ -2398,7 +2351,7 @@ bool f2fs_alloc_nid(struct f2fs_sb_info *sbi, nid_t *nid)
 	struct free_nid *i = NULL;
 retry:
 	if (time_to_inject(sbi, FAULT_ALLOC_NID)) {
-		f2fs_show_injection_info(sbi, FAULT_ALLOC_NID);
+		f2fs_show_injection_info(FAULT_ALLOC_NID);
 		return false;
 	}
 
@@ -3014,7 +2967,7 @@ static int init_node_manager(struct f2fs_sb_info *sbi)
 
 	/* not used nids: 0, node, meta, (and root counted as valid node) */
 	nm_i->available_nids = nm_i->max_nid - sbi->total_valid_node_count -
-						F2FS_RESERVED_NODE_NUM;
+				sbi->nquota_files - F2FS_RESERVED_NODE_NUM;
 	nm_i->nid_cnt[FREE_NID] = 0;
 	nm_i->nid_cnt[PREALLOC_NID] = 0;
 	nm_i->nat_cnt = 0;

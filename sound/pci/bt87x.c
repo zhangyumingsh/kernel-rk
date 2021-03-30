@@ -1,10 +1,24 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * bt87x.c - Brooktree Bt878/Bt879 driver for ALSA
  *
  * Copyright (c) Clemens Ladisch <clemens@ladisch.de>
  *
  * based on btaudio.c by Gerd Knorr <kraxel@bytesex.org>
+ *
+ *
+ *  This driver is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License as published by
+ *  the Free Software Foundation; either version 2 of the License, or
+ *  (at your option) any later version.
+ *
+ *  This driver is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License
+ *  along with this program; if not, write to the Free Software
+ *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
  */
 
 #include <linux/init.h>
@@ -150,7 +164,7 @@ struct snd_bt87x_board {
 	unsigned no_digital:1;	/* No digital input */
 };
 
-static const struct snd_bt87x_board snd_bt87x_boards[] = {
+static struct snd_bt87x_board snd_bt87x_boards[] = {
 	[SND_BT87X_BOARD_UNKNOWN] = {
 		.dig_rate = 32000, /* just a guess */
 	},
@@ -214,14 +228,14 @@ static int snd_bt87x_create_risc(struct snd_bt87x *chip, struct snd_pcm_substrea
 			       	 unsigned int periods, unsigned int period_bytes)
 {
 	unsigned int i, offset;
-	__le32 *risc;
+	u32 *risc;
 
 	if (chip->dma_risc.area == NULL) {
-		if (snd_dma_alloc_pages(SNDRV_DMA_TYPE_DEV, &chip->pci->dev,
+		if (snd_dma_alloc_pages(SNDRV_DMA_TYPE_DEV, snd_dma_pci_data(chip->pci),
 					PAGE_ALIGN(MAX_RISC_SIZE), &chip->dma_risc) < 0)
 			return -ENOMEM;
 	}
-	risc = (__le32 *)chip->dma_risc.area;
+	risc = (u32 *)chip->dma_risc.area;
 	offset = 0;
 	*risc++ = cpu_to_le32(RISC_SYNC | RISC_SYNC_FM1);
 	*risc++ = cpu_to_le32(0);
@@ -339,7 +353,7 @@ static irqreturn_t snd_bt87x_interrupt(int irq, void *dev_id)
 	return IRQ_HANDLED;
 }
 
-static const struct snd_pcm_hardware snd_bt87x_digital_hw = {
+static struct snd_pcm_hardware snd_bt87x_digital_hw = {
 	.info = SNDRV_PCM_INFO_MMAP |
 		SNDRV_PCM_INFO_INTERLEAVED |
 		SNDRV_PCM_INFO_BLOCK_TRANSFER |
@@ -356,7 +370,7 @@ static const struct snd_pcm_hardware snd_bt87x_digital_hw = {
 	.periods_max = 255,
 };
 
-static const struct snd_pcm_hardware snd_bt87x_analog_hw = {
+static struct snd_pcm_hardware snd_bt87x_analog_hw = {
 	.info = SNDRV_PCM_INFO_MMAP |
 		SNDRV_PCM_INFO_INTERLEAVED |
 		SNDRV_PCM_INFO_BLOCK_TRANSFER |
@@ -387,13 +401,13 @@ static int snd_bt87x_set_digital_hw(struct snd_bt87x *chip, struct snd_pcm_runti
 
 static int snd_bt87x_set_analog_hw(struct snd_bt87x *chip, struct snd_pcm_runtime *runtime)
 {
-	static const struct snd_ratnum analog_clock = {
+	static struct snd_ratnum analog_clock = {
 		.num = ANALOG_CLOCK,
 		.den_min = CLOCK_DIV_MIN,
 		.den_max = CLOCK_DIV_MAX,
 		.den_step = 1
 	};
-	static const struct snd_pcm_hw_constraint_ratnums constraint_rates = {
+	static struct snd_pcm_hw_constraint_ratnums constraint_rates = {
 		.nrats = 1,
 		.rats = &analog_clock
 	};
@@ -452,7 +466,12 @@ static int snd_bt87x_hw_params(struct snd_pcm_substream *substream,
 			       struct snd_pcm_hw_params *hw_params)
 {
 	struct snd_bt87x *chip = snd_pcm_substream_chip(substream);
+	int err;
 
+	err = snd_pcm_lib_malloc_pages(substream,
+				       params_buffer_bytes(hw_params));
+	if (err < 0)
+		return err;
 	return snd_bt87x_create_risc(chip, substream,
 				     params_periods(hw_params),
 				     params_period_bytes(hw_params));
@@ -463,6 +482,7 @@ static int snd_bt87x_hw_free(struct snd_pcm_substream *substream)
 	struct snd_bt87x *chip = snd_pcm_substream_chip(substream);
 
 	snd_bt87x_free_risc(chip);
+	snd_pcm_lib_free_pages(substream);
 	return 0;
 }
 
@@ -530,14 +550,16 @@ static snd_pcm_uframes_t snd_bt87x_pointer(struct snd_pcm_substream *substream)
 	return (snd_pcm_uframes_t)bytes_to_frames(runtime, chip->current_line * chip->line_bytes);
 }
 
-static const struct snd_pcm_ops snd_bt87x_pcm_ops = {
+static struct snd_pcm_ops snd_bt87x_pcm_ops = {
 	.open = snd_bt87x_pcm_open,
 	.close = snd_bt87x_close,
+	.ioctl = snd_pcm_lib_ioctl,
 	.hw_params = snd_bt87x_hw_params,
 	.hw_free = snd_bt87x_hw_free,
 	.prepare = snd_bt87x_prepare,
 	.trigger = snd_bt87x_trigger,
 	.pointer = snd_bt87x_pointer,
+	.page = snd_pcm_sgbuf_ops_page,
 };
 
 static int snd_bt87x_capture_volume_info(struct snd_kcontrol *kcontrol,
@@ -576,7 +598,7 @@ static int snd_bt87x_capture_volume_put(struct snd_kcontrol *kcontrol,
 	return changed;
 }
 
-static const struct snd_kcontrol_new snd_bt87x_capture_volume = {
+static struct snd_kcontrol_new snd_bt87x_capture_volume = {
 	.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
 	.name = "Capture Volume",
 	.info = snd_bt87x_capture_volume_info,
@@ -612,7 +634,7 @@ static int snd_bt87x_capture_boost_put(struct snd_kcontrol *kcontrol,
 	return changed;
 }
 
-static const struct snd_kcontrol_new snd_bt87x_capture_boost = {
+static struct snd_kcontrol_new snd_bt87x_capture_boost = {
 	.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
 	.name = "Capture Boost",
 	.info = snd_bt87x_capture_boost_info,
@@ -654,7 +676,7 @@ static int snd_bt87x_capture_source_put(struct snd_kcontrol *kcontrol,
 	return changed;
 }
 
-static const struct snd_kcontrol_new snd_bt87x_capture_source = {
+static struct snd_kcontrol_new snd_bt87x_capture_source = {
 	.iface = SNDRV_CTL_ELEM_IFACE_MIXER,
 	.name = "Capture Source",
 	.info = snd_bt87x_capture_source_info,
@@ -692,11 +714,11 @@ static int snd_bt87x_pcm(struct snd_bt87x *chip, int device, char *name)
 	pcm->private_data = chip;
 	strcpy(pcm->name, name);
 	snd_pcm_set_ops(pcm, SNDRV_PCM_STREAM_CAPTURE, &snd_bt87x_pcm_ops);
-	snd_pcm_set_managed_buffer_all(pcm, SNDRV_DMA_TYPE_DEV_SG,
-				       &chip->pci->dev,
-				       128 * 1024,
-				       ALIGN(255 * 4092, 1024));
-	return 0;
+	return snd_pcm_lib_preallocate_pages_for_all(pcm,
+						     SNDRV_DMA_TYPE_DEV_SG,
+						     snd_dma_pci_data(chip->pci),
+							128 * 1024,
+							ALIGN(255 * 4092, 1024));
 }
 
 static int snd_bt87x_create(struct snd_card *card,
@@ -705,7 +727,7 @@ static int snd_bt87x_create(struct snd_card *card,
 {
 	struct snd_bt87x *chip;
 	int err;
-	static const struct snd_device_ops ops = {
+	static struct snd_device_ops ops = {
 		.dev_free = snd_bt87x_dev_free
 	};
 
@@ -751,8 +773,8 @@ static int snd_bt87x_create(struct snd_card *card,
 		goto fail;
 	}
 	chip->irq = pci->irq;
-	card->sync_irq = chip->irq;
 	pci_set_master(pci);
+	synchronize_irq(chip->irq);
 
 	err = snd_device_new(card, SNDRV_DEV_LOWLEVEL, chip, &ops);
 	if (err < 0)

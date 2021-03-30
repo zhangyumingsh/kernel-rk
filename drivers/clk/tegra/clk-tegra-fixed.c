@@ -1,6 +1,17 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2012, 2013, NVIDIA CORPORATION.  All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms and conditions of the GNU General Public License,
+ * version 2, as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
+ * more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <linux/io.h>
@@ -17,10 +28,6 @@
 #define OSC_CTRL			0x50
 #define OSC_CTRL_OSC_FREQ_SHIFT		28
 #define OSC_CTRL_PLL_REF_DIV_SHIFT	26
-#define OSC_CTRL_MASK			(0x3f2 |	\
-					(0xf << OSC_CTRL_OSC_FREQ_SHIFT))
-
-static u32 osc_ctrl_ctx;
 
 int __init tegra_osc_clk_init(void __iomem *clk_base, struct tegra_clk *clks,
 			      unsigned long *input_freqs, unsigned int num,
@@ -33,7 +40,6 @@ int __init tegra_osc_clk_init(void __iomem *clk_base, struct tegra_clk *clks,
 	unsigned osc_idx;
 
 	val = readl_relaxed(clk_base + OSC_CTRL);
-	osc_ctrl_ctx = val & OSC_CTRL_MASK;
 	osc_idx = val >> OSC_CTRL_OSC_FREQ_SHIFT;
 
 	if (osc_idx < num)
@@ -46,7 +52,8 @@ int __init tegra_osc_clk_init(void __iomem *clk_base, struct tegra_clk *clks,
 		return -EINVAL;
 	}
 
-	osc = clk_register_fixed_rate(NULL, "osc", NULL, 0, *osc_freq);
+	osc = clk_register_fixed_rate(NULL, "osc", NULL, CLK_IS_ROOT,
+				      *osc_freq);
 
 	dt_clk = tegra_lookup_dt_id(tegra_clk_clk_m, clks);
 	if (!dt_clk)
@@ -81,7 +88,8 @@ void __init tegra_fixed_clk_init(struct tegra_clk *tegra_clks)
 	/* clk_32k */
 	dt_clk = tegra_lookup_dt_id(tegra_clk_clk_32k, tegra_clks);
 	if (dt_clk) {
-		clk = clk_register_fixed_rate(NULL, "clk_32k", NULL, 0, 32768);
+		clk = clk_register_fixed_rate(NULL, "clk_32k", NULL,
+					CLK_IS_ROOT, 32768);
 		*dt_clk = clk;
 	}
 
@@ -102,12 +110,3 @@ void __init tegra_fixed_clk_init(struct tegra_clk *tegra_clks)
 	}
 }
 
-void tegra_clk_osc_resume(void __iomem *clk_base)
-{
-	u32 val;
-
-	val = readl_relaxed(clk_base + OSC_CTRL) & ~OSC_CTRL_MASK;
-	val |= osc_ctrl_ctx;
-	writel_relaxed(val, clk_base + OSC_CTRL);
-	fence_udelay(2, clk_base);
-}

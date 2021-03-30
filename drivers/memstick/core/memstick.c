@@ -1,11 +1,15 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  *  Sony MemoryStick support
  *
  *  Copyright (C) 2007 Alex Dubov <oakad@yahoo.com>
  *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ *
  * Special thanks to Carlos Corbacho for providing various MemoryStick cards
  * that made this driver possible.
+ *
  */
 
 #include <linux/memstick.h>
@@ -327,7 +331,7 @@ static int h_memstick_read_dev_id(struct memstick_dev *card,
 	struct ms_id_register id_reg;
 
 	if (!(*mrq)) {
-		memstick_init_req(&card->current_mrq, MS_TPC_READ_REG, &id_reg,
+		memstick_init_req(&card->current_mrq, MS_TPC_READ_REG, NULL,
 				  sizeof(struct ms_id_register));
 		*mrq = &card->current_mrq;
 		return 0;

@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * KVM coalesced MMIO
  *
@@ -86,7 +85,6 @@ static int coalesced_mmio_write(struct kvm_vcpu *vcpu,
 	ring->coalesced_mmio[insert].phys_addr = addr;
 	ring->coalesced_mmio[insert].len = len;
 	memcpy(ring->coalesced_mmio[insert].data, val, len);
-	ring->coalesced_mmio[insert].pio = dev->zone.pio;
 	smp_wmb();
 	ring->last = (insert + 1) % KVM_COALESCED_MMIO_MAX;
 	spin_unlock(&dev->kvm->ring_lock);
@@ -110,11 +108,14 @@ static const struct kvm_io_device_ops coalesced_mmio_ops = {
 int kvm_coalesced_mmio_init(struct kvm *kvm)
 {
 	struct page *page;
+	int ret;
 
+	ret = -ENOMEM;
 	page = alloc_page(GFP_KERNEL | __GFP_ZERO);
 	if (!page)
-		return -ENOMEM;
+		goto out_err;
 
+	ret = 0;
 	kvm->coalesced_mmio_ring = page_address(page);
 
 	/*
@@ -125,7 +126,8 @@ int kvm_coalesced_mmio_init(struct kvm *kvm)
 	spin_lock_init(&kvm->ring_lock);
 	INIT_LIST_HEAD(&kvm->coalesced_zones);
 
-	return 0;
+out_err:
+	return ret;
 }
 
 void kvm_coalesced_mmio_free(struct kvm *kvm)
@@ -140,11 +142,7 @@ int kvm_vm_ioctl_register_coalesced_mmio(struct kvm *kvm,
 	int ret;
 	struct kvm_coalesced_mmio_dev *dev;
 
-	if (zone->pio != 1 && zone->pio != 0)
-		return -EINVAL;
-
-	dev = kzalloc(sizeof(struct kvm_coalesced_mmio_dev),
-		      GFP_KERNEL_ACCOUNT);
+	dev = kzalloc(sizeof(struct kvm_coalesced_mmio_dev), GFP_KERNEL);
 	if (!dev)
 		return -ENOMEM;
 
@@ -153,9 +151,8 @@ int kvm_vm_ioctl_register_coalesced_mmio(struct kvm *kvm,
 	dev->zone = *zone;
 
 	mutex_lock(&kvm->slots_lock);
-	ret = kvm_io_bus_register_dev(kvm,
-				zone->pio ? KVM_PIO_BUS : KVM_MMIO_BUS,
-				zone->addr, zone->size, &dev->dev);
+	ret = kvm_io_bus_register_dev(kvm, KVM_MMIO_BUS, zone->addr,
+				      zone->size, &dev->dev);
 	if (ret < 0)
 		goto out_free_dev;
 	list_add_tail(&dev->list, &kvm->coalesced_zones);
@@ -175,16 +172,11 @@ int kvm_vm_ioctl_unregister_coalesced_mmio(struct kvm *kvm,
 {
 	struct kvm_coalesced_mmio_dev *dev, *tmp;
 
-	if (zone->pio != 1 && zone->pio != 0)
-		return -EINVAL;
-
 	mutex_lock(&kvm->slots_lock);
 
 	list_for_each_entry_safe(dev, tmp, &kvm->coalesced_zones, list)
-		if (zone->pio == dev->zone.pio &&
-		    coalesced_mmio_in_range(dev, zone->addr, zone->size)) {
-			kvm_io_bus_unregister_dev(kvm,
-				zone->pio ? KVM_PIO_BUS : KVM_MMIO_BUS, &dev->dev);
+		if (coalesced_mmio_in_range(dev, zone->addr, zone->size)) {
+			kvm_io_bus_unregister_dev(kvm, KVM_MMIO_BUS, &dev->dev);
 			kvm_iodevice_destructor(&dev->dev);
 		}
 

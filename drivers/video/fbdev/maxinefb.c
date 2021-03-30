@@ -39,7 +39,7 @@
 
 static struct fb_info fb_info;
 
-static const struct fb_var_screeninfo maxinefb_defined = {
+static struct fb_var_screeninfo maxinefb_defined = {
 	.xres =		1024,
 	.yres =		768,
 	.xres_virtual =	1024,
@@ -51,7 +51,7 @@ static const struct fb_var_screeninfo maxinefb_defined = {
 	.vmode =	FB_VMODE_NONINTERLACED,
 };
 
-static struct fb_fix_screeninfo maxinefb_fix __initdata = {
+static struct fb_fix_screeninfo maxinefb_fix = {
 	.id =		"Maxine",
 	.smem_len =	(1024*768),
 	.type =		FB_TYPE_PACKED_PIXELS,
@@ -105,7 +105,7 @@ static int maxinefb_setcolreg(unsigned regno, unsigned red, unsigned green,
 	return 0;
 }
 
-static const struct fb_ops maxinefb_ops = {
+static struct fb_ops maxinefb_ops = {
 	.owner		= THIS_MODULE,
 	.fb_setcolreg	= maxinefb_setcolreg,
 	.fb_fillrect	= cfb_fillrect,

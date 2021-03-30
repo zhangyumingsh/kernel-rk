@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * linux/kernel/ptrace.c
  *
@@ -11,9 +10,6 @@
 #include <linux/capability.h>
 #include <linux/export.h>
 #include <linux/sched.h>
-#include <linux/sched/mm.h>
-#include <linux/sched/coredump.h>
-#include <linux/sched/task.h>
 #include <linux/errno.h>
 #include <linux/mm.h>
 #include <linux/highmem.h>
@@ -30,38 +26,6 @@
 #include <linux/hw_breakpoint.h>
 #include <linux/cn_proc.h>
 #include <linux/compat.h>
-#include <linux/sched/signal.h>
-
-#include <asm/syscall.h>	/* for syscall_get_* */
-
-/*
- * Access another process' address space via ptrace.
- * Source/target buffer must be kernel space,
- * Do not walk the page table directly, use get_user_pages
- */
-int ptrace_access_vm(struct task_struct *tsk, unsigned long addr,
-		     void *buf, int len, unsigned int gup_flags)
-{
-	struct mm_struct *mm;
-	int ret;
-
-	mm = get_task_mm(tsk);
-	if (!mm)
-		return 0;
-
-	if (!tsk->ptrace ||
-	    (current != tsk->parent) ||
-	    ((get_dumpable(mm) != SUID_DUMP_USER) &&
-	     !ptracer_capable(tsk, mm->user_ns))) {
-		mmput(mm);
-		return 0;
-	}
-
-	ret = __access_remote_vm(tsk, mm, addr, buf, len, gup_flags);
-	mmput(mm);
-
-	return ret;
-}
 
 
 void __ptrace_link(struct task_struct *child, struct task_struct *new_parent,
@@ -117,11 +81,7 @@ void __ptrace_unlink(struct task_struct *child)
 	const struct cred *old_cred;
 	BUG_ON(!child->ptrace);
 
-	clear_tsk_thread_flag(child, TIF_SYSCALL_TRACE);
-#ifdef TIF_SYSCALL_EMU
-	clear_tsk_thread_flag(child, TIF_SYSCALL_EMU);
-#endif
-
+	child->ptrace = 0;
 	child->parent = child->real_parent;
 	list_del_init(&child->ptrace_entry);
 	old_cred = child->ptracer_cred;
@@ -129,7 +89,7 @@ void __ptrace_unlink(struct task_struct *child)
 	put_cred(old_cred);
 
 	spin_lock(&child->sighand->siglock);
-	child->ptrace = 0;
+
 	/*
 	 * Clear all pending traps and TRAPPING.  TRAPPING should be
 	 * cleared regardless of JOBCTL_STOP_PENDING.  Do it explicitly.
@@ -264,17 +224,15 @@ static int ptrace_check_attach(struct task_struct *child, bool ignore_state)
 	return ret;
 }
 
-static bool ptrace_has_cap(const struct cred *cred, struct user_namespace *ns,
-			   unsigned int mode)
+static int ptrace_has_cap(struct user_namespace *ns, unsigned int mode)
 {
-	int ret;
+	if (mode & PTRACE_MODE_SCHED)
+		return false;
 
 	if (mode & PTRACE_MODE_NOAUDIT)
-		ret = security_capable(cred, ns, CAP_SYS_PTRACE, CAP_OPT_NOAUDIT);
+		return has_ns_capability_noaudit(current, ns, CAP_SYS_PTRACE);
 	else
-		ret = security_capable(cred, ns, CAP_SYS_PTRACE, CAP_OPT_NONE);
-
-	return ret == 0;
+		return has_ns_capability(current, ns, CAP_SYS_PTRACE);
 }
 
 /* Returns 0 on success, -errno on denial. */
@@ -326,7 +284,7 @@ static int __ptrace_may_access(struct task_struct *task, unsigned int mode)
 	    gid_eq(caller_gid, tcred->sgid) &&
 	    gid_eq(caller_gid, tcred->gid))
 		goto ok;
-	if (ptrace_has_cap(cred, tcred->user_ns, mode))
+	if (ptrace_has_cap(tcred->user_ns, mode))
 		goto ok;
 	rcu_read_unlock();
 	return -EPERM;
@@ -345,10 +303,17 @@ ok:
 	mm = task->mm;
 	if (mm &&
 	    ((get_dumpable(mm) != SUID_DUMP_USER) &&
-	     !ptrace_has_cap(cred, mm->user_ns, mode)))
+	     !ptrace_has_cap(mm->user_ns, mode)))
 	    return -EPERM;
 
+	if (mode & PTRACE_MODE_SCHED)
+		return 0;
 	return security_ptrace_access_check(task, mode);
+}
+
+bool ptrace_may_access_sched(struct task_struct *task, unsigned int mode)
+{
+	return __ptrace_may_access(task, mode | PTRACE_MODE_SCHED);
 }
 
 bool ptrace_may_access(struct task_struct *task, unsigned int mode)
@@ -416,7 +381,7 @@ static int ptrace_attach(struct task_struct *task, long request,
 
 	/* SEIZE doesn't trap tracee on attach */
 	if (!seize)
-		send_sig_info(SIGSTOP, SEND_SIG_PRIV, task);
+		send_sig_info(SIGSTOP, SEND_SIG_FORCED, task);
 
 	spin_lock(&task->sighand->siglock);
 
@@ -450,14 +415,8 @@ unlock_creds:
 	mutex_unlock(&task->signal->cred_guard_mutex);
 out:
 	if (!retval) {
-		/*
-		 * We do not bother to change retval or clear JOBCTL_TRAPPING
-		 * if wait_on_bit() was interrupted by SIGKILL. The tracer will
-		 * not return to user-mode, it will exit and clear this bit in
-		 * __ptrace_unlink() if it wasn't already cleared by the tracee;
-		 * and until then nobody can ptrace this task.
-		 */
-		wait_on_bit(&task->jobctl, JOBCTL_TRAPPING_BIT, TASK_KILLABLE);
+		wait_on_bit(&task->jobctl, JOBCTL_TRAPPING_BIT,
+			    TASK_UNINTERRUPTIBLE);
 		proc_ptrace_connector(task, PTRACE_ATTACH);
 	}
 
@@ -553,6 +512,7 @@ static int ptrace_detach(struct task_struct *child, unsigned int data)
 
 	/* Architecture-specific hardware disable .. */
 	ptrace_disable(child);
+	clear_tsk_thread_flag(child, TIF_SYSCALL_TRACE);
 
 	write_lock_irq(&tasklist_lock);
 	/*
@@ -583,7 +543,7 @@ void exit_ptrace(struct task_struct *tracer, struct list_head *dead)
 
 	list_for_each_entry_safe(p, n, &tracer->ptraced, ptrace_entry) {
 		if (unlikely(p->ptrace & PT_EXITKILL))
-			send_sig_info(SIGKILL, SEND_SIG_PRIV, p);
+			send_sig_info(SIGKILL, SEND_SIG_FORCED, p);
 
 		if (__ptrace_detach(tracer, p))
 			list_add(&p->ptrace_entry, dead);
@@ -599,8 +559,7 @@ int ptrace_readdata(struct task_struct *tsk, unsigned long src, char __user *dst
 		int this_len, retval;
 
 		this_len = (len > sizeof(buf)) ? sizeof(buf) : len;
-		retval = ptrace_access_vm(tsk, src, buf, this_len, FOLL_FORCE);
-
+		retval = access_process_vm(tsk, src, buf, this_len, 0);
 		if (!retval) {
 			if (copied)
 				break;
@@ -627,8 +586,7 @@ int ptrace_writedata(struct task_struct *tsk, char __user *src, unsigned long ds
 		this_len = (len > sizeof(buf)) ? sizeof(buf) : len;
 		if (copy_from_user(buf, src, this_len))
 			return -EFAULT;
-		retval = ptrace_access_vm(tsk, dst, buf, this_len,
-				FOLL_FORCE | FOLL_WRITE);
+		retval = access_process_vm(tsk, dst, buf, this_len, 1);
 		if (!retval) {
 			if (copied)
 				break;
@@ -650,8 +608,8 @@ static int ptrace_setoptions(struct task_struct *child, unsigned long data)
 		return -EINVAL;
 
 	if (unlikely(data & PTRACE_O_SUSPEND_SECCOMP)) {
-		if (!IS_ENABLED(CONFIG_CHECKPOINT_RESTORE) ||
-		    !IS_ENABLED(CONFIG_SECCOMP))
+		if (!config_enabled(CONFIG_CHECKPOINT_RESTORE) ||
+		    !config_enabled(CONFIG_SECCOMP))
 			return -EINVAL;
 
 		if (!capable(CAP_SYS_ADMIN))
@@ -671,7 +629,7 @@ static int ptrace_setoptions(struct task_struct *child, unsigned long data)
 	return 0;
 }
 
-static int ptrace_getsiginfo(struct task_struct *child, kernel_siginfo_t *info)
+static int ptrace_getsiginfo(struct task_struct *child, siginfo_t *info)
 {
 	unsigned long flags;
 	int error = -ESRCH;
@@ -679,7 +637,7 @@ static int ptrace_getsiginfo(struct task_struct *child, kernel_siginfo_t *info)
 	if (lock_task_sighand(child, &flags)) {
 		error = -EINVAL;
 		if (likely(child->last_siginfo != NULL)) {
-			copy_siginfo(info, child->last_siginfo);
+			*info = *child->last_siginfo;
 			error = 0;
 		}
 		unlock_task_sighand(child, &flags);
@@ -687,7 +645,7 @@ static int ptrace_getsiginfo(struct task_struct *child, kernel_siginfo_t *info)
 	return error;
 }
 
-static int ptrace_setsiginfo(struct task_struct *child, const kernel_siginfo_t *info)
+static int ptrace_setsiginfo(struct task_struct *child, const siginfo_t *info)
 {
 	unsigned long flags;
 	int error = -ESRCH;
@@ -695,7 +653,7 @@ static int ptrace_setsiginfo(struct task_struct *child, const kernel_siginfo_t *
 	if (lock_task_sighand(child, &flags)) {
 		error = -EINVAL;
 		if (likely(child->last_siginfo != NULL)) {
-			copy_siginfo(child->last_siginfo, info);
+			*child->last_siginfo = *info;
 			error = 0;
 		}
 		unlock_task_sighand(child, &flags);
@@ -733,7 +691,7 @@ static int ptrace_peek_siginfo(struct task_struct *child,
 		pending = &child->pending;
 
 	for (i = 0; i < arg.nr; ) {
-		kernel_siginfo_t info;
+		siginfo_t info;
 		unsigned long off = arg.off + i;
 		bool found = false;
 
@@ -751,10 +709,11 @@ static int ptrace_peek_siginfo(struct task_struct *child,
 			break;
 
 #ifdef CONFIG_COMPAT
-		if (unlikely(in_compat_syscall())) {
+		if (unlikely(is_compat_task())) {
 			compat_siginfo_t __user *uinfo = compat_ptr(data);
 
-			if (copy_siginfo_to_user32(uinfo, &info)) {
+			if (copy_siginfo_to_user32(uinfo, &info) ||
+			    __put_user(info.si_code, &uinfo->si_code)) {
 				ret = -EFAULT;
 				break;
 			}
@@ -764,7 +723,8 @@ static int ptrace_peek_siginfo(struct task_struct *child,
 		{
 			siginfo_t __user *uinfo = (siginfo_t __user *) data;
 
-			if (copy_siginfo_to_user(uinfo, &info)) {
+			if (copy_siginfo_to_user(uinfo, &info) ||
+			    __put_user(info.si_code, &uinfo->si_code)) {
 				ret = -EFAULT;
 				break;
 			}
@@ -904,107 +864,14 @@ static int ptrace_regset(struct task_struct *task, int req, unsigned int type,
  * to ensure no machine forgets it.
  */
 EXPORT_SYMBOL_GPL(task_user_regset_view);
-
-static unsigned long
-ptrace_get_syscall_info_entry(struct task_struct *child, struct pt_regs *regs,
-			      struct ptrace_syscall_info *info)
-{
-	unsigned long args[ARRAY_SIZE(info->entry.args)];
-	int i;
-
-	info->op = PTRACE_SYSCALL_INFO_ENTRY;
-	info->entry.nr = syscall_get_nr(child, regs);
-	syscall_get_arguments(child, regs, args);
-	for (i = 0; i < ARRAY_SIZE(args); i++)
-		info->entry.args[i] = args[i];
-
-	/* args is the last field in struct ptrace_syscall_info.entry */
-	return offsetofend(struct ptrace_syscall_info, entry.args);
-}
-
-static unsigned long
-ptrace_get_syscall_info_seccomp(struct task_struct *child, struct pt_regs *regs,
-				struct ptrace_syscall_info *info)
-{
-	/*
-	 * As struct ptrace_syscall_info.entry is currently a subset
-	 * of struct ptrace_syscall_info.seccomp, it makes sense to
-	 * initialize that subset using ptrace_get_syscall_info_entry().
-	 * This can be reconsidered in the future if these structures
-	 * diverge significantly enough.
-	 */
-	ptrace_get_syscall_info_entry(child, regs, info);
-	info->op = PTRACE_SYSCALL_INFO_SECCOMP;
-	info->seccomp.ret_data = child->ptrace_message;
-
-	/* ret_data is the last field in struct ptrace_syscall_info.seccomp */
-	return offsetofend(struct ptrace_syscall_info, seccomp.ret_data);
-}
-
-static unsigned long
-ptrace_get_syscall_info_exit(struct task_struct *child, struct pt_regs *regs,
-			     struct ptrace_syscall_info *info)
-{
-	info->op = PTRACE_SYSCALL_INFO_EXIT;
-	info->exit.rval = syscall_get_error(child, regs);
-	info->exit.is_error = !!info->exit.rval;
-	if (!info->exit.is_error)
-		info->exit.rval = syscall_get_return_value(child, regs);
-
-	/* is_error is the last field in struct ptrace_syscall_info.exit */
-	return offsetofend(struct ptrace_syscall_info, exit.is_error);
-}
-
-static int
-ptrace_get_syscall_info(struct task_struct *child, unsigned long user_size,
-			void __user *datavp)
-{
-	struct pt_regs *regs = task_pt_regs(child);
-	struct ptrace_syscall_info info = {
-		.op = PTRACE_SYSCALL_INFO_NONE,
-		.arch = syscall_get_arch(child),
-		.instruction_pointer = instruction_pointer(regs),
-		.stack_pointer = user_stack_pointer(regs),
-	};
-	unsigned long actual_size = offsetof(struct ptrace_syscall_info, entry);
-	unsigned long write_size;
-
-	/*
-	 * This does not need lock_task_sighand() to access
-	 * child->last_siginfo because ptrace_freeze_traced()
-	 * called earlier by ptrace_check_attach() ensures that
-	 * the tracee cannot go away and clear its last_siginfo.
-	 */
-	switch (child->last_siginfo ? child->last_siginfo->si_code : 0) {
-	case SIGTRAP | 0x80:
-		switch (child->ptrace_message) {
-		case PTRACE_EVENTMSG_SYSCALL_ENTRY:
-			actual_size = ptrace_get_syscall_info_entry(child, regs,
-								    &info);
-			break;
-		case PTRACE_EVENTMSG_SYSCALL_EXIT:
-			actual_size = ptrace_get_syscall_info_exit(child, regs,
-								   &info);
-			break;
-		}
-		break;
-	case SIGTRAP | (PTRACE_EVENT_SECCOMP << 8):
-		actual_size = ptrace_get_syscall_info_seccomp(child, regs,
-							      &info);
-		break;
-	}
-
-	write_size = min(actual_size, user_size);
-	return copy_to_user(datavp, &info, write_size) ? -EFAULT : actual_size;
-}
-#endif /* CONFIG_HAVE_ARCH_TRACEHOOK */
+#endif
 
 int ptrace_request(struct task_struct *child, long request,
 		   unsigned long addr, unsigned long data)
 {
 	bool seized = child->ptrace & PT_SEIZED;
 	int ret = -EIO;
-	kernel_siginfo_t siginfo, *si;
+	siginfo_t siginfo, *si;
 	void __user *datavp = (void __user *) data;
 	unsigned long __user *datalp = datavp;
 	unsigned long flags;
@@ -1038,31 +905,24 @@ int ptrace_request(struct task_struct *child, long request,
 		break;
 
 	case PTRACE_SETSIGINFO:
-		ret = copy_siginfo_from_user(&siginfo, datavp);
-		if (!ret)
+		if (copy_from_user(&siginfo, datavp, sizeof siginfo))
+			ret = -EFAULT;
+		else
 			ret = ptrace_setsiginfo(child, &siginfo);
 		break;
 
-	case PTRACE_GETSIGMASK: {
-		sigset_t *mask;
-
+	case PTRACE_GETSIGMASK:
 		if (addr != sizeof(sigset_t)) {
 			ret = -EINVAL;
 			break;
 		}
 
-		if (test_tsk_restore_sigmask(child))
-			mask = &child->saved_sigmask;
-		else
-			mask = &child->blocked;
-
-		if (copy_to_user(datavp, mask, sizeof(sigset_t)))
+		if (copy_to_user(datavp, &child->blocked, sizeof(sigset_t)))
 			ret = -EFAULT;
 		else
 			ret = 0;
 
 		break;
-	}
 
 	case PTRACE_SETSIGMASK: {
 		sigset_t new_set;
@@ -1087,8 +947,6 @@ int ptrace_request(struct task_struct *child, long request,
 		spin_lock_irq(&child->sighand->siglock);
 		child->blocked = new_set;
 		spin_unlock_irq(&child->sighand->siglock);
-
-		clear_tsk_restore_sigmask(child);
 
 		ret = 0;
 		break;
@@ -1202,7 +1060,7 @@ int ptrace_request(struct task_struct *child, long request,
 		struct iovec kiov;
 		struct iovec __user *uiov = datavp;
 
-		if (!access_ok(uiov, sizeof(*uiov)))
+		if (!access_ok(VERIFY_WRITE, uiov, sizeof(*uiov)))
 			return -EFAULT;
 
 		if (__get_user(kiov.iov_base, &uiov->iov_base) ||
@@ -1214,18 +1072,10 @@ int ptrace_request(struct task_struct *child, long request,
 			ret = __put_user(kiov.iov_len, &uiov->iov_len);
 		break;
 	}
-
-	case PTRACE_GET_SYSCALL_INFO:
-		ret = ptrace_get_syscall_info(child, addr, datavp);
-		break;
 #endif
 
 	case PTRACE_SECCOMP_GET_FILTER:
 		ret = seccomp_get_filter(child, addr, datavp);
-		break;
-
-	case PTRACE_SECCOMP_GET_METADATA:
-		ret = seccomp_get_metadata(child, addr, datavp);
 		break;
 
 	default:
@@ -1233,6 +1083,21 @@ int ptrace_request(struct task_struct *child, long request,
 	}
 
 	return ret;
+}
+
+static struct task_struct *ptrace_get_task_struct(pid_t pid)
+{
+	struct task_struct *child;
+
+	rcu_read_lock();
+	child = find_task_by_vpid(pid);
+	if (child)
+		get_task_struct(child);
+	rcu_read_unlock();
+
+	if (!child)
+		return ERR_PTR(-ESRCH);
+	return child;
 }
 
 #ifndef arch_ptrace_attach
@@ -1252,9 +1117,9 @@ SYSCALL_DEFINE4(ptrace, long, request, long, pid, unsigned long, addr,
 		goto out;
 	}
 
-	child = find_get_task_by_vpid(pid);
-	if (!child) {
-		ret = -ESRCH;
+	child = ptrace_get_task_struct(pid);
+	if (IS_ERR(child)) {
+		ret = PTR_ERR(child);
 		goto out;
 	}
 
@@ -1290,7 +1155,7 @@ int generic_ptrace_peekdata(struct task_struct *tsk, unsigned long addr,
 	unsigned long tmp;
 	int copied;
 
-	copied = ptrace_access_vm(tsk, addr, &tmp, sizeof(tmp), FOLL_FORCE);
+	copied = access_process_vm(tsk, addr, &tmp, sizeof(tmp), 0);
 	if (copied != sizeof(tmp))
 		return -EIO;
 	return put_user(tmp, (unsigned long __user *)data);
@@ -1301,8 +1166,7 @@ int generic_ptrace_pokedata(struct task_struct *tsk, unsigned long addr,
 {
 	int copied;
 
-	copied = ptrace_access_vm(tsk, addr, &data, sizeof(data),
-			FOLL_FORCE | FOLL_WRITE);
+	copied = access_process_vm(tsk, addr, &data, sizeof(data), 1);
 	return (copied == sizeof(data)) ? 0 : -EIO;
 }
 
@@ -1313,14 +1177,13 @@ int compat_ptrace_request(struct task_struct *child, compat_long_t request,
 {
 	compat_ulong_t __user *datap = compat_ptr(data);
 	compat_ulong_t word;
-	kernel_siginfo_t siginfo;
+	siginfo_t siginfo;
 	int ret;
 
 	switch (request) {
 	case PTRACE_PEEKTEXT:
 	case PTRACE_PEEKDATA:
-		ret = ptrace_access_vm(child, addr, &word, sizeof(word),
-				FOLL_FORCE);
+		ret = access_process_vm(child, addr, &word, sizeof(word), 0);
 		if (ret != sizeof(word))
 			ret = -EIO;
 		else
@@ -1329,8 +1192,7 @@ int compat_ptrace_request(struct task_struct *child, compat_long_t request,
 
 	case PTRACE_POKETEXT:
 	case PTRACE_POKEDATA:
-		ret = ptrace_access_vm(child, addr, &data, sizeof(data),
-				FOLL_FORCE | FOLL_WRITE);
+		ret = access_process_vm(child, addr, &data, sizeof(data), 1);
 		ret = (ret != sizeof(data) ? -EIO : 0);
 		break;
 
@@ -1347,9 +1209,11 @@ int compat_ptrace_request(struct task_struct *child, compat_long_t request,
 		break;
 
 	case PTRACE_SETSIGINFO:
-		ret = copy_siginfo_from_user32(
-			&siginfo, (struct compat_siginfo __user *) datap);
-		if (!ret)
+		memset(&siginfo, 0, sizeof siginfo);
+		if (copy_siginfo_from_user32(
+			    &siginfo, (struct compat_siginfo __user *) datap))
+			ret = -EFAULT;
+		else
 			ret = ptrace_setsiginfo(child, &siginfo);
 		break;
 #ifdef CONFIG_HAVE_ARCH_TRACEHOOK
@@ -1362,7 +1226,7 @@ int compat_ptrace_request(struct task_struct *child, compat_long_t request,
 		compat_uptr_t ptr;
 		compat_size_t len;
 
-		if (!access_ok(uiov, sizeof(*uiov)))
+		if (!access_ok(VERIFY_WRITE, uiov, sizeof(*uiov)))
 			return -EFAULT;
 
 		if (__get_user(ptr, &uiov->iov_base) ||
@@ -1397,9 +1261,9 @@ COMPAT_SYSCALL_DEFINE4(ptrace, compat_long_t, request, compat_long_t, pid,
 		goto out;
 	}
 
-	child = find_get_task_by_vpid(pid);
-	if (!child) {
-		ret = -ESRCH;
+	child = ptrace_get_task_struct(pid);
+	if (IS_ERR(child)) {
+		ret = PTR_ERR(child);
 		goto out;
 	}
 

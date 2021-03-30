@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * x86 FPU boot time init code:
  */
@@ -8,8 +7,16 @@
 #include <asm/cmdline.h>
 
 #include <linux/sched.h>
-#include <linux/sched/task.h>
 #include <linux/init.h>
+
+/*
+ * Initialize the TS bit in CR0 according to the style of context-switches
+ * we are using:
+ */
+static void fpu__init_cpu_ctx_switch(void)
+{
+	clts();
+}
 
 /*
  * Initialize the registers found in all CPUs, CR0 and CR4:
@@ -19,22 +26,22 @@ static void fpu__init_cpu_generic(void)
 	unsigned long cr0;
 	unsigned long cr4_mask = 0;
 
-	if (boot_cpu_has(X86_FEATURE_FXSR))
+	if (cpu_has_fxsr)
 		cr4_mask |= X86_CR4_OSFXSR;
-	if (boot_cpu_has(X86_FEATURE_XMM))
+	if (cpu_has_xmm)
 		cr4_mask |= X86_CR4_OSXMMEXCPT;
 	if (cr4_mask)
 		cr4_set_bits(cr4_mask);
 
 	cr0 = read_cr0();
 	cr0 &= ~(X86_CR0_TS|X86_CR0_EM); /* clear TS and EM */
-	if (!boot_cpu_has(X86_FEATURE_FPU))
+	if (!cpu_has_fpu)
 		cr0 |= X86_CR0_EM;
 	write_cr0(cr0);
 
 	/* Flush out any pending x87 state: */
 #ifdef CONFIG_MATH_EMULATION
-	if (!boot_cpu_has(X86_FEATURE_FPU))
+	if (!cpu_has_fpu)
 		fpstate_init_soft(&current->thread.fpu.state.soft);
 	else
 #endif
@@ -48,9 +55,16 @@ void fpu__init_cpu(void)
 {
 	fpu__init_cpu_generic();
 	fpu__init_cpu_xstate();
+	fpu__init_cpu_ctx_switch();
 }
 
-static bool fpu__probe_without_cpuid(void)
+/*
+ * The earliest FPU detection code.
+ *
+ * Set the X86_FEATURE_FPU CPU-capability bit based on
+ * trying to execute an actual sequence of FPU instructions:
+ */
+static void fpu__init_system_early_generic(struct cpuinfo_x86 *c)
 {
 	unsigned long cr0;
 	u16 fsw, fcw;
@@ -61,25 +75,18 @@ static bool fpu__probe_without_cpuid(void)
 	cr0 &= ~(X86_CR0_TS | X86_CR0_EM);
 	write_cr0(cr0);
 
-	asm volatile("fninit ; fnstsw %0 ; fnstcw %1" : "+m" (fsw), "+m" (fcw));
+	if (!test_bit(X86_FEATURE_FPU, (unsigned long *)cpu_caps_cleared)) {
+		asm volatile("fninit ; fnstsw %0 ; fnstcw %1"
+			     : "+m" (fsw), "+m" (fcw));
 
-	pr_info("x86/fpu: Probing for FPU: FSW=0x%04hx FCW=0x%04hx\n", fsw, fcw);
-
-	return fsw == 0 && (fcw & 0x103f) == 0x003f;
-}
-
-static void fpu__init_system_early_generic(struct cpuinfo_x86 *c)
-{
-	if (!boot_cpu_has(X86_FEATURE_CPUID) &&
-	    !test_bit(X86_FEATURE_FPU, (unsigned long *)cpu_caps_cleared)) {
-		if (fpu__probe_without_cpuid())
-			setup_force_cpu_cap(X86_FEATURE_FPU);
+		if (fsw == 0 && (fcw & 0x103f) == 0x003f)
+			set_cpu_cap(c, X86_FEATURE_FPU);
 		else
-			setup_clear_cpu_cap(X86_FEATURE_FPU);
+			clear_cpu_cap(c, X86_FEATURE_FPU);
 	}
 
 #ifndef CONFIG_MATH_EMULATION
-	if (!test_cpu_cap(&boot_cpu_data, X86_FEATURE_FPU)) {
+	if (!cpu_has_fpu) {
 		pr_emerg("x86/fpu: Giving up, no FPU found and no math emulation present\n");
 		for (;;)
 			asm volatile("hlt");
@@ -97,7 +104,7 @@ static void __init fpu__init_system_mxcsr(void)
 {
 	unsigned int mask = 0;
 
-	if (boot_cpu_has(X86_FEATURE_FXSR)) {
+	if (cpu_has_fxsr) {
 		/* Static because GCC does not get 16-byte stack alignment right: */
 		static struct fxregs_state fxregs __initdata;
 
@@ -136,21 +143,12 @@ static void __init fpu__init_system_generic(void)
  * This is inherent to the XSAVE architecture which puts all state
  * components into a single, continuous memory block:
  */
-unsigned int fpu_kernel_xstate_size;
-EXPORT_SYMBOL_GPL(fpu_kernel_xstate_size);
+unsigned int xstate_size;
+EXPORT_SYMBOL_GPL(xstate_size);
 
-/* Get alignment of the TYPE. */
-#define TYPE_ALIGN(TYPE) offsetof(struct { char x; TYPE test; }, test)
-
-/*
- * Enforce that 'MEMBER' is the last field of 'TYPE'.
- *
- * Align the computed size with alignment of the TYPE,
- * because that's how C aligns structs.
- */
+/* Enforce that 'MEMBER' is the last field of 'TYPE': */
 #define CHECK_MEMBER_AT_END_OF(TYPE, MEMBER) \
-	BUILD_BUG_ON(sizeof(TYPE) != ALIGN(offsetofend(TYPE, MEMBER), \
-					   TYPE_ALIGN(TYPE)))
+	BUILD_BUG_ON(sizeof(TYPE) != offsetofend(TYPE, MEMBER))
 
 /*
  * We append the 'struct fpu' to the task_struct:
@@ -169,7 +167,7 @@ static void __init fpu__init_task_struct_size(void)
 	 * Add back the dynamically-calculated register state
 	 * size.
 	 */
-	task_size += fpu_kernel_xstate_size;
+	task_size += xstate_size;
 
 	/*
 	 * We dynamically size 'struct fpu', so we require that
@@ -186,35 +184,51 @@ static void __init fpu__init_task_struct_size(void)
 }
 
 /*
- * Set up the user and kernel xstate sizes based on the legacy FPU context size.
+ * Set up the xstate_size based on the legacy FPU context size.
  *
  * We set this up first, and later it will be overwritten by
  * fpu__init_system_xstate() if the CPU knows about xstates.
  */
 static void __init fpu__init_system_xstate_size_legacy(void)
 {
-	static int on_boot_cpu __initdata = 1;
+	static int on_boot_cpu = 1;
 
 	WARN_ON_FPU(!on_boot_cpu);
 	on_boot_cpu = 0;
 
 	/*
-	 * Note that xstate sizes might be overwritten later during
+	 * Note that xstate_size might be overwriten later during
 	 * fpu__init_system_xstate().
 	 */
 
-	if (!boot_cpu_has(X86_FEATURE_FPU)) {
-		fpu_kernel_xstate_size = sizeof(struct swregs_state);
+	if (!cpu_has_fpu) {
+		/*
+		 * Disable xsave as we do not support it if i387
+		 * emulation is enabled.
+		 */
+		setup_clear_cpu_cap(X86_FEATURE_XSAVE);
+		setup_clear_cpu_cap(X86_FEATURE_XSAVEOPT);
+		xstate_size = sizeof(struct swregs_state);
 	} else {
-		if (boot_cpu_has(X86_FEATURE_FXSR))
-			fpu_kernel_xstate_size =
-				sizeof(struct fxregs_state);
+		if (cpu_has_fxsr)
+			xstate_size = sizeof(struct fxregs_state);
 		else
-			fpu_kernel_xstate_size =
-				sizeof(struct fregs_state);
+			xstate_size = sizeof(struct fregs_state);
 	}
-
-	fpu_user_xstate_size = fpu_kernel_xstate_size;
+	/*
+	 * Quirk: we don't yet handle the XSAVES* instructions
+	 * correctly, as we don't correctly convert between
+	 * standard and compacted format when interfacing
+	 * with user-space - so disable it for now.
+	 *
+	 * The difference is small: with recent CPUs the
+	 * compacted format is only marginally smaller than
+	 * the standard FPU state format.
+	 *
+	 * ( This is easy to backport while we are fixing
+	 *   XSAVES* support. )
+	 */
+	setup_clear_cpu_cap(X86_FEATURE_XSAVES);
 }
 
 /*
@@ -230,10 +244,13 @@ u64 __init fpu__get_supported_xfeatures_mask(void)
 /* Legacy code to initialize eager fpu mode. */
 static void __init fpu__init_system_ctx_switch(void)
 {
-	static bool on_boot_cpu __initdata = 1;
+	static bool on_boot_cpu = 1;
 
 	WARN_ON_FPU(!on_boot_cpu);
 	on_boot_cpu = 0;
+
+	WARN_ON_FPU(current->thread.fpu.fpstate_active);
+	current_thread_info()->status = 0;
 }
 
 /*
@@ -242,37 +259,23 @@ static void __init fpu__init_system_ctx_switch(void)
  */
 static void __init fpu__init_parse_early_param(void)
 {
-	char arg[32];
-	char *argptr = arg;
-	int bit;
-
-#ifdef CONFIG_X86_32
 	if (cmdline_find_option_bool(boot_command_line, "no387"))
-#ifdef CONFIG_MATH_EMULATION
 		setup_clear_cpu_cap(X86_FEATURE_FPU);
-#else
-		pr_err("Option 'no387' required CONFIG_MATH_EMULATION enabled.\n");
-#endif
 
-	if (cmdline_find_option_bool(boot_command_line, "nofxsr"))
+	if (cmdline_find_option_bool(boot_command_line, "nofxsr")) {
 		setup_clear_cpu_cap(X86_FEATURE_FXSR);
-#endif
+		setup_clear_cpu_cap(X86_FEATURE_FXSR_OPT);
+		setup_clear_cpu_cap(X86_FEATURE_XMM);
+	}
 
 	if (cmdline_find_option_bool(boot_command_line, "noxsave"))
-		setup_clear_cpu_cap(X86_FEATURE_XSAVE);
+		fpu__xstate_clear_all_cpu_caps();
 
 	if (cmdline_find_option_bool(boot_command_line, "noxsaveopt"))
 		setup_clear_cpu_cap(X86_FEATURE_XSAVEOPT);
 
 	if (cmdline_find_option_bool(boot_command_line, "noxsaves"))
 		setup_clear_cpu_cap(X86_FEATURE_XSAVES);
-
-	if (cmdline_find_option(boot_command_line, "clearcpuid", arg,
-				sizeof(arg)) &&
-	    get_option(&argptr, &bit) &&
-	    bit >= 0 &&
-	    bit < NCAPINTS * 32)
-		setup_clear_cpu_cap(bit);
 }
 
 /*
@@ -289,6 +292,14 @@ void __init fpu__init_system(struct cpuinfo_x86 *c)
 	 * later FPU init activities:
 	 */
 	fpu__init_cpu();
+
+	/*
+	 * But don't leave CR0::TS set yet, as some of the FPU setup
+	 * methods depend on being able to execute FPU instructions
+	 * that will fault on a set TS, such as the FXSAVE in
+	 * fpu__init_system_mxcsr().
+	 */
+	clts();
 
 	fpu__init_system_generic();
 	fpu__init_system_xstate_size_legacy();

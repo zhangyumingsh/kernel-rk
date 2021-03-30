@@ -1,13 +1,17 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * LED Triggers Core
  *
  * Copyright 2005-2007 Openedhand Ltd.
  *
  * Author: Richard Purdie <rpurdie@openedhand.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ *
  */
 
-#include <linux/export.h>
+#include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/list.h>
 #include <linux/spinlock.h>
@@ -16,24 +20,23 @@
 #include <linux/rwsem.h>
 #include <linux/leds.h>
 #include <linux/slab.h>
-#include <linux/mm.h>
 #include "leds.h"
 
 /*
  * Nests outside led_cdev->trigger_lock
  */
 static DECLARE_RWSEM(triggers_list_lock);
-LIST_HEAD(trigger_list);
+static LIST_HEAD(trigger_list);
 
  /* Used by LED Class */
 
-ssize_t led_trigger_write(struct file *filp, struct kobject *kobj,
-			  struct bin_attribute *bin_attr, char *buf,
-			  loff_t pos, size_t count)
+ssize_t led_trigger_store(struct device *dev, struct device_attribute *attr,
+		const char *buf, size_t count)
 {
-	struct device *dev = kobj_to_dev(kobj);
 	struct led_classdev *led_cdev = dev_get_drvdata(dev);
+	char trigger_name[TRIG_NAME_MAX];
 	struct led_trigger *trig;
+	size_t len;
 	int ret = count;
 
 	mutex_lock(&led_cdev->led_access);
@@ -43,14 +46,21 @@ ssize_t led_trigger_write(struct file *filp, struct kobject *kobj,
 		goto unlock;
 	}
 
-	if (sysfs_streq(buf, "none")) {
+	trigger_name[sizeof(trigger_name) - 1] = '\0';
+	strncpy(trigger_name, buf, sizeof(trigger_name) - 1);
+	len = strlen(trigger_name);
+
+	if (len && trigger_name[len - 1] == '\n')
+		trigger_name[len - 1] = '\0';
+
+	if (!strcmp(trigger_name, "none")) {
 		led_trigger_remove(led_cdev);
 		goto unlock;
 	}
 
 	down_read(&triggers_list_lock);
 	list_for_each_entry(trig, &trigger_list, next_trig) {
-		if (sysfs_streq(buf, trig->name)) {
+		if (!strcmp(trigger_name, trig->name)) {
 			down_write(&led_cdev->trigger_lock);
 			led_trigger_set(led_cdev, trig);
 			up_write(&led_cdev->trigger_lock);
@@ -59,102 +69,53 @@ ssize_t led_trigger_write(struct file *filp, struct kobject *kobj,
 			goto unlock;
 		}
 	}
-	/* we come here only if buf matches no trigger */
-	ret = -EINVAL;
 	up_read(&triggers_list_lock);
 
 unlock:
 	mutex_unlock(&led_cdev->led_access);
 	return ret;
 }
-EXPORT_SYMBOL_GPL(led_trigger_write);
+EXPORT_SYMBOL_GPL(led_trigger_store);
 
-__printf(3, 4)
-static int led_trigger_snprintf(char *buf, ssize_t size, const char *fmt, ...)
+ssize_t led_trigger_show(struct device *dev, struct device_attribute *attr,
+		char *buf)
 {
-	va_list args;
-	int i;
-
-	va_start(args, fmt);
-	if (size <= 0)
-		i = vsnprintf(NULL, 0, fmt, args);
-	else
-		i = vscnprintf(buf, size, fmt, args);
-	va_end(args);
-
-	return i;
-}
-
-static int led_trigger_format(char *buf, size_t size,
-			      struct led_classdev *led_cdev)
-{
-	struct led_trigger *trig;
-	int len = led_trigger_snprintf(buf, size, "%s",
-				       led_cdev->trigger ? "none" : "[none]");
-
-	list_for_each_entry(trig, &trigger_list, next_trig) {
-		bool hit = led_cdev->trigger &&
-			!strcmp(led_cdev->trigger->name, trig->name);
-
-		len += led_trigger_snprintf(buf + len, size - len,
-					    " %s%s%s", hit ? "[" : "",
-					    trig->name, hit ? "]" : "");
-	}
-
-	len += led_trigger_snprintf(buf + len, size - len, "\n");
-
-	return len;
-}
-
-/*
- * It was stupid to create 10000 cpu triggers, but we are stuck with it now.
- * Don't make that mistake again. We work around it here by creating binary
- * attribute, which is not limited by length. This is _not_ good design, do not
- * copy it.
- */
-ssize_t led_trigger_read(struct file *filp, struct kobject *kobj,
-			struct bin_attribute *attr, char *buf,
-			loff_t pos, size_t count)
-{
-	struct device *dev = kobj_to_dev(kobj);
 	struct led_classdev *led_cdev = dev_get_drvdata(dev);
-	void *data;
-	int len;
+	struct led_trigger *trig;
+	int len = 0;
 
 	down_read(&triggers_list_lock);
 	down_read(&led_cdev->trigger_lock);
 
-	len = led_trigger_format(NULL, 0, led_cdev);
-	data = kvmalloc(len + 1, GFP_KERNEL);
-	if (!data) {
-		up_read(&led_cdev->trigger_lock);
-		up_read(&triggers_list_lock);
-		return -ENOMEM;
-	}
-	len = led_trigger_format(data, len + 1, led_cdev);
+	if (!led_cdev->trigger)
+		len += scnprintf(buf+len, PAGE_SIZE - len, "[none] ");
+	else
+		len += scnprintf(buf+len, PAGE_SIZE - len, "none ");
 
+	list_for_each_entry(trig, &trigger_list, next_trig) {
+		if (led_cdev->trigger && !strcmp(led_cdev->trigger->name,
+							trig->name))
+			len += scnprintf(buf+len, PAGE_SIZE - len, "[%s] ",
+					 trig->name);
+		else
+			len += scnprintf(buf+len, PAGE_SIZE - len, "%s ",
+					 trig->name);
+	}
 	up_read(&led_cdev->trigger_lock);
 	up_read(&triggers_list_lock);
 
-	len = memory_read_from_buffer(buf, count, &pos, data, len);
-
-	kvfree(data);
-
+	len += scnprintf(len+buf, PAGE_SIZE - len, "\n");
 	return len;
 }
-EXPORT_SYMBOL_GPL(led_trigger_read);
+EXPORT_SYMBOL_GPL(led_trigger_show);
 
 /* Caller must ensure led_cdev->trigger_lock held */
-int led_trigger_set(struct led_classdev *led_cdev, struct led_trigger *trig)
+void led_trigger_set(struct led_classdev *led_cdev, struct led_trigger *trig)
 {
 	unsigned long flags;
 	char *event = NULL;
 	char *envp[2];
 	const char *name;
-	int ret;
-
-	if (!led_cdev->trigger && !trig)
-		return 0;
 
 	name = trig ? trig->name : "none";
 	event = kasprintf(GFP_KERNEL, "TRIGGER=%s", name);
@@ -169,10 +130,7 @@ int led_trigger_set(struct led_classdev *led_cdev, struct led_trigger *trig)
 		led_stop_software_blink(led_cdev);
 		if (led_cdev->trigger->deactivate)
 			led_cdev->trigger->deactivate(led_cdev);
-		device_remove_groups(led_cdev->dev, led_cdev->trigger->groups);
 		led_cdev->trigger = NULL;
-		led_cdev->trigger_data = NULL;
-		led_cdev->activated = false;
 		led_set_brightness(led_cdev, LED_OFF);
 	}
 	if (trig) {
@@ -180,48 +138,16 @@ int led_trigger_set(struct led_classdev *led_cdev, struct led_trigger *trig)
 		list_add_tail(&led_cdev->trig_list, &trig->led_cdevs);
 		write_unlock_irqrestore(&trig->leddev_list_lock, flags);
 		led_cdev->trigger = trig;
-
 		if (trig->activate)
-			ret = trig->activate(led_cdev);
-		else
-			ret = 0;
-
-		if (ret)
-			goto err_activate;
-
-		ret = device_add_groups(led_cdev->dev, trig->groups);
-		if (ret) {
-			dev_err(led_cdev->dev, "Failed to add trigger attributes\n");
-			goto err_add_groups;
-		}
+			trig->activate(led_cdev);
 	}
 
 	if (event) {
 		envp[0] = event;
 		envp[1] = NULL;
-		if (kobject_uevent_env(&led_cdev->dev->kobj, KOBJ_CHANGE, envp))
-			dev_err(led_cdev->dev,
-				"%s: Error sending uevent\n", __func__);
+		kobject_uevent_env(&led_cdev->dev->kobj, KOBJ_CHANGE, envp);
 		kfree(event);
 	}
-
-	return 0;
-
-err_add_groups:
-
-	if (trig->deactivate)
-		trig->deactivate(led_cdev);
-err_activate:
-
-	write_lock_irqsave(&led_cdev->trigger->leddev_list_lock, flags);
-	list_del(&led_cdev->trig_list);
-	write_unlock_irqrestore(&led_cdev->trigger->leddev_list_lock, flags);
-	led_cdev->trigger = NULL;
-	led_cdev->trigger_data = NULL;
-	led_set_brightness(led_cdev, LED_OFF);
-	kfree(event);
-
-	return ret;
 }
 EXPORT_SYMBOL_GPL(led_trigger_set);
 
@@ -243,16 +169,33 @@ void led_trigger_set_default(struct led_classdev *led_cdev)
 	down_read(&triggers_list_lock);
 	down_write(&led_cdev->trigger_lock);
 	list_for_each_entry(trig, &trigger_list, next_trig) {
-		if (!strcmp(led_cdev->default_trigger, trig->name)) {
-			led_cdev->flags |= LED_INIT_DEFAULT_TRIGGER;
+		if (!strcmp(led_cdev->default_trigger, trig->name))
 			led_trigger_set(led_cdev, trig);
-			break;
-		}
 	}
 	up_write(&led_cdev->trigger_lock);
 	up_read(&triggers_list_lock);
 }
 EXPORT_SYMBOL_GPL(led_trigger_set_default);
+
+#ifdef CONFIG_LEDS_TRIGGER_MULTI_CTRL
+void led_trigger_set_by_name(struct led_classdev *led_cdev, char *trig_name)
+{
+	struct led_trigger *trig;
+
+	if (!trig_name)
+		return;
+
+	down_read(&triggers_list_lock);
+	down_write(&led_cdev->trigger_lock);
+	list_for_each_entry(trig, &trigger_list, next_trig) {
+		if (!strcmp(trig_name, trig->name))
+			led_trigger_set(led_cdev, trig);
+	}
+	up_write(&led_cdev->trigger_lock);
+	up_read(&triggers_list_lock);
+}
+EXPORT_SYMBOL_GPL(led_trigger_set_by_name);
+#endif
 
 void led_trigger_rename_static(const char *name, struct led_trigger *trig)
 {
@@ -294,10 +237,8 @@ int led_trigger_register(struct led_trigger *trig)
 	list_for_each_entry(led_cdev, &leds_list, node) {
 		down_write(&led_cdev->trigger_lock);
 		if (!led_cdev->trigger && led_cdev->default_trigger &&
-			    !strcmp(led_cdev->default_trigger, trig->name)) {
-			led_cdev->flags |= LED_INIT_DEFAULT_TRIGGER;
+			    !strcmp(led_cdev->default_trigger, trig->name))
 			led_trigger_set(led_cdev, trig);
-		}
 		up_write(&led_cdev->trigger_lock);
 	}
 	up_read(&leds_list_lock);
@@ -329,34 +270,6 @@ void led_trigger_unregister(struct led_trigger *trig)
 	up_read(&leds_list_lock);
 }
 EXPORT_SYMBOL_GPL(led_trigger_unregister);
-
-static void devm_led_trigger_release(struct device *dev, void *res)
-{
-	led_trigger_unregister(*(struct led_trigger **)res);
-}
-
-int devm_led_trigger_register(struct device *dev,
-			      struct led_trigger *trig)
-{
-	struct led_trigger **dr;
-	int rc;
-
-	dr = devres_alloc(devm_led_trigger_release, sizeof(*dr),
-			  GFP_KERNEL);
-	if (!dr)
-		return -ENOMEM;
-
-	*dr = trig;
-
-	rc = led_trigger_register(trig);
-	if (rc)
-		devres_free(dr);
-	else
-		devres_add(dev, dr);
-
-	return rc;
-}
-EXPORT_SYMBOL_GPL(devm_led_trigger_register);
 
 /* Simple LED Tigger Interface */
 
@@ -445,3 +358,7 @@ void led_trigger_unregister_simple(struct led_trigger *trig)
 	kfree(trig);
 }
 EXPORT_SYMBOL_GPL(led_trigger_unregister_simple);
+
+MODULE_AUTHOR("Richard Purdie");
+MODULE_LICENSE("GPL");
+MODULE_DESCRIPTION("LED Triggers Core");

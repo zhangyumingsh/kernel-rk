@@ -1,9 +1,12 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /* DVB USB compliant linux driver for MSI Mega Sky 580 DVB-T USB2.0 receiver
  *
  * Copyright (C) 2006 Aapo Tahkola (aet@rasterburn.org)
  *
- * see Documentation/media/dvb-drivers/dvb-usb.rst for more information
+ *	This program is free software; you can redistribute it and/or modify it
+ *	under the terms of the GNU General Public License as published by the
+ *	Free Software Foundation, version 2.
+ *
+ * see Documentation/dvb/README.dvb-usb for more information
  */
 
 #include "m920x.h"
@@ -52,9 +55,13 @@ static inline int m920x_read(struct usb_device *udev, u8 request, u16 value,
 static inline int m920x_write(struct usb_device *udev, u8 request,
 			      u16 value, u16 index)
 {
-	return usb_control_msg(udev, usb_sndctrlpipe(udev, 0), request,
-			       USB_TYPE_VENDOR | USB_DIR_OUT, value, index,
-			       NULL, 0, 2000);
+	int ret;
+
+	ret = usb_control_msg(udev, usb_sndctrlpipe(udev, 0),
+			      request, USB_TYPE_VENDOR | USB_DIR_OUT,
+			      value, index, NULL, 0, 2000);
+
+	return ret;
 }
 
 static inline int m920x_write_seq(struct usb_device *udev, u8 request,
@@ -251,6 +258,9 @@ static int m920x_i2c_xfer(struct i2c_adapter *adap, struct i2c_msg msg[], int nu
 	struct dvb_usb_device *d = i2c_get_adapdata(adap);
 	int i, j;
 	int ret = 0;
+
+	if (!num)
+		return -EINVAL;
 
 	if (mutex_lock_interruptible(&d->i2c_mutex) < 0)
 		return -EAGAIN;

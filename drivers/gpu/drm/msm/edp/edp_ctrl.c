@@ -1,18 +1,28 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2014-2015, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/clk.h>
 #include <linux/gpio/consumer.h>
 #include <linux/regulator/consumer.h>
-#include <drm/drm_crtc.h>
-#include <drm/drm_dp_helper.h>
-#include <drm/drm_edid.h>
 
+#include "drm_crtc.h"
+#include "drm_dp_helper.h"
+#include "drm_edid.h"
 #include "edp.h"
 #include "edp.xml.h"
 
+#define VDDA_MIN_UV		1800000	/* uV units */
+#define VDDA_MAX_UV		1800000	/* uV units */
 #define VDDA_UA_ON_LOAD		100000	/* uA units */
 #define VDDA_UA_OFF_LOAD	100	/* uA units */
 
@@ -57,7 +67,7 @@ struct edp_ctrl {
 	void __iomem *base;
 
 	/* regulators */
-	struct regulator *vdda_vreg;	/* 1.8 V */
+	struct regulator *vdda_vreg;
 	struct regulator *lvl_vreg;
 
 	/* clocks */
@@ -89,6 +99,7 @@ struct edp_ctrl {
 	/* edid raw data */
 	struct edid *edid;
 
+	struct drm_dp_link dp_link;
 	struct drm_dp_aux *drm_aux;
 
 	/* dpcd raw data */
@@ -141,46 +152,46 @@ static const struct edp_pixel_clk_div clk_divs[2][EDP_PIXEL_CLK_NUM] = {
 
 static int edp_clk_init(struct edp_ctrl *ctrl)
 {
-	struct platform_device *pdev = ctrl->pdev;
+	struct device *dev = &ctrl->pdev->dev;
 	int ret;
 
-	ctrl->aux_clk = msm_clk_get(pdev, "core");
+	ctrl->aux_clk = devm_clk_get(dev, "core_clk");
 	if (IS_ERR(ctrl->aux_clk)) {
 		ret = PTR_ERR(ctrl->aux_clk);
-		pr_err("%s: Can't find core clock, %d\n", __func__, ret);
+		pr_err("%s: Can't find aux_clk, %d\n", __func__, ret);
 		ctrl->aux_clk = NULL;
 		return ret;
 	}
 
-	ctrl->pixel_clk = msm_clk_get(pdev, "pixel");
+	ctrl->pixel_clk = devm_clk_get(dev, "pixel_clk");
 	if (IS_ERR(ctrl->pixel_clk)) {
 		ret = PTR_ERR(ctrl->pixel_clk);
-		pr_err("%s: Can't find pixel clock, %d\n", __func__, ret);
+		pr_err("%s: Can't find pixel_clk, %d\n", __func__, ret);
 		ctrl->pixel_clk = NULL;
 		return ret;
 	}
 
-	ctrl->ahb_clk = msm_clk_get(pdev, "iface");
+	ctrl->ahb_clk = devm_clk_get(dev, "iface_clk");
 	if (IS_ERR(ctrl->ahb_clk)) {
 		ret = PTR_ERR(ctrl->ahb_clk);
-		pr_err("%s: Can't find iface clock, %d\n", __func__, ret);
+		pr_err("%s: Can't find ahb_clk, %d\n", __func__, ret);
 		ctrl->ahb_clk = NULL;
 		return ret;
 	}
 
-	ctrl->link_clk = msm_clk_get(pdev, "link");
+	ctrl->link_clk = devm_clk_get(dev, "link_clk");
 	if (IS_ERR(ctrl->link_clk)) {
 		ret = PTR_ERR(ctrl->link_clk);
-		pr_err("%s: Can't find link clock, %d\n", __func__, ret);
+		pr_err("%s: Can't find link_clk, %d\n", __func__, ret);
 		ctrl->link_clk = NULL;
 		return ret;
 	}
 
 	/* need mdp core clock to receive irq */
-	ctrl->mdp_core_clk = msm_clk_get(pdev, "mdp_core");
+	ctrl->mdp_core_clk = devm_clk_get(dev, "mdp_core_clk");
 	if (IS_ERR(ctrl->mdp_core_clk)) {
 		ret = PTR_ERR(ctrl->mdp_core_clk);
-		pr_err("%s: Can't find mdp_core clock, %d\n", __func__, ret);
+		pr_err("%s: Can't find mdp_core_clk, %d\n", __func__, ret);
 		ctrl->mdp_core_clk = NULL;
 		return ret;
 	}
@@ -291,24 +302,21 @@ static void edp_clk_disable(struct edp_ctrl *ctrl, u32 clk_mask)
 static int edp_regulator_init(struct edp_ctrl *ctrl)
 {
 	struct device *dev = &ctrl->pdev->dev;
-	int ret;
 
 	DBG("");
 	ctrl->vdda_vreg = devm_regulator_get(dev, "vdda");
-	ret = PTR_ERR_OR_ZERO(ctrl->vdda_vreg);
-	if (ret) {
-		pr_err("%s: Could not get vdda reg, ret = %d\n", __func__,
-				ret);
+	if (IS_ERR(ctrl->vdda_vreg)) {
+		pr_err("%s: Could not get vdda reg, ret = %ld\n", __func__,
+				PTR_ERR(ctrl->vdda_vreg));
 		ctrl->vdda_vreg = NULL;
-		return ret;
+		return PTR_ERR(ctrl->vdda_vreg);
 	}
 	ctrl->lvl_vreg = devm_regulator_get(dev, "lvl-vdd");
-	ret = PTR_ERR_OR_ZERO(ctrl->lvl_vreg);
-	if (ret) {
-		pr_err("%s: Could not get lvl-vdd reg, ret = %d\n", __func__,
-				ret);
+	if (IS_ERR(ctrl->lvl_vreg)) {
+		pr_err("Could not get lvl-vdd reg, %ld",
+				PTR_ERR(ctrl->lvl_vreg));
 		ctrl->lvl_vreg = NULL;
-		return ret;
+		return PTR_ERR(ctrl->lvl_vreg);
 	}
 
 	return 0;
@@ -317,6 +325,12 @@ static int edp_regulator_init(struct edp_ctrl *ctrl)
 static int edp_regulator_enable(struct edp_ctrl *ctrl)
 {
 	int ret;
+
+	ret = regulator_set_voltage(ctrl->vdda_vreg, VDDA_MIN_UV, VDDA_MAX_UV);
+	if (ret) {
+		pr_err("%s:vdda_vreg set_voltage failed, %d\n", __func__, ret);
+		goto vdda_set_fail;
+	}
 
 	ret = regulator_set_load(ctrl->vdda_vreg, VDDA_UA_ON_LOAD);
 	if (ret < 0) {
@@ -402,7 +416,7 @@ static void edp_fill_link_cfg(struct edp_ctrl *ctrl)
 	u32 prate;
 	u32 lrate;
 	u32 bpp;
-	u8 max_lane = drm_dp_max_lane_count(ctrl->dpcd);
+	u8 max_lane = ctrl->dp_link.num_lanes;
 	u8 lane;
 
 	prate = ctrl->pixel_rate;
@@ -412,7 +426,7 @@ static void edp_fill_link_cfg(struct edp_ctrl *ctrl)
 	 * By default, use the maximum link rate and minimum lane count,
 	 * so that we can do rate down shift during link training.
 	 */
-	ctrl->link_rate = ctrl->dpcd[DP_MAX_LINK_RATE];
+	ctrl->link_rate = drm_dp_link_rate_to_bw_code(ctrl->dp_link.rate);
 
 	prate *= bpp;
 	prate /= 8; /* in kByte */
@@ -438,7 +452,7 @@ static void edp_config_ctrl(struct edp_ctrl *ctrl)
 
 	data = EDP_CONFIGURATION_CTRL_LANES(ctrl->lane_cnt - 1);
 
-	if (drm_dp_enhanced_frame_cap(ctrl->dpcd))
+	if (ctrl->dp_link.capabilities & DP_LINK_CAP_ENHANCED_FRAMING)
 		data |= EDP_CONFIGURATION_CTRL_ENHANCED_FRAMING;
 
 	depth = EDP_6BIT;
@@ -700,7 +714,7 @@ static int edp_link_rate_down_shift(struct edp_ctrl *ctrl)
 
 	rate = ctrl->link_rate;
 	lane = ctrl->lane_cnt;
-	max_lane = drm_dp_max_lane_count(ctrl->dpcd);
+	max_lane = ctrl->dp_link.num_lanes;
 
 	bpp = ctrl->color_depth * 3;
 	prate = ctrl->pixel_rate;
@@ -750,22 +764,18 @@ static int edp_clear_training_pattern(struct edp_ctrl *ctrl)
 
 static int edp_do_link_train(struct edp_ctrl *ctrl)
 {
-	u8 values[2];
 	int ret;
+	struct drm_dp_link dp_link;
 
 	DBG("");
 	/*
 	 * Set the current link rate and lane cnt to panel. They may have been
 	 * adjusted and the values are different from them in DPCD CAP
 	 */
-	values[0] = ctrl->lane_cnt;
-	values[1] = ctrl->link_rate;
-
-	if (drm_dp_enhanced_frame_cap(ctrl->dpcd))
-		values[1] |= DP_LANE_COUNT_ENHANCED_FRAME_EN;
-
-	if (drm_dp_dpcd_write(ctrl->drm_aux, DP_LINK_BW_SET, values,
-			      sizeof(values)) < 0)
+	dp_link.num_lanes = ctrl->lane_cnt;
+	dp_link.rate = drm_dp_bw_code_to_link_rate(ctrl->link_rate);
+	dp_link.capabilities = ctrl->dp_link.capabilities;
+	if (drm_dp_link_configure(ctrl->drm_aux, &dp_link) < 0)
 		return EDP_TRAIN_FAIL;
 
 	ctrl->v_level = 0; /* start from default level */
@@ -955,7 +965,6 @@ static void edp_ctrl_on_worker(struct work_struct *work)
 {
 	struct edp_ctrl *ctrl = container_of(
 				work, struct edp_ctrl, on_work);
-	u8 value;
 	int ret;
 
 	mutex_lock(&ctrl->dev_mutex);
@@ -969,27 +978,9 @@ static void edp_ctrl_on_worker(struct work_struct *work)
 	edp_ctrl_link_enable(ctrl, 1);
 
 	edp_ctrl_irq_enable(ctrl, 1);
-
-	/* DP_SET_POWER register is only available on DPCD v1.1 and later */
-	if (ctrl->dpcd[DP_DPCD_REV] >= 0x11) {
-		ret = drm_dp_dpcd_readb(ctrl->drm_aux, DP_SET_POWER, &value);
-		if (ret < 0)
-			goto fail;
-
-		value &= ~DP_SET_POWER_MASK;
-		value |= DP_SET_POWER_D0;
-
-		ret = drm_dp_dpcd_writeb(ctrl->drm_aux, DP_SET_POWER, value);
-		if (ret < 0)
-			goto fail;
-
-		/*
-		 * According to the DP 1.1 specification, a "Sink Device must
-		 * exit the power saving state within 1 ms" (Section 2.5.3.1,
-		 * Table 5-52, "Sink Control Field" (register 0x600).
-		 */
-		usleep_range(1000, 2000);
-	}
+	ret = drm_dp_link_power_up(ctrl->drm_aux, &ctrl->dp_link);
+	if (ret)
+		goto fail;
 
 	ctrl->power_on = true;
 
@@ -1033,19 +1024,7 @@ static void edp_ctrl_off_worker(struct work_struct *work)
 
 	edp_state_ctrl(ctrl, 0);
 
-	/* DP_SET_POWER register is only available on DPCD v1.1 and later */
-	if (ctrl->dpcd[DP_DPCD_REV] >= 0x11) {
-		u8 value;
-		int ret;
-
-		ret = drm_dp_dpcd_readb(ctrl->drm_aux, DP_SET_POWER, &value);
-		if (ret > 0) {
-			value &= ~DP_SET_POWER_MASK;
-			value |= DP_SET_POWER_D3;
-
-			drm_dp_dpcd_writeb(ctrl->drm_aux, DP_SET_POWER, value);
-		}
-	}
+	drm_dp_link_power_down(ctrl->drm_aux, &ctrl->dp_link);
 
 	edp_ctrl_irq_enable(ctrl, 0);
 
@@ -1259,8 +1238,14 @@ int msm_edp_ctrl_get_panel_info(struct edp_ctrl *ctrl,
 		edp_ctrl_irq_enable(ctrl, 1);
 	}
 
+	ret = drm_dp_link_probe(ctrl->drm_aux, &ctrl->dp_link);
+	if (ret) {
+		pr_err("%s: read dpcd cap failed, %d\n", __func__, ret);
+		goto disable_ret;
+	}
+
 	/* Initialize link rate as panel max link rate */
-	ctrl->link_rate = ctrl->dpcd[DP_MAX_LINK_RATE];
+	ctrl->link_rate = drm_dp_link_rate_to_bw_code(ctrl->dp_link.rate);
 
 	ctrl->edid = drm_get_edid(connector, &ctrl->drm_aux->ddc);
 	if (!ctrl->edid) {

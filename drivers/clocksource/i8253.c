@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * i8253 PIT clocksource
  */
@@ -25,7 +24,7 @@ EXPORT_SYMBOL(i8253_lock);
  * restarts the PIT, negating the shutdown. On platforms with the quirk,
  * platform specific code can set this to false.
  */
-bool i8253_clear_counter_on_shutdown __ro_after_init = true;
+bool i8253_clear_counter_on_shutdown = true;
 
 #ifdef CONFIG_CLKSRC_I8253
 /*
@@ -33,7 +32,7 @@ bool i8253_clear_counter_on_shutdown __ro_after_init = true;
  * to just read by itself. So use jiffies to emulate a free
  * running counter:
  */
-static u64 i8253_read(struct clocksource *cs)
+static cycle_t i8253_read(struct clocksource *cs)
 {
 	static int old_count;
 	static u32 old_jifs;
@@ -91,7 +90,7 @@ static u64 i8253_read(struct clocksource *cs)
 
 	count = (PIT_LATCH - 1) - count;
 
-	return (u64)(jifs * PIT_LATCH) + count;
+	return (cycle_t)(jifs * PIT_LATCH) + count;
 }
 
 static struct clocksource i8253_cs = {

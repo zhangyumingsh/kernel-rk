@@ -1,10 +1,13 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * devfreq: Generic Dynamic Voltage and Frequency Scaling (DVFS) Framework
  *	    for Non-CPU Devices.
  *
  * Copyright (C) 2011 Samsung Electronics
  *	MyungJoo Ham <myungjoo.ham@samsung.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  */
 
 #ifndef __LINUX_DEVFREQ_H__
@@ -13,26 +16,21 @@
 #include <linux/device.h>
 #include <linux/notifier.h>
 #include <linux/pm_opp.h>
-#include <linux/pm_qos.h>
 
 #define DEVFREQ_NAME_LEN 16
 
-/* DEVFREQ governor name */
-#define DEVFREQ_GOV_SIMPLE_ONDEMAND	"simple_ondemand"
-#define DEVFREQ_GOV_PERFORMANCE		"performance"
-#define DEVFREQ_GOV_POWERSAVE		"powersave"
-#define DEVFREQ_GOV_USERSPACE		"userspace"
-#define DEVFREQ_GOV_PASSIVE		"passive"
-
 /* DEVFREQ notifier interface */
 #define DEVFREQ_TRANSITION_NOTIFIER	(0)
+#define DEVFREQ_POLICY_NOTIFIER		(1)
 
 /* Transition notifiers of DEVFREQ_TRANSITION_NOTIFIER */
 #define	DEVFREQ_PRECHANGE		(0)
 #define DEVFREQ_POSTCHANGE		(1)
 
+/* Policy Notifiers  */
+#define	DEVFREQ_ADJUST			(0)
+
 struct devfreq;
-struct devfreq_governor;
 
 /**
  * struct devfreq_dev_status - Data given from devfreq user device to
@@ -43,6 +41,7 @@ struct devfreq_governor;
  * @busy_time:		The time that the device was working among the
  *			total_time.
  * @current_frequency:	The operating frequency.
+ * @update:		Whether need to update total_time and busy_time.
  * @private_data:	An entry not specified by the devfreq framework.
  *			A device and a specific governor may have their
  *			own protocol with private_data. However, because
@@ -54,6 +53,7 @@ struct devfreq_dev_status {
 	unsigned long total_time;
 	unsigned long busy_time;
 	unsigned long current_frequency;
+	bool update;
 	void *private_data;
 };
 
@@ -108,17 +108,42 @@ struct devfreq_dev_profile {
 };
 
 /**
- * struct devfreq_stats - Statistics of devfreq device behavior
- * @total_trans:	Number of devfreq transitions.
- * @trans_table:	Statistics of devfreq transitions.
- * @time_in_state:	Statistics of devfreq states.
- * @last_update:	The last time stats were updated.
+ * struct devfreq_governor - Devfreq policy governor
+ * @node:		list node - contains registered devfreq governors
+ * @name:		Governor's name
+ * @immutable:		Immutable flag for governor. If the value is 1,
+ *			this govenror is never changeable to other governor.
+ * @get_target_freq:	Returns desired operating frequency for the device.
+ *			Basically, get_target_freq will run
+ *			devfreq_dev_profile.get_dev_status() to get the
+ *			status of the device (load = busy_time / total_time).
+ *			If no_central_polling is set, this callback is called
+ *			only with update_devfreq() notified by OPP.
+ * @event_handler:      Callback for devfreq core framework to notify events
+ *                      to governors. Events include per device governor
+ *                      init and exit, opp changes out of devfreq, suspend
+ *                      and resume of per device devfreq during device idle.
+ *
+ * Note that the callbacks are called with devfreq->lock locked by devfreq.
  */
-struct devfreq_stats {
-	unsigned int total_trans;
-	unsigned int *trans_table;
-	u64 *time_in_state;
-	u64 last_update;
+struct devfreq_governor {
+	struct list_head node;
+
+	const char name[DEVFREQ_NAME_LEN];
+	const unsigned int immutable;
+	int (*get_target_freq)(struct devfreq *this, unsigned long *freq);
+	int (*event_handler)(struct devfreq *devfreq,
+				unsigned int event, void *data);
+};
+
+/**
+ * struct devfreq_policy - Devfreq frequency limits
+ * @min_:	minimum frequency (adjustable by policy notifiers)
+ * @max:	maximum frequency (adjustable by policy notifiers)
+ */
+struct devfreq_policy {
+	unsigned long min;
+	unsigned long max;
 };
 
 /**
@@ -136,23 +161,22 @@ struct devfreq_stats {
  *		devfreq.nb to the corresponding register notifier call chain.
  * @work:	delayed work for load monitoring.
  * @previous_freq:	previously configured frequency value.
- * @last_status:	devfreq user device info, performance statistics
  * @data:	Private data of the governor. The devfreq framework does not
  *		touch this.
- * @user_min_freq_req:	PM QoS minimum frequency request from user (via sysfs)
- * @user_max_freq_req:	PM QoS maximum frequency request from user (via sysfs)
+ * @policy:	Frequency limits of the device
+ * @min_freq:	Limit minimum frequency requested by user (0: none)
+ * @max_freq:	Limit maximum frequency requested by user (0: none)
  * @scaling_min_freq:	Limit minimum frequency requested by OPP interface
  * @scaling_max_freq:	Limit maximum frequency requested by OPP interface
  * @stop_polling:	 devfreq polling status of a device.
- * @suspend_freq:	 frequency of a device set during suspend phase.
- * @resume_freq:	 frequency of a device set in resume phase.
- * @suspend_count:	 suspend requests counter for a device.
- * @stats:	Statistics of devfreq device behavior
+ * @total_trans:	Number of devfreq transitions
+ * @trans_table:	Statistics of devfreq transitions
+ * @time_in_state:	Statistics of devfreq states
+ * @last_stat_updated:	The last time stat updated
  * @transition_notifier_list: list head of DEVFREQ_TRANSITION_NOTIFIER notifier
- * @nb_min:		Notifier block for DEV_PM_QOS_MIN_FREQUENCY
- * @nb_max:		Notifier block for DEV_PM_QOS_MAX_FREQUENCY
+ * @policy_notifier_list: list head of DEVFREQ_POLICY_NOTIFIER notifier
  *
- * This structure stores the devfreq information for a given device.
+ * This structure stores the devfreq information for a give device.
  *
  * Note that when a governor accesses entries in struct devfreq in its
  * functions except for the context of callbacks defined in struct
@@ -176,23 +200,22 @@ struct devfreq {
 
 	void *data; /* private data for governors */
 
-	struct dev_pm_qos_request user_min_freq_req;
-	struct dev_pm_qos_request user_max_freq_req;
+	struct devfreq_policy policy;
+
+	unsigned long min_freq;
+	unsigned long max_freq;
 	unsigned long scaling_min_freq;
 	unsigned long scaling_max_freq;
 	bool stop_polling;
 
-	unsigned long suspend_freq;
-	unsigned long resume_freq;
-	atomic_t suspend_count;
-
-	/* information for device frequency transitions */
-	struct devfreq_stats stats;
+	/* information for device frequency transition */
+	unsigned int total_trans;
+	unsigned int *trans_table;
+	unsigned long *time_in_state;
+	unsigned long last_stat_updated;
 
 	struct srcu_notifier_head transition_notifier_list;
-
-	struct notifier_block nb_min;
-	struct notifier_block nb_max;
+	struct srcu_notifier_head policy_notifier_list;
 };
 
 struct devfreq_freqs {
@@ -216,17 +239,6 @@ extern void devm_devfreq_remove_device(struct device *dev,
 /* Supposed to be called by PM callbacks */
 extern int devfreq_suspend_device(struct devfreq *devfreq);
 extern int devfreq_resume_device(struct devfreq *devfreq);
-
-extern void devfreq_suspend(void);
-extern void devfreq_resume(void);
-
-/**
- * update_devfreq() - Reevaluate the device and configure frequency
- * @devfreq:	the devfreq device
- *
- * Note: devfreq->lock must be held
- */
-extern int update_devfreq(struct devfreq *devfreq);
 
 /* Helper functions for devfreq user device driver with OPP. */
 extern struct dev_pm_opp *devfreq_recommended_opp(struct device *dev,
@@ -256,6 +268,42 @@ extern void devm_devfreq_unregister_notifier(struct device *dev,
 extern struct devfreq *devfreq_get_devfreq_by_phandle(struct device *dev,
 						int index);
 
+/**
+ * devfreq_update_stats() - update the last_status pointer in struct devfreq
+ * @df:		the devfreq instance whose status needs updating
+ *
+ *  Governors are recommended to use this function along with last_status,
+ * which allows other entities to reuse the last_status without affecting
+ * the values fetched later by governors.
+ */
+static inline int devfreq_update_stats(struct devfreq *df)
+{
+	return df->profile->get_dev_status(df->dev.parent, &df->last_status);
+}
+
+/**
+ * devfreq_verify_within_limits() - Adjust a devfreq policy if needed to make
+ *                                  sure its min/max values are within a
+ *                                  specified range.
+ * @policy:	the policy
+ * @min:	the minimum frequency
+ * @max:	the maximum frequency
+ */
+static inline void devfreq_verify_within_limits(struct devfreq_policy *policy,
+		unsigned int min, unsigned int max)
+{
+	if (policy->min < min)
+		policy->min = min;
+	if (policy->max < min)
+		policy->max = min;
+	if (policy->min > max)
+		policy->min = max;
+	if (policy->max > max)
+		policy->max = max;
+	if (policy->min > policy->max)
+		policy->min = policy->max;
+}
+
 #if IS_ENABLED(CONFIG_DEVFREQ_GOV_SIMPLE_ONDEMAND)
 /**
  * struct devfreq_simple_ondemand_data - void *data fed to struct devfreq
@@ -273,39 +321,6 @@ extern struct devfreq *devfreq_get_devfreq_by_phandle(struct device *dev,
 struct devfreq_simple_ondemand_data {
 	unsigned int upthreshold;
 	unsigned int downdifferential;
-};
-#endif
-
-#if IS_ENABLED(CONFIG_DEVFREQ_GOV_PASSIVE)
-/**
- * struct devfreq_passive_data - void *data fed to struct devfreq
- *	and devfreq_add_device
- * @parent:	the devfreq instance of parent device.
- * @get_target_freq:	Optional callback, Returns desired operating frequency
- *			for the device using passive governor. That is called
- *			when passive governor should decide the next frequency
- *			by using the new frequency of parent devfreq device
- *			using governors except for passive governor.
- *			If the devfreq device has the specific method to decide
- *			the next frequency, should use this callback.
- * @this:	the devfreq instance of own device.
- * @nb:		the notifier block for DEVFREQ_TRANSITION_NOTIFIER list
- *
- * The devfreq_passive_data have to set the devfreq instance of parent
- * device with governors except for the passive governor. But, don't need to
- * initialize the 'this' and 'nb' field because the devfreq core will handle
- * them.
- */
-struct devfreq_passive_data {
-	/* Should set the devfreq instance of parent device */
-	struct devfreq *parent;
-
-	/* Optional callback to decide the next frequency of passvice device */
-	int (*get_target_freq)(struct devfreq *this, unsigned long *freq);
-
-	/* For passive governor's internal use. Don't need to set them */
-	struct devfreq *this;
-	struct notifier_block nb;
 };
 #endif
 
@@ -345,9 +360,6 @@ static inline int devfreq_resume_device(struct devfreq *devfreq)
 {
 	return 0;
 }
-
-static inline void devfreq_suspend(void) {}
-static inline void devfreq_resume(void) {}
 
 static inline struct dev_pm_opp *devfreq_recommended_opp(struct device *dev,
 					   unsigned long *freq, u32 flags)
@@ -411,6 +423,11 @@ static inline struct devfreq *devfreq_get_devfreq_by_phandle(struct device *dev,
 							int index)
 {
 	return ERR_PTR(-ENODEV);
+}
+
+static inline void devfreq_verify_within_limits(struct devfreq_policy *policy,
+		unsigned int min, unsigned int max)
+{
 }
 
 static inline int devfreq_update_stats(struct devfreq *df)

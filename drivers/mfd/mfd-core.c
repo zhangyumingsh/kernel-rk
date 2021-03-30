@@ -1,16 +1,19 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * drivers/mfd/mfd-core.c
  *
  * core MFD support
  * Copyright (c) 2006 Ian Molton
  * Copyright (c) 2007,2008 Dmitry Baryshkov
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ *
  */
 
 #include <linux/kernel.h>
 #include <linux/platform_device.h>
 #include <linux/acpi.h>
-#include <linux/property.h>
 #include <linux/mfd/core.h>
 #include <linux/pm_runtime.h>
 #include <linux/slab.h>
@@ -26,28 +29,54 @@ static struct device_type mfd_dev_type = {
 int mfd_cell_enable(struct platform_device *pdev)
 {
 	const struct mfd_cell *cell = mfd_get_cell(pdev);
+	int err = 0;
 
-	if (!cell->enable) {
-		dev_dbg(&pdev->dev, "No .enable() call-back registered\n");
-		return 0;
-	}
+	/* only call enable hook if the cell wasn't previously enabled */
+	if (atomic_inc_return(cell->usage_count) == 1)
+		err = cell->enable(pdev);
 
-	return cell->enable(pdev);
+	/* if the enable hook failed, decrement counter to allow retries */
+	if (err)
+		atomic_dec(cell->usage_count);
+
+	return err;
 }
 EXPORT_SYMBOL(mfd_cell_enable);
 
 int mfd_cell_disable(struct platform_device *pdev)
 {
 	const struct mfd_cell *cell = mfd_get_cell(pdev);
+	int err = 0;
 
-	if (!cell->disable) {
-		dev_dbg(&pdev->dev, "No .disable() call-back registered\n");
-		return 0;
-	}
+	/* only disable if no other clients are using it */
+	if (atomic_dec_return(cell->usage_count) == 0)
+		err = cell->disable(pdev);
 
-	return cell->disable(pdev);
+	/* if the disable hook failed, increment to allow retries */
+	if (err)
+		atomic_inc(cell->usage_count);
+
+	/* sanity check; did someone call disable too many times? */
+	WARN_ON(atomic_read(cell->usage_count) < 0);
+
+	return err;
 }
 EXPORT_SYMBOL(mfd_cell_disable);
+
+static int mfd_platform_add_cell(struct platform_device *pdev,
+				 const struct mfd_cell *cell,
+				 atomic_t *usage_count)
+{
+	if (!cell)
+		return 0;
+
+	pdev->mfd_cell = kmemdup(cell, sizeof(*cell), GFP_KERNEL);
+	if (!pdev->mfd_cell)
+		return -ENOMEM;
+
+	pdev->mfd_cell->usage_count = usage_count;
+	return 0;
+}
 
 #if IS_ENABLED(CONFIG_ACPI)
 static void mfd_acpi_add_device(const struct mfd_cell *cell,
@@ -77,7 +106,7 @@ static void mfd_acpi_add_device(const struct mfd_cell *cell,
 
 			strlcpy(ids[0].id, match->pnpid, sizeof(ids[0].id));
 			list_for_each_entry(child, &parent->children, node) {
-				if (!acpi_match_device_ids(child, ids)) {
+				if (acpi_match_device_ids(child, ids)) {
 					adev = child;
 					break;
 				}
@@ -108,7 +137,7 @@ static inline void mfd_acpi_add_device(const struct mfd_cell *cell,
 #endif
 
 static int mfd_add_device(struct device *parent, int id,
-			  const struct mfd_cell *cell,
+			  const struct mfd_cell *cell, atomic_t *usage_count,
 			  struct resource *mem_base,
 			  int irq_base, struct irq_domain *domain)
 {
@@ -128,11 +157,7 @@ static int mfd_add_device(struct device *parent, int id,
 	if (!pdev)
 		goto fail_alloc;
 
-	pdev->mfd_cell = kmemdup(cell, sizeof(*cell), GFP_KERNEL);
-	if (!pdev->mfd_cell)
-		goto fail_device;
-
-	res = kcalloc(cell->num_resources, sizeof(*res), GFP_KERNEL);
+	res = kzalloc(sizeof(*res) * cell->num_resources, GFP_KERNEL);
 	if (!res)
 		goto fail_device;
 
@@ -152,11 +177,6 @@ static int mfd_add_device(struct device *parent, int id,
 	if (parent->of_node && cell->of_compatible) {
 		for_each_child_of_node(parent->of_node, np) {
 			if (of_device_is_compatible(np, cell->of_compatible)) {
-				if (!of_device_is_available(np)) {
-					/* Ignore disabled devices error free */
-					ret = 0;
-					goto fail_alias;
-				}
 				pdev->dev.of_node = np;
 				pdev->dev.fwnode = &np->fwnode;
 				break;
@@ -173,11 +193,9 @@ static int mfd_add_device(struct device *parent, int id,
 			goto fail_alias;
 	}
 
-	if (cell->properties) {
-		ret = platform_device_add_properties(pdev, cell->properties);
-		if (ret)
-			goto fail_alias;
-	}
+	ret = mfd_platform_add_cell(pdev, cell, usage_count);
+	if (ret)
+		goto fail_alias;
 
 	for (r = 0; r < cell->num_resources; r++) {
 		res[r].name = cell->resources[r].name;
@@ -245,19 +263,6 @@ fail_alloc:
 	return ret;
 }
 
-/**
- * mfd_add_devices - register child devices
- *
- * @parent:	Pointer to parent device.
- * @id:		Can be PLATFORM_DEVID_AUTO to let the Platform API take care
- *		of device numbering, or will be added to a device's cell_id.
- * @cells:	Array of (struct mfd_cell)s describing child devices.
- * @n_devs:	Number of child devices to register.
- * @mem_base:	Parent register range resource for child devices.
- * @irq_base:	Base of the range of virtual interrupt numbers allocated for
- *		this MFD device. Unused if @domain is specified.
- * @domain:	Interrupt domain to create mappings for hardware interrupts.
- */
 int mfd_add_devices(struct device *parent, int id,
 		    const struct mfd_cell *cells, int n_devs,
 		    struct resource *mem_base,
@@ -265,9 +270,16 @@ int mfd_add_devices(struct device *parent, int id,
 {
 	int i;
 	int ret;
+	atomic_t *cnts;
+
+	/* initialize reference counting for all cells */
+	cnts = kcalloc(n_devs, sizeof(*cnts), GFP_KERNEL);
+	if (!cnts)
+		return -ENOMEM;
 
 	for (i = 0; i < n_devs; i++) {
-		ret = mfd_add_device(parent, id, cells + i, mem_base,
+		atomic_set(&cnts[i], 0);
+		ret = mfd_add_device(parent, id, cells + i, cnts + i, mem_base,
 				     irq_base, domain);
 		if (ret)
 			goto fail;
@@ -278,15 +290,17 @@ int mfd_add_devices(struct device *parent, int id,
 fail:
 	if (i)
 		mfd_remove_devices(parent);
-
+	else
+		kfree(cnts);
 	return ret;
 }
 EXPORT_SYMBOL(mfd_add_devices);
 
-static int mfd_remove_devices_fn(struct device *dev, void *data)
+static int mfd_remove_devices_fn(struct device *dev, void *c)
 {
 	struct platform_device *pdev;
 	const struct mfd_cell *cell;
+	atomic_t **usage_count = c;
 
 	if (dev->type != &mfd_dev_type)
 		return 0;
@@ -297,53 +311,55 @@ static int mfd_remove_devices_fn(struct device *dev, void *data)
 	regulator_bulk_unregister_supply_alias(dev, cell->parent_supplies,
 					       cell->num_parent_supplies);
 
+	/* find the base address of usage_count pointers (for freeing) */
+	if (!*usage_count || (cell->usage_count < *usage_count))
+		*usage_count = cell->usage_count;
+
 	platform_device_unregister(pdev);
 	return 0;
 }
 
 void mfd_remove_devices(struct device *parent)
 {
-	device_for_each_child_reverse(parent, NULL, mfd_remove_devices_fn);
+	atomic_t *cnts = NULL;
+
+	device_for_each_child_reverse(parent, &cnts, mfd_remove_devices_fn);
+	kfree(cnts);
 }
 EXPORT_SYMBOL(mfd_remove_devices);
 
-static void devm_mfd_dev_release(struct device *dev, void *res)
+int mfd_clone_cell(const char *cell, const char **clones, size_t n_clones)
 {
-	mfd_remove_devices(dev);
-}
+	struct mfd_cell cell_entry;
+	struct device *dev;
+	struct platform_device *pdev;
+	int i;
 
-/**
- * devm_mfd_add_devices - Resource managed version of mfd_add_devices()
- *
- * Returns 0 on success or an appropriate negative error number on failure.
- * All child-devices of the MFD will automatically be removed when it gets
- * unbinded.
- */
-int devm_mfd_add_devices(struct device *dev, int id,
-			 const struct mfd_cell *cells, int n_devs,
-			 struct resource *mem_base,
-			 int irq_base, struct irq_domain *domain)
-{
-	struct device **ptr;
-	int ret;
+	/* fetch the parent cell's device (should already be registered!) */
+	dev = bus_find_device_by_name(&platform_bus_type, NULL, cell);
+	if (!dev) {
+		printk(KERN_ERR "failed to find device for cell %s\n", cell);
+		return -ENODEV;
+	}
+	pdev = to_platform_device(dev);
+	memcpy(&cell_entry, mfd_get_cell(pdev), sizeof(cell_entry));
 
-	ptr = devres_alloc(devm_mfd_dev_release, sizeof(*ptr), GFP_KERNEL);
-	if (!ptr)
-		return -ENOMEM;
+	WARN_ON(!cell_entry.enable);
 
-	ret = mfd_add_devices(dev, id, cells, n_devs, mem_base,
-			      irq_base, domain);
-	if (ret < 0) {
-		devres_free(ptr);
-		return ret;
+	for (i = 0; i < n_clones; i++) {
+		cell_entry.name = clones[i];
+		/* don't give up if a single call fails; just report error */
+		if (mfd_add_device(pdev->dev.parent, -1, &cell_entry,
+				   cell_entry.usage_count, NULL, 0, NULL))
+			dev_err(dev, "failed to create platform device '%s'\n",
+					clones[i]);
 	}
 
-	*ptr = dev;
-	devres_add(dev, ptr);
+	put_device(dev);
 
-	return ret;
+	return 0;
 }
-EXPORT_SYMBOL(devm_mfd_add_devices);
+EXPORT_SYMBOL(mfd_clone_cell);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Ian Molton, Dmitry Baryshkov");

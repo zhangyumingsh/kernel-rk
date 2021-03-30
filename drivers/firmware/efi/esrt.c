@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0+
 /*
  * esrt.c
  *
@@ -17,7 +16,6 @@
 #include <linux/device.h>
 #include <linux/efi.h>
 #include <linux/init.h>
-#include <linux/io.h>
 #include <linux/kernel.h>
 #include <linux/kobject.h>
 #include <linux/list.h>
@@ -167,10 +165,13 @@ static struct kset *esrt_kset;
 static int esre_create_sysfs_entry(void *esre, int entry_num)
 {
 	struct esre_entry *entry;
+	char name[20];
 
 	entry = kzalloc(sizeof(*entry), GFP_KERNEL);
 	if (!entry)
 		return -ENOMEM;
+
+	sprintf(name, "entry%d", entry_num);
 
 	entry->kobj.kset = esrt_kset;
 
@@ -179,7 +180,7 @@ static int esre_create_sysfs_entry(void *esre, int entry_num)
 
 		entry->esre.esre1 = esre;
 		rc = kobject_init_and_add(&entry->kobj, &esre1_ktype, NULL,
-					  "entry%d", entry_num);
+					  "%s", name);
 		if (rc) {
 			kfree(entry);
 			return rc;
@@ -228,13 +229,13 @@ static umode_t esrt_attr_is_visible(struct kobject *kobj,
 	return attr->mode;
 }
 
-static const struct attribute_group esrt_attr_group = {
+static struct attribute_group esrt_attr_group = {
 	.attrs = esrt_attrs,
 	.is_visible = esrt_attr_is_visible,
 };
 
 /*
- * remap the table, validate it, mark it reserved and unmap it.
+ * remap the table, copy it to kmalloced pages, and unmap it.
  */
 void __init efi_esrt_init(void)
 {
@@ -246,18 +247,12 @@ void __init efi_esrt_init(void)
 	int rc;
 	phys_addr_t end;
 
-	if (!efi_enabled(EFI_MEMMAP))
-		return;
-
 	pr_debug("esrt-init: loading.\n");
 	if (!esrt_table_exists())
 		return;
 
 	rc = efi_mem_desc_lookup(efi.esrt, &md);
-	if (rc < 0 ||
-	    (!(md.attribute & EFI_MEMORY_RUNTIME) &&
-	     md.type != EFI_BOOT_SERVICES_DATA &&
-	     md.type != EFI_RUNTIME_SERVICES_DATA)) {
+	if (rc < 0) {
 		pr_warn("ESRT header is not in the memory map.\n");
 		return;
 	}
@@ -273,7 +268,7 @@ void __init efi_esrt_init(void)
 	max -= efi.esrt;
 
 	if (max < size) {
-		pr_err("ESRT header doesn't fit on single memory map entry. (size: %zu max: %zu)\n",
+		pr_err("ESRT header doen't fit on single memory map entry. (size: %zu max: %zu)\n",
 		       size, max);
 		return;
 	}
@@ -286,7 +281,6 @@ void __init efi_esrt_init(void)
 	}
 
 	memcpy(&tmpesrt, va, sizeof(tmpesrt));
-	early_memunmap(va, size);
 
 	if (tmpesrt.fw_resource_version == 1) {
 		entry_size = sizeof (*v1_entries);
@@ -299,7 +293,7 @@ void __init efi_esrt_init(void)
 	if (tmpesrt.fw_resource_count > 0 && max - size < entry_size) {
 		pr_err("ESRT memory map entry can only hold the header. (max: %zu size: %zu)\n",
 		       max - size, entry_size);
-		return;
+		goto err_memunmap;
 	}
 
 	/*
@@ -312,7 +306,7 @@ void __init efi_esrt_init(void)
 	if (tmpesrt.fw_resource_count > 128) {
 		pr_err("ESRT says fw_resource_count has very large value %d.\n",
 		       tmpesrt.fw_resource_count);
-		return;
+		goto err_memunmap;
 	}
 
 	/*
@@ -323,20 +317,29 @@ void __init efi_esrt_init(void)
 	if (max < size + entries_size) {
 		pr_err("ESRT does not fit on single memory map entry (size: %zu max: %zu)\n",
 		       size, max);
-		return;
+		goto err_memunmap;
 	}
 
+	/* remap it with our (plausible) new pages */
+	early_memunmap(va, size);
 	size += entries_size;
+	va = early_memremap(efi.esrt, size);
+	if (!va) {
+		pr_err("early_memremap(%p, %zu) failed.\n", (void *)efi.esrt,
+		       size);
+		return;
+	}
 
 	esrt_data = (phys_addr_t)efi.esrt;
 	esrt_data_size = size;
 
 	end = esrt_data + size;
 	pr_info("Reserving ESRT space from %pa to %pa.\n", &esrt_data, &end);
-	if (md.type == EFI_BOOT_SERVICES_DATA)
-		efi_mem_reserve(esrt_data, esrt_data_size);
+	memblock_reserve(esrt_data, esrt_data_size);
 
 	pr_debug("esrt-init: loaded.\n");
+err_memunmap:
+	early_memunmap(va, size);
 }
 
 static int __init register_entries(void)
@@ -379,17 +382,27 @@ static void cleanup_entry_list(void)
 static int __init esrt_sysfs_init(void)
 {
 	int error;
+	struct efi_system_resource_table __iomem *ioesrt;
 
 	pr_debug("esrt-sysfs: loading.\n");
 	if (!esrt_data || !esrt_data_size)
 		return -ENOSYS;
 
-	esrt = memremap(esrt_data, esrt_data_size, MEMREMAP_WB);
-	if (!esrt) {
-		pr_err("memremap(%pa, %zu) failed.\n", &esrt_data,
+	ioesrt = ioremap(esrt_data, esrt_data_size);
+	if (!ioesrt) {
+		pr_err("ioremap(%pa, %zu) failed.\n", &esrt_data,
 		       esrt_data_size);
 		return -ENOMEM;
 	}
+
+	esrt = kmalloc(esrt_data_size, GFP_KERNEL);
+	if (!esrt) {
+		pr_err("kmalloc failed. (wanted %zu bytes)\n", esrt_data_size);
+		iounmap(ioesrt);
+		return -ENOMEM;
+	}
+
+	memcpy_fromio(esrt, ioesrt, esrt_data_size);
 
 	esrt_kobj = kobject_create_and_add("esrt", efi_kobj);
 	if (!esrt_kobj) {
@@ -416,6 +429,8 @@ static int __init esrt_sysfs_init(void)
 	if (error)
 		goto err_cleanup_list;
 
+	memblock_remove(esrt_data, esrt_data_size);
+
 	pr_debug("esrt-sysfs: loaded.\n");
 
 	return 0;
@@ -427,7 +442,7 @@ err_remove_group:
 err_remove_esrt:
 	kobject_put(esrt_kobj);
 err:
-	memunmap(esrt);
+	kfree(esrt);
 	esrt = NULL;
 	return error;
 }

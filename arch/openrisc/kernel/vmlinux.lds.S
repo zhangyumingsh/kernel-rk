@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * OpenRISC vmlinux.lds.S
  *
@@ -10,13 +9,18 @@
  * Copyright (C) 2003 Matjaz Breskvar <phoenix@bsemi.com>
  * Copyright (C) 2010-2011 Jonas Bonn <jonas@southpole.se>
  *
+ *      This program is free software; you can redistribute it and/or
+ *      modify it under the terms of the GNU General Public License
+ *      as published by the Free Software Foundation; either version
+ *      2 of the License, or (at your option) any later version.
+ *
  * ld script for OpenRISC architecture
  */
 
 /* TODO
  *		- clean up __offset & stuff
- *		- change all 8192 alignment to PAGE !!!
- *		- recheck if all alignments are really needed
+ *		- change all 8192 aligment to PAGE !!!
+ *		- recheck if all aligments are really needed
  */
 
 #  define LOAD_OFFSET  PAGE_OFFSET
@@ -24,16 +28,9 @@
 
 #include <asm/page.h>
 #include <asm/cache.h>
-#include <asm/thread_info.h>
 #include <asm-generic/vmlinux.lds.h>
 
-#ifdef __OR1K__
-#define __OUTPUT_FORMAT        "elf32-or1k"
-#else
-#define __OUTPUT_FORMAT        "elf32-or32"
-#endif
-
-OUTPUT_FORMAT(__OUTPUT_FORMAT, __OUTPUT_FORMAT, __OUTPUT_FORMAT)
+OUTPUT_FORMAT("elf32-or32", "elf32-or32", "elf32-or32")
 jiffies = jiffies_64 + 4;
 
 SECTIONS
@@ -52,7 +49,6 @@ SECTIONS
           _stext = .;
 	  TEXT_TEXT
 	  SCHED_TEXT
-	  CPUIDLE_TEXT
 	  LOCK_TEXT
 	  KPROBES_TEXT
 	  IRQENTRY_TEXT
@@ -67,18 +63,19 @@ SECTIONS
 
 	_sdata = .;
 
-	/* Page alignment required for RO_DATA */
-	RO_DATA(PAGE_SIZE)
+	/* Page alignment required for RO_DATA_SECTION */
+	RO_DATA_SECTION(PAGE_SIZE)
 	_e_kernel_ro = .;
 
 	/* Whatever comes after _e_kernel_ro had better be page-aligend, too */
 
 	/* 32 here is cacheline size... recheck this */
-	RW_DATA(32, PAGE_SIZE, PAGE_SIZE)
+	RW_DATA_SECTION(32, PAGE_SIZE, PAGE_SIZE)
 
         _edata  =  .;
 
 	EXCEPTION_TABLE(4)
+	NOTES
 
 	/* Init code and data */
 	. = ALIGN(PAGE_SIZE);

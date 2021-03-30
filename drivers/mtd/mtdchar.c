@@ -1,6 +1,20 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Copyright © 1999-2010 David Woodhouse <dwmw2@infradead.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+ *
  */
 
 #include <linux/device.h>
@@ -23,7 +37,7 @@
 #include <linux/mtd/partitions.h>
 #include <linux/mtd/map.h>
 
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 
 #include "mtdcore.h"
 
@@ -174,7 +188,7 @@ static ssize_t mtdchar_read(struct file *file, char __user *buf, size_t count,
 			break;
 		case MTD_FILE_MODE_RAW:
 		{
-			struct mtd_oob_ops ops = {};
+			struct mtd_oob_ops ops;
 
 			ops.mode = MTD_OPS_RAW;
 			ops.datbuf = kbuf;
@@ -268,7 +282,7 @@ static ssize_t mtdchar_write(struct file *file, const char __user *buf, size_t c
 
 		case MTD_FILE_MODE_RAW:
 		{
-			struct mtd_oob_ops ops = {};
+			struct mtd_oob_ops ops;
 
 			ops.mode = MTD_OPS_RAW;
 			ops.datbuf = kbuf;
@@ -314,6 +328,10 @@ static ssize_t mtdchar_write(struct file *file, const char __user *buf, size_t c
     IOCTL calls for getting device parameters.
 
 ======================================================================*/
+static void mtdchar_erase_callback (struct erase_info *instr)
+{
+	wake_up((wait_queue_head_t *)instr->priv);
+}
 
 static int otp_select_filemode(struct mtd_file_info *mfi, int mode)
 {
@@ -350,7 +368,7 @@ static int mtdchar_writeoob(struct file *file, struct mtd_info *mtd,
 	uint32_t __user *retp)
 {
 	struct mtd_file_info *mfi = file->private_data;
-	struct mtd_oob_ops ops = {};
+	struct mtd_oob_ops ops;
 	uint32_t retlen;
 	int ret = 0;
 
@@ -361,7 +379,12 @@ static int mtdchar_writeoob(struct file *file, struct mtd_info *mtd,
 		return -EINVAL;
 
 	if (!mtd->_write_oob)
-		return -EOPNOTSUPP;
+		ret = -EOPNOTSUPP;
+	else
+		ret = access_ok(VERIFY_READ, ptr, length) ? 0 : -EFAULT;
+
+	if (ret)
+		return ret;
 
 	ops.ooblen = length;
 	ops.ooboffs = start & (mtd->writesize - 1);
@@ -394,11 +417,14 @@ static int mtdchar_readoob(struct file *file, struct mtd_info *mtd,
 	uint32_t __user *retp)
 {
 	struct mtd_file_info *mfi = file->private_data;
-	struct mtd_oob_ops ops = {};
+	struct mtd_oob_ops ops;
 	int ret = 0;
 
 	if (length > 4096)
 		return -EINVAL;
+
+	if (!access_ok(VERIFY_WRITE, ptr, length))
+		return -EFAULT;
 
 	ops.ooblen = length;
 	ops.ooboffs = start & (mtd->writesize - 1);
@@ -429,7 +455,7 @@ static int mtdchar_readoob(struct file *file, struct mtd_info *mtd,
 	 * data. For our userspace tools it is important to dump areas
 	 * with ECC errors!
 	 * For kernel internal usage it also might return -EUCLEAN
-	 * to signal the caller that a bitflip has occurred and has
+	 * to signal the caller that a bitflip has occured and has
 	 * been corrected by the ECC algorithm.
 	 *
 	 * Note: currently the standard NAND function, nand_read_oob_std,
@@ -443,107 +469,34 @@ static int mtdchar_readoob(struct file *file, struct mtd_info *mtd,
 }
 
 /*
- * Copies (and truncates, if necessary) OOB layout information to the
- * deprecated layout struct, nand_ecclayout_user. This is necessary only to
- * support the deprecated API ioctl ECCGETLAYOUT while allowing all new
- * functionality to use mtd_ooblayout_ops flexibly (i.e. mtd_ooblayout_ops
- * can describe any kind of OOB layout with almost zero overhead from a
- * memory usage point of view).
+ * Copies (and truncates, if necessary) data from the larger struct,
+ * nand_ecclayout, to the smaller, deprecated layout struct,
+ * nand_ecclayout_user. This is necessary only to support the deprecated
+ * API ioctl ECCGETLAYOUT while allowing all new functionality to use
+ * nand_ecclayout flexibly (i.e. the struct may change size in new
+ * releases without requiring major rewrites).
  */
-static int shrink_ecclayout(struct mtd_info *mtd,
-			    struct nand_ecclayout_user *to)
+static int shrink_ecclayout(const struct nand_ecclayout *from,
+		struct nand_ecclayout_user *to)
 {
-	struct mtd_oob_region oobregion;
-	int i, section = 0, ret;
+	int i;
 
-	if (!mtd || !to)
+	if (!from || !to)
 		return -EINVAL;
 
 	memset(to, 0, sizeof(*to));
 
-	to->eccbytes = 0;
-	for (i = 0; i < MTD_MAX_ECCPOS_ENTRIES;) {
-		u32 eccpos;
-
-		ret = mtd_ooblayout_ecc(mtd, section++, &oobregion);
-		if (ret < 0) {
-			if (ret != -ERANGE)
-				return ret;
-
-			break;
-		}
-
-		eccpos = oobregion.offset;
-		for (; i < MTD_MAX_ECCPOS_ENTRIES &&
-		       eccpos < oobregion.offset + oobregion.length; i++) {
-			to->eccpos[i] = eccpos++;
-			to->eccbytes++;
-		}
-	}
+	to->eccbytes = min((int)from->eccbytes, MTD_MAX_ECCPOS_ENTRIES);
+	for (i = 0; i < to->eccbytes; i++)
+		to->eccpos[i] = from->eccpos[i];
 
 	for (i = 0; i < MTD_MAX_OOBFREE_ENTRIES; i++) {
-		ret = mtd_ooblayout_free(mtd, i, &oobregion);
-		if (ret < 0) {
-			if (ret != -ERANGE)
-				return ret;
-
+		if (from->oobfree[i].length == 0 &&
+				from->oobfree[i].offset == 0)
 			break;
-		}
-
-		to->oobfree[i].offset = oobregion.offset;
-		to->oobfree[i].length = oobregion.length;
-		to->oobavail += to->oobfree[i].length;
+		to->oobavail += from->oobfree[i].length;
+		to->oobfree[i] = from->oobfree[i];
 	}
-
-	return 0;
-}
-
-static int get_oobinfo(struct mtd_info *mtd, struct nand_oobinfo *to)
-{
-	struct mtd_oob_region oobregion;
-	int i, section = 0, ret;
-
-	if (!mtd || !to)
-		return -EINVAL;
-
-	memset(to, 0, sizeof(*to));
-
-	to->eccbytes = 0;
-	for (i = 0; i < ARRAY_SIZE(to->eccpos);) {
-		u32 eccpos;
-
-		ret = mtd_ooblayout_ecc(mtd, section++, &oobregion);
-		if (ret < 0) {
-			if (ret != -ERANGE)
-				return ret;
-
-			break;
-		}
-
-		if (oobregion.length + i > ARRAY_SIZE(to->eccpos))
-			return -EINVAL;
-
-		eccpos = oobregion.offset;
-		for (; eccpos < oobregion.offset + oobregion.length; i++) {
-			to->eccpos[i] = eccpos++;
-			to->eccbytes++;
-		}
-	}
-
-	for (i = 0; i < 8; i++) {
-		ret = mtd_ooblayout_free(mtd, i, &oobregion);
-		if (ret < 0) {
-			if (ret != -ERANGE)
-				return ret;
-
-			break;
-		}
-
-		to->oobfree[i][0] = oobregion.offset;
-		to->oobfree[i][1] = oobregion.length;
-	}
-
-	to->useecc = MTD_NANDECC_AUTOPLACE;
 
 	return 0;
 }
@@ -587,7 +540,7 @@ static int mtdchar_write_ioctl(struct mtd_info *mtd,
 		struct mtd_write_req __user *argp)
 {
 	struct mtd_write_req req;
-	struct mtd_oob_ops ops = {};
+	struct mtd_oob_ops ops;
 	const void __user *usr_data, *usr_oob;
 	int ret;
 
@@ -596,6 +549,9 @@ static int mtdchar_write_ioctl(struct mtd_info *mtd,
 
 	usr_data = (const void __user *)(uintptr_t)req.usr_data;
 	usr_oob = (const void __user *)(uintptr_t)req.usr_oob;
+	if (!access_ok(VERIFY_READ, usr_data, req.len) ||
+	    !access_ok(VERIFY_READ, usr_oob, req.ooblen))
+		return -EFAULT;
 
 	if (!mtd->_write_oob)
 		return -EOPNOTSUPP;
@@ -637,9 +593,20 @@ static int mtdchar_ioctl(struct file *file, u_int cmd, u_long arg)
 	struct mtd_info *mtd = mfi->mtd;
 	void __user *argp = (void __user *)arg;
 	int ret = 0;
+	u_long size;
 	struct mtd_info_user info;
 
 	pr_debug("MTD_ioctl\n");
+
+	size = (cmd & IOCSIZE_MASK) >> IOCSIZE_SHIFT;
+	if (cmd & IOC_IN) {
+		if (!access_ok(VERIFY_READ, argp, size))
+			return -EFAULT;
+	}
+	if (cmd & IOC_OUT) {
+		if (!access_ok(VERIFY_WRITE, argp, size))
+			return -EFAULT;
+	}
 
 	switch (cmd) {
 	case MEMGETREGIONCOUNT:
@@ -695,6 +662,11 @@ static int mtdchar_ioctl(struct file *file, u_int cmd, u_long arg)
 		if (!erase)
 			ret = -ENOMEM;
 		else {
+			wait_queue_head_t waitq;
+			DECLARE_WAITQUEUE(wait, current);
+
+			init_waitqueue_head(&waitq);
+
 			if (cmd == MEMERASE64) {
 				struct erase_info_user64 einfo64;
 
@@ -716,8 +688,31 @@ static int mtdchar_ioctl(struct file *file, u_int cmd, u_long arg)
 				erase->addr = einfo32.start;
 				erase->len = einfo32.length;
 			}
+			erase->mtd = mtd;
+			erase->callback = mtdchar_erase_callback;
+			erase->priv = (unsigned long)&waitq;
 
+			/*
+			  FIXME: Allow INTERRUPTIBLE. Which means
+			  not having the wait_queue head on the stack.
+
+			  If the wq_head is on the stack, and we
+			  leave because we got interrupted, then the
+			  wq_head is no longer there when the
+			  callback routine tries to wake us up.
+			*/
 			ret = mtd_erase(mtd, erase);
+			if (!ret) {
+				set_current_state(TASK_UNINTERRUPTIBLE);
+				add_wait_queue(&waitq, &wait);
+				if (erase->state != MTD_ERASE_DONE &&
+				    erase->state != MTD_ERASE_FAILED)
+					schedule();
+				remove_wait_queue(&waitq, &wait);
+				set_current_state(TASK_RUNNING);
+
+				ret = (erase->state == MTD_ERASE_FAILED)?-EIO:0;
+			}
 			kfree(erase);
 		}
 		break;
@@ -824,12 +819,16 @@ static int mtdchar_ioctl(struct file *file, u_int cmd, u_long arg)
 	{
 		struct nand_oobinfo oi;
 
-		if (!mtd->ooblayout)
+		if (!mtd->ecclayout)
 			return -EOPNOTSUPP;
+		if (mtd->ecclayout->eccbytes > ARRAY_SIZE(oi.eccpos))
+			return -EINVAL;
 
-		ret = get_oobinfo(mtd, &oi);
-		if (ret)
-			return ret;
+		oi.useecc = MTD_NANDECC_AUTOPLACE;
+		memcpy(&oi.eccpos, mtd->ecclayout->eccpos, sizeof(oi.eccpos));
+		memcpy(&oi.oobfree, mtd->ecclayout->oobfree,
+		       sizeof(oi.oobfree));
+		oi.eccbytes = mtd->ecclayout->eccbytes;
 
 		if (copy_to_user(argp, &oi, sizeof(struct nand_oobinfo)))
 			return -EFAULT;
@@ -918,14 +917,14 @@ static int mtdchar_ioctl(struct file *file, u_int cmd, u_long arg)
 	{
 		struct nand_ecclayout_user *usrlay;
 
-		if (!mtd->ooblayout)
+		if (!mtd->ecclayout)
 			return -EOPNOTSUPP;
 
 		usrlay = kmalloc(sizeof(*usrlay), GFP_KERNEL);
 		if (!usrlay)
 			return -ENOMEM;
 
-		shrink_ecclayout(mtd, usrlay);
+		shrink_ecclayout(mtd->ecclayout, usrlay);
 
 		if (copy_to_user(argp, usrlay, sizeof(*usrlay)))
 			ret = -EFAULT;

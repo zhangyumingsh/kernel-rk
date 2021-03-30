@@ -1,27 +1,29 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
+// SPDX-License-Identifier: GPL-2.0
 /*
- * Copyright(c) 2016, Analogix Semiconductor.
+ * Copyright(c) 2017 Icenowy Zheng <icenowy@aosc.io>
  *
- * Based on anx7808 driver obtained from chromeos with copyright:
- * Copyright(c) 2013, Google Inc.
+ * Based on analogix-anx78xx.c, which is:
+ *   Copyright(c) 2016, Analogix Semiconductor. All rights reserved.
  */
+
+#include <linux/module.h>
 #include <linux/regmap.h>
 
 #include <drm/drm.h>
+#include <drm/drmP.h>
 #include <drm/drm_dp_helper.h>
-#include <drm/drm_print.h>
 
 #include "analogix-i2c-dptx.h"
 
 #define AUX_WAIT_TIMEOUT_MS	15
 #define AUX_CH_BUFFER_SIZE	16
 
-static int anx_i2c_dp_clear_bits(struct regmap *map, u8 reg, u8 mask)
+static int anx_clear_bits(struct regmap *map, u8 reg, u8 mask)
 {
 	return regmap_update_bits(map, reg, mask, 0);
 }
 
-static bool anx_dp_aux_op_finished(struct regmap *map_dptx)
+static bool anx_aux_op_finished(struct regmap *map_dptx)
 {
 	unsigned int value;
 	int err;
@@ -33,7 +35,7 @@ static bool anx_dp_aux_op_finished(struct regmap *map_dptx)
 	return (value & SP_AUX_EN) == 0;
 }
 
-static int anx_dp_aux_wait(struct regmap *map_dptx)
+static int anx_aux_wait(struct regmap *map_dptx)
 {
 	unsigned long timeout;
 	unsigned int status;
@@ -41,9 +43,9 @@ static int anx_dp_aux_wait(struct regmap *map_dptx)
 
 	timeout = jiffies + msecs_to_jiffies(AUX_WAIT_TIMEOUT_MS) + 1;
 
-	while (!anx_dp_aux_op_finished(map_dptx)) {
+	while (!anx_aux_op_finished(map_dptx)) {
 		if (time_after(jiffies, timeout)) {
-			if (!anx_dp_aux_op_finished(map_dptx)) {
+			if (!anx_aux_op_finished(map_dptx)) {
 				DRM_ERROR("Timed out waiting AUX to finish\n");
 				return -ETIMEDOUT;
 			}
@@ -70,7 +72,7 @@ static int anx_dp_aux_wait(struct regmap *map_dptx)
 	return 0;
 }
 
-static int anx_dp_aux_address(struct regmap *map_dptx, unsigned int addr)
+static int anx_aux_address(struct regmap *map_dptx, unsigned int addr)
 {
 	int err;
 
@@ -98,8 +100,7 @@ static int anx_dp_aux_address(struct regmap *map_dptx, unsigned int addr)
 	return 0;
 }
 
-ssize_t anx_dp_aux_transfer(struct regmap *map_dptx,
-				struct drm_dp_aux_msg *msg)
+ssize_t anx_aux_transfer(struct regmap *map_dptx, struct drm_dp_aux_msg *msg)
 {
 	u8 ctrl1 = msg->request;
 	u8 ctrl2 = SP_AUX_EN;
@@ -126,7 +127,7 @@ ssize_t anx_dp_aux_transfer(struct regmap *map_dptx,
 	}
 
 	/* Write address and request */
-	err = anx_dp_aux_address(map_dptx, msg->address);
+	err = anx_aux_address(map_dptx, msg->address);
 	if (err)
 		return err;
 
@@ -140,7 +141,7 @@ ssize_t anx_dp_aux_transfer(struct regmap *map_dptx,
 	if (err)
 		return err;
 
-	err = anx_dp_aux_wait(map_dptx);
+	err = anx_aux_wait(map_dptx);
 	if (err)
 		return err;
 
@@ -155,11 +156,14 @@ ssize_t anx_dp_aux_transfer(struct regmap *map_dptx,
 			return err;
 	}
 
-	err = anx_i2c_dp_clear_bits(map_dptx, SP_DP_AUX_CH_CTRL2_REG,
-				    SP_ADDR_ONLY);
+	err = anx_clear_bits(map_dptx, SP_DP_AUX_CH_CTRL2_REG, SP_ADDR_ONLY);
 	if (err)
 		return err;
 
 	return msg->size;
 }
-EXPORT_SYMBOL_GPL(anx_dp_aux_transfer);
+EXPORT_SYMBOL(anx_aux_transfer);
+
+MODULE_DESCRIPTION("Analogix DisplayPort Transmitter common code");
+MODULE_AUTHOR("Icenowy Zheng <icenowy@aosc.io>");
+MODULE_LICENSE("GPL v2");

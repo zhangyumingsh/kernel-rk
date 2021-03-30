@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _ASM_S390_ALTERNATIVE_H
 #define _ASM_S390_ALTERNATIVE_H
 
@@ -139,10 +138,10 @@ void apply_alternatives(struct alt_instr *start, struct alt_instr *end);
  * without volatile and memory clobber.
  */
 #define alternative(oldinstr, altinstr, facility)			\
-	asm_inline volatile(ALTERNATIVE(oldinstr, altinstr, facility) : : : "memory")
+	asm volatile(ALTERNATIVE(oldinstr, altinstr, facility) : : : "memory")
 
 #define alternative_2(oldinstr, altinstr1, facility1, altinstr2, facility2) \
-	asm_inline volatile(ALTERNATIVE_2(oldinstr, altinstr1, facility1,   \
+	asm volatile(ALTERNATIVE_2(oldinstr, altinstr1, facility1,	    \
 				   altinstr2, facility2) ::: "memory")
 
 #endif /* __ASSEMBLY__ */

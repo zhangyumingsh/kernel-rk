@@ -1,8 +1,13 @@
-/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * AEAD: Authenticated Encryption with Associated Data
  * 
  * Copyright (c) 2007-2015 Herbert Xu <herbert@gondor.apana.org.au>
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the Free
+ * Software Foundation; either version 2 of the License, or (at your option) 
+ * any later version.
+ *
  */
 
 #ifndef _CRYPTO_INTERNAL_AEAD_H
@@ -75,15 +80,14 @@ static inline u32 aead_request_flags(struct aead_request *req)
 	return req->base.flags;
 }
 
-static inline struct aead_request *aead_request_cast(
-	struct crypto_async_request *req)
+static inline void crypto_set_aead_spawn(
+	struct crypto_aead_spawn *spawn, struct crypto_instance *inst)
 {
-	return container_of(req, struct aead_request, base);
+	crypto_set_spawn(&spawn->base, inst);
 }
 
-int crypto_grab_aead(struct crypto_aead_spawn *spawn,
-		     struct crypto_instance *inst,
-		     const char *name, u32 type, u32 mask);
+int crypto_grab_aead(struct crypto_aead_spawn *spawn, const char *name,
+		     u32 type, u32 mask);
 
 static inline void crypto_drop_aead(struct crypto_aead_spawn *spawn)
 {
@@ -106,6 +110,16 @@ static inline void crypto_aead_set_reqsize(struct crypto_aead *aead,
 					   unsigned int reqsize)
 {
 	aead->reqsize = reqsize;
+}
+
+static inline unsigned int crypto_aead_alg_maxauthsize(struct aead_alg *alg)
+{
+	return alg->maxauthsize;
+}
+
+static inline unsigned int crypto_aead_maxauthsize(struct crypto_aead *aead)
+{
+	return crypto_aead_alg_maxauthsize(crypto_aead_alg(aead));
 }
 
 static inline void aead_init_queue(struct aead_queue *queue,
@@ -137,27 +151,6 @@ static inline struct aead_request *aead_get_backlog(struct aead_queue *queue)
 	req = crypto_get_backlog(&queue->base);
 
 	return req ? container_of(req, struct aead_request, base) : NULL;
-}
-
-static inline unsigned int crypto_aead_alg_chunksize(struct aead_alg *alg)
-{
-	return alg->chunksize;
-}
-
-/**
- * crypto_aead_chunksize() - obtain chunk size
- * @tfm: cipher handle
- *
- * The block size is set to one for ciphers such as CCM.  However,
- * you still need to provide incremental updates in multiples of
- * the underlying block size as the IV does not have sub-block
- * granularity.  This is known in this API as the chunk size.
- *
- * Return: chunk size in bytes
- */
-static inline unsigned int crypto_aead_chunksize(struct crypto_aead *tfm)
-{
-	return crypto_aead_alg_chunksize(crypto_aead_alg(tfm));
 }
 
 int crypto_register_aead(struct aead_alg *alg);

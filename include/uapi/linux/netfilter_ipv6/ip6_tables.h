@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 /*
  * 25-Jul-1998 Major changes to allow for ip chain table
  *
@@ -18,7 +17,6 @@
 
 #include <linux/types.h>
 #include <linux/compiler.h>
-#include <linux/if.h>
 #include <linux/netfilter_ipv6.h>
 
 #include <linux/netfilter/x_tables.h>
@@ -262,7 +260,7 @@ struct ip6t_get_entries {
 static __inline__ struct xt_entry_target *
 ip6t_get_target(struct ip6t_entry *e)
 {
-	return (struct xt_entry_target *)((char *)e + e->target_offset);
+	return (void *)e + e->target_offset;
 }
 
 /*

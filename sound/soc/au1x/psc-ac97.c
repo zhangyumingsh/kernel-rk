@@ -1,11 +1,15 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Au12x0/Au1550 PSC ALSA ASoC audio support.
  *
  * (c) 2007-2009 MSC Vertriebsges.m.b.H.,
  *	Manuel Lauss <manuel.lauss@gmail.com>
  *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ *
  * Au1xxx-PSC AC97 glue.
+ *
  */
 
 #include <linux/init.h>
@@ -339,6 +343,7 @@ static const struct snd_soc_dai_ops au1xpsc_ac97_dai_ops = {
 };
 
 static const struct snd_soc_dai_driver au1xpsc_ac97_dai_template = {
+	.bus_control		= true,
 	.probe			= au1xpsc_ac97_probe,
 	.playback = {
 		.rates		= AC97_RATES,
@@ -362,7 +367,7 @@ static const struct snd_soc_component_driver au1xpsc_ac97_component = {
 static int au1xpsc_ac97_drvprobe(struct platform_device *pdev)
 {
 	int ret;
-	struct resource *dmares;
+	struct resource *iores, *dmares;
 	unsigned long sel;
 	struct au1xpsc_audio_data *wd;
 
@@ -373,7 +378,8 @@ static int au1xpsc_ac97_drvprobe(struct platform_device *pdev)
 
 	mutex_init(&wd->lock);
 
-	wd->mmio = devm_platform_ioremap_resource(pdev, 0);
+	iores = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	wd->mmio = devm_ioremap_resource(&pdev->dev, iores);
 	if (IS_ERR(wd->mmio))
 		return PTR_ERR(wd->mmio);
 
@@ -468,7 +474,7 @@ static int au1xpsc_ac97_drvresume(struct device *dev)
 	return 0;
 }
 
-static const struct dev_pm_ops au1xpscac97_pmops = {
+static struct dev_pm_ops au1xpscac97_pmops = {
 	.suspend	= au1xpsc_ac97_drvsuspend,
 	.resume		= au1xpsc_ac97_drvresume,
 };

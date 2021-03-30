@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 .text
 #include <linux/linkage.h>
 #include <asm/segment.h>
@@ -90,7 +89,7 @@ restore_registers:
 
 	ret
 
-SYM_CODE_START(do_olpc_suspend_lowlevel)
+ENTRY(do_olpc_suspend_lowlevel)
 	call	save_processor_state
 	call	save_registers
 
@@ -110,7 +109,6 @@ ret_point:
 	call	restore_registers
 	call	restore_processor_state
 	ret
-SYM_CODE_END(do_olpc_suspend_lowlevel)
 
 .data
 saved_gdt:             .long   0,0

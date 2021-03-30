@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * linux/include/linux/sunrpc/gss_api.h
  *
@@ -13,6 +12,7 @@
 #ifndef _LINUX_SUNRPC_GSS_API_H
 #define _LINUX_SUNRPC_GSS_API_H
 
+#ifdef __KERNEL__
 #include <linux/sunrpc/xdr.h>
 #include <linux/sunrpc/msg_prot.h>
 #include <linux/uio.h>
@@ -48,7 +48,7 @@ int gss_import_sec_context(
 		size_t			bufsize,
 		struct gss_api_mech	*mech,
 		struct gss_ctx		**ctx_id,
-		time64_t		*endtime,
+		time_t			*endtime,
 		gfp_t			gfp_mask);
 u32 gss_get_mic(
 		struct gss_ctx		*ctx_id,
@@ -73,7 +73,6 @@ u32 gss_delete_sec_context(
 rpc_authflavor_t gss_svc_to_pseudoflavor(struct gss_api_mech *, u32 qop,
 					u32 service);
 u32 gss_pseudoflavor_to_service(struct gss_api_mech *, u32 pseudoflavor);
-bool gss_pseudoflavor_to_datatouch(struct gss_api_mech *, u32 pseudoflavor);
 char *gss_service_to_auth_domain_name(struct gss_api_mech *, u32 service);
 
 struct pf_desc {
@@ -82,7 +81,6 @@ struct pf_desc {
 	u32	service;
 	char	*name;
 	char	*auth_domain_name;
-	bool	datatouch;
 };
 
 /* Different mechanisms (e.g., krb5 or spkm3) may implement gss-api, and
@@ -108,7 +106,7 @@ struct gss_api_ops {
 			const void		*input_token,
 			size_t			bufsize,
 			struct gss_ctx		*ctx_id,
-			time64_t		*endtime,
+			time_t			*endtime,
 			gfp_t			gfp_mask);
 	u32 (*gss_get_mic)(
 			struct gss_ctx		*ctx_id,
@@ -150,11 +148,15 @@ struct gss_api_mech *gss_mech_get_by_name(const char *);
 /* Similar, but get by pseudoflavor. */
 struct gss_api_mech *gss_mech_get_by_pseudoflavor(u32);
 
+/* Fill in an array with a list of supported pseudoflavors */
+int gss_mech_list_pseudoflavors(rpc_authflavor_t *, int);
+
 struct gss_api_mech * gss_mech_get(struct gss_api_mech *);
 
 /* For every successful gss_mech_get or gss_mech_get_by_* call there must be a
  * corresponding call to gss_mech_put. */
 void gss_mech_put(struct gss_api_mech *);
 
+#endif /* __KERNEL__ */
 #endif /* _LINUX_SUNRPC_GSS_API_H */
 

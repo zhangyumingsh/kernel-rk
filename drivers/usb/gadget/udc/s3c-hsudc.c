@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /* linux/drivers/usb/gadget/s3c-hsudc.c
  *
  * Copyright (c) 2010 Samsung Electronics Co., Ltd.
@@ -9,7 +8,11 @@
  * The S3C24XX USB 2.0 high-speed USB controller supports upto 9 endpoints.
  * Each endpoint can be configured as either in or out endpoint. Endpoints
  * can be configured for Bulk or Interrupt transfer mode.
- */
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+*/
 
 #include <linux/kernel.h>
 #include <linux/module.h>
@@ -566,7 +569,7 @@ static int s3c_hsudc_handle_reqfeat(struct s3c_hsudc *hsudc,
 		hsep = &hsudc->ep[ep_num];
 		switch (le16_to_cpu(ctrl->wValue)) {
 		case USB_ENDPOINT_HALT:
-			if (set || !hsep->wedge)
+			if (set || (!set && !hsep->wedge))
 				s3c_hsudc_set_halt(&hsep->ep, set);
 			return 0;
 		}
@@ -951,7 +954,7 @@ static int s3c_hsudc_dequeue(struct usb_ep *_ep, struct usb_request *_req)
 	return 0;
 }
 
-static const struct usb_ep_ops s3c_hsudc_ep_ops = {
+static struct usb_ep_ops s3c_hsudc_ep_ops = {
 	.enable = s3c_hsudc_ep_enable,
 	.disable = s3c_hsudc_ep_disable,
 	.alloc_request = s3c_hsudc_alloc_request,
@@ -1263,6 +1266,7 @@ static const struct usb_gadget_ops s3c_hsudc_gadget_ops = {
 static int s3c_hsudc_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
+	struct resource *res;
 	struct s3c_hsudc *hsudc;
 	struct s3c24xx_hsudc_platdata *pd = dev_get_platdata(&pdev->dev);
 	int ret, i;
@@ -1289,7 +1293,9 @@ static int s3c_hsudc_probe(struct platform_device *pdev)
 		goto err_supplies;
 	}
 
-	hsudc->regs = devm_platform_ioremap_resource(pdev, 0);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+
+	hsudc->regs = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(hsudc->regs)) {
 		ret = PTR_ERR(hsudc->regs);
 		goto err_res;
@@ -1308,8 +1314,10 @@ static int s3c_hsudc_probe(struct platform_device *pdev)
 	s3c_hsudc_setup_ep(hsudc);
 
 	ret = platform_get_irq(pdev, 0);
-	if (ret < 0)
+	if (ret < 0) {
+		dev_err(dev, "unable to obtain IRQ number\n");
 		goto err_res;
+	}
 	hsudc->irq = ret;
 
 	ret = devm_request_irq(&pdev->dev, hsudc->irq, s3c_hsudc_irq, 0,

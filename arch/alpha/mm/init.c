@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  *  linux/arch/alpha/mm/init.c
  *
@@ -19,11 +18,11 @@
 #include <linux/mm.h>
 #include <linux/swap.h>
 #include <linux/init.h>
-#include <linux/memblock.h> /* max_low_pfn */
+#include <linux/bootmem.h> /* max_low_pfn */
 #include <linux/vmalloc.h>
 #include <linux/gfp.h>
 
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/pgtable.h>
 #include <asm/pgalloc.h>
 #include <asm/hwrpb.h>
@@ -146,8 +145,6 @@ callback_init(void * kernel_end)
 {
 	struct crb_struct * crb;
 	pgd_t *pgd;
-	p4d_t *p4d;
-	pud_t *pud;
 	pmd_t *pmd;
 	void *two_pages;
 
@@ -186,10 +183,8 @@ callback_init(void * kernel_end)
 	memset(two_pages, 0, 2*PAGE_SIZE);
 
 	pgd = pgd_offset_k(VMALLOC_START);
-	p4d = p4d_offset(pgd, VMALLOC_START);
-	pud = pud_offset(p4d, VMALLOC_START);
-	pud_set(pud, (pmd_t *)two_pages);
-	pmd = pmd_offset(pud, VMALLOC_START);
+	pgd_set(pgd, (pmd_t *)two_pages);
+	pmd = pmd_offset(pgd, VMALLOC_START);
 	pmd_set(pmd, (pte_t *)(two_pages + PAGE_SIZE));
 
 	if (alpha_using_srm) {
@@ -218,9 +213,9 @@ callback_init(void * kernel_end)
 				/* Newer consoles (especially on larger
 				   systems) may require more pages of
 				   PTEs. Grab additional pages as needed. */
-				if (pmd != pmd_offset(pud, vaddr)) {
+				if (pmd != pmd_offset(pgd, vaddr)) {
 					memset(kernel_end, 0, PAGE_SIZE);
-					pmd = pmd_offset(pud, vaddr);
+					pmd = pmd_offset(pgd, vaddr);
 					pmd_set(pmd, (pte_t *)kernel_end);
 					kernel_end += PAGE_SIZE;
 				}
@@ -286,6 +281,20 @@ mem_init(void)
 {
 	set_max_mapnr(max_low_pfn);
 	high_memory = (void *) __va(max_low_pfn * PAGE_SIZE);
-	memblock_free_all();
+	free_all_bootmem();
 	mem_init_print_info(NULL);
 }
+
+void
+free_initmem(void)
+{
+	free_initmem_default(-1);
+}
+
+#ifdef CONFIG_BLK_DEV_INITRD
+void
+free_initrd_mem(unsigned long start, unsigned long end)
+{
+	free_reserved_area((void *)start, (void *)end, -1, "initrd");
+}
+#endif

@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * Interface between ext4 and JBD
  */
@@ -6,28 +5,6 @@
 #include "ext4_jbd2.h"
 
 #include <trace/events/ext4.h>
-
-int ext4_inode_journal_mode(struct inode *inode)
-{
-	if (EXT4_JOURNAL(inode) == NULL)
-		return EXT4_INODE_WRITEBACK_DATA_MODE;	/* writeback */
-	/* We do not support data journalling with delayed allocation */
-	if (!S_ISREG(inode->i_mode) ||
-	    ext4_test_inode_flag(inode, EXT4_INODE_EA_INODE) ||
-	    test_opt(inode->i_sb, DATA_FLAGS) == EXT4_MOUNT_JOURNAL_DATA ||
-	    (ext4_test_inode_flag(inode, EXT4_INODE_JOURNAL_DATA) &&
-	    !test_opt(inode->i_sb, DELALLOC))) {
-		/* We do not support data journalling for encrypted data */
-		if (S_ISREG(inode->i_mode) && IS_ENCRYPTED(inode))
-			return EXT4_INODE_ORDERED_DATA_MODE;  /* ordered */
-		return EXT4_INODE_JOURNAL_DATA_MODE;	/* journal data */
-	}
-	if (test_opt(inode->i_sb, DATA_FLAGS) == EXT4_MOUNT_ORDERED_DATA)
-		return EXT4_INODE_ORDERED_DATA_MODE;	/* ordered */
-	if (test_opt(inode->i_sb, DATA_FLAGS) == EXT4_MOUNT_WRITEBACK_DATA)
-		return EXT4_INODE_WRITEBACK_DATA_MODE;	/* writeback */
-	BUG();
-}
 
 /* Just increment the non-pointer handle value */
 static handle_t *ext4_get_nojournal(void)
@@ -66,11 +43,7 @@ static int ext4_journal_check_start(struct super_block *sb)
 	journal_t *journal;
 
 	might_sleep();
-
-	if (unlikely(ext4_forced_shutdown(EXT4_SB(sb))))
-		return -EIO;
-
-	if (sb_rdonly(sb))
+	if (sb->s_flags & MS_RDONLY)
 		return -EROFS;
 	WARN_ON(sb->s_writers.frozen == SB_FREEZE_COMPLETE);
 	journal = EXT4_SB(sb)->s_journal;
@@ -80,7 +53,6 @@ static int ext4_journal_check_start(struct super_block *sb)
 	 * take the FS itself readonly cleanly.
 	 */
 	if (journal && is_journal_aborted(journal)) {
-		ext4_set_errno(sb, -journal->j_errno);
 		ext4_abort(sb, "Detected aborted journal");
 		return -EROFS;
 	}
@@ -88,14 +60,12 @@ static int ext4_journal_check_start(struct super_block *sb)
 }
 
 handle_t *__ext4_journal_start_sb(struct super_block *sb, unsigned int line,
-				  int type, int blocks, int rsv_blocks,
-				  int revoke_creds)
+				  int type, int blocks, int rsv_blocks)
 {
 	journal_t *journal;
 	int err;
 
-	trace_ext4_journal_start(sb, blocks, rsv_blocks, revoke_creds,
-				 _RET_IP_);
+	trace_ext4_journal_start(sb, blocks, rsv_blocks, _RET_IP_);
 	err = ext4_journal_check_start(sb);
 	if (err < 0)
 		return ERR_PTR(err);
@@ -103,8 +73,8 @@ handle_t *__ext4_journal_start_sb(struct super_block *sb, unsigned int line,
 	journal = EXT4_SB(sb)->s_journal;
 	if (!journal)
 		return ext4_get_nojournal();
-	return jbd2__journal_start(journal, blocks, rsv_blocks, revoke_creds,
-				   GFP_NOFS, type, line);
+	return jbd2__journal_start(journal, blocks, rsv_blocks, GFP_NOFS,
+				   type, line);
 }
 
 int __ext4_journal_stop(const char *where, unsigned int line, handle_t *handle)
@@ -144,8 +114,8 @@ handle_t *__ext4_journal_start_reserved(handle_t *handle, unsigned int line,
 		return ext4_get_nojournal();
 
 	sb = handle->h_journal->j_private;
-	trace_ext4_journal_start_reserved(sb,
-				jbd2_handle_buffer_credits(handle), _RET_IP_);
+	trace_ext4_journal_start_reserved(sb, handle->h_buffer_credits,
+					  _RET_IP_);
 	err = ext4_journal_check_start(sb);
 	if (err < 0) {
 		jbd2_journal_free_reserved(handle);
@@ -156,19 +126,6 @@ handle_t *__ext4_journal_start_reserved(handle_t *handle, unsigned int line,
 	if (err < 0)
 		return ERR_PTR(err);
 	return handle;
-}
-
-int __ext4_journal_ensure_credits(handle_t *handle, int check_cred,
-				  int extend_cred, int revoke_cred)
-{
-	if (!ext4_handle_valid(handle))
-		return 0;
-	if (jbd2_handle_buffer_credits(handle) >= check_cred &&
-	    handle->h_revoke_credits >= revoke_cred)
-		return 0;
-	extend_cred = max(0, extend_cred - jbd2_handle_buffer_credits(handle));
-	revoke_cred = max(0, revoke_cred - handle->h_revoke_credits);
-	return ext4_journal_extend(handle, extend_cred, revoke_cred);
 }
 
 static void ext4_journal_abort_handle(const char *caller, unsigned int line,
@@ -272,7 +229,6 @@ int __ext4_forget(const char *where, unsigned int line, handle_t *handle,
 	if (err) {
 		ext4_journal_abort_handle(where, line, __func__,
 					  bh, handle, err);
-		ext4_set_errno(inode->i_sb, -err);
 		__ext4_abort(inode->i_sb, where, line,
 			   "error %d when attempting revoke", err);
 	}
@@ -317,7 +273,7 @@ int __ext4_handle_dirty_metadata(const char *where, unsigned int line,
 				       handle->h_type,
 				       handle->h_line_no,
 				       handle->h_requested_credits,
-				       jbd2_handle_buffer_credits(handle), err);
+				       handle->h_buffer_credits, err);
 				return err;
 			}
 			ext4_error_inode(inode, where, line,
@@ -328,8 +284,7 @@ int __ext4_handle_dirty_metadata(const char *where, unsigned int line,
 					 handle->h_type,
 					 handle->h_line_no,
 					 handle->h_requested_credits,
-					 jbd2_handle_buffer_credits(handle),
-					 err);
+					 handle->h_buffer_credits, err);
 		}
 	} else {
 		if (inode)
@@ -344,7 +299,6 @@ int __ext4_handle_dirty_metadata(const char *where, unsigned int line,
 				es = EXT4_SB(inode->i_sb)->s_es;
 				es->s_last_error_block =
 					cpu_to_le64(bh->b_blocknr);
-				ext4_set_errno(inode->i_sb, EIO);
 				ext4_error_inode(inode, where, line,
 						 bh->b_blocknr,
 					"IO error syncing itable block");

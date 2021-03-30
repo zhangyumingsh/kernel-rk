@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * linux/drivers/video/ep93xx-fb.c
  *
@@ -11,6 +10,11 @@
  *
  * Based on the Cirrus Logic ep93xxfb driver, and various other ep93xxfb
  * drivers.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ *
  */
 
 #include <linux/platform_device.h>
@@ -312,8 +316,9 @@ static int ep93xxfb_mmap(struct fb_info *info, struct vm_area_struct *vma)
 	unsigned int offset = vma->vm_pgoff << PAGE_SHIFT;
 
 	if (offset < info->fix.smem_len) {
-		return dma_mmap_wc(info->dev, vma, info->screen_base,
-				   info->fix.smem_start, info->fix.smem_len);
+		return dma_mmap_writecombine(info->dev, vma, info->screen_base,
+					     info->fix.smem_start,
+					     info->fix.smem_len);
 	}
 
 	return -EINVAL;
@@ -402,7 +407,7 @@ static int ep93xxfb_setcolreg(unsigned int regno, unsigned int red,
 	return 0;
 }
 
-static const struct fb_ops ep93xxfb_ops = {
+static struct fb_ops ep93xxfb_ops = {
 	.owner		= THIS_MODULE,
 	.fb_check_var	= ep93xxfb_check_var,
 	.fb_set_par	= ep93xxfb_set_par,
@@ -423,7 +428,8 @@ static int ep93xxfb_alloc_videomem(struct fb_info *info)
 	/* Maximum 16bpp -> used memory is maximum x*y*2 bytes */
 	fb_size = EP93XXFB_MAX_XRES * EP93XXFB_MAX_YRES * 2;
 
-	virt_addr = dma_alloc_wc(info->dev, fb_size, &phys_addr, GFP_KERNEL);
+	virt_addr = dma_alloc_writecombine(info->dev, fb_size,
+					   &phys_addr, GFP_KERNEL);
 	if (!virt_addr)
 		return -ENOMEM;
 

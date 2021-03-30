@@ -1,10 +1,14 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Copyright 2008-2011 DENX Software Engineering GmbH
  * Author: Heiko Schocher <hs@denx.de>
  *
  * Description:
  * Keymile 83xx platform specific routines.
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under  the terms of  the GNU General  Public License as published by the
+ * Free Software Foundation;  either version 2 of the  License, or (at your
+ * option) any later version.
  */
 
 #include <linux/stddef.h>
@@ -33,7 +37,8 @@
 #include <asm/udbg.h>
 #include <sysdev/fsl_soc.h>
 #include <sysdev/fsl_pci.h>
-#include <soc/fsl/qe/qe.h>
+#include <asm/qe.h>
+#include <asm/qe_ic.h>
 
 #include "mpc83xx.h"
 
@@ -63,7 +68,7 @@ static void quirk_mpc8360e_qe_enet10(void)
 		return;
 	}
 
-	base = ioremap(res.start, resource_size(&res));
+	base = ioremap(res.start, res.end - res.start + 1);
 
 	/*
 	 * set output delay adjustments to default values according
@@ -125,9 +130,14 @@ static void __init mpc83xx_km_setup_arch(void)
 	struct device_node *np;
 #endif
 
-	mpc83xx_setup_arch();
+	if (ppc_md.progress)
+		ppc_md.progress("kmpbec83xx_setup_arch()", 0);
+
+	mpc83xx_setup_pci();
 
 #ifdef CONFIG_QUICC_ENGINE
+	qe_reset();
+
 	np = of_find_node_by_name(NULL, "par_io");
 	if (np != NULL) {
 		par_io_init(np);
@@ -163,10 +173,11 @@ static char *board[] __initdata = {
  */
 static int __init mpc83xx_km_probe(void)
 {
+	unsigned long node = of_get_flat_dt_root();
 	int i = 0;
 
 	while (board[i]) {
-		if (of_machine_is_compatible(board[i]))
+		if (of_flat_dt_is_compatible(node, board[i]))
 			break;
 		i++;
 	}
@@ -177,7 +188,7 @@ define_machine(mpc83xx_km) {
 	.name		= "mpc83xx-km-platform",
 	.probe		= mpc83xx_km_probe,
 	.setup_arch	= mpc83xx_km_setup_arch,
-	.init_IRQ	= mpc83xx_ipic_init_IRQ,
+	.init_IRQ	= mpc83xx_ipic_and_qe_init_IRQ,
 	.get_irq	= ipic_get_irq,
 	.restart	= mpc83xx_restart,
 	.time_init	= mpc83xx_time_init,

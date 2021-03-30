@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * Written by Kanoj Sarcar (kanoj@sgi.com) Aug 99
  * Adapted for the alpha wildfire architecture Jan 2001.
@@ -73,6 +72,7 @@ PLAT_NODE_DATA_LOCALNR(unsigned long p, int n)
 #define virt_to_page(kaddr)	pfn_to_page(__pa(kaddr) >> PAGE_SHIFT)
 
 #define pmd_page(pmd)		(pfn_to_page(pmd_val(pmd) >> 32))
+#define pgd_page(pgd)		(pfn_to_page(pgd_val(pgd) >> 32))
 #define pte_pfn(pte)		(pte_val(pte) >> 32)
 
 #define mk_pte(page, pgprot)						     \

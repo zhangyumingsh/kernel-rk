@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * Extensible Firmware Interface
  *
@@ -39,23 +38,14 @@
  * say 0 - 3G.
  */
 
-int __init efi_alloc_page_tables(void)
-{
-	return 0;
-}
-
 void efi_sync_low_kernel_mappings(void) {}
-
-void __init efi_dump_pagetable(void)
-{
-#ifdef CONFIG_EFI_PGT_DUMP
-	ptdump_walk_pgd_level(NULL, &init_mm);
-#endif
-}
-
+void __init efi_dump_pagetable(void) {}
 int __init efi_setup_page_tables(unsigned long pa_memmap, unsigned num_pages)
 {
 	return 0;
+}
+void __init efi_cleanup_page_tables(unsigned long pa_memmap, unsigned num_pages)
+{
 }
 
 void __init efi_map_region(efi_memory_desc_t *md)
@@ -66,17 +56,9 @@ void __init efi_map_region(efi_memory_desc_t *md)
 void __init efi_map_region_fixed(efi_memory_desc_t *md) {}
 void __init parse_efi_setup(u64 phys_addr, u32 data_len) {}
 
-efi_status_t efi_call_svam(efi_set_virtual_address_map_t *__efiapi *,
-			   u32, u32, u32, void *);
-
-efi_status_t __init efi_set_virtual_address_map(unsigned long memory_map_size,
-						unsigned long descriptor_size,
-						u32 descriptor_version,
-						efi_memory_desc_t *virtual_map)
+pgd_t * __init efi_call_phys_prolog(void)
 {
 	struct desc_ptr gdt_descr;
-	efi_status_t status;
-	unsigned long flags;
 	pgd_t *save_pgd;
 
 	/* Current pgd is swapper_pg_dir, we'll restore it later: */
@@ -84,25 +66,26 @@ efi_status_t __init efi_set_virtual_address_map(unsigned long memory_map_size,
 	load_cr3(initial_page_table);
 	__flush_tlb_all();
 
-	gdt_descr.address = get_cpu_gdt_paddr(0);
+	gdt_descr.address = __pa(get_cpu_gdt_table(0));
 	gdt_descr.size = GDT_SIZE - 1;
 	load_gdt(&gdt_descr);
 
-	/* Disable interrupts around EFI calls: */
-	local_irq_save(flags);
-	status = efi_call_svam(&efi.systab->runtime->set_virtual_address_map,
-			       memory_map_size, descriptor_size,
-			       descriptor_version, virtual_map);
-	local_irq_restore(flags);
-
-	load_fixmap_gdt(0);
-	load_cr3(save_pgd);
-	__flush_tlb_all();
-
-	return status;
+	return save_pgd;
 }
 
-void __init efi_runtime_update_mappings(void)
+void __init efi_call_phys_epilog(pgd_t *save_pgd)
+{
+	struct desc_ptr gdt_descr;
+
+	gdt_descr.address = (unsigned long)get_cpu_gdt_table(0);
+	gdt_descr.size = GDT_SIZE - 1;
+	load_gdt(&gdt_descr);
+
+	load_cr3(save_pgd);
+	__flush_tlb_all();
+}
+
+void __init efi_runtime_mkexec(void)
 {
 	if (__supported_pte_mask & _PAGE_NX)
 		runtime_code_page_mkexec();

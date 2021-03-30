@@ -1,10 +1,12 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Designware HDMI CEC driver
  *
  * Copyright (C) 2015-2017 Russell King.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  */
-#include <linux/delay.h>
 #include <linux/interrupt.h>
 #include <linux/io.h>
 #include <linux/module.h>
@@ -130,16 +132,8 @@ static irqreturn_t dw_hdmi_cec_hardirq(int irq, void *data)
 
 	dw_hdmi_write(cec, stat, HDMI_IH_CEC_STAT0);
 
-	/*
-	 * Status with both done and error_initiator bits have been seen
-	 * on Rockchip RK3328 devices, transmit attempt seems to have failed
-	 * when this happens, report as low drive and block cec-framework
-	 * 100ms before core retransmits the failed message, this seems to
-	 * mitigate the issue with failed transmit attempts.
-	 */
-	if ((stat & (CEC_STAT_DONE|CEC_STAT_ERROR_INIT)) == (CEC_STAT_DONE|CEC_STAT_ERROR_INIT)) {
-		pr_info("dw_hdmi_cec_hardirq: stat=%02x LOW_DRIVE\n", stat);
-		cec->tx_status = CEC_TX_STATUS_LOW_DRIVE;
+	if (stat & CEC_STAT_ERROR_INIT) {
+		cec->tx_status = CEC_TX_STATUS_ERROR;
 		cec->tx_done = true;
 		ret = IRQ_WAKE_THREAD;
 	} else if (stat & CEC_STAT_DONE) {
@@ -148,10 +142,6 @@ static irqreturn_t dw_hdmi_cec_hardirq(int irq, void *data)
 		ret = IRQ_WAKE_THREAD;
 	} else if (stat & CEC_STAT_NACK) {
 		cec->tx_status = CEC_TX_STATUS_NACK;
-		cec->tx_done = true;
-		ret = IRQ_WAKE_THREAD;
-	} else if (stat & CEC_STAT_ERROR_INIT) {
-		cec->tx_status = CEC_TX_STATUS_ERROR;
 		cec->tx_done = true;
 		ret = IRQ_WAKE_THREAD;
 	}
@@ -186,8 +176,6 @@ static irqreturn_t dw_hdmi_cec_thread(int irq, void *data)
 
 	if (cec->tx_done) {
 		cec->tx_done = false;
-		if (cec->tx_status == CEC_TX_STATUS_LOW_DRIVE)
-			msleep(100);
 		cec_transmit_attempt_done(adap, cec->tx_status);
 	}
 	if (cec->rx_done) {
@@ -271,8 +259,8 @@ static int dw_hdmi_cec_probe(struct platform_device *pdev)
 	dw_hdmi_write(cec, 0, HDMI_CEC_POLARITY);
 
 	cec->adap = cec_allocate_adapter(&dw_hdmi_cec_ops, cec, "dw_hdmi",
-					 CEC_CAP_DEFAULTS |
-					 CEC_CAP_CONNECTOR_INFO,
+					 CEC_CAP_LOG_ADDRS | CEC_CAP_TRANSMIT |
+					 CEC_CAP_RC | CEC_CAP_PASSTHROUGH,
 					 CEC_MAX_LOG_ADDRS);
 	if (IS_ERR(cec->adap))
 		return PTR_ERR(cec->adap);
@@ -293,14 +281,13 @@ static int dw_hdmi_cec_probe(struct platform_device *pdev)
 	if (ret < 0)
 		return ret;
 
-	cec->notify = cec_notifier_cec_adap_register(pdev->dev.parent,
-						     NULL, cec->adap);
+	cec->notify = cec_notifier_get(pdev->dev.parent);
 	if (!cec->notify)
 		return -ENOMEM;
 
 	ret = cec_register_adapter(cec->adap, pdev->dev.parent);
 	if (ret < 0) {
-		cec_notifier_cec_adap_unregister(cec->notify, cec->adap);
+		cec_notifier_put(cec->notify);
 		return ret;
 	}
 
@@ -310,6 +297,8 @@ static int dw_hdmi_cec_probe(struct platform_device *pdev)
 	 */
 	devm_remove_action(&pdev->dev, dw_hdmi_cec_del, cec);
 
+	cec_register_cec_notifier(cec->adap, cec->notify);
+
 	return 0;
 }
 
@@ -317,8 +306,8 @@ static int dw_hdmi_cec_remove(struct platform_device *pdev)
 {
 	struct dw_hdmi_cec *cec = platform_get_drvdata(pdev);
 
-	cec_notifier_cec_adap_unregister(cec->notify, cec->adap);
 	cec_unregister_adapter(cec->adap);
+	cec_notifier_put(cec->notify);
 
 	return 0;
 }

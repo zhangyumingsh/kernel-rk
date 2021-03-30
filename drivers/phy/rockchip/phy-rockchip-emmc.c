@@ -1,9 +1,17 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Rockchip emmc PHY driver
  *
  * Copyright (C) 2016 Shawn Lin <shawn.lin@rock-chips.com>
  * Copyright (C) 2016 ROCKCHIP, Inc.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/clk.h>
@@ -67,6 +75,9 @@
 #define PHYCTRL_OTAPDLYENA_SHIFT	0xb
 #define PHYCTRL_OTAPDLYSEL_MASK		0xf
 #define PHYCTRL_OTAPDLYSEL_SHIFT	0x7
+#define PHYCTRL_REN_STRB_ENABLE		0x1
+#define PHYCTRL_REN_STRB_MASK		0x1
+#define PHYCTRL_REN_STRB_SHIFT		0x9
 
 #define PHYCTRL_IS_CALDONE(x) \
 	((((x) >> PHYCTRL_CALDONE_SHIFT) & \
@@ -79,7 +90,6 @@ struct rockchip_emmc_phy {
 	unsigned int	reg_offset;
 	struct regmap	*reg_base;
 	struct clk	*emmcclk;
-	unsigned int drive_impedance;
 };
 
 static int rockchip_emmc_phy_power(struct phy *phy, bool on_off)
@@ -89,7 +99,6 @@ static int rockchip_emmc_phy_power(struct phy *phy, bool on_off)
 	unsigned int dllrdy;
 	unsigned int freqsel = PHYCTRL_FREQSEL_200M;
 	unsigned long rate;
-	int ret;
 
 	/*
 	 * Keep phyctrl_pdb and phyctrl_endll low to allow
@@ -132,7 +141,7 @@ static int rockchip_emmc_phy_power(struct phy *phy, bool on_off)
 		default:
 			ideal_rate = 200000000;
 			break;
-		}
+		};
 
 		diff = (rate > ideal_rate) ?
 			rate - ideal_rate : ideal_rate - rate;
@@ -166,13 +175,12 @@ static int rockchip_emmc_phy_power(struct phy *phy, bool on_off)
 	 * failure cases are found which indicates we should be more tolerant
 	 * to calpad busy trimming.
 	 */
-	ret = regmap_read_poll_timeout(rk_phy->reg_base,
-				       rk_phy->reg_offset + GRF_EMMCPHY_STATUS,
-				       caldone, PHYCTRL_IS_CALDONE(caldone),
-				       0, 50);
-	if (ret) {
-		pr_err("%s: caldone failed, ret=%d\n", __func__, ret);
-		return ret;
+	if (regmap_read_poll_timeout(rk_phy->reg_base,
+				     rk_phy->reg_offset + GRF_EMMCPHY_STATUS,
+				     caldone, PHYCTRL_IS_CALDONE(caldone),
+				     5, 500)) {
+		pr_err("rockchip_emmc_phy_power: caldone timeout.\n");
+		return -ETIMEDOUT;
 	}
 
 	/* Set the frequency of the DLL operation */
@@ -212,15 +220,19 @@ static int rockchip_emmc_phy_power(struct phy *phy, bool on_off)
 	 * NOTE: There appear to be corner cases where the DLL seems to take
 	 * extra long to lock for reasons that aren't understood.  In some
 	 * extreme cases we've seen it take up to over 10ms (!).  We'll be
-	 * generous and give it 50ms.
+	 * generous and give it 50ms.  We still busy wait here because:
+	 * - In most cases it should be super fast.
+	 * - This is not called lots during normal operation so it shouldn't
+	 *   be a power or performance problem to busy wait.  We expect it
+	 *   only at boot / resume.  In both cases, eMMC is probably on the
+	 *   critical path so busy waiting a little extra time should be OK.
 	 */
-	ret = regmap_read_poll_timeout(rk_phy->reg_base,
-				       rk_phy->reg_offset + GRF_EMMCPHY_STATUS,
-				       dllrdy, PHYCTRL_IS_DLLRDY(dllrdy),
-				       0, 50 * USEC_PER_MSEC);
-	if (ret) {
-		pr_err("%s: dllrdy failed. ret=%d\n", __func__, ret);
-		return ret;
+	if (regmap_read_poll_timeout(rk_phy->reg_base,
+				     rk_phy->reg_offset + GRF_EMMCPHY_STATUS,
+				     dllrdy, PHYCTRL_IS_DLLRDY(dllrdy),
+				     1, 50 * USEC_PER_MSEC)) {
+		pr_err("rockchip_emmc_phy_power: dllrdy timeout.\n");
+		return -ETIMEDOUT;
 	}
 
 	return 0;
@@ -274,10 +286,10 @@ static int rockchip_emmc_phy_power_on(struct phy *phy)
 {
 	struct rockchip_emmc_phy *rk_phy = phy_get_drvdata(phy);
 
-	/* Drive impedance: from DTS */
+	/* Drive impedance: 50 Ohm */
 	regmap_write(rk_phy->reg_base,
 		     rk_phy->reg_offset + GRF_EMMCPHY_CON6,
-		     HIWORD_UPDATE(rk_phy->drive_impedance,
+		     HIWORD_UPDATE(PHYCTRL_DR_50OHM,
 				   PHYCTRL_DR_MASK,
 				   PHYCTRL_DR_SHIFT));
 
@@ -295,6 +307,13 @@ static int rockchip_emmc_phy_power_on(struct phy *phy)
 				   PHYCTRL_OTAPDLYSEL_MASK,
 				   PHYCTRL_OTAPDLYSEL_SHIFT));
 
+	/* Internal pull-down for strobe line: enable */
+	regmap_write(rk_phy->reg_base,
+		     rk_phy->reg_offset + GRF_EMMCPHY_CON2,
+		     HIWORD_UPDATE(PHYCTRL_REN_STRB_ENABLE,
+				   PHYCTRL_REN_STRB_MASK,
+				   PHYCTRL_REN_STRB_SHIFT));
+
 	/* Power up emmc phy analog blocks */
 	return rockchip_emmc_phy_power(phy, PHYCTRL_PDB_PWR_ON);
 }
@@ -307,26 +326,6 @@ static const struct phy_ops ops = {
 	.owner		= THIS_MODULE,
 };
 
-static u32 convert_drive_impedance_ohm(struct platform_device *pdev, u32 dr_ohm)
-{
-	switch (dr_ohm) {
-	case 100:
-		return PHYCTRL_DR_100OHM;
-	case 66:
-		return PHYCTRL_DR_66OHM;
-	case 50:
-		return PHYCTRL_DR_50OHM;
-	case 40:
-		return PHYCTRL_DR_40OHM;
-	case 33:
-		return PHYCTRL_DR_33OHM;
-	}
-
-	dev_warn(&pdev->dev, "Invalid value %u for drive-impedance-ohm.\n",
-		 dr_ohm);
-	return PHYCTRL_DR_50OHM;
-}
-
 static int rockchip_emmc_phy_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
@@ -335,7 +334,6 @@ static int rockchip_emmc_phy_probe(struct platform_device *pdev)
 	struct phy_provider *phy_provider;
 	struct regmap *grf;
 	unsigned int reg_offset;
-	u32 val;
 
 	if (!dev->parent || !dev->parent->of_node)
 		return -ENODEV;
@@ -351,17 +349,13 @@ static int rockchip_emmc_phy_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	if (of_property_read_u32(dev->of_node, "reg", &reg_offset)) {
-		dev_err(dev, "missing reg property in node %pOFn\n",
-			dev->of_node);
+		dev_err(dev, "missing reg property in node %s\n",
+			dev->of_node->name);
 		return -EINVAL;
 	}
 
 	rk_phy->reg_offset = reg_offset;
 	rk_phy->reg_base = grf;
-	rk_phy->drive_impedance = PHYCTRL_DR_50OHM;
-
-	if (!of_property_read_u32(dev->of_node, "drive-impedance-ohm", &val))
-		rk_phy->drive_impedance = convert_drive_impedance_ohm(pdev, val);
 
 	generic_phy = devm_phy_create(dev, dev->of_node, &ops);
 	if (IS_ERR(generic_phy)) {

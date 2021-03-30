@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  *  ATI Mach64 CT/VT/GT/LT Cursor Support
  */
@@ -194,7 +193,7 @@ static int atyfb_cursor(struct fb_info *info, struct fb_cursor *cursor)
 	return 0;
 }
 
-int aty_init_cursor(struct fb_info *info, struct fb_ops *atyfb_ops)
+int aty_init_cursor(struct fb_info *info)
 {
 	unsigned long addr;
 
@@ -219,7 +218,7 @@ int aty_init_cursor(struct fb_info *info, struct fb_ops *atyfb_ops)
 	info->sprite.buf_align = 16; 	/* and 64 lines tall. */
 	info->sprite.flags = FB_PIXMAP_IO;
 
-	atyfb_ops->fb_cursor = atyfb_cursor;
+	info->fbops->fb_cursor = atyfb_cursor;
 
 	return 0;
 }

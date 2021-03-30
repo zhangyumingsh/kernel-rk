@@ -208,7 +208,9 @@ syscall_debug_table:
 	mfs	r11, rmsr;		/* save MSR */			\
 	swi	r11, r1, PT_MSR;
 
-#define RESTORE_REGS_GP \
+#define RESTORE_REGS \
+	lwi	r11, r1, PT_MSR;					\
+	mts	rmsr , r11;						\
 	lwi	r2, r1, PT_R2;	/* restore SDA */		\
 	lwi	r3, r1, PT_R3;					\
 	lwi	r4, r1, PT_R4;					\
@@ -239,18 +241,6 @@ syscall_debug_table:
 	lwi	r29, r1, PT_R29;					\
 	lwi	r30, r1, PT_R30;					\
 	lwi	r31, r1, PT_R31;	/* Restore cur task reg */
-
-#define RESTORE_REGS \
-	lwi	r11, r1, PT_MSR;					\
-	mts	rmsr , r11;						\
-	RESTORE_REGS_GP
-
-#define RESTORE_REGS_RTBD \
-	lwi	r11, r1, PT_MSR;					\
-	andni	r11, r11, MSR_EIP;          /* clear EIP */             \
-	ori	r11, r11, MSR_EE | MSR_BIP; /* set EE and BIP */        \
-	mts	rmsr , r11;						\
-	RESTORE_REGS_GP
 
 #define SAVE_STATE	\
 	swi	r1, r0, TOPHYS(PER_CPU(ENTRY_SP)); /* save stack */	\
@@ -437,7 +427,7 @@ C_ENTRY(ret_from_trap):
 	swi	CURRENT_TASK, r0, PER_CPU(CURRENT_SAVE); /* save current */
 	VM_OFF;
 	tophys(r1,r1);
-	RESTORE_REGS_RTBD;
+	RESTORE_REGS;
 	addik	r1, r1, PT_SIZE		/* Clean up stack space.  */
 	lwi	r1, r1, PT_R1 - PT_SIZE;/* Restore user stack pointer. */
 	bri	6f;
@@ -446,7 +436,7 @@ C_ENTRY(ret_from_trap):
 2:	set_bip;			/*  Ints masked for state restore */
 	VM_OFF;
 	tophys(r1,r1);
-	RESTORE_REGS_RTBD;
+	RESTORE_REGS;
 	addik	r1, r1, PT_SIZE		/* Clean up stack space.  */
 	tovirt(r1,r1);
 6:
@@ -622,7 +612,7 @@ C_ENTRY(ret_from_exc):
 	VM_OFF;
 	tophys(r1,r1);
 
-	RESTORE_REGS_RTBD;
+	RESTORE_REGS;
 	addik	r1, r1, PT_SIZE		/* Clean up stack space.  */
 
 	lwi	r1, r1, PT_R1 - PT_SIZE; /* Restore user stack pointer. */
@@ -631,7 +621,7 @@ C_ENTRY(ret_from_exc):
 2:	set_bip;			/* Ints masked for state restore */
 	VM_OFF;
 	tophys(r1,r1);
-	RESTORE_REGS_RTBD;
+	RESTORE_REGS;
 	addik	r1, r1, PT_SIZE		/* Clean up stack space.  */
 
 	tovirt(r1,r1);
@@ -728,7 +718,7 @@ no_intr_resched:
 	bri	6f;
 /* MS: Return to kernel state. */
 2:
-#ifdef CONFIG_PREEMPTION
+#ifdef CONFIG_PREEMPT
 	lwi	r11, CURRENT_TASK, TS_THREAD_INFO;
 	/* MS: get preempt_count from thread info */
 	lwi	r5, r11, TI_PREEMPT_COUNT;
@@ -738,9 +728,14 @@ no_intr_resched:
 	andi	r5, r5, _TIF_NEED_RESCHED;
 	beqi	r5, restore /* if zero jump over */
 
+preempt:
 	/* interrupts are off that's why I am calling preempt_chedule_irq */
 	bralid	r15, preempt_schedule_irq
 	nop
+	lwi	r11, CURRENT_TASK, TS_THREAD_INFO;	/* get thread info */
+	lwi	r5, r11, TI_FLAGS;		/* get flags in thread info */
+	andi	r5, r5, _TIF_NEED_RESCHED;
+	bnei	r5, preempt /* if non zero jump to resched */
 restore:
 #endif
 	VM_OFF /* MS: turn off MMU */
@@ -852,7 +847,7 @@ dbtrap_call: /* Return point for kernel/user entry + 8 because of rtsd r15, 8 */
 	VM_OFF;
 	tophys(r1,r1);
 	/* MS: Restore all regs */
-	RESTORE_REGS_RTBD
+	RESTORE_REGS
 	addik	r1, r1, PT_SIZE	 /* Clean up stack space */
 	lwi	r1, r1, PT_R1 - PT_SIZE; /* Restore user stack pointer */
 DBTRAP_return_user: /* MS: Make global symbol for debugging */
@@ -863,7 +858,7 @@ DBTRAP_return_user: /* MS: Make global symbol for debugging */
 2:	VM_OFF;
 	tophys(r1,r1);
 	/* MS: Restore all regs */
-	RESTORE_REGS_RTBD
+	RESTORE_REGS
 	lwi	r14, r1, PT_R14;
 	lwi	r16, r1, PT_PC;
 	addik	r1, r1, PT_SIZE; /* MS: Clean up stack space */

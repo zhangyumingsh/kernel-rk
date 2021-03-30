@@ -1,8 +1,22 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * driver for ENE KB3926 B/C/D/E/F CIR (pnp id: ENE0XXX)
  *
  * Copyright (C) 2010 Maxim Levitsky <maximlevitsky@gmail.com>
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License as
+ * published by the Free Software Foundation; either version 2 of the
+ * License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307
+ * USA
  *
  * Special thanks to:
  *   Sami R. <maesesami@gmail.com> for lot of help in debugging and therefore
@@ -13,6 +27,7 @@
  *   on latest notebooks
  *
  *   ENE for partial device documentation
+ *
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -174,7 +189,7 @@ static int ene_hw_detect(struct ene_device *dev)
 	return 0;
 }
 
-/* Read properties of hw sample buffer */
+/* Read properities of hw sample buffer */
 static void ene_rx_setup_hw_buffer(struct ene_device *dev)
 {
 	u16 tmp;
@@ -889,7 +904,7 @@ static int ene_set_tx_carrier(struct rc_dev *rdev, u32 carrier)
 
 		dbg("TX: out of range %d-%d kHz carrier",
 			2000 / ENE_CIRMOD_PRD_MIN, 2000 / ENE_CIRMOD_PRD_MAX);
-		return -EINVAL;
+		return -1;
 	}
 
 	dev->tx_period = period;

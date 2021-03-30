@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * Vortex Mixer support.
  *
@@ -25,7 +24,7 @@ static int snd_vortex_mixer(vortex_t *vortex)
 	struct snd_ac97_bus *pbus;
 	struct snd_ac97_template ac97;
 	int err;
-	static const struct snd_ac97_bus_ops ops = {
+	static struct snd_ac97_bus_ops ops = {
 		.write = vortex_codec_write,
 		.read = vortex_codec_read,
 	};

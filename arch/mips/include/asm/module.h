@@ -1,10 +1,9 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _ASM_MODULE_H
 #define _ASM_MODULE_H
 
 #include <linux/list.h>
 #include <linux/elf.h>
-#include <asm/extable.h>
+#include <asm/uaccess.h>
 
 struct mod_arch_specific {
 	/* Data Bus Error exception tables */
@@ -48,8 +47,8 @@ typedef struct {
 #define Elf_Mips_Rel	Elf32_Rel
 #define Elf_Mips_Rela	Elf32_Rela
 
-#define ELF_MIPS_R_SYM(rel) ELF32_R_SYM((rel).r_info)
-#define ELF_MIPS_R_TYPE(rel) ELF32_R_TYPE((rel).r_info)
+#define ELF_MIPS_R_SYM(rel) ELF32_R_SYM(rel.r_info)
+#define ELF_MIPS_R_TYPE(rel) ELF32_R_TYPE(rel.r_info)
 
 #endif
 
@@ -66,8 +65,8 @@ typedef struct {
 #define Elf_Mips_Rel	Elf64_Mips_Rel
 #define Elf_Mips_Rela	Elf64_Mips_Rela
 
-#define ELF_MIPS_R_SYM(rel) ((rel).r_sym)
-#define ELF_MIPS_R_TYPE(rel) ((rel).r_type)
+#define ELF_MIPS_R_SYM(rel) (rel.r_sym)
+#define ELF_MIPS_R_TYPE(rel) (rel.r_type)
 
 #endif
 
@@ -103,28 +102,36 @@ search_module_dbetables(unsigned long addr)
 #define MODULE_PROC_FAMILY "TX39XX "
 #elif defined CONFIG_CPU_VR41XX
 #define MODULE_PROC_FAMILY "VR41XX "
+#elif defined CONFIG_CPU_R4300
+#define MODULE_PROC_FAMILY "R4300 "
 #elif defined CONFIG_CPU_R4X00
 #define MODULE_PROC_FAMILY "R4X00 "
 #elif defined CONFIG_CPU_TX49XX
 #define MODULE_PROC_FAMILY "TX49XX "
 #elif defined CONFIG_CPU_R5000
 #define MODULE_PROC_FAMILY "R5000 "
+#elif defined CONFIG_CPU_R5432
+#define MODULE_PROC_FAMILY "R5432 "
 #elif defined CONFIG_CPU_R5500
 #define MODULE_PROC_FAMILY "R5500 "
+#elif defined CONFIG_CPU_R6000
+#define MODULE_PROC_FAMILY "R6000 "
 #elif defined CONFIG_CPU_NEVADA
 #define MODULE_PROC_FAMILY "NEVADA "
+#elif defined CONFIG_CPU_R8000
+#define MODULE_PROC_FAMILY "R8000 "
 #elif defined CONFIG_CPU_R10000
 #define MODULE_PROC_FAMILY "R10000 "
 #elif defined CONFIG_CPU_RM7000
 #define MODULE_PROC_FAMILY "RM7000 "
 #elif defined CONFIG_CPU_SB1
 #define MODULE_PROC_FAMILY "SB1 "
-#elif defined CONFIG_CPU_LOONGSON32
-#define MODULE_PROC_FAMILY "LOONGSON32 "
-#elif defined CONFIG_CPU_LOONGSON2EF
-#define MODULE_PROC_FAMILY "LOONGSON2EF "
-#elif defined CONFIG_CPU_LOONGSON64
-#define MODULE_PROC_FAMILY "LOONGSON64 "
+#elif defined CONFIG_CPU_LOONGSON1
+#define MODULE_PROC_FAMILY "LOONGSON1 "
+#elif defined CONFIG_CPU_LOONGSON2
+#define MODULE_PROC_FAMILY "LOONGSON2 "
+#elif defined CONFIG_CPU_LOONGSON3
+#define MODULE_PROC_FAMILY "LOONGSON3 "
 #elif defined CONFIG_CPU_CAVIUM_OCTEON
 #define MODULE_PROC_FAMILY "OCTEON "
 #elif defined CONFIG_CPU_XLR

@@ -1,9 +1,12 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /* linux/drivers/mfd/sm501.c
  *
  * Copyright (C) 2006 Simtec Electronics
  *	Ben Dooks <ben@simtec.co.uk>
  *	Vincent Sanders <vince@simtec.co.uk>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  *
  * SM501 MFD driver
 */
@@ -16,9 +19,7 @@
 #include <linux/device.h>
 #include <linux/platform_device.h>
 #include <linux/pci.h>
-#include <linux/platform_data/i2c-gpio.h>
-#include <linux/gpio/driver.h>
-#include <linux/gpio/machine.h>
+#include <linux/i2c-gpio.h>
 #include <linux/slab.h>
 
 #include <linux/sm501.h>
@@ -879,6 +880,11 @@ static int sm501_register_display(struct sm501_devdata *sm,
 
 #ifdef CONFIG_MFD_SM501_GPIO
 
+static inline struct sm501_gpio_chip *to_sm501_gpio(struct gpio_chip *gc)
+{
+	return container_of(gc, struct sm501_gpio_chip, gpio);
+}
+
 static inline struct sm501_devdata *sm501_gpio_to_dev(struct sm501_gpio *gpio)
 {
 	return container_of(gpio, struct sm501_devdata, gpio);
@@ -887,7 +893,7 @@ static inline struct sm501_devdata *sm501_gpio_to_dev(struct sm501_gpio *gpio)
 static int sm501_gpio_get(struct gpio_chip *chip, unsigned offset)
 
 {
-	struct sm501_gpio_chip *smgpio = gpiochip_get_data(chip);
+	struct sm501_gpio_chip *smgpio = to_sm501_gpio(chip);
 	unsigned long result;
 
 	result = smc501_readl(smgpio->regbase + SM501_GPIO_DATA_LOW);
@@ -918,7 +924,7 @@ static void sm501_gpio_ensure_gpio(struct sm501_gpio_chip *smchip,
 static void sm501_gpio_set(struct gpio_chip *chip, unsigned offset, int value)
 
 {
-	struct sm501_gpio_chip *smchip = gpiochip_get_data(chip);
+	struct sm501_gpio_chip *smchip = to_sm501_gpio(chip);
 	struct sm501_gpio *smgpio = smchip->ourgpio;
 	unsigned long bit = 1 << offset;
 	void __iomem *regs = smchip->regbase;
@@ -943,7 +949,7 @@ static void sm501_gpio_set(struct gpio_chip *chip, unsigned offset, int value)
 
 static int sm501_gpio_input(struct gpio_chip *chip, unsigned offset)
 {
-	struct sm501_gpio_chip *smchip = gpiochip_get_data(chip);
+	struct sm501_gpio_chip *smchip = to_sm501_gpio(chip);
 	struct sm501_gpio *smgpio = smchip->ourgpio;
 	void __iomem *regs = smchip->regbase;
 	unsigned long bit = 1 << offset;
@@ -969,7 +975,7 @@ static int sm501_gpio_input(struct gpio_chip *chip, unsigned offset)
 static int sm501_gpio_output(struct gpio_chip *chip,
 			     unsigned offset, int value)
 {
-	struct sm501_gpio_chip *smchip = gpiochip_get_data(chip);
+	struct sm501_gpio_chip *smchip = to_sm501_gpio(chip);
 	struct sm501_gpio *smgpio = smchip->ourgpio;
 	unsigned long bit = 1 << offset;
 	void __iomem *regs = smchip->regbase;
@@ -1001,7 +1007,7 @@ static int sm501_gpio_output(struct gpio_chip *chip,
 	return 0;
 }
 
-static const struct gpio_chip gpio_chip_template = {
+static struct gpio_chip gpio_chip_template = {
 	.ngpio			= 32,
 	.direction_input	= sm501_gpio_input,
 	.direction_output	= sm501_gpio_output,
@@ -1034,7 +1040,7 @@ static int sm501_gpio_register_chip(struct sm501_devdata *sm,
 	gchip->base   = base;
 	chip->ourgpio = gpio;
 
-	return gpiochip_add_data(gchip, chip);
+	return gpiochip_add(gchip);
 }
 
 static int sm501_register_gpio(struct sm501_devdata *sm)
@@ -1049,13 +1055,13 @@ static int sm501_register_gpio(struct sm501_devdata *sm)
 	spin_lock_init(&gpio->lock);
 
 	gpio->regs_res = request_mem_region(iobase, 0x20, "sm501-gpio");
-	if (!gpio->regs_res) {
+	if (gpio->regs_res == NULL) {
 		dev_err(sm->dev, "gpio: failed to request region\n");
 		return -ENXIO;
 	}
 
 	gpio->regs = ioremap(iobase, 0x20);
-	if (!gpio->regs) {
+	if (gpio->regs == NULL) {
 		dev_err(sm->dev, "gpio: failed to remap registers\n");
 		ret = -ENXIO;
 		goto err_claimed;
@@ -1086,7 +1092,8 @@ static int sm501_register_gpio(struct sm501_devdata *sm)
 	iounmap(gpio->regs);
 
  err_claimed:
-	release_mem_region(iobase, 0x20);
+	release_resource(gpio->regs_res);
+	kfree(gpio->regs_res);
 
 	return ret;
 }
@@ -1094,7 +1101,6 @@ static int sm501_register_gpio(struct sm501_devdata *sm)
 static void sm501_gpio_remove(struct sm501_devdata *sm)
 {
 	struct sm501_gpio *gpio = &sm->gpio;
-	resource_size_t iobase = sm->io_res->start + SM501_GPIO;
 
 	if (!sm->gpio.registered)
 		return;
@@ -1103,7 +1109,16 @@ static void sm501_gpio_remove(struct sm501_devdata *sm)
 	gpiochip_remove(&gpio->high.gpio);
 
 	iounmap(gpio->regs);
-	release_mem_region(iobase, 0x20);
+	release_resource(gpio->regs_res);
+	kfree(gpio->regs_res);
+}
+
+static inline int sm501_gpio_pin2nr(struct sm501_devdata *sm, unsigned int pin)
+{
+	struct sm501_gpio *gpio = &sm->gpio;
+	int base = (pin < 32) ? gpio->low.gpio.base : gpio->high.gpio.base;
+
+	return (pin % 32) + base;
 }
 
 static inline int sm501_gpio_isregistered(struct sm501_devdata *sm)
@@ -1120,6 +1135,11 @@ static inline void sm501_gpio_remove(struct sm501_devdata *sm)
 {
 }
 
+static inline int sm501_gpio_pin2nr(struct sm501_devdata *sm, unsigned int pin)
+{
+	return -1;
+}
+
 static inline int sm501_gpio_isregistered(struct sm501_devdata *sm)
 {
 	return 0;
@@ -1131,39 +1151,20 @@ static int sm501_register_gpio_i2c_instance(struct sm501_devdata *sm,
 {
 	struct i2c_gpio_platform_data *icd;
 	struct platform_device *pdev;
-	struct gpiod_lookup_table *lookup;
 
 	pdev = sm501_create_subdev(sm, "i2c-gpio", 0,
 				   sizeof(struct i2c_gpio_platform_data));
 	if (!pdev)
 		return -ENOMEM;
 
-	/* Create a gpiod lookup using gpiochip-local offsets */
-	lookup = devm_kzalloc(&pdev->dev, struct_size(lookup, table, 3),
-			      GFP_KERNEL);
-	if (!lookup)
-		return -ENOMEM;
-
-	lookup->dev_id = "i2c-gpio";
-	if (iic->pin_sda < 32)
-		lookup->table[0].chip_label = "SM501-LOW";
-	else
-		lookup->table[0].chip_label = "SM501-HIGH";
-	lookup->table[0].chip_hwnum = iic->pin_sda % 32;
-	lookup->table[0].con_id = NULL;
-	lookup->table[0].idx = 0;
-	lookup->table[0].flags = GPIO_ACTIVE_HIGH | GPIO_OPEN_DRAIN;
-	if (iic->pin_scl < 32)
-		lookup->table[1].chip_label = "SM501-LOW";
-	else
-		lookup->table[1].chip_label = "SM501-HIGH";
-	lookup->table[1].chip_hwnum = iic->pin_scl % 32;
-	lookup->table[1].con_id = NULL;
-	lookup->table[1].idx = 1;
-	lookup->table[1].flags = GPIO_ACTIVE_HIGH | GPIO_OPEN_DRAIN;
-	gpiod_add_lookup_table(lookup);
-
 	icd = dev_get_platdata(&pdev->dev);
+
+	/* We keep the pin_sda and pin_scl fields relative in case the
+	 * same platform data is passed to >1 SM501.
+	 */
+
+	icd->sda_pin = sm501_gpio_pin2nr(sm, iic->pin_sda);
+	icd->scl_pin = sm501_gpio_pin2nr(sm, iic->pin_scl);
 	icd->timeout = iic->timeout;
 	icd->udelay = iic->udelay;
 
@@ -1175,9 +1176,9 @@ static int sm501_register_gpio_i2c_instance(struct sm501_devdata *sm,
 
 	pdev->id = iic->bus_num;
 
-	dev_info(sm->dev, "registering i2c-%d: sda=%d, scl=%d\n",
+	dev_info(sm->dev, "registering i2c-%d: sda=%d (%d), scl=%d (%d)\n",
 		 iic->bus_num,
-		 iic->pin_sda, iic->pin_scl);
+		 icd->sda_pin, iic->pin_sda, icd->scl_pin, iic->pin_scl);
 
 	return sm501_register_device(sm, pdev);
 }
@@ -1358,7 +1359,7 @@ static int sm501_init_dev(struct sm501_devdata *sm)
 			sm501_register_gpio(sm);
 	}
 
-	if (pdata && pdata->gpio_i2c && pdata->gpio_i2c_nr > 0) {
+	if (pdata && pdata->gpio_i2c != NULL && pdata->gpio_i2c_nr > 0) {
 		if (!sm501_gpio_isregistered(sm))
 			dev_err(sm->dev, "no gpio available for i2c gpio.\n");
 		else
@@ -1383,8 +1384,9 @@ static int sm501_plat_probe(struct platform_device *dev)
 	struct sm501_devdata *sm;
 	int ret;
 
-	sm = kzalloc(sizeof(*sm), GFP_KERNEL);
-	if (!sm) {
+	sm = kzalloc(sizeof(struct sm501_devdata), GFP_KERNEL);
+	if (sm == NULL) {
+		dev_err(&dev->dev, "no memory for device data\n");
 		ret = -ENOMEM;
 		goto err1;
 	}
@@ -1394,13 +1396,16 @@ static int sm501_plat_probe(struct platform_device *dev)
 	sm->platdata = dev_get_platdata(&dev->dev);
 
 	ret = platform_get_irq(dev, 0);
-	if (ret < 0)
+	if (ret < 0) {
+		dev_err(&dev->dev, "failed to get irq resource\n");
 		goto err_res;
+	}
 	sm->irq = ret;
 
 	sm->io_res = platform_get_resource(dev, IORESOURCE_MEM, 1);
 	sm->mem_res = platform_get_resource(dev, IORESOURCE_MEM, 0);
-	if (!sm->io_res || !sm->mem_res) {
+
+	if (sm->io_res == NULL || sm->mem_res == NULL) {
 		dev_err(&dev->dev, "failed to get IO resource\n");
 		ret = -ENOENT;
 		goto err_res;
@@ -1408,7 +1413,8 @@ static int sm501_plat_probe(struct platform_device *dev)
 
 	sm->regs_claim = request_mem_region(sm->io_res->start,
 					    0x100, "sm501");
-	if (!sm->regs_claim) {
+
+	if (sm->regs_claim == NULL) {
 		dev_err(&dev->dev, "cannot claim registers\n");
 		ret = -EBUSY;
 		goto err_res;
@@ -1417,7 +1423,8 @@ static int sm501_plat_probe(struct platform_device *dev)
 	platform_set_drvdata(dev, sm);
 
 	sm->regs = ioremap(sm->io_res->start, resource_size(sm->io_res));
-	if (!sm->regs) {
+
+	if (sm->regs == NULL) {
 		dev_err(&dev->dev, "cannot remap registers\n");
 		ret = -EIO;
 		goto err_claim;
@@ -1426,7 +1433,8 @@ static int sm501_plat_probe(struct platform_device *dev)
 	return sm501_init_dev(sm);
 
  err_claim:
-	release_mem_region(sm->io_res->start, 0x100);
+	release_resource(sm->regs_claim);
+	kfree(sm->regs_claim);
  err_res:
 	kfree(sm);
  err1:
@@ -1442,7 +1450,7 @@ static void sm501_set_power(struct sm501_devdata *sm, int on)
 {
 	struct sm501_platdata *pd = sm->platdata;
 
-	if (!pd)
+	if (pd == NULL)
 		return;
 
 	if (pd->get_power) {
@@ -1566,8 +1574,9 @@ static int sm501_pci_probe(struct pci_dev *dev,
 	struct sm501_devdata *sm;
 	int err;
 
-	sm = kzalloc(sizeof(*sm), GFP_KERNEL);
-	if (!sm) {
+	sm = kzalloc(sizeof(struct sm501_devdata), GFP_KERNEL);
+	if (sm == NULL) {
+		dev_err(&dev->dev, "no memory for device data\n");
 		err = -ENOMEM;
 		goto err1;
 	}
@@ -1618,14 +1627,15 @@ static int sm501_pci_probe(struct pci_dev *dev,
 
 	sm->regs_claim = request_mem_region(sm->io_res->start,
 					    0x100, "sm501");
-	if (!sm->regs_claim) {
+	if (sm->regs_claim == NULL) {
 		dev_err(&dev->dev, "cannot claim registers\n");
 		err= -EBUSY;
 		goto err3;
 	}
 
 	sm->regs = pci_ioremap_bar(dev, 1);
-	if (!sm->regs) {
+
+	if (sm->regs == NULL) {
 		dev_err(&dev->dev, "cannot remap registers\n");
 		err = -EIO;
 		goto err4;
@@ -1635,7 +1645,8 @@ static int sm501_pci_probe(struct pci_dev *dev,
 	return 0;
 
  err4:
-	release_mem_region(sm->io_res->start, 0x100);
+	release_resource(sm->regs_claim);
+	kfree(sm->regs_claim);
  err3:
 	pci_disable_device(dev);
  err2:
@@ -1670,7 +1681,8 @@ static void sm501_pci_remove(struct pci_dev *dev)
 	sm501_dev_remove(sm);
 	iounmap(sm->regs);
 
-	release_mem_region(sm->io_res->start, 0x100);
+	release_resource(sm->regs_claim);
+	kfree(sm->regs_claim);
 
 	pci_disable_device(dev);
 }
@@ -1682,7 +1694,8 @@ static int sm501_plat_remove(struct platform_device *dev)
 	sm501_dev_remove(sm);
 	iounmap(sm->regs);
 
-	release_mem_region(sm->io_res->start, 0x100);
+	release_resource(sm->regs_claim);
+	kfree(sm->regs_claim);
 
 	return 0;
 }

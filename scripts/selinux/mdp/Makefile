@@ -1,8 +1,5 @@
-# SPDX-License-Identifier: GPL-2.0
-hostprogs	:= mdp
-HOST_EXTRACFLAGS += \
-	-I$(srctree)/include/uapi -I$(srctree)/include \
-	-I$(srctree)/security/selinux/include -I$(objtree)/include
+hostprogs-y	:= mdp
+HOST_EXTRACFLAGS += -Isecurity/selinux/include
 
-always-y	:= $(hostprogs)
+always		:= $(hostprogs-y)
 clean-files	:= policy.* file_contexts

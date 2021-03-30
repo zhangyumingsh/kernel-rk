@@ -1,8 +1,22 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Driver for ITE Tech Inc. IT8712F/IT8512 CIR
  *
  * Copyright (C) 2010 Juan Jesús García de Soria <skandalfo@gmail.com>
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License as
+ * published by the Free Software Foundation; either version 2 of the
+ * License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+ * General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307
+ * USA.
  *
  * Inspired by the original lirc_it87 and lirc_ite8709 drivers, on top of the
  * skeleton provided by the nuvoton-cir driver.
@@ -382,7 +396,7 @@ static int ite_tx_ir(struct rc_dev *rcdev, unsigned *txbuf, unsigned n)
 	ite_dbg("%s called", __func__);
 
 	/* clear the array just in case */
-	memset(last_sent, 0, sizeof(last_sent));
+	memset(last_sent, 0, ARRAY_SIZE(last_sent));
 
 	spin_lock_irqsave(&dev->lock, flags);
 
@@ -506,7 +520,7 @@ static int ite_tx_ir(struct rc_dev *rcdev, unsigned *txbuf, unsigned n)
 	/* and set the carrier values for reception */
 	ite_set_carrier_params(dev);
 
-	/* re-enable the receiver */
+	/* reenable the receiver */
 	if (dev->in_use)
 		dev->params.enable_rx(dev);
 
@@ -1549,11 +1563,9 @@ static int ite_probe(struct pnp_dev *pdev, const struct pnp_device_id
 	rdev->close = ite_close;
 	rdev->s_idle = ite_s_idle;
 	rdev->s_rx_carrier_range = ite_set_rx_carrier_range;
-	/* FIFO threshold is 17 bytes, so 17 * 8 samples minimum */
-	rdev->min_timeout = 17 * 8 * ITE_BAUDRATE_DIVISOR *
-			    itdev->params.sample_period;
-	rdev->timeout = IR_DEFAULT_TIMEOUT;
-	rdev->max_timeout = 10 * IR_DEFAULT_TIMEOUT;
+	rdev->min_timeout = ITE_MIN_IDLE_TIMEOUT;
+	rdev->max_timeout = ITE_MAX_IDLE_TIMEOUT;
+	rdev->timeout = ITE_IDLE_TIMEOUT;
 	rdev->rx_resolution = ITE_BAUDRATE_DIVISOR *
 				itdev->params.sample_period;
 	rdev->tx_resolution = ITE_BAUDRATE_DIVISOR *

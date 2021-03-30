@@ -1,8 +1,9 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef __ASM_MACH_LOONGSON64_IRQ_H_
 #define __ASM_MACH_LOONGSON64_IRQ_H_
 
 #include <boot_param.h>
+
+#ifdef CONFIG_CPU_LOONGSON3
 
 /* cpu core interrupt numbers */
 #define MIPS_CPU_IRQ_BASE 56
@@ -32,6 +33,8 @@
 #define LOONGSON_INT_ROUTER_HT1(n)	LOONGSON_INT_ROUTER_ENTRY(n + 0x18)
 
 #define LOONGSON_INT_COREx_INTy(x, y)	(1<<(x) | 1<<(y+4))	/* route to int y of core x */
+
+#endif
 
 extern void fixup_irqs(void);
 extern void loongson3_ipi_interrupt(struct pt_regs *regs);

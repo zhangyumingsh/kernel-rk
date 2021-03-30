@@ -17,12 +17,10 @@
 #include <asm/cachectl.h>
 #include <asm/fixmap.h>
 
-#if CONFIG_PGTABLE_LEVELS == 2
+#ifdef CONFIG_PAGE_SIZE_64KB
 #include <asm-generic/pgtable-nopmd.h>
-#elif CONFIG_PGTABLE_LEVELS == 3
-#include <asm-generic/pgtable-nopud.h>
 #else
-#include <asm-generic/pgtable-nop4d.h>
+#include <asm-generic/pgtable-nopud.h>
 #endif
 
 /*
@@ -32,7 +30,12 @@
  * tables. Each page table is also a single 4K page, giving 512 (==
  * PTRS_PER_PTE) 8 byte ptes. Each pud entry is initialized to point to
  * invalid_pmd_table, each pmd entry is initialized to point to
- * invalid_pte_table, each pte is initialized to 0.
+ * invalid_pte_table, each pte is initialized to 0. When memory is low,
+ * and a pmd table or a page table allocation fails, empty_bad_pmd_table
+ * and empty_bad_page_table is returned back to higher layer code, so
+ * that the failure is recognized later on. Linux does not seem to
+ * handle these failures very well though. The empty_bad_page_table has
+ * invalid pte entries in it, to force page faults.
  *
  * Kernel mappings: kernel mappings are held in the swapper_pg_table.
  * The layout is identical to userspace except it's indexed with the
@@ -50,18 +53,9 @@
 #define PMD_SIZE	(1UL << PMD_SHIFT)
 #define PMD_MASK	(~(PMD_SIZE-1))
 
-# ifdef __PAGETABLE_PUD_FOLDED
-# define PGDIR_SHIFT	(PMD_SHIFT + (PAGE_SHIFT + PMD_ORDER - 3))
-# endif
-#endif
 
-#ifndef __PAGETABLE_PUD_FOLDED
-#define PUD_SHIFT	(PMD_SHIFT + (PAGE_SHIFT + PMD_ORDER - 3))
-#define PUD_SIZE	(1UL << PUD_SHIFT)
-#define PUD_MASK	(~(PUD_SIZE-1))
-#define PGDIR_SHIFT	(PUD_SHIFT + (PAGE_SHIFT + PUD_ORDER - 3))
+#define PGDIR_SHIFT	(PMD_SHIFT + (PAGE_SHIFT + PMD_ORDER - 3))
 #endif
-
 #define PGDIR_SIZE	(1UL << PGDIR_SHIFT)
 #define PGDIR_MASK	(~(PGDIR_SIZE-1))
 
@@ -84,13 +78,8 @@
  * of virtual address space.
  */
 #ifdef CONFIG_PAGE_SIZE_4KB
-# ifdef CONFIG_MIPS_VA_BITS_48
-#  define PGD_ORDER		0
-#  define PUD_ORDER		0
-# else
-#  define PGD_ORDER		1
-#  define PUD_ORDER		aieeee_attempt_to_allocate_pud
-# endif
+#define PGD_ORDER		1
+#define PUD_ORDER		aieeee_attempt_to_allocate_pud
 #define PMD_ORDER		0
 #define PTE_ORDER		0
 #endif
@@ -101,11 +90,7 @@
 #define PTE_ORDER		0
 #endif
 #ifdef CONFIG_PAGE_SIZE_16KB
-#ifdef CONFIG_MIPS_VA_BITS_48
-#define PGD_ORDER               1
-#else
-#define PGD_ORDER               0
-#endif
+#define PGD_ORDER		0
 #define PUD_ORDER		aieeee_attempt_to_allocate_pud
 #define PMD_ORDER		0
 #define PTE_ORDER		0
@@ -119,24 +104,21 @@
 #ifdef CONFIG_PAGE_SIZE_64KB
 #define PGD_ORDER		0
 #define PUD_ORDER		aieeee_attempt_to_allocate_pud
-#ifdef CONFIG_MIPS_VA_BITS_48
-#define PMD_ORDER		0
-#else
 #define PMD_ORDER		aieeee_attempt_to_allocate_pmd
-#endif
 #define PTE_ORDER		0
 #endif
 
 #define PTRS_PER_PGD	((PAGE_SIZE << PGD_ORDER) / sizeof(pgd_t))
-#ifndef __PAGETABLE_PUD_FOLDED
-#define PTRS_PER_PUD	((PAGE_SIZE << PUD_ORDER) / sizeof(pud_t))
-#endif
 #ifndef __PAGETABLE_PMD_FOLDED
 #define PTRS_PER_PMD	((PAGE_SIZE << PMD_ORDER) / sizeof(pmd_t))
 #endif
 #define PTRS_PER_PTE	((PAGE_SIZE << PTE_ORDER) / sizeof(pte_t))
 
-#define USER_PTRS_PER_PGD       ((TASK_SIZE64 / PGDIR_SIZE)?(TASK_SIZE64 / PGDIR_SIZE):1)
+#if PGDIR_SIZE >= TASK_SIZE64
+#define USER_PTRS_PER_PGD	(1)
+#else
+#define USER_PTRS_PER_PGD	(TASK_SIZE64 / PGDIR_SIZE)
+#endif
 #define FIRST_USER_ADDRESS	0UL
 
 /*
@@ -147,7 +129,7 @@
 #define VMALLOC_START		(MAP_BASE + (2 * PAGE_SIZE))
 #define VMALLOC_END	\
 	(MAP_BASE + \
-	 min(PTRS_PER_PGD * PTRS_PER_PUD * PTRS_PER_PMD * PTRS_PER_PTE * PAGE_SIZE, \
+	 min(PTRS_PER_PGD * PTRS_PER_PMD * PTRS_PER_PTE * PAGE_SIZE, \
 	     (1UL << cpu_vmbits)) - (1UL << 32))
 
 #if defined(CONFIG_MODULES) && defined(KBUILD_64BIT_SYM32) && \
@@ -163,76 +145,12 @@
 #define pmd_ERROR(e) \
 	printk("%s:%d: bad pmd %016lx.\n", __FILE__, __LINE__, pmd_val(e))
 #endif
-#ifndef __PAGETABLE_PUD_FOLDED
-#define pud_ERROR(e) \
-	printk("%s:%d: bad pud %016lx.\n", __FILE__, __LINE__, pud_val(e))
-#endif
 #define pgd_ERROR(e) \
 	printk("%s:%d: bad pgd %016lx.\n", __FILE__, __LINE__, pgd_val(e))
 
 extern pte_t invalid_pte_table[PTRS_PER_PTE];
+extern pte_t empty_bad_page_table[PTRS_PER_PTE];
 
-#ifndef __PAGETABLE_PUD_FOLDED
-/*
- * For 4-level pagetables we defines these ourselves, for 3-level the
- * definitions are below, for 2-level the
- * definitions are supplied by <asm-generic/pgtable-nopmd.h>.
- */
-typedef struct { unsigned long pud; } pud_t;
-#define pud_val(x)	((x).pud)
-#define __pud(x)	((pud_t) { (x) })
-
-extern pud_t invalid_pud_table[PTRS_PER_PUD];
-
-/*
- * Empty pgd entries point to the invalid_pud_table.
- */
-static inline int p4d_none(p4d_t p4d)
-{
-	return p4d_val(p4d) == (unsigned long)invalid_pud_table;
-}
-
-static inline int p4d_bad(p4d_t p4d)
-{
-	if (unlikely(p4d_val(p4d) & ~PAGE_MASK))
-		return 1;
-
-	return 0;
-}
-
-static inline int p4d_present(p4d_t p4d)
-{
-	return p4d_val(p4d) != (unsigned long)invalid_pud_table;
-}
-
-static inline void p4d_clear(p4d_t *p4dp)
-{
-	p4d_val(*p4dp) = (unsigned long)invalid_pud_table;
-}
-
-#define pud_index(address)	(((address) >> PUD_SHIFT) & (PTRS_PER_PUD - 1))
-
-static inline unsigned long p4d_page_vaddr(p4d_t p4d)
-{
-	return p4d_val(p4d);
-}
-
-#define p4d_phys(p4d)		virt_to_phys((void *)p4d_val(p4d))
-#define p4d_page(p4d)		(pfn_to_page(p4d_phys(p4d) >> PAGE_SHIFT))
-
-#define p4d_index(address)	(((address) >> P4D_SHIFT) & (PTRS_PER_P4D - 1))
-
-static inline pud_t *pud_offset(p4d_t *p4d, unsigned long address)
-{
-	return (pud_t *)p4d_page_vaddr(*p4d) + pud_index(address);
-}
-
-static inline void set_p4d(p4d_t *p4d, p4d_t p4dval)
-{
-	*p4d = p4dval;
-}
-
-#endif
 
 #ifndef __PAGETABLE_PMD_FOLDED
 /*
@@ -320,6 +238,10 @@ static inline void pud_clear(pud_t *pudp)
 #define pfn_pmd(pfn, prot)	__pmd(((pfn) << _PFN_SHIFT) | pgprot_val(prot))
 #endif
 
+#define __pgd_offset(address)	pgd_index(address)
+#define __pud_offset(address)	(((address) >> PUD_SHIFT) & (PTRS_PER_PUD-1))
+#define __pmd_offset(address)	pmd_index(address)
+
 /* to find an entry in a kernel page-table-directory */
 #define pgd_offset_k(address) pgd_offset(&init_mm, address)
 
@@ -359,7 +281,6 @@ static inline pmd_t *pmd_offset(pud_t * pud, unsigned long address)
  * Initialize a new pgd / pmd table with invalid pointers.
  */
 extern void pgd_init(unsigned long page);
-extern void pud_init(unsigned long page, unsigned long pagetable);
 extern void pmd_init(unsigned long page, unsigned long pagetable);
 
 /*

@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /* tcx.c: TCX frame buffer driver
  *
  * Copyright (C) 2003, 2006 David S. Miller (davem@davemloft.net)
@@ -40,7 +39,7 @@ static int tcx_pan_display(struct fb_var_screeninfo *, struct fb_info *);
  *  Frame buffer operations
  */
 
-static const struct fb_ops tcx_ops = {
+static struct fb_ops tcx_ops = {
 	.owner			= THIS_MODULE,
 	.fb_setcolreg		= tcx_setcolreg,
 	.fb_blank		= tcx_blank,
@@ -468,8 +467,8 @@ static int tcx_probe(struct platform_device *op)
 
 	dev_set_drvdata(&op->dev, info);
 
-	printk(KERN_INFO "%pOF: TCX at %lx:%lx, %s\n",
-	       dp,
+	printk(KERN_INFO "%s: TCX at %lx:%lx, %s\n",
+	       dp->full_name,
 	       par->which_io,
 	       info->fix.smem_start,
 	       par->lowdepth ? "8-bit only" : "24-bit depth");

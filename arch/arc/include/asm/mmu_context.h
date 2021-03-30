@@ -1,6 +1,9 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (C) 2004, 2007-2010, 2011-2012 Synopsys, Inc. (www.synopsys.com)
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  *
  * vineetg: May 2011
  *  -Refactored get_new_mmu_context( ) to only handle live-mm.
@@ -17,7 +20,6 @@
 
 #include <asm/arcregs.h>
 #include <asm/tlb.h>
-#include <linux/sched/mm.h>
 
 #include <asm-generic/mm_hooks.h>
 
@@ -81,7 +83,7 @@ static inline void get_new_mmu_context(struct mm_struct *mm)
 		local_flush_tlb_all();
 
 		/*
-		 * Above check for rollover of 8 bit ASID in 32 bit container.
+		 * Above checke for rollover of 8 bit ASID in 32 bit container.
 		 * If the container itself wrapped around, set it to a non zero
 		 * "generation" to distinguish from no context
 		 */
@@ -144,7 +146,7 @@ static inline void switch_mm(struct mm_struct *prev, struct mm_struct *next,
 	 */
 	cpumask_set_cpu(cpu, mm_cpumask(next));
 
-#ifdef ARC_USE_SCRATCH_REG
+#ifndef CONFIG_SMP
 	/* PGD cached in MMU reg to avoid 3 mem lookups: task->mm->pgd */
 	write_aux_reg(ARC_REG_SCRATCH_DATA0, next->pgd);
 #endif

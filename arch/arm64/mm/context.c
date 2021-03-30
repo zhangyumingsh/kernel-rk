@@ -1,9 +1,20 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Based on arch/arm/mm/context.c
  *
  * Copyright (C) 2002-2003 Deep Blue Solutions Ltd, all rights reserved.
  * Copyright (C) 2012 ARM Ltd.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <linux/bitops.h>
@@ -13,7 +24,6 @@
 
 #include <asm/cpufeature.h>
 #include <asm/mmu_context.h>
-#include <asm/smp.h>
 #include <asm/tlbflush.h>
 
 static u32 asid_bits;
@@ -29,75 +39,29 @@ static cpumask_t tlb_flush_pending;
 #define ASID_MASK		(~GENMASK(asid_bits - 1, 0))
 #define ASID_FIRST_VERSION	(1UL << asid_bits)
 
-#define NUM_USER_ASIDS		ASID_FIRST_VERSION
+#ifdef CONFIG_UNMAP_KERNEL_AT_EL0
+#define NUM_USER_ASIDS		(ASID_FIRST_VERSION >> 1)
+#define asid2idx(asid)		(((asid) & ~ASID_MASK) >> 1)
+#define idx2asid(idx)		(((idx) << 1) & ~ASID_MASK)
+#else
+#define NUM_USER_ASIDS		(ASID_FIRST_VERSION)
 #define asid2idx(asid)		((asid) & ~ASID_MASK)
 #define idx2asid(idx)		asid2idx(idx)
+#endif
 
-/* Get the ASIDBits supported by the current CPU */
-static u32 get_cpu_asid_bits(void)
-{
-	u32 asid;
-	int fld = cpuid_feature_extract_unsigned_field(read_cpuid(ID_AA64MMFR0_EL1),
-						ID_AA64MMFR0_ASID_SHIFT);
-
-	switch (fld) {
-	default:
-		pr_warn("CPU%d: Unknown ASID size (%d); assuming 8-bit\n",
-					smp_processor_id(),  fld);
-		/* Fallthrough */
-	case 0:
-		asid = 8;
-		break;
-	case 2:
-		asid = 16;
-	}
-
-	return asid;
-}
-
-/* Check if the current cpu's ASIDBits is compatible with asid_bits */
-void verify_cpu_asid_bits(void)
-{
-	u32 asid = get_cpu_asid_bits();
-
-	if (asid < asid_bits) {
-		/*
-		 * We cannot decrease the ASID size at runtime, so panic if we support
-		 * fewer ASID bits than the boot CPU.
-		 */
-		pr_crit("CPU%d: smaller ASID size(%u) than boot CPU (%u)\n",
-				smp_processor_id(), asid, asid_bits);
-		cpu_panic_kernel();
-	}
-}
-
-static void set_kpti_asid_bits(void)
-{
-	unsigned int len = BITS_TO_LONGS(NUM_USER_ASIDS) * sizeof(unsigned long);
-	/*
-	 * In case of KPTI kernel/user ASIDs are allocated in
-	 * pairs, the bottom bit distinguishes the two: if it
-	 * is set, then the ASID will map only userspace. Thus
-	 * mark even as reserved for kernel.
-	 */
-	memset(asid_map, 0xaa, len);
-}
-
-static void set_reserved_asid_bits(void)
-{
-	if (arm64_kernel_unmapped_at_el0())
-		set_kpti_asid_bits();
-	else
-		bitmap_clear(asid_map, 0, NUM_USER_ASIDS);
-}
-
-static void flush_context(void)
+static void flush_context(unsigned int cpu)
 {
 	int i;
 	u64 asid;
 
 	/* Update the list of reserved ASIDs and the ASID bitmap. */
-	set_reserved_asid_bits();
+	bitmap_clear(asid_map, 0, NUM_USER_ASIDS);
+
+	/*
+	 * Ensure the generation bump is observed before we xchg the
+	 * active_asids.
+	 */
+	smp_wmb();
 
 	for_each_possible_cpu(i) {
 		asid = atomic64_xchg_relaxed(&per_cpu(active_asids, i), 0);
@@ -114,11 +78,11 @@ static void flush_context(void)
 		per_cpu(reserved_asids, i) = asid;
 	}
 
-	/*
-	 * Queue a TLB invalidation for each CPU to perform on next
-	 * context-switch
-	 */
+	/* Queue a TLB invalidate and flush the I-cache if necessary. */
 	cpumask_setall(&tlb_flush_pending);
+
+	if (icache_is_aivivt())
+		__flush_icache_all();
 }
 
 static bool check_update_reserved_asid(u64 asid, u64 newasid)
@@ -145,7 +109,7 @@ static bool check_update_reserved_asid(u64 asid, u64 newasid)
 	return hit;
 }
 
-static u64 new_context(struct mm_struct *mm)
+static u64 new_context(struct mm_struct *mm, unsigned int cpu)
 {
 	static u32 cur_idx = 1;
 	u64 asid = atomic64_read(&mm->context.id);
@@ -183,9 +147,9 @@ static u64 new_context(struct mm_struct *mm)
 	/* We're out of ASIDs, so increment the global generation count */
 	generation = atomic64_add_return_relaxed(ASID_FIRST_VERSION,
 						 &asid_generation);
-	flush_context();
+	flush_context(cpu);
 
-	/* We have more ASIDs than CPUs, so this will always succeed */
+	/* We have at least 1 ASID per CPU, so this will always succeed */
 	asid = find_next_zero_bit(asid_map, NUM_USER_ASIDS, 1);
 
 set_asid:
@@ -197,39 +161,26 @@ set_asid:
 void check_and_switch_context(struct mm_struct *mm, unsigned int cpu)
 {
 	unsigned long flags;
-	u64 asid, old_active_asid;
-
-	if (system_supports_cnp())
-		cpu_set_reserved_ttbr0();
+	u64 asid;
 
 	asid = atomic64_read(&mm->context.id);
 
 	/*
-	 * The memory ordering here is subtle.
-	 * If our active_asids is non-zero and the ASID matches the current
-	 * generation, then we update the active_asids entry with a relaxed
-	 * cmpxchg. Racing with a concurrent rollover means that either:
-	 *
-	 * - We get a zero back from the cmpxchg and end up waiting on the
-	 *   lock. Taking the lock synchronises with the rollover and so
-	 *   we are forced to see the updated generation.
-	 *
-	 * - We get a valid ASID back from the cmpxchg, which means the
-	 *   relaxed xchg in flush_context will treat us as reserved
-	 *   because atomic RmWs are totally ordered for a given location.
+	 * The memory ordering here is subtle. We rely on the control
+	 * dependency between the generation read and the update of
+	 * active_asids to ensure that we are synchronised with a
+	 * parallel rollover (i.e. this pairs with the smp_wmb() in
+	 * flush_context).
 	 */
-	old_active_asid = atomic64_read(&per_cpu(active_asids, cpu));
-	if (old_active_asid &&
-	    !((asid ^ atomic64_read(&asid_generation)) >> asid_bits) &&
-	    atomic64_cmpxchg_relaxed(&per_cpu(active_asids, cpu),
-				     old_active_asid, asid))
+	if (!((asid ^ atomic64_read(&asid_generation)) >> asid_bits)
+	    && atomic64_xchg_relaxed(&per_cpu(active_asids, cpu), asid))
 		goto switch_mm_fastpath;
 
 	raw_spin_lock_irqsave(&cpu_asid_lock, flags);
 	/* Check that our ASID belongs to the current generation. */
 	asid = atomic64_read(&mm->context.id);
 	if ((asid ^ atomic64_read(&asid_generation)) >> asid_bits) {
-		asid = new_context(mm);
+		asid = new_context(mm, cpu);
 		atomic64_set(&mm->context.id, asid);
 	}
 
@@ -240,9 +191,6 @@ void check_and_switch_context(struct mm_struct *mm, unsigned int cpu)
 	raw_spin_unlock_irqrestore(&cpu_asid_lock, flags);
 
 switch_mm_fastpath:
-
-	arm64_apply_bp_hardening();
-
 	/*
 	 * Defer TTBR0_EL1 setting for user threads to uaccess_enable() when
 	 * emulating PAN.
@@ -260,40 +208,31 @@ asmlinkage void post_ttbr_update_workaround(void)
 			CONFIG_CAVIUM_ERRATUM_27456));
 }
 
-static int asids_update_limit(void)
-{
-	unsigned long num_available_asids = NUM_USER_ASIDS;
-
-	if (arm64_kernel_unmapped_at_el0())
-		num_available_asids /= 2;
-	/*
-	 * Expect allocation after rollover to fail if we don't have at least
-	 * one more ASID than CPUs. ASID #0 is reserved for init_mm.
-	 */
-	WARN_ON(num_available_asids - 1 <= num_possible_cpus());
-	pr_info("ASID allocator initialised with %lu entries\n",
-		num_available_asids);
-	return 0;
-}
-arch_initcall(asids_update_limit);
-
 static int asids_init(void)
 {
-	asid_bits = get_cpu_asid_bits();
+	int fld = cpuid_feature_extract_field(read_cpuid(SYS_ID_AA64MMFR0_EL1), 4);
+
+	switch (fld) {
+	default:
+		pr_warn("Unknown ASID size (%d); assuming 8-bit\n", fld);
+		/* Fallthrough */
+	case 0:
+		asid_bits = 8;
+		break;
+	case 2:
+		asid_bits = 16;
+	}
+
+	/* If we end up with more CPUs than ASIDs, expect things to crash */
+	WARN_ON(NUM_USER_ASIDS < num_possible_cpus());
 	atomic64_set(&asid_generation, ASID_FIRST_VERSION);
-	asid_map = kcalloc(BITS_TO_LONGS(NUM_USER_ASIDS), sizeof(*asid_map),
+	asid_map = kzalloc(BITS_TO_LONGS(NUM_USER_ASIDS) * sizeof(*asid_map),
 			   GFP_KERNEL);
 	if (!asid_map)
 		panic("Failed to allocate bitmap for %lu ASIDs\n",
 		      NUM_USER_ASIDS);
 
-	/*
-	 * We cannot call set_reserved_asid_bits() here because CPU
-	 * caps are not finalized yet, so it is safer to assume KPTI
-	 * and reserve kernel ASID's from beginning.
-	 */
-	if (IS_ENABLED(CONFIG_UNMAP_KERNEL_AT_EL0))
-		set_kpti_asid_bits();
+	pr_info("ASID allocator initialised with %lu entries\n", NUM_USER_ASIDS);
 	return 0;
 }
 early_initcall(asids_init);

@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #include <linux/linkage.h>
 #include <linux/errno.h>
 #include <asm/asm.h>
@@ -12,16 +11,16 @@
  *
  */
 .macro op_safe_regs op
-SYM_FUNC_START(\op\()_safe_regs)
+ENTRY(\op\()_safe_regs)
 	pushq %rbx
-	pushq %r12
+	pushq %rbp
 	movq	%rdi, %r10	/* Save pointer */
 	xorl	%r11d, %r11d	/* Return value */
 	movl    (%rdi), %eax
 	movl    4(%rdi), %ecx
 	movl    8(%rdi), %edx
 	movl    12(%rdi), %ebx
-	movl    20(%rdi), %r12d
+	movl    20(%rdi), %ebp
 	movl    24(%rdi), %esi
 	movl    28(%rdi), %edi
 1:	\op
@@ -30,10 +29,10 @@ SYM_FUNC_START(\op\()_safe_regs)
 	movl    %ecx, 4(%r10)
 	movl    %edx, 8(%r10)
 	movl    %ebx, 12(%r10)
-	movl    %r12d, 20(%r10)
+	movl    %ebp, 20(%r10)
 	movl    %esi, 24(%r10)
 	movl    %edi, 28(%r10)
-	popq %r12
+	popq %rbp
 	popq %rbx
 	ret
 3:
@@ -41,13 +40,13 @@ SYM_FUNC_START(\op\()_safe_regs)
 	jmp     2b
 
 	_ASM_EXTABLE(1b, 3b)
-SYM_FUNC_END(\op\()_safe_regs)
+ENDPROC(\op\()_safe_regs)
 .endm
 
 #else /* X86_32 */
 
 .macro op_safe_regs op
-SYM_FUNC_START(\op\()_safe_regs)
+ENTRY(\op\()_safe_regs)
 	pushl %ebx
 	pushl %ebp
 	pushl %esi
@@ -83,7 +82,7 @@ SYM_FUNC_START(\op\()_safe_regs)
 	jmp     2b
 
 	_ASM_EXTABLE(1b, 3b)
-SYM_FUNC_END(\op\()_safe_regs)
+ENDPROC(\op\()_safe_regs)
 .endm
 
 #endif

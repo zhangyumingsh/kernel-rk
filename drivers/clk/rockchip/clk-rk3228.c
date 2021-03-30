@@ -1,12 +1,20 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Copyright (c) 2015 Rockchip Electronics Co. Ltd.
  * Author: Xing Zheng <zhengxing@rock-chips.com>
  *         Jeffy Chen <jeffy.chen@rock-chips.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/clk-provider.h>
-#include <linux/io.h>
 #include <linux/of.h>
 #include <linux/of_address.h>
 #include <linux/syscore_ops.h>
@@ -14,6 +22,10 @@
 #include "clk.h"
 
 #define RK3228_GRF_SOC_STATUS0	0x480
+
+#define RK3228_UART_FRAC_MAX_PRATE	600000000
+#define RK3228_SPDIF_FRAC_MAX_PRATE	600000000
+#define RK3228_I2S_FRAC_MAX_PRATE	600000000
 
 enum rk3228_plls {
 	apll, dpll, cpll, gpll,
@@ -78,22 +90,22 @@ static struct rockchip_pll_rate_table rk3228_pll_rates[] = {
 #define RK3228_DIV_PCLK_MASK		0x7
 #define RK3228_DIV_PCLK_SHIFT		12
 
-#define RK3228_CLKSEL1(_core_aclk_div, _core_peri_div)				\
-	{									\
-		.reg = RK2928_CLKSEL_CON(1),					\
-		.val = HIWORD_UPDATE(_core_peri_div, RK3228_DIV_PERI_MASK,	\
-				     RK3228_DIV_PERI_SHIFT) |			\
-		       HIWORD_UPDATE(_core_aclk_div, RK3228_DIV_ACLK_MASK,	\
-				     RK3228_DIV_ACLK_SHIFT),			\
+#define RK3228_CLKSEL1(_core_aclk_div, _core_peri_div)			\
+{									\
+	.reg = RK2928_CLKSEL_CON(1),					\
+	.val = HIWORD_UPDATE(_core_peri_div, RK3228_DIV_PERI_MASK,	\
+			     RK3228_DIV_PERI_SHIFT) |			\
+	       HIWORD_UPDATE(_core_aclk_div, RK3228_DIV_ACLK_MASK,	\
+			     RK3228_DIV_ACLK_SHIFT),			\
 }
 
-#define RK3228_CPUCLK_RATE(_prate, _core_aclk_div, _core_peri_div)		\
-	{									\
-		.prate = _prate,						\
-		.divs = {							\
-			RK3228_CLKSEL1(_core_aclk_div, _core_peri_div),		\
-		},								\
-	}
+#define RK3228_CPUCLK_RATE(_prate, _core_aclk_div, _core_peri_div)	\
+{									\
+	.prate = _prate,						\
+	.divs = {							\
+		RK3228_CLKSEL1(_core_aclk_div, _core_peri_div),		\
+	},								\
+}
 
 static struct rockchip_cpuclk_rate_table rk3228_cpuclk_rates[] __initdata = {
 	RK3228_CPUCLK_RATE(1800000000, 1, 7),
@@ -214,14 +226,15 @@ static struct rockchip_clk_branch rk3228_clk_branches[] __initdata = {
 			RK2928_CLKSEL_CON(4), 8, 5, DFLAGS),
 
 	/* PD_DDR */
-	COMPOSITE(0, "clk_ddrphy_src", mux_ddrphy_p, CLK_IGNORE_UNUSED,
-			RK2928_CLKSEL_CON(26), 8, 2, MFLAGS, 0, 2, DFLAGS | CLK_DIVIDER_POWER_OF_TWO,
-			RK2928_CLKGATE_CON(0), 2, GFLAGS),
-	GATE(0, "ddrphy4x", "clk_ddrphy_src", CLK_IGNORE_UNUSED,
+	COMPOSITE_DDRCLK(SCLK_DDRC, "clk_ddrc", mux_ddrphy_p, 0,
+			 RK2928_CLKSEL_CON(26), 8, 2, 0, 2,
+			 ROCKCHIP_DDRCLK_SIP_V2),
+	FACTOR(0, "clk_ddrphy", "clk_ddrc", 0, 1, 4),
+	GATE(0, "ddrphy4x", "clk_ddrc", CLK_IGNORE_UNUSED,
 			RK2928_CLKGATE_CON(7), 1, GFLAGS),
-	FACTOR_GATE(0, "ddrc", "clk_ddrphy_src", CLK_IGNORE_UNUSED, 1, 4,
+	GATE(0, "ddrc", "ddrphy_pre", CLK_IGNORE_UNUSED,
 			RK2928_CLKGATE_CON(8), 5, GFLAGS),
-	FACTOR_GATE(0, "ddrphy", "clk_ddrphy_src", CLK_IGNORE_UNUSED, 1, 4,
+	FACTOR_GATE(0, "ddrphy", "ddrphy4x", CLK_IGNORE_UNUSED, 1, 4,
 			RK2928_CLKGATE_CON(7), 0, GFLAGS),
 
 	/* PD_CORE */
@@ -239,7 +252,7 @@ static struct rockchip_clk_branch rk3228_clk_branches[] __initdata = {
 			RK2928_CLKGATE_CON(4), 0, GFLAGS),
 
 	/* PD_MISC */
-	MUX(SCLK_HDMI_PHY, "hdmiphy", mux_hdmiphy_p, CLK_SET_RATE_PARENT,
+	MUX(HDMIPHY, "hdmiphy", mux_hdmiphy_p, CLK_SET_RATE_PARENT,
 			RK2928_MISC_CON, 13, 1, MFLAGS),
 	MUX(0, "usb480m_phy", mux_usb480m_phy_p, CLK_SET_RATE_PARENT,
 			RK2928_MISC_CON, 14, 1, MFLAGS),
@@ -400,7 +413,7 @@ static struct rockchip_clk_branch rk3228_clk_branches[] __initdata = {
 	COMPOSITE_FRACMUX(0, "i2s0_frac", "i2s0_src", CLK_SET_RATE_PARENT,
 			RK2928_CLKSEL_CON(8), 0,
 			RK2928_CLKGATE_CON(0), 4, GFLAGS,
-			&rk3228_i2s0_fracmux),
+			&rk3228_i2s0_fracmux, RK3228_I2S_FRAC_MAX_PRATE),
 	GATE(SCLK_I2S0, "sclk_i2s0", "i2s0_pre", CLK_SET_RATE_PARENT,
 			RK2928_CLKGATE_CON(0), 5, GFLAGS),
 
@@ -410,7 +423,7 @@ static struct rockchip_clk_branch rk3228_clk_branches[] __initdata = {
 	COMPOSITE_FRACMUX(0, "i2s1_frac", "i2s1_src", CLK_SET_RATE_PARENT,
 			RK2928_CLKSEL_CON(7), 0,
 			RK2928_CLKGATE_CON(0), 11, GFLAGS,
-			&rk3228_i2s1_fracmux),
+			&rk3228_i2s1_fracmux, RK3228_I2S_FRAC_MAX_PRATE),
 	GATE(SCLK_I2S1, "sclk_i2s1", "i2s1_pre", CLK_SET_RATE_PARENT,
 			RK2928_CLKGATE_CON(0), 14, GFLAGS),
 	COMPOSITE_NODIV(SCLK_I2S_OUT, "i2s_out", mux_i2s_out_p, 0,
@@ -423,7 +436,7 @@ static struct rockchip_clk_branch rk3228_clk_branches[] __initdata = {
 	COMPOSITE_FRACMUX(0, "i2s2_frac", "i2s2_src", CLK_SET_RATE_PARENT,
 			RK2928_CLKSEL_CON(30), 0,
 			RK2928_CLKGATE_CON(0), 8, GFLAGS,
-			&rk3228_i2s2_fracmux),
+			&rk3228_i2s2_fracmux, RK3228_I2S_FRAC_MAX_PRATE),
 	GATE(SCLK_I2S2, "sclk_i2s2", "i2s2_pre", CLK_SET_RATE_PARENT,
 			RK2928_CLKGATE_CON(0), 9, GFLAGS),
 
@@ -433,7 +446,7 @@ static struct rockchip_clk_branch rk3228_clk_branches[] __initdata = {
 	COMPOSITE_FRACMUX(0, "spdif_frac", "sclk_spdif_src", CLK_SET_RATE_PARENT,
 			RK2928_CLKSEL_CON(20), 0,
 			RK2928_CLKGATE_CON(2), 12, GFLAGS,
-			&rk3228_spdif_fracmux),
+			&rk3228_spdif_fracmux, RK3228_SPDIF_FRAC_MAX_PRATE),
 
 	GATE(0, "jtag", "ext_jtag", CLK_IGNORE_UNUSED,
 			RK2928_CLKGATE_CON(1), 3, GFLAGS),
@@ -468,15 +481,15 @@ static struct rockchip_clk_branch rk3228_clk_branches[] __initdata = {
 	COMPOSITE_FRACMUX(0, "uart0_frac", "uart0_src", CLK_SET_RATE_PARENT,
 			RK2928_CLKSEL_CON(17), 0,
 			RK2928_CLKGATE_CON(1), 9, GFLAGS,
-			&rk3228_uart0_fracmux),
+			&rk3228_uart0_fracmux, RK3228_UART_FRAC_MAX_PRATE),
 	COMPOSITE_FRACMUX(0, "uart1_frac", "uart1_src", CLK_SET_RATE_PARENT,
 			RK2928_CLKSEL_CON(18), 0,
 			RK2928_CLKGATE_CON(1), 11, GFLAGS,
-			&rk3228_uart1_fracmux),
+			&rk3228_uart1_fracmux, RK3228_UART_FRAC_MAX_PRATE),
 	COMPOSITE_FRACMUX(0, "uart2_frac", "uart2_src", CLK_SET_RATE_PARENT,
 			RK2928_CLKSEL_CON(19), 0,
 			RK2928_CLKGATE_CON(1), 13, GFLAGS,
-			&rk3228_uart2_fracmux),
+			&rk3228_uart2_fracmux, RK3228_UART_FRAC_MAX_PRATE),
 
 	COMPOSITE(SCLK_NANDC, "sclk_nandc", mux_pll_src_2plls_p, 0,
 			RK2928_CLKSEL_CON(2), 14, 1, MFLAGS, 8, 5, DFLAGS,
@@ -664,26 +677,31 @@ static const char *const rk3228_critical_clocks[] __initconst = {
 
 static void __iomem *rk3228_cru_base;
 
-static void rk3228_clk_shutdown(void)
+static void rk3228_dump_cru(void)
 {
-	writel_relaxed(0x11010000, rk3228_cru_base + RK3228_MODE_CON);
+	if (rk3228_cru_base) {
+		pr_warn("CRU:\n");
+		print_hex_dump(KERN_WARNING, "", DUMP_PREFIX_OFFSET,
+			       32, 4, rk3228_cru_base,
+			       0x1f8, false);
+	}
 }
 
 static void __init rk3228_clk_init(struct device_node *np)
 {
 	struct rockchip_clk_provider *ctx;
+	void __iomem *reg_base;
 
-	rk3228_cru_base = of_iomap(np, 0);
-
-	if (!rk3228_cru_base) {
+	reg_base = of_iomap(np, 0);
+	if (!reg_base) {
 		pr_err("%s: could not map cru region\n", __func__);
 		return;
 	}
 
-	ctx = rockchip_clk_init(np, rk3228_cru_base, CLK_NR_CLKS);
+	ctx = rockchip_clk_init(np, reg_base, CLK_NR_CLKS);
 	if (IS_ERR(ctx)) {
 		pr_err("%s: rockchip clk init failed\n", __func__);
-		iounmap(rk3228_cru_base);
+		iounmap(reg_base);
 		return;
 	}
 
@@ -700,11 +718,16 @@ static void __init rk3228_clk_init(struct device_node *np)
 			&rk3228_cpuclk_data, rk3228_cpuclk_rates,
 			ARRAY_SIZE(rk3228_cpuclk_rates));
 
-	rockchip_register_softrst(np, 9, rk3228_cru_base + RK2928_SOFTRST_CON(0),
+	rockchip_register_softrst(np, 9, reg_base + RK2928_SOFTRST_CON(0),
 				  ROCKCHIP_SOFTRST_HIWORD_MASK);
 
-	rockchip_register_restart_notifier(ctx, RK3228_GLB_SRST_FST, rk3228_clk_shutdown);
+	rockchip_register_restart_notifier(ctx, RK3228_GLB_SRST_FST, NULL);
 
 	rockchip_clk_of_add_provider(np, ctx);
+
+	if (!rk_dump_cru) {
+		rk3228_cru_base = reg_base;
+		rk_dump_cru = rk3228_dump_cru;
+	}
 }
 CLK_OF_DECLARE(rk3228_cru, "rockchip,rk3228-cru", rk3228_clk_init);

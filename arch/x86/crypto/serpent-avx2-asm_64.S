@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * x86_64/AVX2 assembler optimized version of Serpent
  *
@@ -7,26 +6,26 @@
  * Based on AVX assembler implementation of Serpent by:
  *  Copyright © 2012 Johannes Goetzfried
  *      <Johannes.Goetzfried@informatik.stud.uni-erlangen.de>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
  */
 
 #include <linux/linkage.h>
-#include <asm/frame.h>
 #include "glue_helper-asm-avx2.S"
 
 .file "serpent-avx2-asm_64.S"
 
-.section	.rodata.cst16.bswap128_mask, "aM", @progbits, 16
+.data
 .align 16
+
 .Lbswap128_mask:
 	.byte 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0
-
-.section	.rodata.cst16.xts_gf128mul_and_shl1_mask_0, "aM", @progbits, 16
-.align 16
 .Lxts_gf128mul_and_shl1_mask_0:
 	.byte 0x87, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0
-
-.section	.rodata.cst16.xts_gf128mul_and_shl1_mask_1, "aM", @progbits, 16
-.align 16
 .Lxts_gf128mul_and_shl1_mask_1:
 	.byte 0x0e, 1, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0
 
@@ -561,7 +560,7 @@
 	transpose_4x4(x0, x1, x2, x3, t0, t1, t2)
 
 .align 8
-SYM_FUNC_START_LOCAL(__serpent_enc_blk16)
+__serpent_enc_blk16:
 	/* input:
 	 *	%rdi: ctx, CTX
 	 *	RA1, RB1, RC1, RD1, RA2, RB2, RC2, RD2: plaintext
@@ -612,10 +611,10 @@ SYM_FUNC_START_LOCAL(__serpent_enc_blk16)
 	write_blocks(RA2, RB2, RC2, RD2, RK0, RK1, RK2);
 
 	ret;
-SYM_FUNC_END(__serpent_enc_blk16)
+ENDPROC(__serpent_enc_blk16)
 
 .align 8
-SYM_FUNC_START_LOCAL(__serpent_dec_blk16)
+__serpent_dec_blk16:
 	/* input:
 	 *	%rdi: ctx, CTX
 	 *	RA1, RB1, RC1, RD1, RA2, RB2, RC2, RD2: ciphertext
@@ -666,15 +665,14 @@ SYM_FUNC_START_LOCAL(__serpent_dec_blk16)
 	write_blocks(RC2, RD2, RB2, RE2, RK0, RK1, RK2);
 
 	ret;
-SYM_FUNC_END(__serpent_dec_blk16)
+ENDPROC(__serpent_dec_blk16)
 
-SYM_FUNC_START(serpent_ecb_enc_16way)
+ENTRY(serpent_ecb_enc_16way)
 	/* input:
 	 *	%rdi: ctx, CTX
 	 *	%rsi: dst
 	 *	%rdx: src
 	 */
-	FRAME_BEGIN
 
 	vzeroupper;
 
@@ -686,17 +684,15 @@ SYM_FUNC_START(serpent_ecb_enc_16way)
 
 	vzeroupper;
 
-	FRAME_END
 	ret;
-SYM_FUNC_END(serpent_ecb_enc_16way)
+ENDPROC(serpent_ecb_enc_16way)
 
-SYM_FUNC_START(serpent_ecb_dec_16way)
+ENTRY(serpent_ecb_dec_16way)
 	/* input:
 	 *	%rdi: ctx, CTX
 	 *	%rsi: dst
 	 *	%rdx: src
 	 */
-	FRAME_BEGIN
 
 	vzeroupper;
 
@@ -708,17 +704,15 @@ SYM_FUNC_START(serpent_ecb_dec_16way)
 
 	vzeroupper;
 
-	FRAME_END
 	ret;
-SYM_FUNC_END(serpent_ecb_dec_16way)
+ENDPROC(serpent_ecb_dec_16way)
 
-SYM_FUNC_START(serpent_cbc_dec_16way)
+ENTRY(serpent_cbc_dec_16way)
 	/* input:
 	 *	%rdi: ctx, CTX
 	 *	%rsi: dst
 	 *	%rdx: src
 	 */
-	FRAME_BEGIN
 
 	vzeroupper;
 
@@ -731,18 +725,16 @@ SYM_FUNC_START(serpent_cbc_dec_16way)
 
 	vzeroupper;
 
-	FRAME_END
 	ret;
-SYM_FUNC_END(serpent_cbc_dec_16way)
+ENDPROC(serpent_cbc_dec_16way)
 
-SYM_FUNC_START(serpent_ctr_16way)
+ENTRY(serpent_ctr_16way)
 	/* input:
 	 *	%rdi: ctx, CTX
 	 *	%rsi: dst (16 blocks)
 	 *	%rdx: src (16 blocks)
 	 *	%rcx: iv (little endian, 128bit)
 	 */
-	FRAME_BEGIN
 
 	vzeroupper;
 
@@ -756,18 +748,16 @@ SYM_FUNC_START(serpent_ctr_16way)
 
 	vzeroupper;
 
-	FRAME_END
 	ret;
-SYM_FUNC_END(serpent_ctr_16way)
+ENDPROC(serpent_ctr_16way)
 
-SYM_FUNC_START(serpent_xts_enc_16way)
+ENTRY(serpent_xts_enc_16way)
 	/* input:
 	 *	%rdi: ctx, CTX
 	 *	%rsi: dst (16 blocks)
 	 *	%rdx: src (16 blocks)
 	 *	%rcx: iv (t ⊕ αⁿ ∈ GF(2¹²⁸))
 	 */
-	FRAME_BEGIN
 
 	vzeroupper;
 
@@ -782,18 +772,16 @@ SYM_FUNC_START(serpent_xts_enc_16way)
 
 	vzeroupper;
 
-	FRAME_END
 	ret;
-SYM_FUNC_END(serpent_xts_enc_16way)
+ENDPROC(serpent_xts_enc_16way)
 
-SYM_FUNC_START(serpent_xts_dec_16way)
+ENTRY(serpent_xts_dec_16way)
 	/* input:
 	 *	%rdi: ctx, CTX
 	 *	%rsi: dst (16 blocks)
 	 *	%rdx: src (16 blocks)
 	 *	%rcx: iv (t ⊕ αⁿ ∈ GF(2¹²⁸))
 	 */
-	FRAME_BEGIN
 
 	vzeroupper;
 
@@ -808,6 +796,5 @@ SYM_FUNC_START(serpent_xts_dec_16way)
 
 	vzeroupper;
 
-	FRAME_END
 	ret;
-SYM_FUNC_END(serpent_xts_dec_16way)
+ENDPROC(serpent_xts_dec_16way)

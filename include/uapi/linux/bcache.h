@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 #ifndef _LINUX_BCACHE_H
 #define _LINUX_BCACHE_H
 
@@ -6,7 +5,7 @@
  * Bcache on disk data structures
  */
 
-#include <linux/types.h>
+#include <asm/types.h>
 
 #define BITMASK(name, type, field, offset, size)		\
 static inline __u64 name(const type *k)				\
@@ -30,10 +29,10 @@ struct bkey {
 	BITMASK(name, struct bkey, field, offset, size)
 
 #define PTR_FIELD(name, offset, size)					\
-static inline __u64 name(const struct bkey *k, unsigned int i)		\
+static inline __u64 name(const struct bkey *k, unsigned i)		\
 { return (k->ptr[i] >> offset) & ~(~0ULL << size); }			\
 									\
-static inline void SET_##name(struct bkey *k, unsigned int i, __u64 v)	\
+static inline void SET_##name(struct bkey *k, unsigned i, __u64 v)	\
 {									\
 	k->ptr[i] &= ~(~(~0ULL << size) << offset);			\
 	k->ptr[i] |= (v & ~(~0ULL << size)) << offset;			\
@@ -117,14 +116,12 @@ static inline void bkey_copy_key(struct bkey *dest, const struct bkey *src)
 static inline struct bkey *bkey_next(const struct bkey *k)
 {
 	__u64 *d = (void *) k;
-
 	return (struct bkey *) (d + bkey_u64s(k));
 }
 
-static inline struct bkey *bkey_idx(const struct bkey *k, unsigned int nr_keys)
+static inline struct bkey *bkey_idx(const struct bkey *k, unsigned nr_keys)
 {
 	__u64 *d = (void *) k;
-
 	return (struct bkey *) (d + nr_keys);
 }
 /* Enough for a key with 6 pointers */
@@ -148,7 +145,6 @@ static inline struct bkey *bkey_idx(const struct bkey *k, unsigned int nr_keys)
 #define BCACHE_SB_MAX_VERSION		4
 
 #define SB_SECTOR			8
-#define SB_OFFSET			(SB_SECTOR << SECTOR_SHIFT)
 #define SB_SIZE				4096
 #define SB_LABEL_SIZE			32
 #define SB_JOURNAL_BUCKETS		256U
@@ -156,57 +152,6 @@ static inline struct bkey *bkey_idx(const struct bkey *k, unsigned int nr_keys)
 #define MAX_CACHES_PER_SET		8
 
 #define BDEV_DATA_START_DEFAULT		16	/* sectors */
-
-struct cache_sb_disk {
-	__le64			csum;
-	__le64			offset;	/* sector where this sb was written */
-	__le64			version;
-
-	__u8			magic[16];
-
-	__u8			uuid[16];
-	union {
-		__u8		set_uuid[16];
-		__le64		set_magic;
-	};
-	__u8			label[SB_LABEL_SIZE];
-
-	__le64			flags;
-	__le64			seq;
-	__le64			pad[8];
-
-	union {
-	struct {
-		/* Cache devices */
-		__le64		nbuckets;	/* device size */
-
-		__le16		block_size;	/* sectors */
-		__le16		bucket_size;	/* sectors */
-
-		__le16		nr_in_set;
-		__le16		nr_this_dev;
-	};
-	struct {
-		/* Backing devices */
-		__le64		data_offset;
-
-		/*
-		 * block_size from the cache device section is still used by
-		 * backing devices, so don't add anything here until we fix
-		 * things to not need it for backing devices anymore
-		 */
-	};
-	};
-
-	__le32			last_mount;	/* time overflow in y2106 */
-
-	__le16			first_bucket;
-	union {
-		__le16		njournal_buckets;
-		__le16		keys;
-	};
-	__le64			d[SB_JOURNAL_BUCKETS];	/* journal buckets */
-};
 
 struct cache_sb {
 	__u64			csum;
@@ -249,7 +194,7 @@ struct cache_sb {
 	};
 	};
 
-	__u32			last_mount;	/* time overflow in y2106 */
+	__u32			last_mount;	/* time_t */
 
 	__u16			first_bucket;
 	union {
@@ -372,7 +317,7 @@ struct uuid_entry {
 		struct {
 			__u8	uuid[16];
 			__u8	label[32];
-			__u32	first_reg; /* time overflow in y2106 */
+			__u32	first_reg;
 			__u32	last_reg;
 			__u32	invalidated;
 

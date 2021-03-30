@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * INET		An implementation of the TCP/IP protocol suite for the LINUX
  *		operating system.  INET is implemented using the  BSD Socket
@@ -45,9 +44,7 @@
 #include <net/ip_fib.h>
 
 #include <linux/errqueue.h>
-#include <linux/uaccess.h>
-
-#include <linux/bpfilter.h>
+#include <asm/uaccess.h>
 
 /*
  *	SOL_IP control messages.
@@ -83,8 +80,7 @@ static void ip_cmsg_recv_opts(struct msghdr *msg, struct sk_buff *skb)
 }
 
 
-static void ip_cmsg_recv_retopts(struct net *net, struct msghdr *msg,
-				 struct sk_buff *skb)
+static void ip_cmsg_recv_retopts(struct msghdr *msg, struct sk_buff *skb)
 {
 	unsigned char optbuf[sizeof(struct ip_options) + 40];
 	struct ip_options *opt = (struct ip_options *)optbuf;
@@ -92,24 +88,13 @@ static void ip_cmsg_recv_retopts(struct net *net, struct msghdr *msg,
 	if (IPCB(skb)->opt.optlen == 0)
 		return;
 
-	if (ip_options_echo(net, opt, skb)) {
+	if (ip_options_echo(opt, skb)) {
 		msg->msg_flags |= MSG_CTRUNC;
 		return;
 	}
 	ip_options_undo(opt);
 
 	put_cmsg(msg, SOL_IP, IP_RETOPTS, opt->optlen, opt->__data);
-}
-
-static void ip_cmsg_recv_fragsize(struct msghdr *msg, struct sk_buff *skb)
-{
-	int val;
-
-	if (IPCB(skb)->frag_max_size == 0)
-		return;
-
-	val = IPCB(skb)->frag_max_size;
-	put_cmsg(msg, SOL_IP, IP_RECVFRAGSIZE, sizeof(val), &val);
 }
 
 static void ip_cmsg_recv_checksum(struct msghdr *msg, struct sk_buff *skb,
@@ -168,10 +153,10 @@ static void ip_cmsg_recv_dstaddr(struct msghdr *msg, struct sk_buff *skb)
 	put_cmsg(msg, SOL_IP, IP_ORIGDSTADDR, sizeof(sin), &sin);
 }
 
-void ip_cmsg_recv_offset(struct msghdr *msg, struct sock *sk,
-			 struct sk_buff *skb, int tlen, int offset)
+void ip_cmsg_recv_offset(struct msghdr *msg, struct sk_buff *skb,
+			 int tlen, int offset)
 {
-	struct inet_sock *inet = inet_sk(sk);
+	struct inet_sock *inet = inet_sk(skb->sk);
 	unsigned int flags = inet->cmsg_flags;
 
 	/* Ordered by supposed usage frequency */
@@ -208,7 +193,7 @@ void ip_cmsg_recv_offset(struct msghdr *msg, struct sock *sk,
 	}
 
 	if (flags & IP_CMSG_RETOPTS) {
-		ip_cmsg_recv_retopts(sock_net(sk), msg, skb);
+		ip_cmsg_recv_retopts(msg, skb);
 
 		flags &= ~IP_CMSG_RETOPTS;
 		if (!flags)
@@ -233,18 +218,14 @@ void ip_cmsg_recv_offset(struct msghdr *msg, struct sock *sk,
 
 	if (flags & IP_CMSG_CHECKSUM)
 		ip_cmsg_recv_checksum(msg, skb, tlen, offset);
-
-	if (flags & IP_CMSG_RECVFRAGSIZE)
-		ip_cmsg_recv_fragsize(msg, skb);
 }
 EXPORT_SYMBOL(ip_cmsg_recv_offset);
 
-int ip_cmsg_send(struct sock *sk, struct msghdr *msg, struct ipcm_cookie *ipc,
+int ip_cmsg_send(struct net *net, struct msghdr *msg, struct ipcm_cookie *ipc,
 		 bool allow_ipv6)
 {
 	int err, val;
 	struct cmsghdr *cmsg;
-	struct net *net = sock_net(sk);
 
 	for_each_cmsghdr(cmsg, msg) {
 		if (!CMSG_OK(msg, cmsg))
@@ -266,18 +247,11 @@ int ip_cmsg_send(struct sock *sk, struct msghdr *msg, struct ipcm_cookie *ipc,
 			continue;
 		}
 #endif
-		if (cmsg->cmsg_level == SOL_SOCKET) {
-			err = __sock_cmsg_send(sk, msg, cmsg, &ipc->sockc);
-			if (err)
-				return err;
-			continue;
-		}
-
 		if (cmsg->cmsg_level != SOL_IP)
 			continue;
 		switch (cmsg->cmsg_type) {
 		case IP_RETOPTS:
-			err = cmsg->cmsg_len - sizeof(struct cmsghdr);
+			err = cmsg->cmsg_len - CMSG_ALIGN(sizeof(struct cmsghdr));
 
 			/* Our caller is responsible for freeing ipc->opt */
 			err = ip_options_get(net, &ipc->opt, CMSG_DATA(cmsg),
@@ -305,12 +279,9 @@ int ip_cmsg_send(struct sock *sk, struct msghdr *msg, struct ipcm_cookie *ipc,
 			ipc->ttl = val;
 			break;
 		case IP_TOS:
-			if (cmsg->cmsg_len == CMSG_LEN(sizeof(int)))
-				val = *(int *)CMSG_DATA(cmsg);
-			else if (cmsg->cmsg_len == CMSG_LEN(sizeof(u8)))
-				val = *(u8 *)CMSG_DATA(cmsg);
-			else
+			if (cmsg->cmsg_len != CMSG_LEN(sizeof(int)))
 				return -EINVAL;
+			val = *(int *)CMSG_DATA(cmsg);
 			if (val < 0 || val > 255)
 				return -EINVAL;
 			ipc->tos = val;
@@ -323,6 +294,21 @@ int ip_cmsg_send(struct sock *sk, struct msghdr *msg, struct ipcm_cookie *ipc,
 	}
 	return 0;
 }
+
+
+/* Special input handler for packets caught by router alert option.
+   They are selected only by protocol field, and then processed likely
+   local ones; but only if someone wants them! Otherwise, router
+   not running rsvpd will kill RSVP.
+
+   It is user level problem, what it will make with them.
+   I have no idea, how it will masquearde or NAT them (it is joke, joke :-)),
+   but receiver should be enough clever f.e. to forward mtrace requests,
+   sent to multicast group to reach destination designated router.
+ */
+struct ip_ra_chain __rcu *ip_ra_chain;
+static DEFINE_SPINLOCK(ip_ra_lock);
+
 
 static void ip_ra_destroy_rcu(struct rcu_head *head)
 {
@@ -337,30 +323,27 @@ int ip_ra_control(struct sock *sk, unsigned char on,
 {
 	struct ip_ra_chain *ra, *new_ra;
 	struct ip_ra_chain __rcu **rap;
-	struct net *net = sock_net(sk);
 
 	if (sk->sk_type != SOCK_RAW || inet_sk(sk)->inet_num == IPPROTO_RAW)
 		return -EINVAL;
 
 	new_ra = on ? kmalloc(sizeof(*new_ra), GFP_KERNEL) : NULL;
-	if (on && !new_ra)
-		return -ENOMEM;
 
-	mutex_lock(&net->ipv4.ra_mutex);
-	for (rap = &net->ipv4.ra_chain;
+	spin_lock_bh(&ip_ra_lock);
+	for (rap = &ip_ra_chain;
 	     (ra = rcu_dereference_protected(*rap,
-			lockdep_is_held(&net->ipv4.ra_mutex))) != NULL;
+			lockdep_is_held(&ip_ra_lock))) != NULL;
 	     rap = &ra->next) {
 		if (ra->sk == sk) {
 			if (on) {
-				mutex_unlock(&net->ipv4.ra_mutex);
+				spin_unlock_bh(&ip_ra_lock);
 				kfree(new_ra);
 				return -EADDRINUSE;
 			}
 			/* dont let ip_call_ra_chain() use sk again */
 			ra->sk = NULL;
 			RCU_INIT_POINTER(*rap, ra->next);
-			mutex_unlock(&net->ipv4.ra_mutex);
+			spin_unlock_bh(&ip_ra_lock);
 
 			if (ra->destructor)
 				ra->destructor(sk);
@@ -375,7 +358,7 @@ int ip_ra_control(struct sock *sk, unsigned char on,
 		}
 	}
 	if (!new_ra) {
-		mutex_unlock(&net->ipv4.ra_mutex);
+		spin_unlock_bh(&ip_ra_lock);
 		return -ENOBUFS;
 	}
 	new_ra->sk = sk;
@@ -384,7 +367,7 @@ int ip_ra_control(struct sock *sk, unsigned char on,
 	RCU_INIT_POINTER(new_ra->next, ra);
 	rcu_assign_pointer(*rap, new_ra);
 	sock_hold(sk);
-	mutex_unlock(&net->ipv4.ra_mutex);
+	spin_unlock_bh(&ip_ra_lock);
 
 	return 0;
 }
@@ -482,15 +465,16 @@ static bool ipv4_datagram_support_cmsg(const struct sock *sk,
 		return false;
 
 	/* Support IP_PKTINFO on tstamp packets if requested, to correlate
-	 * timestamp with egress dev. Not possible for packets without iif
+	 * timestamp with egress dev. Not possible for packets without dev
 	 * or without payload (SOF_TIMESTAMPING_OPT_TSONLY).
 	 */
-	info = PKTINFO_SKB_CB(skb);
-	if (!(sk->sk_tsflags & SOF_TIMESTAMPING_OPT_CMSG) ||
-	    !info->ipi_ifindex)
+	if ((!(sk->sk_tsflags & SOF_TIMESTAMPING_OPT_CMSG)) ||
+	    (!skb->dev))
 		return false;
 
+	info = PKTINFO_SKB_CB(skb);
 	info->ipi_spec_dst.s_addr = ip_hdr(skb)->saddr;
+	info->ipi_ifindex = skb->dev->ifindex;
 	return true;
 }
 
@@ -520,10 +504,9 @@ int ip_recv_error(struct sock *sk, struct msghdr *msg, int len, int *addr_len)
 		copied = len;
 	}
 	err = skb_copy_datagram_msg(skb, 0, msg, copied);
-	if (unlikely(err)) {
-		kfree_skb(skb);
-		return err;
-	}
+	if (err)
+		goto out_free_skb;
+
 	sock_recv_timestamp(msg, sk, skb);
 
 	serr = SKB_EXT_ERR(skb);
@@ -555,7 +538,8 @@ int ip_recv_error(struct sock *sk, struct msghdr *msg, int len, int *addr_len)
 	msg->msg_flags |= MSG_ERRQUEUE;
 	err = copied;
 
-	consume_skb(skb);
+out_free_skb:
+	kfree_skb(skb);
 out:
 	return err;
 }
@@ -591,7 +575,6 @@ static int do_ip_setsockopt(struct sock *sk, int level,
 			    int optname, char __user *optval, unsigned int optlen)
 {
 	struct inet_sock *inet = inet_sk(sk);
-	struct net *net = sock_net(sk);
 	int val = 0, err;
 	bool needs_rtnl = setsockopt_needs_rtnl(optname);
 
@@ -619,7 +602,6 @@ static int do_ip_setsockopt(struct sock *sk, int level,
 	case IP_MULTICAST_LOOP:
 	case IP_RECVORIGDSTADDR:
 	case IP_CHECKSUM:
-	case IP_RECVFRAGSIZE:
 		if (optlen >= sizeof(int)) {
 			if (get_user(val, (int __user *) optval))
 				return -EFAULT;
@@ -634,8 +616,6 @@ static int do_ip_setsockopt(struct sock *sk, int level,
 
 	/* If optlen==0, it is equivalent to val == 0 */
 
-	if (optname == IP_ROUTER_ALERT)
-		return ip_ra_control(sk, val ? 1 : 0, NULL);
 	if (ip_mroute_opt(optname))
 		return ip_mroute_setsockopt(sk, optname, optval, optlen);
 
@@ -656,7 +636,7 @@ static int do_ip_setsockopt(struct sock *sk, int level,
 		if (err)
 			break;
 		old = rcu_dereference_protected(inet->inet_opt,
-						lockdep_sock_is_held(sk));
+						sock_owned_by_user(sk));
 		if (inet->is_icsk) {
 			struct inet_connection_sock *icsk = inet_csk(sk);
 #if IS_ENABLED(CONFIG_IPV6)
@@ -734,14 +714,6 @@ static int do_ip_setsockopt(struct sock *sk, int level,
 			}
 		}
 		break;
-	case IP_RECVFRAGSIZE:
-		if (sk->sk_type != SOCK_RAW && sk->sk_type != SOCK_DGRAM)
-			goto e_inval;
-		if (val)
-			inet->cmsg_flags |= IP_CMSG_RECVFRAGSIZE;
-		else
-			inet->cmsg_flags &= ~IP_CMSG_RECVFRAGSIZE;
-		break;
 	case IP_TOS:	/* This sets both TOS and Precedence */
 		if (sk->sk_type == SOCK_STREAM) {
 			val &= ~INET_ECN_MASK;
@@ -807,7 +779,6 @@ static int do_ip_setsockopt(struct sock *sk, int level,
 	{
 		struct net_device *dev = NULL;
 		int ifindex;
-		int midx;
 
 		if (optlen != sizeof(int))
 			goto e_inval;
@@ -823,13 +794,10 @@ static int do_ip_setsockopt(struct sock *sk, int level,
 		err = -EADDRNOTAVAIL;
 		if (!dev)
 			break;
-
-		midx = l3mdev_master_ifindex(dev);
 		dev_put(dev);
 
 		err = -EINVAL;
-		if (sk->sk_bound_dev_if &&
-		    (!midx || midx != sk->sk_bound_dev_if))
+		if (sk->sk_bound_dev_if)
 			break;
 
 		inet->uc_index = ifindex;
@@ -939,14 +907,19 @@ static int do_ip_setsockopt(struct sock *sk, int level,
 			err = -ENOBUFS;
 			break;
 		}
-		msf = memdup_user(optval, optlen);
-		if (IS_ERR(msf)) {
-			err = PTR_ERR(msf);
+		msf = kmalloc(optlen, GFP_KERNEL);
+		if (!msf) {
+			err = -ENOBUFS;
+			break;
+		}
+		err = -EFAULT;
+		if (copy_from_user(msf, optval, optlen)) {
+			kfree(msf);
 			break;
 		}
 		/* numsrc >= (1G-4) overflow in 32 bits */
 		if (msf->imsf_numsrc >= 0x3ffffffcU ||
-		    msf->imsf_numsrc > net->ipv4.sysctl_igmp_max_msf) {
+		    msf->imsf_numsrc > sysctl_igmp_max_msf) {
 			kfree(msf);
 			err = -ENOBUFS;
 			break;
@@ -986,7 +959,7 @@ static int do_ip_setsockopt(struct sock *sk, int level,
 			mreq.imr_multiaddr.s_addr = mreqs.imr_multiaddr;
 			mreq.imr_address.s_addr = mreqs.imr_interface;
 			mreq.imr_ifindex = 0;
-			err = ip_mc_join_group_ssm(sk, &mreq, MCAST_INCLUDE);
+			err = ip_mc_join_group(sk, &mreq);
 			if (err && err != -EADDRINUSE)
 				break;
 			omode = MCAST_INCLUDE;
@@ -1063,7 +1036,7 @@ static int do_ip_setsockopt(struct sock *sk, int level,
 			mreq.imr_multiaddr = psin->sin_addr;
 			mreq.imr_address.s_addr = 0;
 			mreq.imr_ifindex = greqs.gsr_interface;
-			err = ip_mc_join_group_ssm(sk, &mreq, MCAST_INCLUDE);
+			err = ip_mc_join_group(sk, &mreq);
 			if (err && err != -EADDRINUSE)
 				break;
 			greqs.gsr_interface = mreq.imr_ifindex;
@@ -1090,15 +1063,18 @@ static int do_ip_setsockopt(struct sock *sk, int level,
 			err = -ENOBUFS;
 			break;
 		}
-		gsf = memdup_user(optval, optlen);
-		if (IS_ERR(gsf)) {
-			err = PTR_ERR(gsf);
+		gsf = kmalloc(optlen, GFP_KERNEL);
+		if (!gsf) {
+			err = -ENOBUFS;
 			break;
 		}
+		err = -EFAULT;
+		if (copy_from_user(gsf, optval, optlen))
+			goto mc_msf_out;
 
 		/* numsrc >= (4G-140)/128 overflow in 32 bits */
 		if (gsf->gf_numsrc >= 0x1ffffff ||
-		    gsf->gf_numsrc > net->ipv4.sysctl_igmp_max_msf) {
+		    gsf->gf_numsrc > sysctl_igmp_max_msf) {
 			err = -ENOBUFS;
 			goto mc_msf_out;
 		}
@@ -1145,6 +1121,9 @@ mc_msf_out:
 		if (val != 0 && val != 1)
 			goto e_inval;
 		inet->mc_all = val;
+		break;
+	case IP_ROUTER_ALERT:
+		err = ip_ra_control(sk, val ? 1 : 0, NULL);
 		break;
 
 	case IP_FREEBIND:
@@ -1212,29 +1191,20 @@ void ipv4_pktinfo_prepare(const struct sock *sk, struct sk_buff *skb)
 		       ipv6_sk_rxinfo(sk);
 
 	if (prepare && skb_rtable(skb)) {
-		/* skb->cb is overloaded: prior to this point it is IP{6}CB
-		 * which has interface index (iif) as the first member of the
-		 * underlying inet{6}_skb_parm struct. This code then overlays
-		 * PKTINFO_SKB_CB and in_pktinfo also has iif as the first
-		 * element so the iif is picked up from the prior IPCB. If iif
-		 * is the loopback interface, then return the sending interface
-		 * (e.g., process binds socket to eth0 for Tx which is
-		 * redirected to loopback in the rtable/dst).
-		 */
-		struct rtable *rt = skb_rtable(skb);
-		bool l3slave = ipv4_l3mdev_skb(IPCB(skb)->flags);
-
-		if (pktinfo->ipi_ifindex == LOOPBACK_IFINDEX)
-			pktinfo->ipi_ifindex = inet_iif(skb);
-		else if (l3slave && rt && rt->rt_iif)
-			pktinfo->ipi_ifindex = rt->rt_iif;
-
+		pktinfo->ipi_ifindex = inet_iif(skb);
 		pktinfo->ipi_spec_dst.s_addr = fib_compute_spec_dst(skb);
 	} else {
 		pktinfo->ipi_ifindex = 0;
 		pktinfo->ipi_spec_dst.s_addr = 0;
 	}
-	skb_dst_drop(skb);
+	/* We need to keep the dst for __ip_options_echo()
+	 * We could restrict the test to opt.ts_needtime || opt.srr,
+	 * but the following is good enough as IP options are not often used.
+	 */
+	if (unlikely(IPCB(skb)->opt.optlen))
+		skb_dst_force(skb);
+	else
+		skb_dst_drop(skb);
 }
 
 int ip_setsockopt(struct sock *sk, int level,
@@ -1246,11 +1216,6 @@ int ip_setsockopt(struct sock *sk, int level,
 		return -ENOPROTOOPT;
 
 	err = do_ip_setsockopt(sk, level, optname, optval, optlen);
-#if IS_ENABLED(CONFIG_BPFILTER_UMH)
-	if (optname >= BPFILTER_IPT_SO_SET_REPLACE &&
-	    optname < BPFILTER_IPT_SET_MAX)
-		err = bpfilter_ip_set_sockopt(sk, optname, optval, optlen);
-#endif
 #ifdef CONFIG_NETFILTER
 	/* we need to exclude all possible ENOPROTOOPTs except default case */
 	if (err == -ENOPROTOOPT && optname != IP_HDRINCL &&
@@ -1337,7 +1302,7 @@ static int do_ip_getsockopt(struct sock *sk, int level, int optname,
 		struct ip_options_rcu *inet_opt;
 
 		inet_opt = rcu_dereference_protected(inet->inet_opt,
-						     lockdep_sock_is_held(sk));
+						     sock_owned_by_user(sk));
 		opt->optlen = 0;
 		if (inet_opt)
 			memcpy(optbuf, &inet_opt->opt,
@@ -1381,20 +1346,14 @@ static int do_ip_getsockopt(struct sock *sk, int level, int optname,
 	case IP_CHECKSUM:
 		val = (inet->cmsg_flags & IP_CMSG_CHECKSUM) != 0;
 		break;
-	case IP_RECVFRAGSIZE:
-		val = (inet->cmsg_flags & IP_CMSG_RECVFRAGSIZE) != 0;
-		break;
 	case IP_TOS:
 		val = inet->tos;
 		break;
 	case IP_TTL:
-	{
-		struct net *net = sock_net(sk);
 		val = (inet->uc_ttl == -1 ?
-		       net->ipv4.sysctl_ip_default_ttl :
+		       sysctl_ip_default_ttl :
 		       inet->uc_ttl);
 		break;
-	}
 	case IP_HDRINCL:
 		val = inet->hdrincl;
 		break;
@@ -1559,11 +1518,6 @@ int ip_getsockopt(struct sock *sk, int level,
 	int err;
 
 	err = do_ip_getsockopt(sk, level, optname, optval, optlen, 0);
-#if IS_ENABLED(CONFIG_BPFILTER_UMH)
-	if (optname >= BPFILTER_IPT_SO_GET_INFO &&
-	    optname < BPFILTER_IPT_GET_MAX)
-		err = bpfilter_ip_get_sockopt(sk, optname, optval, optlen);
-#endif
 #ifdef CONFIG_NETFILTER
 	/* we need to exclude all possible ENOPROTOOPTs except default case */
 	if (err == -ENOPROTOOPT && optname != IP_PKTOPTIONS &&
@@ -1596,11 +1550,6 @@ int compat_ip_getsockopt(struct sock *sk, int level, int optname,
 	err = do_ip_getsockopt(sk, level, optname, optval, optlen,
 		MSG_CMSG_COMPAT);
 
-#if IS_ENABLED(CONFIG_BPFILTER_UMH)
-	if (optname >= BPFILTER_IPT_SO_GET_INFO &&
-	    optname < BPFILTER_IPT_GET_MAX)
-		err = bpfilter_ip_get_sockopt(sk, optname, optval, optlen);
-#endif
 #ifdef CONFIG_NETFILTER
 	/* we need to exclude all possible ENOPROTOOPTs except default case */
 	if (err == -ENOPROTOOPT && optname != IP_PKTOPTIONS &&

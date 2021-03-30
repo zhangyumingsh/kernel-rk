@@ -1,6 +1,9 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /**
  * Copyright (C) 2008, Creative Technology Ltd. All Rights Reserved.
+ *
+ * This source file is released under GPL v2 license (no other versions).
+ * See the COPYING file included in the main directory of this source
+ * distribution for the license terms and conditions.
  *
  * @File    ctatc.c
  *
@@ -35,7 +38,7 @@
 			    | (0x10 << 16) \
 			    | ((IEC958_AES3_CON_FS_48000) << 24))
 
-static const struct snd_pci_quirk subsys_20k1_list[] = {
+static struct snd_pci_quirk subsys_20k1_list[] = {
 	SND_PCI_QUIRK(PCI_VENDOR_ID_CREATIVE, 0x0022, "SB055x", CTSB055X),
 	SND_PCI_QUIRK(PCI_VENDOR_ID_CREATIVE, 0x002f, "SB055x", CTSB055X),
 	SND_PCI_QUIRK(PCI_VENDOR_ID_CREATIVE, 0x0029, "SB073x", CTSB073X),
@@ -45,7 +48,7 @@ static const struct snd_pci_quirk subsys_20k1_list[] = {
 	{ } /* terminator */
 };
 
-static const struct snd_pci_quirk subsys_20k2_list[] = {
+static struct snd_pci_quirk subsys_20k2_list[] = {
 	SND_PCI_QUIRK(PCI_VENDOR_ID_CREATIVE, PCI_SUBDEVICE_ID_CREATIVE_SB0760,
 		      "SB0760", CTSB0760),
 	SND_PCI_QUIRK(PCI_VENDOR_ID_CREATIVE, PCI_SUBDEVICE_ID_CREATIVE_SB1270,
@@ -272,7 +275,7 @@ static int atc_pcm_playback_prepare(struct ct_atc *atc, struct ct_atc_pcm *apcm)
 
 	/* Get AMIXER resource */
 	n_amixer = (n_amixer < 2) ? 2 : n_amixer;
-	apcm->amixers = kcalloc(n_amixer, sizeof(void *), GFP_KERNEL);
+	apcm->amixers = kzalloc(sizeof(void *)*n_amixer, GFP_KERNEL);
 	if (!apcm->amixers) {
 		err = -ENOMEM;
 		goto error1;
@@ -540,18 +543,18 @@ atc_pcm_capture_get_resources(struct ct_atc *atc, struct ct_atc_pcm *apcm)
 	}
 
 	if (n_srcc) {
-		apcm->srccs = kcalloc(n_srcc, sizeof(void *), GFP_KERNEL);
+		apcm->srccs = kzalloc(sizeof(void *)*n_srcc, GFP_KERNEL);
 		if (!apcm->srccs)
 			return -ENOMEM;
 	}
 	if (n_amixer) {
-		apcm->amixers = kcalloc(n_amixer, sizeof(void *), GFP_KERNEL);
+		apcm->amixers = kzalloc(sizeof(void *)*n_amixer, GFP_KERNEL);
 		if (!apcm->amixers) {
 			err = -ENOMEM;
 			goto error1;
 		}
 	}
-	apcm->srcimps = kcalloc(n_srcimp, sizeof(void *), GFP_KERNEL);
+	apcm->srcimps = kzalloc(sizeof(void *)*n_srcimp, GFP_KERNEL);
 	if (!apcm->srcimps) {
 		err = -ENOMEM;
 		goto error1;
@@ -816,7 +819,7 @@ static int spdif_passthru_playback_get_resources(struct ct_atc *atc,
 
 	/* Get AMIXER resource */
 	n_amixer = (n_amixer < 2) ? 2 : n_amixer;
-	apcm->amixers = kcalloc(n_amixer, sizeof(void *), GFP_KERNEL);
+	apcm->amixers = kzalloc(sizeof(void *)*n_amixer, GFP_KERNEL);
 	if (!apcm->amixers) {
 		err = -ENOMEM;
 		goto error1;
@@ -1375,19 +1378,19 @@ static int atc_get_resources(struct ct_atc *atc)
 	num_daios = ((atc->model == CTSB1270) ? 8 : 7);
 	num_srcs = ((atc->model == CTSB1270) ? 6 : 4);
 
-	atc->daios = kcalloc(num_daios, sizeof(void *), GFP_KERNEL);
+	atc->daios = kzalloc(sizeof(void *)*num_daios, GFP_KERNEL);
 	if (!atc->daios)
 		return -ENOMEM;
 
-	atc->srcs = kcalloc(num_srcs, sizeof(void *), GFP_KERNEL);
+	atc->srcs = kzalloc(sizeof(void *)*num_srcs, GFP_KERNEL);
 	if (!atc->srcs)
 		return -ENOMEM;
 
-	atc->srcimps = kcalloc(num_srcs, sizeof(void *), GFP_KERNEL);
+	atc->srcimps = kzalloc(sizeof(void *)*num_srcs, GFP_KERNEL);
 	if (!atc->srcimps)
 		return -ENOMEM;
 
-	atc->pcm = kcalloc(2 * 4, sizeof(void *), GFP_KERNEL);
+	atc->pcm = kzalloc(sizeof(void *)*(2*4), GFP_KERNEL);
 	if (!atc->pcm)
 		return -ENOMEM;
 
@@ -1545,9 +1548,17 @@ static void atc_connect_resources(struct ct_atc *atc)
 #ifdef CONFIG_PM_SLEEP
 static int atc_suspend(struct ct_atc *atc)
 {
+	int i;
 	struct hw *hw = atc->hw;
 
 	snd_power_change_state(atc->card, SNDRV_CTL_POWER_D3hot);
+
+	for (i = FRONT; i < NUM_PCMS; i++) {
+		if (!atc->pcms[i])
+			continue;
+
+		snd_pcm_suspend_all(atc->pcms[i]);
+	}
 
 	atc_release_resources(atc);
 
@@ -1612,7 +1623,7 @@ static int atc_resume(struct ct_atc *atc)
 }
 #endif
 
-static const struct ct_atc atc_preset = {
+static struct ct_atc atc_preset = {
 	.map_audio_buffer = ct_map_audio_buffer,
 	.unmap_audio_buffer = ct_unmap_audio_buffer,
 	.pcm_playback_prepare = atc_pcm_playback_prepare,
@@ -1669,7 +1680,7 @@ int ct_atc_create(struct snd_card *card, struct pci_dev *pci,
 		  struct ct_atc **ratc)
 {
 	struct ct_atc *atc;
-	static const struct snd_device_ops ops = {
+	static struct snd_device_ops ops = {
 		.dev_free = atc_dev_free,
 	};
 	int err;

@@ -1,8 +1,22 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * LIRC base driver
  *
  * by Artur Lipowski <alipowski@interia.pl>
+ *
+ *  This program is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License as published by
+ *  the Free Software Foundation; either version 2 of the License, or
+ *  (at your option) any later version.
+ *
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License
+ *  along with this program; if not, write to the Free Software
+ *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ *
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -10,16 +24,15 @@
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/device.h>
-#include <linux/file.h>
 #include <linux/idr.h>
 #include <linux/poll.h>
 #include <linux/sched.h>
 #include <linux/wait.h>
 
 #include "rc-core-priv.h"
-#include <uapi/linux/lirc.h>
+#include <media/lirc.h>
 
-#define LIRCBUF_SIZE	1024
+#define LIRCBUF_SIZE	256
 
 static dev_t lirc_base_dev;
 
@@ -95,18 +108,12 @@ void ir_lirc_raw_event(struct rc_dev *dev, struct ir_raw_event ev)
 			TO_US(ev.duration), TO_STR(ev.pulse));
 	}
 
-	/*
-	 * bpf does not care about the gap generated above; that exists
-	 * for backwards compatibility
-	 */
-	lirc_bpf_run(dev, sample);
-
 	spin_lock_irqsave(&dev->lirc_fh_lock, flags);
 	list_for_each_entry(fh, &dev->lirc_fh, list) {
 		if (LIRC_IS_TIMEOUT(sample) && !fh->send_timeout_reports)
 			continue;
 		if (kfifo_put(&fh->rawir, sample))
-			wake_up_poll(&fh->wait_poll, EPOLLIN | EPOLLRDNORM);
+			wake_up_poll(&fh->wait_poll, POLLIN | POLLRDNORM);
 	}
 	spin_unlock_irqrestore(&dev->lirc_fh_lock, flags);
 }
@@ -127,7 +134,7 @@ void ir_lirc_scancode_event(struct rc_dev *dev, struct lirc_scancode *lsc)
 	spin_lock_irqsave(&dev->lirc_fh_lock, flags);
 	list_for_each_entry(fh, &dev->lirc_fh, list) {
 		if (kfifo_put(&fh->scancodes, *lsc))
-			wake_up_poll(&fh->wait_poll, EPOLLIN | EPOLLRDNORM);
+			wake_up_poll(&fh->wait_poll, POLLIN | POLLRDNORM);
 	}
 	spin_unlock_irqrestore(&dev->lirc_fh_lock, flags);
 }
@@ -185,7 +192,7 @@ static int ir_lirc_open(struct inode *inode, struct file *file)
 	list_add(&fh->list, &dev->lirc_fh);
 	spin_unlock_irqrestore(&dev->lirc_fh_lock, flags);
 
-	stream_open(inode, file);
+	nonseekable_open(inode, file);
 
 	return 0;
 out_kfifo:
@@ -598,24 +605,25 @@ out:
 	return ret;
 }
 
-static __poll_t ir_lirc_poll(struct file *file, struct poll_table_struct *wait)
+static unsigned int ir_lirc_poll(struct file *file,
+				 struct poll_table_struct *wait)
 {
 	struct lirc_fh *fh = file->private_data;
 	struct rc_dev *rcdev = fh->rc;
-	__poll_t events = 0;
+	unsigned int events = 0;
 
 	poll_wait(file, &fh->wait_poll, wait);
 
 	if (!rcdev->registered) {
-		events = EPOLLHUP | EPOLLERR;
+		events = POLLHUP | POLLERR;
 	} else if (rcdev->driver_type != RC_DRIVER_IR_RAW_TX) {
 		if (fh->rec_mode == LIRC_MODE_SCANCODE &&
 		    !kfifo_is_empty(&fh->scancodes))
-			events = EPOLLIN | EPOLLRDNORM;
+			events = POLLIN | POLLRDNORM;
 
 		if (fh->rec_mode == LIRC_MODE_MODE2 &&
 		    !kfifo_is_empty(&fh->rawir))
-			events = EPOLLIN | EPOLLRDNORM;
+			events = POLLIN | POLLRDNORM;
 	}
 
 	return events;
@@ -720,7 +728,9 @@ static const struct file_operations lirc_fops = {
 	.owner		= THIS_MODULE,
 	.write		= ir_lirc_transmit_ir,
 	.unlocked_ioctl	= ir_lirc_ioctl,
-	.compat_ioctl	= compat_ptr_ioctl,
+#ifdef CONFIG_COMPAT
+	.compat_ioctl	= ir_lirc_ioctl,
+#endif
 	.read		= ir_lirc_read,
 	.poll		= ir_lirc_poll,
 	.open		= ir_lirc_open,
@@ -799,7 +809,7 @@ void ir_lirc_unregister(struct rc_dev *dev)
 
 	spin_lock_irqsave(&dev->lirc_fh_lock, flags);
 	list_for_each_entry(fh, &dev->lirc_fh, list)
-		wake_up_poll(&fh->wait_poll, EPOLLHUP | EPOLLERR);
+		wake_up_poll(&fh->wait_poll, POLLHUP | POLLERR);
 	spin_unlock_irqrestore(&dev->lirc_fh_lock, flags);
 
 	cdev_device_del(&dev->lirc_cdev, &dev->lirc_dev);
@@ -834,29 +844,6 @@ void __exit lirc_dev_exit(void)
 {
 	class_destroy(lirc_class);
 	unregister_chrdev_region(lirc_base_dev, RC_DEV_MAX);
-}
-
-struct rc_dev *rc_dev_get_from_fd(int fd)
-{
-	struct fd f = fdget(fd);
-	struct lirc_fh *fh;
-	struct rc_dev *dev;
-
-	if (!f.file)
-		return ERR_PTR(-EBADF);
-
-	if (f.file->f_op != &lirc_fops) {
-		fdput(f);
-		return ERR_PTR(-EINVAL);
-	}
-
-	fh = f.file->private_data;
-	dev = fh->rc;
-
-	get_device(&dev->dev);
-	fdput(f);
-
-	return dev;
 }
 
 MODULE_ALIAS("lirc_dev");

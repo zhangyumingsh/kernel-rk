@@ -1,10 +1,10 @@
-// SPDX-License-Identifier: GPL-2.0-only
-//
-// Freescale MPC5200 PSC DMA
-// ALSA SoC Platform driver
-//
-// Copyright (C) 2008 Secret Lab Technologies Ltd.
-// Copyright (C) 2009 Jon Smirl, Digispeaker
+/*
+ * Freescale MPC5200 PSC DMA
+ * ALSA SoC Platform driver
+ *
+ * Copyright (C) 2008 Secret Lab Technologies Ltd.
+ * Copyright (C) 2009 Jon Smirl, Digispeaker
+ */
 
 #include <linux/module.h>
 #include <linux/of_device.h>
@@ -21,8 +21,6 @@
 #include <asm/mpc52xx_psc.h>
 
 #include "mpc5200_dma.h"
-
-#define DRV_NAME "mpc5200_dma"
 
 /*
  * Interrupt handlers
@@ -98,8 +96,7 @@ static irqreturn_t psc_dma_bcom_irq(int irq, void *_psc_dma_stream)
 	return IRQ_HANDLED;
 }
 
-static int psc_dma_hw_free(struct snd_soc_component *component,
-			   struct snd_pcm_substream *substream)
+static int psc_dma_hw_free(struct snd_pcm_substream *substream)
 {
 	snd_pcm_set_runtime_buffer(substream, NULL);
 	return 0;
@@ -111,8 +108,7 @@ static int psc_dma_hw_free(struct snd_soc_component *component,
  * This function is called by ALSA to start, stop, pause, and resume the DMA
  * transfer of data.
  */
-static int psc_dma_trigger(struct snd_soc_component *component,
-			   struct snd_pcm_substream *substream, int cmd)
+static int psc_dma_trigger(struct snd_pcm_substream *substream, int cmd)
 {
 	struct snd_soc_pcm_runtime *rtd = substream->private_data;
 	struct psc_dma *psc_dma = snd_soc_dai_get_drvdata(rtd->cpu_dai);
@@ -212,8 +208,7 @@ static const struct snd_pcm_hardware psc_dma_hardware = {
 	.fifo_size		= 512,
 };
 
-static int psc_dma_open(struct snd_soc_component *component,
-			struct snd_pcm_substream *substream)
+static int psc_dma_open(struct snd_pcm_substream *substream)
 {
 	struct snd_pcm_runtime *runtime = substream->runtime;
 	struct snd_soc_pcm_runtime *rtd = substream->private_data;
@@ -241,8 +236,7 @@ static int psc_dma_open(struct snd_soc_component *component,
 	return 0;
 }
 
-static int psc_dma_close(struct snd_soc_component *component,
-			 struct snd_pcm_substream *substream)
+static int psc_dma_close(struct snd_pcm_substream *substream)
 {
 	struct snd_soc_pcm_runtime *rtd = substream->private_data;
 	struct psc_dma *psc_dma = snd_soc_dai_get_drvdata(rtd->cpu_dai);
@@ -267,8 +261,7 @@ static int psc_dma_close(struct snd_soc_component *component,
 }
 
 static snd_pcm_uframes_t
-psc_dma_pointer(struct snd_soc_component *component,
-		struct snd_pcm_substream *substream)
+psc_dma_pointer(struct snd_pcm_substream *substream)
 {
 	struct snd_soc_pcm_runtime *rtd = substream->private_data;
 	struct psc_dma *psc_dma = snd_soc_dai_get_drvdata(rtd->cpu_dai);
@@ -285,25 +278,35 @@ psc_dma_pointer(struct snd_soc_component *component,
 	return bytes_to_frames(substream->runtime, count);
 }
 
-static int psc_dma_hw_params(struct snd_soc_component *component,
-			     struct snd_pcm_substream *substream,
-			     struct snd_pcm_hw_params *params)
+static int
+psc_dma_hw_params(struct snd_pcm_substream *substream,
+			 struct snd_pcm_hw_params *params)
 {
 	snd_pcm_set_runtime_buffer(substream, &substream->dma_buffer);
 
 	return 0;
 }
 
-static int psc_dma_new(struct snd_soc_component *component,
-		       struct snd_soc_pcm_runtime *rtd)
+static struct snd_pcm_ops psc_dma_ops = {
+	.open		= psc_dma_open,
+	.close		= psc_dma_close,
+	.hw_free	= psc_dma_hw_free,
+	.ioctl		= snd_pcm_lib_ioctl,
+	.pointer	= psc_dma_pointer,
+	.trigger	= psc_dma_trigger,
+	.hw_params	= psc_dma_hw_params,
+};
+
+static int psc_dma_new(struct snd_soc_pcm_runtime *rtd)
 {
 	struct snd_card *card = rtd->card->snd_card;
 	struct snd_soc_dai *dai = rtd->cpu_dai;
 	struct snd_pcm *pcm = rtd->pcm;
+	struct psc_dma *psc_dma = snd_soc_dai_get_drvdata(rtd->cpu_dai);
 	size_t size = psc_dma_hardware.buffer_bytes_max;
 	int rc;
 
-	dev_dbg(component->dev, "psc_dma_new(card=%p, dai=%p, pcm=%p)\n",
+	dev_dbg(rtd->platform->dev, "psc_dma_new(card=%p, dai=%p, pcm=%p)\n",
 		card, dai, pcm);
 
 	rc = dma_coerce_mask_and_coherent(card->dev, DMA_BIT_MASK(32));
@@ -336,14 +339,13 @@ static int psc_dma_new(struct snd_soc_component *component,
 	return -ENOMEM;
 }
 
-static void psc_dma_free(struct snd_soc_component *component,
-			 struct snd_pcm *pcm)
+static void psc_dma_free(struct snd_pcm *pcm)
 {
 	struct snd_soc_pcm_runtime *rtd = pcm->private_data;
 	struct snd_pcm_substream *substream;
 	int stream;
 
-	dev_dbg(component->dev, "psc_dma_free(pcm=%p)\n", pcm);
+	dev_dbg(rtd->platform->dev, "psc_dma_free(pcm=%p)\n", pcm);
 
 	for (stream = 0; stream < 2; stream++) {
 		substream = pcm->streams[stream].substream;
@@ -355,16 +357,10 @@ static void psc_dma_free(struct snd_soc_component *component,
 	}
 }
 
-static const struct snd_soc_component_driver mpc5200_audio_dma_component = {
-	.name		= DRV_NAME,
-	.open		= psc_dma_open,
-	.close		= psc_dma_close,
-	.hw_free	= psc_dma_hw_free,
-	.pointer	= psc_dma_pointer,
-	.trigger	= psc_dma_trigger,
-	.hw_params	= psc_dma_hw_params,
-	.pcm_construct	= psc_dma_new,
-	.pcm_destruct	= psc_dma_free,
+static struct snd_soc_platform_driver mpc5200_audio_dma_platform = {
+	.ops		= &psc_dma_ops,
+	.pcm_new	= &psc_dma_new,
+	.pcm_free	= &psc_dma_free,
 };
 
 int mpc5200_audio_dma_create(struct platform_device *op)
@@ -473,8 +469,7 @@ int mpc5200_audio_dma_create(struct platform_device *op)
 	dev_set_drvdata(&op->dev, psc_dma);
 
 	/* Tell the ASoC OF helpers about it */
-	return devm_snd_soc_register_component(&op->dev,
-					&mpc5200_audio_dma_component, NULL, 0);
+	return snd_soc_register_platform(&op->dev, &mpc5200_audio_dma_platform);
 out_irq:
 	free_irq(psc_dma->irq, psc_dma);
 	free_irq(psc_dma->capture.irq, &psc_dma->capture);
@@ -492,6 +487,8 @@ int mpc5200_audio_dma_destroy(struct platform_device *op)
 	struct psc_dma *psc_dma = dev_get_drvdata(&op->dev);
 
 	dev_dbg(&op->dev, "mpc5200_audio_dma_destroy()\n");
+
+	snd_soc_unregister_platform(&op->dev);
 
 	bcom_gen_bd_rx_release(psc_dma->capture.bcom_task);
 	bcom_gen_bd_tx_release(psc_dma->playback.bcom_task);

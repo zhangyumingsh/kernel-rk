@@ -1,7 +1,7 @@
-// SPDX-License-Identifier: GPL-2.0 OR MIT
 /**************************************************************************
  *
- * Copyright 2011-2014 VMware, Inc., Palo Alto, CA., USA
+ * Copyright © 2011-2014 VMware, Inc., Palo Alto, CA., USA
+ * All Rights Reserved.
  *
  * Permission is hereby granted, free of charge, to any person obtaining a
  * copy of this software and associated documentation files (the
@@ -25,8 +25,7 @@
  *
  **************************************************************************/
 
-#include <linux/sched/signal.h>
-
+#include <drm/drmP.h>
 #include "vmwgfx_drv.h"
 
 #define VMW_FENCE_WRAP (1 << 31)
@@ -47,7 +46,7 @@ struct vmw_fence_manager {
 	bool goal_irq_on; /* Protected by @goal_irq_mutex */
 	bool seqno_valid; /* Protected by @lock, and may not be set to true
 			     without the @goal_irq_mutex held. */
-	u64 ctx;
+	unsigned ctx;
 };
 
 struct vmw_user_fence {
@@ -72,6 +71,7 @@ struct vmw_user_fence {
  */
 struct vmw_event_fence_action {
 	struct vmw_fence_action action;
+	struct list_head fpriv_head;
 
 	struct drm_pending_event *event;
 	struct vmw_fence_obj *fence;
@@ -109,31 +109,32 @@ fman_from_fence(struct vmw_fence_obj *fence)
  * objects with actions attached to them.
  */
 
-static void vmw_fence_obj_destroy(struct dma_fence *f)
+static void vmw_fence_obj_destroy(struct fence *f)
 {
 	struct vmw_fence_obj *fence =
 		container_of(f, struct vmw_fence_obj, base);
 
 	struct vmw_fence_manager *fman = fman_from_fence(fence);
+	unsigned long irq_flags;
 
-	spin_lock(&fman->lock);
+	spin_lock_irqsave(&fman->lock, irq_flags);
 	list_del_init(&fence->head);
 	--fman->num_fence_objects;
-	spin_unlock(&fman->lock);
+	spin_unlock_irqrestore(&fman->lock, irq_flags);
 	fence->destroy(fence);
 }
 
-static const char *vmw_fence_get_driver_name(struct dma_fence *f)
+static const char *vmw_fence_get_driver_name(struct fence *f)
 {
 	return "vmwgfx";
 }
 
-static const char *vmw_fence_get_timeline_name(struct dma_fence *f)
+static const char *vmw_fence_get_timeline_name(struct fence *f)
 {
 	return "svga";
 }
 
-static bool vmw_fence_enable_signaling(struct dma_fence *f)
+static bool vmw_fence_enable_signaling(struct fence *f)
 {
 	struct vmw_fence_obj *fence =
 		container_of(f, struct vmw_fence_obj, base);
@@ -152,12 +153,12 @@ static bool vmw_fence_enable_signaling(struct dma_fence *f)
 }
 
 struct vmwgfx_wait_cb {
-	struct dma_fence_cb base;
+	struct fence_cb base;
 	struct task_struct *task;
 };
 
 static void
-vmwgfx_wait_cb(struct dma_fence *fence, struct dma_fence_cb *cb)
+vmwgfx_wait_cb(struct fence *fence, struct fence_cb *cb)
 {
 	struct vmwgfx_wait_cb *wait =
 		container_of(cb, struct vmwgfx_wait_cb, base);
@@ -167,7 +168,7 @@ vmwgfx_wait_cb(struct dma_fence *fence, struct dma_fence_cb *cb)
 
 static void __vmw_fences_update(struct vmw_fence_manager *fman);
 
-static long vmw_fence_wait(struct dma_fence *f, bool intr, signed long timeout)
+static long vmw_fence_wait(struct fence *f, bool intr, signed long timeout)
 {
 	struct vmw_fence_obj *fence =
 		container_of(f, struct vmw_fence_obj, base);
@@ -176,6 +177,7 @@ static long vmw_fence_wait(struct dma_fence *f, bool intr, signed long timeout)
 	struct vmw_private *dev_priv = fman->dev_priv;
 	struct vmwgfx_wait_cb cb;
 	long ret = timeout;
+	unsigned long irq_flags;
 
 	if (likely(vmw_fence_obj_signaled(fence)))
 		return timeout;
@@ -183,10 +185,7 @@ static long vmw_fence_wait(struct dma_fence *f, bool intr, signed long timeout)
 	vmw_fifo_ping_host(dev_priv, SVGA_SYNC_GENERIC);
 	vmw_seqno_waiter_add(dev_priv);
 
-	spin_lock(f->lock);
-
-	if (test_bit(DMA_FENCE_FLAG_SIGNALED_BIT, &f->flags))
-		goto out;
+	spin_lock_irqsave(f->lock, irq_flags);
 
 	if (intr && signal_pending(current)) {
 		ret = -ERESTARTSYS;
@@ -197,52 +196,37 @@ static long vmw_fence_wait(struct dma_fence *f, bool intr, signed long timeout)
 	cb.task = current;
 	list_add(&cb.base.node, &f->cb_list);
 
-	for (;;) {
+	while (ret > 0) {
 		__vmw_fences_update(fman);
+		if (test_bit(FENCE_FLAG_SIGNALED_BIT, &f->flags))
+			break;
 
-		/*
-		 * We can use the barrier free __set_current_state() since
-		 * DMA_FENCE_FLAG_SIGNALED_BIT + wakeup is protected by the
-		 * fence spinlock.
-		 */
 		if (intr)
 			__set_current_state(TASK_INTERRUPTIBLE);
 		else
 			__set_current_state(TASK_UNINTERRUPTIBLE);
-
-		if (test_bit(DMA_FENCE_FLAG_SIGNALED_BIT, &f->flags)) {
-			if (ret == 0 && timeout > 0)
-				ret = 1;
-			break;
-		}
-
-		if (intr && signal_pending(current)) {
-			ret = -ERESTARTSYS;
-			break;
-		}
-
-		if (ret == 0)
-			break;
-
-		spin_unlock(f->lock);
+		spin_unlock_irqrestore(f->lock, irq_flags);
 
 		ret = schedule_timeout(ret);
 
-		spin_lock(f->lock);
+		spin_lock_irqsave(f->lock, irq_flags);
+		if (ret > 0 && intr && signal_pending(current))
+			ret = -ERESTARTSYS;
 	}
-	__set_current_state(TASK_RUNNING);
+
 	if (!list_empty(&cb.base.node))
 		list_del(&cb.base.node);
+	__set_current_state(TASK_RUNNING);
 
 out:
-	spin_unlock(f->lock);
+	spin_unlock_irqrestore(f->lock, irq_flags);
 
 	vmw_seqno_waiter_remove(dev_priv);
 
 	return ret;
 }
 
-static const struct dma_fence_ops vmw_fence_ops = {
+static struct fence_ops vmw_fence_ops = {
 	.get_driver_name = vmw_fence_get_driver_name,
 	.get_timeline_name = vmw_fence_get_timeline_name,
 	.enable_signaling = vmw_fence_enable_signaling,
@@ -269,10 +253,10 @@ static void vmw_fence_work_func(struct work_struct *work)
 		INIT_LIST_HEAD(&list);
 		mutex_lock(&fman->goal_irq_mutex);
 
-		spin_lock(&fman->lock);
+		spin_lock_irq(&fman->lock);
 		list_splice_init(&fman->cleanup_list, &list);
 		seqno_valid = fman->seqno_valid;
-		spin_unlock(&fman->lock);
+		spin_unlock_irq(&fman->lock);
 
 		if (!seqno_valid && fman->goal_irq_on) {
 			fman->goal_irq_on = false;
@@ -301,7 +285,7 @@ struct vmw_fence_manager *vmw_fence_manager_init(struct vmw_private *dev_priv)
 {
 	struct vmw_fence_manager *fman = kzalloc(sizeof(*fman), GFP_KERNEL);
 
-	if (unlikely(!fman))
+	if (unlikely(fman == NULL))
 		return NULL;
 
 	fman->dev_priv = dev_priv;
@@ -310,27 +294,27 @@ struct vmw_fence_manager *vmw_fence_manager_init(struct vmw_private *dev_priv)
 	INIT_LIST_HEAD(&fman->cleanup_list);
 	INIT_WORK(&fman->work, &vmw_fence_work_func);
 	fman->fifo_down = true;
-	fman->user_fence_size = ttm_round_pot(sizeof(struct vmw_user_fence)) +
-		TTM_OBJ_EXTRA_SIZE;
+	fman->user_fence_size = ttm_round_pot(sizeof(struct vmw_user_fence));
 	fman->fence_size = ttm_round_pot(sizeof(struct vmw_fence_obj));
 	fman->event_fence_action_size =
 		ttm_round_pot(sizeof(struct vmw_event_fence_action));
 	mutex_init(&fman->goal_irq_mutex);
-	fman->ctx = dma_fence_context_alloc(1);
+	fman->ctx = fence_context_alloc(1);
 
 	return fman;
 }
 
 void vmw_fence_manager_takedown(struct vmw_fence_manager *fman)
 {
+	unsigned long irq_flags;
 	bool lists_empty;
 
 	(void) cancel_work_sync(&fman->work);
 
-	spin_lock(&fman->lock);
+	spin_lock_irqsave(&fman->lock, irq_flags);
 	lists_empty = list_empty(&fman->fence_list) &&
 		list_empty(&fman->cleanup_list);
-	spin_unlock(&fman->lock);
+	spin_unlock_irqrestore(&fman->lock, irq_flags);
 
 	BUG_ON(!lists_empty);
 	kfree(fman);
@@ -340,14 +324,15 @@ static int vmw_fence_obj_init(struct vmw_fence_manager *fman,
 			      struct vmw_fence_obj *fence, u32 seqno,
 			      void (*destroy) (struct vmw_fence_obj *fence))
 {
+	unsigned long irq_flags;
 	int ret = 0;
 
-	dma_fence_init(&fence->base, &vmw_fence_ops, &fman->lock,
-		       fman->ctx, seqno);
+	fence_init(&fence->base, &vmw_fence_ops, &fman->lock,
+		   fman->ctx, seqno);
 	INIT_LIST_HEAD(&fence->seq_passed_actions);
 	fence->destroy = destroy;
 
-	spin_lock(&fman->lock);
+	spin_lock_irqsave(&fman->lock, irq_flags);
 	if (unlikely(fman->fifo_down)) {
 		ret = -EBUSY;
 		goto out_unlock;
@@ -356,7 +341,7 @@ static int vmw_fence_obj_init(struct vmw_fence_manager *fman,
 	++fman->num_fence_objects;
 
 out_unlock:
-	spin_unlock(&fman->lock);
+	spin_unlock_irqrestore(&fman->lock, irq_flags);
 	return ret;
 
 }
@@ -447,7 +432,7 @@ static bool vmw_fence_goal_check_locked(struct vmw_fence_obj *fence)
 	u32 goal_seqno;
 	u32 *fifo_mem;
 
-	if (dma_fence_is_signaled_locked(&fence->base))
+	if (fence_is_signaled_locked(&fence->base))
 		return false;
 
 	fifo_mem = fman->dev_priv->mmio_virt;
@@ -475,7 +460,7 @@ rerun:
 	list_for_each_entry_safe(fence, next_fence, &fman->fence_list, head) {
 		if (seqno - fence->base.seqno < VMW_FENCE_WRAP) {
 			list_del_init(&fence->head);
-			dma_fence_signal_locked(&fence->base);
+			fence_signal_locked(&fence->base);
 			INIT_LIST_HEAD(&action_list);
 			list_splice_init(&fence->seq_passed_actions,
 					 &action_list);
@@ -505,27 +490,29 @@ rerun:
 
 void vmw_fences_update(struct vmw_fence_manager *fman)
 {
-	spin_lock(&fman->lock);
+	unsigned long irq_flags;
+
+	spin_lock_irqsave(&fman->lock, irq_flags);
 	__vmw_fences_update(fman);
-	spin_unlock(&fman->lock);
+	spin_unlock_irqrestore(&fman->lock, irq_flags);
 }
 
 bool vmw_fence_obj_signaled(struct vmw_fence_obj *fence)
 {
 	struct vmw_fence_manager *fman = fman_from_fence(fence);
 
-	if (test_bit(DMA_FENCE_FLAG_SIGNALED_BIT, &fence->base.flags))
+	if (test_bit(FENCE_FLAG_SIGNALED_BIT, &fence->base.flags))
 		return 1;
 
 	vmw_fences_update(fman);
 
-	return dma_fence_is_signaled(&fence->base);
+	return fence_is_signaled(&fence->base);
 }
 
 int vmw_fence_obj_wait(struct vmw_fence_obj *fence, bool lazy,
 		       bool interruptible, unsigned long timeout)
 {
-	long ret = dma_fence_wait_timeout(&fence->base, interruptible, timeout);
+	long ret = fence_wait_timeout(&fence->base, interruptible, timeout);
 
 	if (likely(ret > 0))
 		return 0;
@@ -544,7 +531,7 @@ void vmw_fence_obj_flush(struct vmw_fence_obj *fence)
 
 static void vmw_fence_destroy(struct vmw_fence_obj *fence)
 {
-	dma_fence_free(&fence->base);
+	fence_free(&fence->base);
 }
 
 int vmw_fence_create(struct vmw_fence_manager *fman,
@@ -555,7 +542,7 @@ int vmw_fence_create(struct vmw_fence_manager *fman,
  	int ret;
 
 	fence = kzalloc(sizeof(*fence), GFP_KERNEL);
-	if (unlikely(!fence))
+	if (unlikely(fence == NULL))
 		return -ENOMEM;
 
 	ret = vmw_fence_obj_init(fman, fence, seqno,
@@ -607,10 +594,6 @@ int vmw_user_fence_create(struct drm_file *file_priv,
 	struct vmw_user_fence *ufence;
 	struct vmw_fence_obj *tmp;
 	struct ttm_mem_global *mem_glob = vmw_mem_glob(fman->dev_priv);
-	struct ttm_operation_ctx ctx = {
-		.interruptible = false,
-		.no_wait_gpu = false
-	};
 	int ret;
 
 	/*
@@ -619,12 +602,12 @@ int vmw_user_fence_create(struct drm_file *file_priv,
 	 */
 
 	ret = ttm_mem_global_alloc(mem_glob, fman->user_fence_size,
-				   &ctx);
+				   false, false);
 	if (unlikely(ret != 0))
 		return ret;
 
 	ufence = kzalloc(sizeof(*ufence), GFP_KERNEL);
-	if (unlikely(!ufence)) {
+	if (unlikely(ufence == NULL)) {
 		ret = -ENOMEM;
 		goto out_no_object;
 	}
@@ -655,7 +638,7 @@ int vmw_user_fence_create(struct drm_file *file_priv,
 	}
 
 	*p_fence = &ufence->fence;
-	*p_handle = ufence->base.handle;
+	*p_handle = ufence->base.hash.key;
 
 	return 0;
 out_err:
@@ -664,51 +647,6 @@ out_err:
 out_no_object:
 	ttm_mem_global_free(mem_glob, fman->user_fence_size);
 	return ret;
-}
-
-
-/**
- * vmw_wait_dma_fence - Wait for a dma fence
- *
- * @fman: pointer to a fence manager
- * @fence: DMA fence to wait on
- *
- * This function handles the case when the fence is actually a fence
- * array.  If that's the case, it'll wait on each of the child fence
- */
-int vmw_wait_dma_fence(struct vmw_fence_manager *fman,
-		       struct dma_fence *fence)
-{
-	struct dma_fence_array *fence_array;
-	int ret = 0;
-	int i;
-
-
-	if (dma_fence_is_signaled(fence))
-		return 0;
-
-	if (!dma_fence_is_array(fence))
-		return dma_fence_wait(fence, true);
-
-	/* From i915: Note that if the fence-array was created in
-	 * signal-on-any mode, we should *not* decompose it into its individual
-	 * fences. However, we don't currently store which mode the fence-array
-	 * is operating in. Fortunately, the only user of signal-on-any is
-	 * private to amdgpu and we should not see any incoming fence-array
-	 * from sync-file being in signal-on-any mode.
-	 */
-
-	fence_array = to_dma_fence_array(fence);
-	for (i = 0; i < fence_array->num_fences; i++) {
-		struct dma_fence *child = fence_array->fences[i];
-
-		ret = dma_fence_wait(child, true);
-
-		if (ret < 0)
-			return ret;
-	}
-
-	return 0;
 }
 
 
@@ -726,21 +664,21 @@ void vmw_fence_fifo_down(struct vmw_fence_manager *fman)
 	 * restart when we've released the fman->lock.
 	 */
 
-	spin_lock(&fman->lock);
+	spin_lock_irq(&fman->lock);
 	fman->fifo_down = true;
 	while (!list_empty(&fman->fence_list)) {
 		struct vmw_fence_obj *fence =
 			list_entry(fman->fence_list.prev, struct vmw_fence_obj,
 				   head);
-		dma_fence_get(&fence->base);
-		spin_unlock(&fman->lock);
+		fence_get(&fence->base);
+		spin_unlock_irq(&fman->lock);
 
 		ret = vmw_fence_obj_wait(fence, false, false,
 					 VMW_FENCE_WAIT_TIMEOUT);
 
 		if (unlikely(ret != 0)) {
 			list_del_init(&fence->head);
-			dma_fence_signal(&fence->base);
+			fence_signal(&fence->base);
 			INIT_LIST_HEAD(&action_list);
 			list_splice_init(&fence->seq_passed_actions,
 					 &action_list);
@@ -748,17 +686,19 @@ void vmw_fence_fifo_down(struct vmw_fence_manager *fman)
 		}
 
 		BUG_ON(!list_empty(&fence->head));
-		dma_fence_put(&fence->base);
-		spin_lock(&fman->lock);
+		fence_put(&fence->base);
+		spin_lock_irq(&fman->lock);
 	}
-	spin_unlock(&fman->lock);
+	spin_unlock_irq(&fman->lock);
 }
 
 void vmw_fence_fifo_up(struct vmw_fence_manager *fman)
 {
-	spin_lock(&fman->lock);
+	unsigned long irq_flags;
+
+	spin_lock_irqsave(&fman->lock, irq_flags);
 	fman->fifo_down = false;
-	spin_unlock(&fman->lock);
+	spin_unlock_irqrestore(&fman->lock, irq_flags);
 }
 
 
@@ -873,9 +813,9 @@ int vmw_fence_obj_signaled_ioctl(struct drm_device *dev, void *data,
 	arg->signaled = vmw_fence_obj_signaled(fence);
 
 	arg->signaled_flags = arg->flags;
-	spin_lock(&fman->lock);
+	spin_lock_irq(&fman->lock);
 	arg->passed_seqno = dev_priv->last_read_seqno;
-	spin_unlock(&fman->lock);
+	spin_unlock_irq(&fman->lock);
 
 	ttm_base_object_unref(&base);
 
@@ -895,6 +835,44 @@ int vmw_fence_obj_unref_ioctl(struct drm_device *dev, void *data,
 }
 
 /**
+ * vmw_event_fence_fpriv_gone - Remove references to struct drm_file objects
+ *
+ * @fman: Pointer to a struct vmw_fence_manager
+ * @event_list: Pointer to linked list of struct vmw_event_fence_action objects
+ * with pointers to a struct drm_file object about to be closed.
+ *
+ * This function removes all pending fence events with references to a
+ * specific struct drm_file object about to be closed. The caller is required
+ * to pass a list of all struct vmw_event_fence_action objects with such
+ * events attached. This function is typically called before the
+ * struct drm_file object's event management is taken down.
+ */
+void vmw_event_fence_fpriv_gone(struct vmw_fence_manager *fman,
+				struct list_head *event_list)
+{
+	struct vmw_event_fence_action *eaction;
+	struct drm_pending_event *event;
+	unsigned long irq_flags;
+
+	while (1) {
+		spin_lock_irqsave(&fman->lock, irq_flags);
+		if (list_empty(event_list))
+			goto out_unlock;
+		eaction = list_first_entry(event_list,
+					   struct vmw_event_fence_action,
+					   fpriv_head);
+		list_del_init(&eaction->fpriv_head);
+		event = eaction->event;
+		eaction->event = NULL;
+		spin_unlock_irqrestore(&fman->lock, irq_flags);
+		event->destroy(event);
+	}
+out_unlock:
+	spin_unlock_irqrestore(&fman->lock, irq_flags);
+}
+
+
+/**
  * vmw_event_fence_action_seq_passed
  *
  * @action: The struct vmw_fence_action embedded in a struct
@@ -902,7 +880,8 @@ int vmw_fence_obj_unref_ioctl(struct drm_device *dev, void *data,
  *
  * This function is called when the seqno of the fence where @action is
  * attached has passed. It queues the event on the submitter's event list.
- * This function is always called from atomic context.
+ * This function is always called from atomic context, and may be called
+ * from irq context.
  */
 static void vmw_event_fence_action_seq_passed(struct vmw_fence_action *action)
 {
@@ -910,24 +889,27 @@ static void vmw_event_fence_action_seq_passed(struct vmw_fence_action *action)
 		container_of(action, struct vmw_event_fence_action, action);
 	struct drm_device *dev = eaction->dev;
 	struct drm_pending_event *event = eaction->event;
+	struct drm_file *file_priv;
+	unsigned long irq_flags;
 
 	if (unlikely(event == NULL))
 		return;
 
-	spin_lock_irq(&dev->event_lock);
+	file_priv = event->file_priv;
+	spin_lock_irqsave(&dev->event_lock, irq_flags);
 
 	if (likely(eaction->tv_sec != NULL)) {
-		struct timespec64 ts;
+		struct timeval tv;
 
-		ktime_get_ts64(&ts);
-		/* monotonic time, so no y2038 overflow */
-		*eaction->tv_sec = ts.tv_sec;
-		*eaction->tv_usec = ts.tv_nsec / NSEC_PER_USEC;
+		do_gettimeofday(&tv);
+		*eaction->tv_sec = tv.tv_sec;
+		*eaction->tv_usec = tv.tv_usec;
 	}
 
-	drm_send_event_locked(dev, eaction->event);
+	list_del_init(&eaction->fpriv_head);
 	eaction->event = NULL;
-	spin_unlock_irq(&dev->event_lock);
+	drm_send_event_locked(dev, eaction->event);
+	spin_unlock_irqrestore(&dev->event_lock, irq_flags);
 }
 
 /**
@@ -943,6 +925,12 @@ static void vmw_event_fence_action_cleanup(struct vmw_fence_action *action)
 {
 	struct vmw_event_fence_action *eaction =
 		container_of(action, struct vmw_event_fence_action, action);
+	struct vmw_fence_manager *fman = fman_from_fence(eaction->fence);
+	unsigned long irq_flags;
+
+	spin_lock_irqsave(&fman->lock, irq_flags);
+	list_del(&eaction->fpriv_head);
+	spin_unlock_irqrestore(&fman->lock, irq_flags);
 
 	vmw_fence_obj_unreference(&eaction->fence);
 	kfree(eaction);
@@ -962,13 +950,14 @@ static void vmw_fence_obj_add_action(struct vmw_fence_obj *fence,
 			      struct vmw_fence_action *action)
 {
 	struct vmw_fence_manager *fman = fman_from_fence(fence);
+	unsigned long irq_flags;
 	bool run_update = false;
 
 	mutex_lock(&fman->goal_irq_mutex);
-	spin_lock(&fman->lock);
+	spin_lock_irqsave(&fman->lock, irq_flags);
 
 	fman->pending_actions[action->type]++;
-	if (dma_fence_is_signaled_locked(&fence->base)) {
+	if (fence_is_signaled_locked(&fence->base)) {
 		struct list_head action_list;
 
 		INIT_LIST_HEAD(&action_list);
@@ -984,7 +973,7 @@ static void vmw_fence_obj_add_action(struct vmw_fence_obj *fence,
 		run_update = vmw_fence_goal_check_locked(fence);
 	}
 
-	spin_unlock(&fman->lock);
+	spin_unlock_irqrestore(&fman->lock, irq_flags);
 
 	if (run_update) {
 		if (!fman->goal_irq_on) {
@@ -1021,9 +1010,11 @@ int vmw_event_fence_action_queue(struct drm_file *file_priv,
 {
 	struct vmw_event_fence_action *eaction;
 	struct vmw_fence_manager *fman = fman_from_fence(fence);
+	struct vmw_fpriv *vmw_fp = vmw_fpriv(file_priv);
+	unsigned long irq_flags;
 
 	eaction = kzalloc(sizeof(*eaction), GFP_KERNEL);
-	if (unlikely(!eaction))
+	if (unlikely(eaction == NULL))
 		return -ENOMEM;
 
 	eaction->event = event;
@@ -1036,6 +1027,10 @@ int vmw_event_fence_action_queue(struct drm_file *file_priv,
 	eaction->dev = fman->dev_priv->dev;
 	eaction->tv_sec = tv_sec;
 	eaction->tv_usec = tv_usec;
+
+	spin_lock_irqsave(&fman->lock, irq_flags);
+	list_add_tail(&eaction->fpriv_head, &vmw_fp->fence_events);
+	spin_unlock_irqrestore(&fman->lock, irq_flags);
 
 	vmw_fence_obj_add_action(fence, &eaction->action);
 
@@ -1056,26 +1051,38 @@ static int vmw_event_fence_action_create(struct drm_file *file_priv,
 	struct vmw_event_fence_pending *event;
 	struct vmw_fence_manager *fman = fman_from_fence(fence);
 	struct drm_device *dev = fman->dev_priv->dev;
+	unsigned long irq_flags;
 	int ret;
 
+	spin_lock_irqsave(&dev->event_lock, irq_flags);
+
+	ret = (file_priv->event_space < sizeof(event->event)) ? -EBUSY : 0;
+	if (likely(ret == 0))
+		file_priv->event_space -= sizeof(event->event);
+
+	spin_unlock_irqrestore(&dev->event_lock, irq_flags);
+
+	if (unlikely(ret != 0)) {
+		DRM_ERROR("Failed to allocate event space for this file.\n");
+		goto out_no_space;
+	}
+
+
 	event = kzalloc(sizeof(*event), GFP_KERNEL);
-	if (unlikely(!event)) {
+	if (unlikely(event == NULL)) {
 		DRM_ERROR("Failed to allocate an event.\n");
 		ret = -ENOMEM;
-		goto out_no_space;
+		goto out_no_event;
 	}
 
 	event->event.base.type = DRM_VMW_EVENT_FENCE_SIGNALED;
 	event->event.base.length = sizeof(*event);
 	event->event.user_data = user_data;
 
-	ret = drm_event_reserve_init(dev, file_priv, &event->base, &event->event.base);
+	event->base.event = &event->event.base;
+	event->base.file_priv = file_priv;
+	event->base.destroy = (void (*) (struct drm_pending_event *)) kfree;
 
-	if (unlikely(ret != 0)) {
-		DRM_ERROR("Failed to allocate event space for this file.\n");
-		kfree(event);
-		goto out_no_space;
-	}
 
 	if (flags & DRM_VMW_FE_FLAG_REQ_TIME)
 		ret = vmw_event_fence_action_queue(file_priv, fence,
@@ -1095,7 +1102,11 @@ static int vmw_event_fence_action_create(struct drm_file *file_priv,
 	return 0;
 
 out_no_queue:
-	drm_event_cancel_free(dev, &event->base);
+	event->base.destroy(&event->base);
+out_no_event:
+	spin_lock_irqsave(&dev->event_lock, irq_flags);
+	file_priv->event_space += sizeof(*event);
+	spin_unlock_irqrestore(&dev->event_lock, irq_flags);
 out_no_space:
 	return ret;
 }
@@ -1139,7 +1150,7 @@ int vmw_fence_event_ioctl(struct drm_device *dev, void *data,
 					  "object.\n");
 				goto out_no_ref_obj;
 			}
-			handle = base->handle;
+			handle = base->hash.key;
 		}
 		ttm_base_object_unref(&base);
 	}
@@ -1171,7 +1182,7 @@ int vmw_fence_event_ioctl(struct drm_device *dev, void *data,
 	}
 
 	vmw_execbuf_copy_fence_user(dev_priv, vmw_fp, 0, user_fence_rep, fence,
-				    handle, -1, NULL);
+				    handle);
 	vmw_fence_obj_unreference(&fence);
 	return 0;
 out_no_create:

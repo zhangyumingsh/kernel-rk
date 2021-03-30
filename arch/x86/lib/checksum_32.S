@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * INET		An implementation of the TCP/IP protocol suite for the LINUX
  *		operating system.  INET is implemented using the  BSD Socket
@@ -19,12 +18,16 @@
  *			     handling.
  *		Andi Kleen,  add zeroing on error
  *                   converted to pure assembler
+ *
+ *		This program is free software; you can redistribute it and/or
+ *		modify it under the terms of the GNU General Public License
+ *		as published by the Free Software Foundation; either version
+ *		2 of the License, or (at your option) any later version.
  */
 
 #include <linux/linkage.h>
 #include <asm/errno.h>
 #include <asm/asm.h>
-#include <asm/export.h>
 #include <asm/nospec-branch.h>
 
 /*
@@ -46,7 +49,7 @@ unsigned int csum_partial(const unsigned char * buff, int len, unsigned int sum)
 	   * Fortunately, it is easy to convert 2-byte alignment to 4-byte
 	   * alignment for the unrolled loop.
 	   */		
-SYM_FUNC_START(csum_partial)
+ENTRY(csum_partial)
 	pushl %esi
 	pushl %ebx
 	movl 20(%esp),%eax	# Function arg: unsigned int sum
@@ -128,13 +131,13 @@ SYM_FUNC_START(csum_partial)
 	popl %ebx
 	popl %esi
 	ret
-SYM_FUNC_END(csum_partial)
+ENDPROC(csum_partial)
 
 #else
 
 /* Version for PentiumII/PPro */
 
-SYM_FUNC_START(csum_partial)
+ENTRY(csum_partial)
 	pushl %esi
 	pushl %ebx
 	movl 20(%esp),%eax	# Function arg: unsigned int sum
@@ -246,10 +249,9 @@ SYM_FUNC_START(csum_partial)
 	popl %ebx
 	popl %esi
 	ret
-SYM_FUNC_END(csum_partial)
+ENDPROC(csum_partial)
 				
 #endif
-EXPORT_SYMBOL(csum_partial)
 
 /*
 unsigned int csum_partial_copy_generic (const char *src, char *dst,
@@ -269,18 +271,18 @@ unsigned int csum_partial_copy_generic (const char *src, char *dst,
 
 #define SRC(y...)			\
 	9999: y;			\
-	_ASM_EXTABLE_UA(9999b, 6001f)
+	_ASM_EXTABLE(9999b, 6001f)
 
 #define DST(y...)			\
 	9999: y;			\
-	_ASM_EXTABLE_UA(9999b, 6002f)
+	_ASM_EXTABLE(9999b, 6002f)
 
 #ifndef CONFIG_X86_USE_PPRO_CHECKSUM
 
 #define ARGBASE 16		
 #define FP		12
 		
-SYM_FUNC_START(csum_partial_copy_generic)
+ENTRY(csum_partial_copy_generic)
 	subl  $4,%esp	
 	pushl %edi
 	pushl %esi
@@ -398,7 +400,7 @@ DST(	movb %cl, (%edi)	)
 	popl %edi
 	popl %ecx			# equivalent to addl $4,%esp
 	ret	
-SYM_FUNC_END(csum_partial_copy_generic)
+ENDPROC(csum_partial_copy_generic)
 
 #else
 
@@ -416,7 +418,7 @@ SYM_FUNC_END(csum_partial_copy_generic)
 
 #define ARGBASE 12
 		
-SYM_FUNC_START(csum_partial_copy_generic)
+ENTRY(csum_partial_copy_generic)
 	pushl %ebx
 	pushl %edi
 	pushl %esi
@@ -483,10 +485,9 @@ DST(	movb %dl, (%edi)         )
 	popl %edi
 	popl %ebx
 	ret
-SYM_FUNC_END(csum_partial_copy_generic)
+ENDPROC(csum_partial_copy_generic)
 				
 #undef ROUND
 #undef ROUND1		
 		
 #endif
-EXPORT_SYMBOL(csum_partial_copy_generic)

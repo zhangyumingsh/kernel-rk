@@ -17,10 +17,11 @@
 #include <linux/blkdev.h>
 #include <linux/bio.h>
 #include <linux/proc_fs.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <platform/simcall.h>
 
 #define SIMDISK_MAJOR 240
+#define SECTOR_SHIFT 9
 #define SIMDISK_MINORS 1
 #define MAX_SIMDISK_COUNT 10
 
@@ -85,7 +86,6 @@ static void simdisk_transfer(struct simdisk *dev, unsigned long sector,
 		unsigned long io;
 
 		simc_lseek(dev->fd, offset, SEEK_SET);
-		READ_ONCE(*buffer);
 		if (write)
 			io = simc_write(dev->fd, buffer, nbytes);
 		else
@@ -109,13 +109,13 @@ static blk_qc_t simdisk_make_request(struct request_queue *q, struct bio *bio)
 	sector_t sector = bio->bi_iter.bi_sector;
 
 	bio_for_each_segment(bvec, bio, iter) {
-		char *buffer = kmap_atomic(bvec.bv_page) + bvec.bv_offset;
+		char *buffer = __bio_kmap_atomic(bio, iter);
 		unsigned len = bvec.bv_len >> SECTOR_SHIFT;
 
 		simdisk_transfer(dev, sector, len, buffer,
 				bio_data_dir(bio) == WRITE);
 		sector += len;
-		kunmap_atomic(buffer);
+		__bio_kunmap_atomic(buffer);
 	}
 
 	bio_endio(bio);
@@ -227,12 +227,16 @@ static ssize_t proc_read_simdisk(struct file *file, char __user *buf,
 static ssize_t proc_write_simdisk(struct file *file, const char __user *buf,
 			size_t count, loff_t *ppos)
 {
-	char *tmp = memdup_user_nul(buf, count);
+	char *tmp = kmalloc(count + 1, GFP_KERNEL);
 	struct simdisk *dev = PDE_DATA(file_inode(file));
 	int err;
 
-	if (IS_ERR(tmp))
-		return PTR_ERR(tmp);
+	if (tmp == NULL)
+		return -ENOMEM;
+	if (copy_from_user(tmp, buf, count)) {
+		err = -EFAULT;
+		goto out_free;
+	}
 
 	err = simdisk_detach(dev);
 	if (err != 0)
@@ -240,6 +244,8 @@ static ssize_t proc_write_simdisk(struct file *file, const char __user *buf,
 
 	if (count > 0 && tmp[count - 1] == '\n')
 		tmp[count - 1] = 0;
+	else
+		tmp[count] = 0;
 
 	if (tmp[0])
 		err = simdisk_attach(dev, tmp);
@@ -251,10 +257,10 @@ out_free:
 	return err;
 }
 
-static const struct proc_ops simdisk_proc_ops = {
-	.proc_read	= proc_read_simdisk,
-	.proc_write	= proc_write_simdisk,
-	.proc_lseek	= default_llseek,
+static const struct file_operations fops = {
+	.read = proc_read_simdisk,
+	.write = proc_write_simdisk,
+	.llseek = default_llseek,
 };
 
 static int __init simdisk_setup(struct simdisk *dev, int which,
@@ -290,14 +296,15 @@ static int __init simdisk_setup(struct simdisk *dev, int which,
 	set_capacity(dev->gd, 0);
 	add_disk(dev->gd);
 
-	dev->procfile = proc_create_data(tmp, 0644, procdir, &simdisk_proc_ops, dev);
+	dev->procfile = proc_create_data(tmp, 0644, procdir, &fops, dev);
 	return 0;
 
 out_alloc_disk:
 	blk_cleanup_queue(dev->queue);
 	dev->queue = NULL;
 out_alloc_queue:
-	return -ENOMEM;
+	simc_close(dev->fd);
+	return -EIO;
 }
 
 static int __init simdisk_init(void)
@@ -315,7 +322,8 @@ static int __init simdisk_init(void)
 	if (simdisk_count > MAX_SIMDISK_COUNT)
 		simdisk_count = MAX_SIMDISK_COUNT;
 
-	sddev = kmalloc_array(simdisk_count, sizeof(*sddev), GFP_KERNEL);
+	sddev = kmalloc(simdisk_count * sizeof(struct simdisk),
+			GFP_KERNEL);
 	if (sddev == NULL)
 		goto out_unregister;
 

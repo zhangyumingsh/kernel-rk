@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /* sunhv.c: Serial driver for SUN4V hypervisor console.
  *
  * Copyright (C) 2006, 2007 David S. Miller (davem@davemloft.net)
@@ -24,6 +23,10 @@
 #include <asm/prom.h>
 #include <asm/irq.h>
 #include <asm/setup.h>
+
+#if defined(CONFIG_MAGIC_SYSRQ)
+#define SUPPORT_SYSRQ
+#endif
 
 #include <linux/serial_core.h>
 #include <linux/sunserialcore.h>
@@ -113,7 +116,7 @@ static int receive_chars_getchar(struct uart_port *port)
 
 static int receive_chars_read(struct uart_port *port)
 {
-	static int saw_console_brk;
+	int saw_console_brk = 0;
 	int limit = 10000;
 
 	while (limit-- > 0) {
@@ -125,9 +128,6 @@ static int receive_chars_read(struct uart_port *port)
 			bytes_read = 0;
 
 			if (stat == CON_BREAK) {
-				if (saw_console_brk)
-					sun_do_break();
-
 				if (uart_handle_break(port))
 					continue;
 				saw_console_brk = 1;
@@ -151,7 +151,6 @@ static int receive_chars_read(struct uart_port *port)
 		if (port->sysrq != 0 &&  *con_read_page) {
 			for (i = 0; i < bytes_read; i++)
 				uart_handle_sysrq_char(port, con_read_page[i]);
-			saw_console_brk = 0;
 		}
 
 		if (port->state == NULL)
@@ -371,7 +370,7 @@ static int sunhv_verify_port(struct uart_port *port, struct serial_struct *ser)
 	return -EINVAL;
 }
 
-static const struct uart_ops sunhv_pops = {
+static struct uart_ops sunhv_pops = {
 	.tx_empty	= sunhv_tx_empty,
 	.set_mctrl	= sunhv_set_mctrl,
 	.get_mctrl	= sunhv_get_mctrl,
@@ -548,7 +547,6 @@ static int hv_probe(struct platform_device *op)
 
 	sunhv_port = port;
 
-	port->has_sysrq = 1;
 	port->line = 0;
 	port->ops = &sunhv_pops;
 	port->type = PORT_SUNHV;
@@ -606,8 +604,7 @@ static int hv_remove(struct platform_device *dev)
 	uart_remove_one_port(&sunhv_reg, port);
 
 	sunserial_unregister_minors(&sunhv_reg, 1);
-	kfree(con_read_page);
-	kfree(con_write_page);
+
 	kfree(port);
 	sunhv_port = NULL;
 

@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * ring buffer tester and benchmark
  *
@@ -7,7 +6,6 @@
 #include <linux/ring_buffer.h>
 #include <linux/completion.h>
 #include <linux/kthread.h>
-#include <uapi/linux/sched/types.h>
 #include <linux/module.h>
 #include <linux/ktime.h>
 #include <asm/local.h>
@@ -29,7 +27,7 @@ static int reader_finish;
 static DECLARE_COMPLETION(read_start);
 static DECLARE_COMPLETION(read_done);
 
-static struct trace_buffer *buffer;
+static struct ring_buffer *buffer;
 static struct task_struct *producer;
 static struct task_struct *consumer;
 static unsigned long read;
@@ -114,7 +112,7 @@ static enum event_status read_page(int cpu)
 	int i;
 
 	bpage = ring_buffer_alloc_read_page(buffer, cpu);
-	if (IS_ERR(bpage))
+	if (!bpage)
 		return EVENT_DROPPED;
 
 	ret = ring_buffer_read_page(buffer, &bpage, PAGE_SIZE, cpu, 1);
@@ -172,7 +170,7 @@ static enum event_status read_page(int cpu)
 			}
 		}
 	}
-	ring_buffer_free_read_page(buffer, cpu, bpage);
+	ring_buffer_free_read_page(buffer, bpage);
 
 	if (ret < 0)
 		return EVENT_DROPPED;
@@ -267,12 +265,12 @@ static void ring_buffer_producer(void)
 		if (consumer && !(cnt % wakeup_interval))
 			wake_up_process(consumer);
 
-#ifndef CONFIG_PREEMPTION
+#ifndef CONFIG_PREEMPT
 		/*
-		 * If we are a non preempt kernel, the 10 seconds run will
+		 * If we are a non preempt kernel, the 10 second run will
 		 * stop everything while it runs. Instead, we will call
 		 * cond_resched and also add any time that was lost by a
-		 * reschedule.
+		 * rescedule.
 		 *
 		 * Do a cond resched at the same frequency we would wake up
 		 * the reader.
@@ -362,7 +360,7 @@ static void ring_buffer_producer(void)
 			hit--; /* make it non zero */
 		}
 
-		/* Calculate the average time in nanosecs */
+		/* Caculate the average time in nanosecs */
 		avg = NSEC_PER_MSEC / (hit + missed);
 		trace_printk("%ld ns per entry\n", avg);
 	}

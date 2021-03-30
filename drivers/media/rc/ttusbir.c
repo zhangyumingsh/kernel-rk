@@ -1,8 +1,21 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * TechnoTrend USB IR Receiver
  *
  * Copyright (C) 2012 Sean Young <sean@mess.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
  */
 
 #include <linux/module.h>
@@ -306,10 +319,7 @@ static int ttusbir_probe(struct usb_interface *intf,
 	rc->priv = tt;
 	rc->driver_name = DRIVER_NAME;
 	rc->map_name = RC_MAP_TT_1500;
-	rc->min_timeout = 1;
-	rc->timeout = IR_DEFAULT_TIMEOUT;
-	rc->max_timeout = 10 * IR_DEFAULT_TIMEOUT;
-
+	rc->timeout = MS_TO_NS(100);
 	/*
 	 * The precision is NS_PER_BIT, but since every 8th bit can be
 	 * overwritten with garbage the accuracy is at best 2 * NS_PER_BIT.

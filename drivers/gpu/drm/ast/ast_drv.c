@@ -25,15 +25,11 @@
 /*
  * Authors: Dave Airlie <airlied@redhat.com>
  */
-
-#include <linux/console.h>
 #include <linux/module.h>
-#include <linux/pci.h>
+#include <linux/console.h>
 
+#include <drm/drmP.h>
 #include <drm/drm_crtc_helper.h>
-#include <drm/drm_drv.h>
-#include <drm/drm_gem_vram_helper.h>
-#include <drm/drm_probe_helper.h>
 
 #include "ast_drv.h"
 
@@ -79,48 +75,15 @@ static void ast_kick_out_firmware_fb(struct pci_dev *pdev)
 #ifdef CONFIG_X86
 	primary = pdev->resource[PCI_ROM_RESOURCE].flags & IORESOURCE_ROM_SHADOW;
 #endif
-	drm_fb_helper_remove_conflicting_framebuffers(ap, "astdrmfb", primary);
+	remove_conflicting_framebuffers(ap, "astdrmfb", primary);
 	kfree(ap);
 }
 
 static int ast_pci_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 {
-	struct drm_device *dev;
-	int ret;
-
 	ast_kick_out_firmware_fb(pdev);
 
-	ret = pci_enable_device(pdev);
-	if (ret)
-		return ret;
-
-	dev = drm_dev_alloc(&driver, &pdev->dev);
-	if (IS_ERR(dev)) {
-		ret = PTR_ERR(dev);
-		goto err_pci_disable_device;
-	}
-
-	dev->pdev = pdev;
-	pci_set_drvdata(pdev, dev);
-
-	ret = ast_driver_load(dev, ent->driver_data);
-	if (ret)
-		goto err_drm_dev_put;
-
-	ret = drm_dev_register(dev, ent->driver_data);
-	if (ret)
-		goto err_ast_driver_unload;
-
-	return 0;
-
-err_ast_driver_unload:
-	ast_driver_unload(dev);
-err_drm_dev_put:
-	drm_dev_put(dev);
-err_pci_disable_device:
-	pci_disable_device(pdev);
-	return ret;
-
+	return drm_get_pci_dev(pdev, ent, &driver);
 }
 
 static void
@@ -128,27 +91,36 @@ ast_pci_remove(struct pci_dev *pdev)
 {
 	struct drm_device *dev = pci_get_drvdata(pdev);
 
-	drm_dev_unregister(dev);
-	ast_driver_unload(dev);
-	drm_dev_put(dev);
+	drm_put_dev(dev);
 }
+
+
 
 static int ast_drm_freeze(struct drm_device *dev)
 {
-	int error;
+	drm_kms_helper_poll_disable(dev);
 
-	error = drm_mode_config_helper_suspend(dev);
-	if (error)
-		return error;
 	pci_save_state(dev->pdev);
+
+	console_lock();
+	ast_fbdev_set_suspend(dev, 1);
+	console_unlock();
 	return 0;
 }
 
 static int ast_drm_thaw(struct drm_device *dev)
 {
+	int error = 0;
+
 	ast_post_gpu(dev);
 
-	return drm_mode_config_helper_resume(dev);
+	drm_mode_config_reset(dev);
+	drm_helper_resume_force_mode(dev);
+
+	console_lock();
+	ast_fbdev_set_suspend(dev, 0);
+	console_unlock();
+	return error;
 }
 
 static int ast_drm_resume(struct drm_device *dev)
@@ -161,6 +133,8 @@ static int ast_drm_resume(struct drm_device *dev)
 	ret = ast_drm_thaw(dev);
 	if (ret)
 		return ret;
+
+	drm_kms_helper_poll_enable(dev);
 	return 0;
 }
 
@@ -178,7 +152,6 @@ static int ast_pm_suspend(struct device *dev)
 	pci_set_power_state(pdev, PCI_D3hot);
 	return 0;
 }
-
 static int ast_pm_resume(struct device *dev)
 {
 	struct pci_dev *pdev = to_pci_dev(dev);
@@ -194,6 +167,7 @@ static int ast_pm_freeze(struct device *dev)
 	if (!ddev || !ddev->dev_private)
 		return -ENODEV;
 	return ast_drm_freeze(ddev);
+
 }
 
 static int ast_pm_thaw(struct device *dev)
@@ -228,12 +202,25 @@ static struct pci_driver ast_pci_driver = {
 	.driver.pm = &ast_pm_ops,
 };
 
-DEFINE_DRM_GEM_FOPS(ast_fops);
+static const struct file_operations ast_fops = {
+	.owner = THIS_MODULE,
+	.open = drm_open,
+	.release = drm_release,
+	.unlocked_ioctl = drm_ioctl,
+	.mmap = ast_mmap,
+	.poll = drm_poll,
+#ifdef CONFIG_COMPAT
+	.compat_ioctl = drm_compat_ioctl,
+#endif
+	.read = drm_read,
+};
 
 static struct drm_driver driver = {
-	.driver_features = DRIVER_ATOMIC |
-			   DRIVER_GEM |
-			   DRIVER_MODESET,
+	.driver_features = DRIVER_MODESET | DRIVER_GEM,
+
+	.load = ast_driver_load,
+	.unload = ast_driver_unload,
+	.set_busid = drm_pci_set_busid,
 
 	.fops = &ast_fops,
 	.name = DRIVER_NAME,
@@ -243,21 +230,27 @@ static struct drm_driver driver = {
 	.minor = DRIVER_MINOR,
 	.patchlevel = DRIVER_PATCHLEVEL,
 
-	DRM_GEM_VRAM_DRIVER
+	.gem_free_object = ast_gem_free_object,
+	.dumb_create = ast_dumb_create,
+	.dumb_map_offset = ast_dumb_mmap_offset,
+	.dumb_destroy = drm_gem_dumb_destroy,
+
 };
 
 static int __init ast_init(void)
 {
+#ifdef CONFIG_VGA_CONSOLE
 	if (vgacon_text_force() && ast_modeset == -1)
 		return -EINVAL;
+#endif
 
 	if (ast_modeset == 0)
 		return -EINVAL;
-	return pci_register_driver(&ast_pci_driver);
+	return drm_pci_init(&driver, &ast_pci_driver);
 }
 static void __exit ast_exit(void)
 {
-	pci_unregister_driver(&ast_pci_driver);
+	drm_pci_exit(&driver, &ast_pci_driver);
 }
 
 module_init(ast_init);

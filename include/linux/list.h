@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _LINUX_LIST_H
 #define _LINUX_LIST_H
 
@@ -23,16 +22,9 @@
 #define LIST_HEAD(name) \
 	struct list_head name = LIST_HEAD_INIT(name)
 
-/**
- * INIT_LIST_HEAD - Initialize a list_head structure
- * @list: list_head structure to be initialized.
- *
- * Initializes the list_head to point to itself.  If it is a list header,
- * the result is an empty list.
- */
 static inline void INIT_LIST_HEAD(struct list_head *list)
 {
-	WRITE_ONCE(list->next, list);
+	list->next = list;
 	list->prev = list;
 }
 
@@ -70,7 +62,7 @@ static inline void __list_add(struct list_head *new,
 	next->prev = new;
 	new->next = next;
 	new->prev = prev;
-	WRITE_ONCE(prev->next, new);
+	prev->next = new;
 }
 
 /**
@@ -113,20 +105,12 @@ static inline void __list_del(struct list_head * prev, struct list_head * next)
 	WRITE_ONCE(prev->next, next);
 }
 
-/*
- * Delete a list entry and clear the 'prev' pointer.
- *
- * This is a special-purpose list clearing method used in the networking code
- * for lists allocated as per-cpu, where we don't want to incur the extra
- * WRITE_ONCE() overhead of a regular list_del_init(). The code that uses this
- * needs to check the node 'prev' pointer instead of calling list_empty().
+/**
+ * list_del - deletes entry from list.
+ * @entry: the element to delete from the list.
+ * Note: list_empty() on entry does not return true after this, the entry is
+ * in an undefined state.
  */
-static inline void __list_del_clearprev(struct list_head *entry)
-{
-	__list_del(entry->prev, entry->next);
-	entry->prev = NULL;
-}
-
 static inline void __list_del_entry(struct list_head *entry)
 {
 	if (!__list_del_entry_valid(entry))
@@ -135,12 +119,6 @@ static inline void __list_del_entry(struct list_head *entry)
 	__list_del(entry->prev, entry->next);
 }
 
-/**
- * list_del - deletes entry from list.
- * @entry: the element to delete from the list.
- * Note: list_empty() on entry does not return true after this, the entry is
- * in an undefined state.
- */
 static inline void list_del(struct list_head *entry)
 {
 	__list_del_entry(entry);
@@ -164,35 +142,11 @@ static inline void list_replace(struct list_head *old,
 	new->prev->next = new;
 }
 
-/**
- * list_replace_init - replace old entry by new one and initialize the old one
- * @old : the element to be replaced
- * @new : the new element to insert
- *
- * If @old was empty, it will be overwritten.
- */
 static inline void list_replace_init(struct list_head *old,
-				     struct list_head *new)
+					struct list_head *new)
 {
 	list_replace(old, new);
 	INIT_LIST_HEAD(old);
-}
-
-/**
- * list_swap - replace entry1 with entry2 and re-add entry1 at entry2's position
- * @entry1: the location to place entry2
- * @entry2: the location to place entry1
- */
-static inline void list_swap(struct list_head *entry1,
-			     struct list_head *entry2)
-{
-	struct list_head *pos = entry2->prev;
-
-	list_del(entry2);
-	list_replace(entry1, entry2);
-	if (pos == entry1)
-		pos = entry2;
-	list_add(entry1, pos);
 }
 
 /**
@@ -229,40 +183,6 @@ static inline void list_move_tail(struct list_head *list,
 }
 
 /**
- * list_bulk_move_tail - move a subsection of a list to its tail
- * @head: the head that will follow our entry
- * @first: first entry to move
- * @last: last entry to move, can be the same as first
- *
- * Move all entries between @first and including @last before @head.
- * All three entries must belong to the same linked list.
- */
-static inline void list_bulk_move_tail(struct list_head *head,
-				       struct list_head *first,
-				       struct list_head *last)
-{
-	first->prev->next = last->next;
-	last->next->prev = first->prev;
-
-	head->prev->next = first;
-	first->prev = head->prev;
-
-	last->next = head;
-	head->prev = last;
-}
-
-/**
- * list_is_first -- tests whether @list is the first entry in list @head
- * @list: the entry to test
- * @head: the head of the list
- */
-static inline int list_is_first(const struct list_head *list,
-					const struct list_head *head)
-{
-	return list->prev == head;
-}
-
-/**
  * list_is_last - tests whether @list is the last entry in list @head
  * @list: the entry to test
  * @head: the head of the list
@@ -279,7 +199,7 @@ static inline int list_is_last(const struct list_head *list,
  */
 static inline int list_empty(const struct list_head *head)
 {
-	return READ_ONCE(head->next) == head;
+	return head->next == head;
 }
 
 /**
@@ -313,24 +233,6 @@ static inline void list_rotate_left(struct list_head *head)
 		first = head->next;
 		list_move_tail(first, head);
 	}
-}
-
-/**
- * list_rotate_to_front() - Rotate list to specific item.
- * @list: The desired new front of the list.
- * @head: The head of the list.
- *
- * Rotates list so that @list becomes the new front of the list.
- */
-static inline void list_rotate_to_front(struct list_head *list,
-					struct list_head *head)
-{
-	/*
-	 * Deletes the list head from the list denoted by @head and
-	 * places it as the tail of @list, this effectively rotates the
-	 * list so that @list is at the front.
-	 */
-	list_move_tail(head, list);
 }
 
 /**
@@ -380,36 +282,6 @@ static inline void list_cut_position(struct list_head *list,
 		INIT_LIST_HEAD(list);
 	else
 		__list_cut_position(list, head, entry);
-}
-
-/**
- * list_cut_before - cut a list into two, before given entry
- * @list: a new list to add all removed entries
- * @head: a list with entries
- * @entry: an entry within head, could be the head itself
- *
- * This helper moves the initial part of @head, up to but
- * excluding @entry, from @head to @list.  You should pass
- * in @entry an element you know is on @head.  @list should
- * be an empty list or a list you do not care about losing
- * its data.
- * If @entry == @head, all entries on @head are moved to
- * @list.
- */
-static inline void list_cut_before(struct list_head *list,
-				   struct list_head *head,
-				   struct list_head *entry)
-{
-	if (head->next == entry) {
-		INIT_LIST_HEAD(list);
-		return;
-	}
-	list->next = head->next;
-	list->next->prev = list;
-	list->prev = entry->prev;
-	list->prev->next = list;
-	head->next = entry;
-	entry->prev = head;
 }
 
 static inline void __list_splice(const struct list_head *list,
@@ -522,11 +394,8 @@ static inline void list_splice_tail_init(struct list_head *list,
  *
  * Note that if the list is empty, it returns NULL.
  */
-#define list_first_entry_or_null(ptr, type, member) ({ \
-	struct list_head *head__ = (ptr); \
-	struct list_head *pos__ = READ_ONCE(head__->next); \
-	pos__ != head__ ? list_entry(pos__, type, member) : NULL; \
-})
+#define list_first_entry_or_null(ptr, type, member) \
+	(!list_empty(ptr) ? list_first_entry(ptr, type, member) : NULL)
 
 /**
  * list_next_entry - get the next element in list
@@ -551,16 +420,6 @@ static inline void list_splice_tail_init(struct list_head *list,
  */
 #define list_for_each(pos, head) \
 	for (pos = (head)->next; pos != (head); pos = pos->next)
-
-/**
- * list_for_each_continue - continue iteration over a list
- * @pos:	the &struct list_head to use as a loop cursor.
- * @head:	the head for your list.
- *
- * Continue to iterate over a list, continuing after the current position.
- */
-#define list_for_each_continue(pos, head) \
-	for (pos = pos->next; pos != (head); pos = pos->next)
 
 /**
  * list_for_each_prev	-	iterate over a list backwards
@@ -665,19 +524,6 @@ static inline void list_splice_tail_init(struct list_head *list,
 	     pos = list_next_entry(pos, member))
 
 /**
- * list_for_each_entry_from_reverse - iterate backwards over list of given type
- *                                    from the current point
- * @pos:	the type * to use as a loop cursor.
- * @head:	the head for your list.
- * @member:	the name of the list_head within the struct.
- *
- * Iterate backwards over list of given type, continuing from current position.
- */
-#define list_for_each_entry_from_reverse(pos, head, member)		\
-	for (; &pos->member != (head);					\
-	     pos = list_prev_entry(pos, member))
-
-/**
  * list_for_each_entry_safe - iterate over list of given type safe against removal of list entry
  * @pos:	the type * to use as a loop cursor.
  * @n:		another type * to use as temporary storage
@@ -768,39 +614,14 @@ static inline void INIT_HLIST_NODE(struct hlist_node *h)
 	h->pprev = NULL;
 }
 
-/**
- * hlist_unhashed - Has node been removed from list and reinitialized?
- * @h: Node to be checked
- *
- * Not that not all removal functions will leave a node in unhashed
- * state.  For example, hlist_nulls_del_init_rcu() does leave the
- * node in unhashed state, but hlist_nulls_del() does not.
- */
 static inline int hlist_unhashed(const struct hlist_node *h)
 {
 	return !h->pprev;
 }
 
-/**
- * hlist_unhashed_lockless - Version of hlist_unhashed for lockless use
- * @h: Node to be checked
- *
- * This variant of hlist_unhashed() must be used in lockless contexts
- * to avoid potential load-tearing.  The READ_ONCE() is paired with the
- * various WRITE_ONCE() in hlist helpers that are defined below.
- */
-static inline int hlist_unhashed_lockless(const struct hlist_node *h)
-{
-	return !READ_ONCE(h->pprev);
-}
-
-/**
- * hlist_empty - Is the specified hlist_head structure an empty hlist?
- * @h: Structure to check.
- */
 static inline int hlist_empty(const struct hlist_head *h)
 {
-	return !READ_ONCE(h->first);
+	return !h->first;
 }
 
 static inline void __hlist_del(struct hlist_node *n)
@@ -810,16 +631,9 @@ static inline void __hlist_del(struct hlist_node *n)
 
 	WRITE_ONCE(*pprev, next);
 	if (next)
-		WRITE_ONCE(next->pprev, pprev);
+		next->pprev = pprev;
 }
 
-/**
- * hlist_del - Delete the specified hlist_node from its list
- * @n: Node to delete.
- *
- * Note that this function leaves the node in hashed state.  Use
- * hlist_del_init() or similar instead to unhash @n.
- */
 static inline void hlist_del(struct hlist_node *n)
 {
 	__hlist_del(n);
@@ -827,12 +641,6 @@ static inline void hlist_del(struct hlist_node *n)
 	n->pprev = LIST_POISON2;
 }
 
-/**
- * hlist_del_init - Delete the specified hlist_node from its list and initialize
- * @n: Node to delete.
- *
- * Note that this function leaves the node in unhashed state.
- */
 static inline void hlist_del_init(struct hlist_node *n)
 {
 	if (!hlist_unhashed(n)) {
@@ -841,95 +649,49 @@ static inline void hlist_del_init(struct hlist_node *n)
 	}
 }
 
-/**
- * hlist_add_head - add a new entry at the beginning of the hlist
- * @n: new entry to be added
- * @h: hlist head to add it after
- *
- * Insert a new entry after the specified head.
- * This is good for implementing stacks.
- */
 static inline void hlist_add_head(struct hlist_node *n, struct hlist_head *h)
 {
 	struct hlist_node *first = h->first;
-	WRITE_ONCE(n->next, first);
+	n->next = first;
 	if (first)
-		WRITE_ONCE(first->pprev, &n->next);
-	WRITE_ONCE(h->first, n);
-	WRITE_ONCE(n->pprev, &h->first);
+		first->pprev = &n->next;
+	h->first = n;
+	n->pprev = &h->first;
 }
 
-/**
- * hlist_add_before - add a new entry before the one specified
- * @n: new entry to be added
- * @next: hlist node to add it before, which must be non-NULL
- */
+/* next must be != NULL */
 static inline void hlist_add_before(struct hlist_node *n,
-				    struct hlist_node *next)
+					struct hlist_node *next)
 {
-	WRITE_ONCE(n->pprev, next->pprev);
-	WRITE_ONCE(n->next, next);
-	WRITE_ONCE(next->pprev, &n->next);
-	WRITE_ONCE(*(n->pprev), n);
+	n->pprev = next->pprev;
+	n->next = next;
+	next->pprev = &n->next;
+	*(n->pprev) = n;
 }
 
-/**
- * hlist_add_behing - add a new entry after the one specified
- * @n: new entry to be added
- * @prev: hlist node to add it after, which must be non-NULL
- */
 static inline void hlist_add_behind(struct hlist_node *n,
 				    struct hlist_node *prev)
 {
-	WRITE_ONCE(n->next, prev->next);
-	WRITE_ONCE(prev->next, n);
-	WRITE_ONCE(n->pprev, &prev->next);
+	n->next = prev->next;
+	prev->next = n;
+	n->pprev = &prev->next;
 
 	if (n->next)
-		WRITE_ONCE(n->next->pprev, &n->next);
+		n->next->pprev  = &n->next;
 }
 
-/**
- * hlist_add_fake - create a fake hlist consisting of a single headless node
- * @n: Node to make a fake list out of
- *
- * This makes @n appear to be its own predecessor on a headless hlist.
- * The point of this is to allow things like hlist_del() to work correctly
- * in cases where there is no list.
- */
+/* after that we'll appear to be on some hlist and hlist_del will work */
 static inline void hlist_add_fake(struct hlist_node *n)
 {
 	n->pprev = &n->next;
 }
 
-/**
- * hlist_fake: Is this node a fake hlist?
- * @h: Node to check for being a self-referential fake hlist.
- */
 static inline bool hlist_fake(struct hlist_node *h)
 {
 	return h->pprev == &h->next;
 }
 
-/**
- * hlist_is_singular_node - is node the only element of the specified hlist?
- * @n: Node to check for singularity.
- * @h: Header for potentially singular list.
- *
- * Check whether the node is the only node of the head without
- * accessing head, thus avoiding unnecessary cache misses.
- */
-static inline bool
-hlist_is_singular_node(struct hlist_node *n, struct hlist_head *h)
-{
-	return !n->next && n->pprev == &h->first;
-}
-
-/**
- * hlist_move_list - Move an hlist
- * @old: hlist_head for old list.
- * @new: hlist_head for new list.
- *
+/*
  * Move a list from one list head to another. Fixup the pprev
  * reference of the first entry if it exists.
  */

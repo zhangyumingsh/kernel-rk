@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * EMIF driver
  *
@@ -6,6 +5,10 @@
  *
  * Aneesh V <aneesh@ti.com>
  * Santosh Shilimkar <santosh.shilimkar@ti.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  */
 #include <linux/err.h>
 #include <linux/kernel.h>
@@ -23,9 +26,8 @@
 #include <linux/list.h>
 #include <linux/spinlock.h>
 #include <linux/pm.h>
-
+#include <memory/jedec_ddr.h>
 #include "emif.h"
-#include "jedec_ddr.h"
 #include "of_memory.h"
 
 /**
@@ -125,7 +127,7 @@ static int emif_regdump_show(struct seq_file *s, void *unused)
 
 	for (i = 0; i < EMIF_MAX_NUM_FREQUENCIES && regs_cache[i]; i++) {
 		do_emif_regdump_show(s, emif, regs_cache[i]);
-		seq_putc(s, '\n');
+		seq_printf(s, "\n");
 	}
 
 	return 0;
@@ -1613,7 +1615,7 @@ static void emif_shutdown(struct platform_device *pdev)
 static int get_emif_reg_values(struct emif_data *emif, u32 freq,
 		struct emif_regs *regs)
 {
-	u32				ip_rev, phy_type;
+	u32				cs1_used, ip_rev, phy_type;
 	u32				cl, type;
 	const struct lpddr2_timings	*timings;
 	const struct lpddr2_min_tck	*min_tck;
@@ -1621,6 +1623,7 @@ static int get_emif_reg_values(struct emif_data *emif, u32 freq,
 	const struct lpddr2_addressing	*addressing;
 	struct emif_data		*emif_for_calc;
 	struct device			*dev;
+	const struct emif_custom_configs *custom_configs;
 
 	dev = emif->dev;
 	/*
@@ -1638,10 +1641,12 @@ static int get_emif_reg_values(struct emif_data *emif, u32 freq,
 
 	device_info	= emif_for_calc->plat_data->device_info;
 	type		= device_info->type;
+	cs1_used	= device_info->cs1_used;
 	ip_rev		= emif_for_calc->plat_data->ip_rev;
 	phy_type	= emif_for_calc->plat_data->phy_type;
 
 	min_tck		= emif_for_calc->plat_data->min_tck;
+	custom_configs	= emif_for_calc->plat_data->custom_configs;
 
 	set_ddr_clk_period(freq);
 

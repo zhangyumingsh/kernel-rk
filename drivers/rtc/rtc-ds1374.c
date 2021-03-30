@@ -14,7 +14,7 @@
  */
 /*
  * It would be more efficient to use i2c msgs/i2c_transfer directly but, as
- * recommended in .../Documentation/i2c/writing-clients.rst section
+ * recommened in .../Documentation/i2c/writing-clients section
  * "Sending and receiving", using SMBus level communication is preferred.
  */
 
@@ -89,8 +89,10 @@ static int ds1374_read_rtc(struct i2c_client *client, u32 *time,
 	int ret;
 	int i;
 
-	if (WARN_ON(nbytes > 4))
+	if (nbytes > 4) {
+		WARN_ON(1);
 		return -EINVAL;
+	}
 
 	ret = i2c_smbus_read_i2c_block_data(client, reg, nbytes, buf);
 
@@ -439,13 +441,14 @@ static void ds1374_wdt_ping(void)
 
 static void ds1374_wdt_disable(void)
 {
+	int ret = -ENOIOCTLCMD;
 	int cr;
 
 	cr = i2c_smbus_read_byte_data(save_client, DS1374_REG_CR);
 	/* Disable watchdog timer */
 	cr &= ~DS1374_REG_CR_WACE;
 
-	i2c_smbus_write_byte_data(save_client, DS1374_REG_CR, cr);
+	ret = i2c_smbus_write_byte_data(save_client, DS1374_REG_CR, cr);
 }
 
 /*
@@ -466,7 +469,7 @@ static int ds1374_wdt_open(struct inode *inode, struct file *file)
 		 */
 		wdt_is_open = 1;
 		mutex_unlock(&ds1374->mutex);
-		return stream_open(inode, file);
+		return nonseekable_open(inode, file);
 	}
 	return -ENODEV;
 }
@@ -585,7 +588,6 @@ static const struct file_operations ds1374_wdt_fops = {
 	.owner			= THIS_MODULE,
 	.read			= ds1374_wdt_read,
 	.unlocked_ioctl		= ds1374_wdt_unlocked_ioctl,
-	.compat_ioctl		= compat_ptr_ioctl,
 	.write			= ds1374_wdt_write,
 	.open                   = ds1374_wdt_open,
 	.release                = ds1374_wdt_release,
@@ -710,7 +712,6 @@ static SIMPLE_DEV_PM_OPS(ds1374_pm, ds1374_suspend, ds1374_resume);
 static struct i2c_driver ds1374_driver = {
 	.driver = {
 		.name = "rtc-ds1374",
-		.of_match_table = of_match_ptr(ds1374_of_match),
 		.pm = &ds1374_pm,
 	},
 	.probe = ds1374_probe,

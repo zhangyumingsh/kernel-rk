@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /* ld script to make m68k Linux kernel */
 
 #include <asm-generic/vmlinux.lds.h>
@@ -16,10 +15,7 @@ SECTIONS
   .text : {
 	HEAD_TEXT
 	TEXT_TEXT
-	IRQENTRY_TEXT
-	SOFTIRQENTRY_TEXT
 	SCHED_TEXT
-	CPUIDLE_TEXT
 	LOCK_TEXT
 	*(.fixup)
 	*(.gnu.warning)
@@ -31,9 +27,9 @@ SECTIONS
 
   _sdata = .;			/* Start of data section */
 
-  RO_DATA(4096)
+  RODATA
 
-  RW_DATA(16, PAGE_SIZE, THREAD_SIZE)
+  RW_DATA_SECTION(16, PAGE_SIZE, THREAD_SIZE)
 
   BSS_SECTION(0, 0, 0)
 

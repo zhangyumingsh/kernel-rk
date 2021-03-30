@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 	.file "reg_round.S"
 /*---------------------------------------------------------------------------+
  |  reg_round.S                                                              |
@@ -109,7 +108,7 @@ FPU_denormal:
 .globl fpu_Arith_exit
 
 /* Entry point when called from C */
-SYM_FUNC_START(FPU_round)
+ENTRY(FPU_round)
 	pushl	%ebp
 	movl	%esp,%ebp
 	pushl	%esi
@@ -707,5 +706,3 @@ L_exception_exit:
 	mov	$-1,%eax
 	jmp	fpu_reg_round_special_exit
 #endif /* PARANOID */ 
-
-SYM_FUNC_END(FPU_round)

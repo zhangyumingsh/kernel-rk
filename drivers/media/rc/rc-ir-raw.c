@@ -1,7 +1,16 @@
-// SPDX-License-Identifier: GPL-2.0
-// rc-ir-raw.c - handle IR pulse/space events
-//
-// Copyright (C) 2010 by Mauro Carvalho Chehab
+/* rc-ir-raw.c - handle IR pulse/space events
+ *
+ * Copyright (C) 2010 by Mauro Carvalho Chehab
+ *
+ * This program is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License as published by
+ *  the Free Software Foundation version 2 of the License.
+ *
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU General Public License for more details.
+ */
 
 #include <linux/export.h>
 #include <linux/kthread.h>
@@ -14,7 +23,7 @@
 static LIST_HEAD(ir_raw_client_list);
 
 /* Used to handle IR raw handler extensions */
-DEFINE_MUTEX(ir_raw_handler_lock);
+static DEFINE_MUTEX(ir_raw_handler_lock);
 static LIST_HEAD(ir_raw_handler_list);
 static atomic64_t available_protocols = ATOMIC64_INIT(0);
 
@@ -157,7 +166,7 @@ EXPORT_SYMBOL_GPL(ir_raw_event_store_with_timeout);
 /**
  * ir_raw_event_store_with_filter() - pass next pulse/space to decoders with some processing
  * @dev:	the struct rc_dev device descriptor
- * @ev:		the event that has occurred
+ * @type:	the type of the event that has occurred
  *
  * This routine (which may be called from an interrupt context) works
  * in similar manner to ir_raw_event_store_edge.
@@ -186,7 +195,7 @@ int ir_raw_event_store_with_filter(struct rc_dev *dev, struct ir_raw_event *ev)
 		dev->raw->this_ev = *ev;
 	}
 
-	/* Enter idle mode if necessary */
+	/* Enter idle mode if nessesary */
 	if (!ev->pulse && dev->timeout &&
 	    dev->raw->this_ev.duration >= dev->timeout)
 		ir_raw_event_set_idle(dev, true);
@@ -672,17 +681,9 @@ void ir_raw_event_unregister(struct rc_dev *dev)
 		if (handler->raw_unregister &&
 		    (handler->protocols & dev->enabled_protocols))
 			handler->raw_unregister(dev);
-
-	lirc_bpf_free(dev);
+	mutex_unlock(&ir_raw_handler_lock);
 
 	ir_raw_event_free(dev);
-
-	/*
-	 * A user can be calling bpf(BPF_PROG_{QUERY|ATTACH|DETACH}), so
-	 * ensure that the raw member is null on unlock; this is how
-	 * "device gone" is checked.
-	 */
-	mutex_unlock(&ir_raw_handler_lock);
 }
 
 /*

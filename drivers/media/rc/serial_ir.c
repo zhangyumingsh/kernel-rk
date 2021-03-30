@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * serial_ir.c
  *
@@ -11,6 +10,15 @@
  * Copyright (C) 1999 Christoph Bartelmus <lirc@bartelmus.de>
  * Copyright (C) 2007 Andrei Tanas <andrei@tanas.ca> (suspend/resume support)
  * Copyright (C) 2016 Sean Young <sean@mess.org> (port to rc-core)
+ *  This program is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License as published by
+ *  the Free Software Foundation; either version 2 of the License, or
+ *  (at your option) any later version.
+ *
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU General Public License for more details.
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -353,7 +361,7 @@ static irqreturn_t serial_ir_irq_handler(int i, void *blah)
 			dcd = (status & hardware[type].signal_pin) ? 1 : 0;
 
 			if (dcd == last_dcd) {
-				dev_dbg(&serial_ir.pdev->dev,
+				dev_err(&serial_ir.pdev->dev,
 					"ignoring spike: %d %d %lldns %lldns\n",
 					dcd, sense, ktime_to_ns(kt),
 					ktime_to_ns(serial_ir.lastkt));
@@ -462,7 +470,7 @@ static int hardware_init_port(void)
 	return 0;
 }
 
-static void serial_ir_timeout(struct timer_list *unused)
+static void serial_ir_timeout(unsigned long arg)
 {
 	struct ir_raw_event ev = {
 		.timeout = true,
@@ -532,7 +540,8 @@ static int serial_ir_probe(struct platform_device *dev)
 
 	serial_ir.rcdev = rcdev;
 
-	timer_setup(&serial_ir.timeout_timer, serial_ir_timeout, 0);
+	setup_timer(&serial_ir.timeout_timer, serial_ir_timeout,
+		    (unsigned long)&serial_ir);
 
 	result = devm_request_irq(&dev->dev, irq, serial_ir_irq_handler,
 				  share_irq ? IRQF_SHARED : 0,
@@ -765,6 +774,8 @@ static void serial_ir_exit(void)
 
 static int __init serial_ir_init_module(void)
 {
+	int result;
+
 	switch (type) {
 	case IR_HOMEBREW:
 	case IR_IRDEO:
@@ -792,7 +803,12 @@ static int __init serial_ir_init_module(void)
 	if (sense != -1)
 		sense = !!sense;
 
-	return serial_ir_init();
+	result = serial_ir_init();
+	if (!result)
+		return 0;
+
+	serial_ir_exit();
+	return result;
 }
 
 static void __exit serial_ir_exit_module(void)
@@ -811,11 +827,11 @@ MODULE_LICENSE("GPL");
 module_param(type, int, 0444);
 MODULE_PARM_DESC(type, "Hardware type (0 = home-brew, 1 = IRdeo, 2 = IRdeo Remote, 3 = AnimaX, 4 = IgorPlug");
 
-module_param_hw(io, int, ioport, 0444);
+module_param(io, int, 0444);
 MODULE_PARM_DESC(io, "I/O address base (0x3f8 or 0x2f8)");
 
 /* some architectures (e.g. intel xscale) have memory mapped registers */
-module_param_hw(iommap, ulong, other, 0444);
+module_param(iommap, ulong, 0444);
 MODULE_PARM_DESC(iommap, "physical base for memory mapped I/O (0 = no memory mapped io)");
 
 /*
@@ -823,13 +839,13 @@ MODULE_PARM_DESC(iommap, "physical base for memory mapped I/O (0 = no memory map
  * on 32bit word boundaries.
  * See linux-kernel/drivers/tty/serial/8250/8250.c serial_in()/out()
  */
-module_param_hw(ioshift, int, other, 0444);
+module_param(ioshift, int, 0444);
 MODULE_PARM_DESC(ioshift, "shift I/O register offset (0 = no shift)");
 
-module_param_hw(irq, int, irq, 0444);
+module_param(irq, int, 0444);
 MODULE_PARM_DESC(irq, "Interrupt (4 or 3)");
 
-module_param_hw(share_irq, bool, other, 0444);
+module_param(share_irq, bool, 0444);
 MODULE_PARM_DESC(share_irq, "Share interrupts (0 = off, 1 = on)");
 
 module_param(sense, int, 0444);

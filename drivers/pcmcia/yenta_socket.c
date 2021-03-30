@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Regular cardbus driver ("yenta_socket")
  *
@@ -173,7 +172,8 @@ static void exca_writew(struct yenta_socket *socket, unsigned reg, u16 val)
 
 static ssize_t show_yenta_registers(struct device *yentadev, struct device_attribute *attr, char *buf)
 {
-	struct yenta_socket *socket = dev_get_drvdata(yentadev);
+	struct pci_dev *dev = to_pci_dev(yentadev);
+	struct yenta_socket *socket = pci_get_drvdata(dev);
 	int offset = 0, i;
 
 	offset = snprintf(buf, PAGE_SIZE, "CB registers:");
@@ -535,9 +535,9 @@ static irqreturn_t yenta_interrupt(int irq, void *dev_id)
 	return IRQ_HANDLED;
 }
 
-static void yenta_interrupt_wrapper(struct timer_list *t)
+static void yenta_interrupt_wrapper(unsigned long data)
 {
-	struct yenta_socket *socket = from_timer(socket, t, poll_timer);
+	struct yenta_socket *socket = (struct yenta_socket *) data;
 
 	yenta_interrupt(0, (void *)socket);
 	socket->poll_timer.expires = jiffies + HZ;
@@ -1234,7 +1234,8 @@ static int yenta_probe(struct pci_dev *dev, const struct pci_device_id *id)
 	if (!socket->cb_irq || request_irq(socket->cb_irq, yenta_interrupt, IRQF_SHARED, "yenta", socket)) {
 		/* No IRQ or request_irq failed. Poll */
 		socket->cb_irq = 0; /* But zero is a valid IRQ number. */
-		timer_setup(&socket->poll_timer, yenta_interrupt_wrapper, 0);
+		setup_timer(&socket->poll_timer, yenta_interrupt_wrapper,
+			    (unsigned long)socket);
 		mod_timer(&socket->poll_timer, jiffies + HZ);
 		dev_info(&dev->dev,
 			 "no PCI IRQ, CardBus support disabled for this socket.\n");

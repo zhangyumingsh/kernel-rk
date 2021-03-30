@@ -77,7 +77,7 @@ struct mthca_cq_context {
 	__be32 ci_db;		/* Arbel only */
 	__be32 state_db;	/* Arbel only */
 	u32    reserved;
-} __packed;
+} __attribute__((packed));
 
 #define MTHCA_CQ_STATUS_OK          ( 0 << 28)
 #define MTHCA_CQ_STATUS_OVERFLOW    ( 9 << 28)
@@ -211,6 +211,11 @@ static inline void update_cons_index(struct mthca_dev *dev, struct mthca_cq *cq,
 		mthca_write64(MTHCA_TAVOR_CQ_DB_INC_CI | cq->cqn, incr - 1,
 			      dev->kar + MTHCA_CQ_DOORBELL,
 			      MTHCA_GET_DOORBELL_LOCK(&dev->doorbell_lock));
+		/*
+		 * Make sure doorbells don't leak out of CQ spinlock
+		 * and reach the HCA out of order:
+		 */
+		mmiowb();
 	}
 }
 
@@ -602,6 +607,9 @@ static inline int mthca_poll_one(struct mthca_dev *dev,
 		case MTHCA_OPCODE_ATOMIC_FA:
 			entry->opcode    = IB_WC_FETCH_ADD;
 			entry->byte_len  = MTHCA_ATOMIC_BYTE_LEN;
+			break;
+		case MTHCA_OPCODE_BIND_MW:
+			entry->opcode    = IB_WC_BIND_MW;
 			break;
 		default:
 			entry->opcode    = MTHCA_OPCODE_INVALID;

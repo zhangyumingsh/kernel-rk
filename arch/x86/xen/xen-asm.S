@@ -1,26 +1,28 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /*
- * Asm versions of Xen pv-ops, suitable for direct use.
+ * Asm versions of Xen pv-ops, suitable for either direct use or
+ * inlining.  The inline versions are the same as the direct-use
+ * versions, with the pre- and post-amble chopped off.
+ *
+ * This code is encoded for size rather than absolute efficiency, with
+ * a view to being able to inline as much as possible.
  *
  * We only bother with direct forms (ie, vcpu in percpu data) of the
- * operations here; the indirect forms are better handled in C.
+ * operations here; the indirect forms are better handled in C, since
+ * they're generally too large to inline anyway.
  */
 
 #include <asm/asm-offsets.h>
 #include <asm/percpu.h>
 #include <asm/processor-flags.h>
-#include <asm/frame.h>
-#include <asm/asm.h>
 
-#include <linux/linkage.h>
+#include "xen-asm.h"
 
 /*
  * Enable events.  This clears the event mask and tests the pending
  * event status with one and operation.  If there are pending events,
  * then enter the hypervisor to get them handled.
  */
-SYM_FUNC_START(xen_irq_enable_direct)
-	FRAME_BEGIN
+ENTRY(xen_irq_enable_direct)
 	/* Unmask events */
 	movb $0, PER_CPU_VAR(xen_vcpu_info) + XEN_vcpu_info_mask
 
@@ -34,21 +36,24 @@ SYM_FUNC_START(xen_irq_enable_direct)
 	testb $0xff, PER_CPU_VAR(xen_vcpu_info) + XEN_vcpu_info_pending
 	jz 1f
 
-	call check_events
+2:	call check_events
 1:
-	FRAME_END
+ENDPATCH(xen_irq_enable_direct)
 	ret
-SYM_FUNC_END(xen_irq_enable_direct)
+	ENDPROC(xen_irq_enable_direct)
+	RELOC(xen_irq_enable_direct, 2b+1)
 
 
 /*
  * Disabling events is simply a matter of making the event mask
  * non-zero.
  */
-SYM_FUNC_START(xen_irq_disable_direct)
+ENTRY(xen_irq_disable_direct)
 	movb $1, PER_CPU_VAR(xen_vcpu_info) + XEN_vcpu_info_mask
+ENDPATCH(xen_irq_disable_direct)
 	ret
-SYM_FUNC_END(xen_irq_disable_direct)
+	ENDPROC(xen_irq_disable_direct)
+	RELOC(xen_irq_disable_direct, 0)
 
 /*
  * (xen_)save_fl is used to get the current interrupt enable status.
@@ -59,12 +64,14 @@ SYM_FUNC_END(xen_irq_disable_direct)
  * undefined.  We need to toggle the state of the bit, because Xen and
  * x86 use opposite senses (mask vs enable).
  */
-SYM_FUNC_START(xen_save_fl_direct)
+ENTRY(xen_save_fl_direct)
 	testb $0xff, PER_CPU_VAR(xen_vcpu_info) + XEN_vcpu_info_mask
 	setz %ah
 	addb %ah, %ah
+ENDPATCH(xen_save_fl_direct)
 	ret
-SYM_FUNC_END(xen_save_fl_direct)
+	ENDPROC(xen_save_fl_direct)
+	RELOC(xen_save_fl_direct, 0)
 
 
 /*
@@ -74,8 +81,7 @@ SYM_FUNC_END(xen_save_fl_direct)
  * interrupt mask state, it checks for unmasked pending events and
  * enters the hypervisor to get them delivered if so.
  */
-SYM_FUNC_START(xen_restore_fl_direct)
-	FRAME_BEGIN
+ENTRY(xen_restore_fl_direct)
 #ifdef CONFIG_X86_64
 	testw $X86_EFLAGS_IF, %di
 #else
@@ -91,19 +97,19 @@ SYM_FUNC_START(xen_restore_fl_direct)
 	/* check for unmasked and pending */
 	cmpw $0x0001, PER_CPU_VAR(xen_vcpu_info) + XEN_vcpu_info_pending
 	jnz 1f
-	call check_events
+2:	call check_events
 1:
-	FRAME_END
+ENDPATCH(xen_restore_fl_direct)
 	ret
-SYM_FUNC_END(xen_restore_fl_direct)
+	ENDPROC(xen_restore_fl_direct)
+	RELOC(xen_restore_fl_direct, 2b+1)
 
 
 /*
  * Force an event check by making a hypercall, but preserve regs
  * before making the call.
  */
-SYM_FUNC_START(check_events)
-	FRAME_BEGIN
+check_events:
 #ifdef CONFIG_X86_32
 	push %eax
 	push %ecx
@@ -133,21 +139,4 @@ SYM_FUNC_START(check_events)
 	pop %rcx
 	pop %rax
 #endif
-	FRAME_END
 	ret
-SYM_FUNC_END(check_events)
-
-SYM_FUNC_START(xen_read_cr2)
-	FRAME_BEGIN
-	_ASM_MOV PER_CPU_VAR(xen_vcpu), %_ASM_AX
-	_ASM_MOV XEN_vcpu_info_arch_cr2(%_ASM_AX), %_ASM_AX
-	FRAME_END
-	ret
-SYM_FUNC_END(xen_read_cr2);
-
-SYM_FUNC_START(xen_read_cr2_direct)
-	FRAME_BEGIN
-	_ASM_MOV PER_CPU_VAR(xen_vcpu_info) + XEN_vcpu_info_arch_cr2, %_ASM_AX
-	FRAME_END
-	ret
-SYM_FUNC_END(xen_read_cr2_direct);

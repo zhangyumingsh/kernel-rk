@@ -1,9 +1,12 @@
-// SPDX-License-Identifier: GPL-2.0+
 /*
  * audio.c -- Audio gadget driver
  *
  * Copyright (C) 2008 Bryan Wu <cooloney@kernel.org>
  * Copyright (C) 2008 Analog Devices, Inc
+ *
+ * Enter bugs at http://blackfin.uclinux.org/
+ *
+ * Licensed under the GPL-2 or later.
  */
 
 /* #define VERBOSE_DEBUG */
@@ -154,7 +157,7 @@ static struct usb_device_descriptor device_desc = {
 	.bLength =		sizeof device_desc,
 	.bDescriptorType =	USB_DT_DEVICE,
 
-	/* .bcdUSB = DYNAMIC */
+	.bcdUSB =		cpu_to_le16(0x200),
 
 #ifdef CONFIG_GADGET_UAC1_LEGACY
 	.bDeviceClass =		USB_CLASS_PER_INTERFACE,

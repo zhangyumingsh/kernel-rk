@@ -98,9 +98,6 @@ static const struct bcma_device_id_name bcma_bcm_device_names[] = {
 	{ BCMA_CORE_SHIM, "SHIM" },
 	{ BCMA_CORE_PCIE2, "PCIe Gen2" },
 	{ BCMA_CORE_ARM_CR4, "ARM CR4" },
-	{ BCMA_CORE_GCI, "GCI" },
-	{ BCMA_CORE_CMEM, "CNDS DDR2/3 memory controller" },
-	{ BCMA_CORE_ARM_CA7, "ARM CA7" },
 	{ BCMA_CORE_DEFAULT, "Default" },
 };
 
@@ -219,7 +216,7 @@ static s32 bcma_erom_get_mst_port(struct bcma_bus *bus, u32 __iomem **eromptr)
 static u32 bcma_erom_get_addr_desc(struct bcma_bus *bus, u32 __iomem **eromptr,
 				  u32 type, u8 port)
 {
-	u32 addrl, addrh, sizeh = 0;
+	u32 addrl, addrh, sizel, sizeh = 0;
 	u32 size;
 
 	u32 ent = bcma_erom_get_ent(bus, eromptr);
@@ -239,9 +236,12 @@ static u32 bcma_erom_get_addr_desc(struct bcma_bus *bus, u32 __iomem **eromptr,
 
 	if ((ent & SCAN_ADDR_SZ) == SCAN_ADDR_SZ_SZD) {
 		size = bcma_erom_get_ent(bus, eromptr);
+		sizel = size & SCAN_SIZE_SZ;
 		if (size & SCAN_SIZE_SG32)
 			sizeh = bcma_erom_get_ent(bus, eromptr);
-	}
+	} else
+		sizel = SCAN_ADDR_SZ_BASE <<
+				((ent & SCAN_ADDR_SZ) >> SCAN_ADDR_SZ_SHIFT);
 
 	return addrl;
 }
@@ -315,8 +315,6 @@ static int bcma_get_next_core(struct bcma_bus *bus, u32 __iomem **eromptr,
 		switch (core->id.id) {
 		case BCMA_CORE_4706_MAC_GBIT_COMMON:
 		case BCMA_CORE_NS_CHIPCOMMON_B:
-		case BCMA_CORE_PMU:
-		case BCMA_CORE_GCI:
 		/* Not used yet: case BCMA_CORE_OOB_ROUTER: */
 			break;
 		default:
@@ -422,11 +420,11 @@ static int bcma_get_next_core(struct bcma_bus *bus, u32 __iomem **eromptr,
 		}
 	}
 	if (bus->hosttype == BCMA_HOSTTYPE_SOC) {
-		core->io_addr = ioremap(core->addr, BCMA_CORE_SIZE);
+		core->io_addr = ioremap_nocache(core->addr, BCMA_CORE_SIZE);
 		if (!core->io_addr)
 			return -ENOMEM;
 		if (core->wrap) {
-			core->io_wrap = ioremap(core->wrap,
+			core->io_wrap = ioremap_nocache(core->wrap,
 							BCMA_CORE_SIZE);
 			if (!core->io_wrap) {
 				iounmap(core->io_addr);
@@ -469,7 +467,7 @@ int bcma_bus_scan(struct bcma_bus *bus)
 
 	erombase = bcma_scan_read32(bus, 0, BCMA_CC_EROM);
 	if (bus->hosttype == BCMA_HOSTTYPE_SOC) {
-		eromptr = ioremap(erombase, BCMA_CORE_SIZE);
+		eromptr = ioremap_nocache(erombase, BCMA_CORE_SIZE);
 		if (!eromptr)
 			return -ENOMEM;
 	} else {

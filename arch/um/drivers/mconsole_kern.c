@@ -1,7 +1,7 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (C) 2001 Lennert Buytenhek (buytenh@gnu.org)
  * Copyright (C) 2001 - 2008 Jeff Dike (jdike@{addtoit,linux.intel}.com)
+ * Licensed under the GPL
  */
 
 #include <linux/console.h>
@@ -13,7 +13,6 @@
 #include <linux/module.h>
 #include <linux/notifier.h>
 #include <linux/reboot.h>
-#include <linux/sched/debug.h>
 #include <linux/proc_fs.h>
 #include <linux/slab.h>
 #include <linux/syscalls.h>
@@ -25,7 +24,7 @@
 #include <linux/fs.h>
 #include <linux/mount.h>
 #include <linux/file.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/switch_to.h>
 
 #include <init.h>
@@ -96,6 +95,7 @@ static irqreturn_t mconsole_interrupt(int irq, void *dev_id)
 	}
 	if (!list_empty(&mc_requests))
 		schedule_work(&mconsole_work);
+	reactivate_fd(fd, MCONSOLE_IRQ);
 	return IRQ_HANDLED;
 }
 
@@ -129,7 +129,6 @@ void mconsole_proc(struct mc_request *req)
 	struct file *file;
 	int first_chunk = 1;
 	char *ptr = req->request.data;
-	loff_t pos = 0;
 
 	ptr += strlen("proc");
 	ptr = skip_spaces(ptr);
@@ -148,7 +147,12 @@ void mconsole_proc(struct mc_request *req)
 	}
 
 	do {
-		len = kernel_read(file, buf, PAGE_SIZE - 1, &pos);
+		loff_t pos = file->f_pos;
+		mm_segment_t old_fs = get_fs();
+		set_fs(KERNEL_DS);
+		len = vfs_read(file, buf, PAGE_SIZE - 1, &pos);
+		set_fs(old_fs);
+		file->f_pos = pos;
 		if (len < 0) {
 			mconsole_reply(req, "Read of file failed", 1, 0);
 			goto out_free;
@@ -239,6 +243,7 @@ void mconsole_stop(struct mc_request *req)
 		(*req->cmd->handler)(req);
 	}
 	os_set_fd_block(req->originating_fd, 0);
+	reactivate_fd(req->originating_fd, MCONSOLE_IRQ);
 	mconsole_reply(req, "", 0, 0);
 }
 
@@ -743,18 +748,27 @@ static ssize_t mconsole_proc_write(struct file *file,
 {
 	char *buf;
 
-	buf = memdup_user_nul(buffer, count);
-	if (IS_ERR(buf))
-		return PTR_ERR(buf);
+	buf = kmalloc(count + 1, GFP_KERNEL);
+	if (buf == NULL)
+		return -ENOMEM;
+
+	if (copy_from_user(buf, buffer, count)) {
+		count = -EFAULT;
+		goto out;
+	}
+
+	buf[count] = '\0';
 
 	mconsole_notify(notify_socket, MCONSOLE_USER_NOTIFY, buf, count);
+ out:
 	kfree(buf);
 	return count;
 }
 
-static const struct proc_ops mconsole_proc_ops = {
-	.proc_write	= mconsole_proc_write,
-	.proc_lseek	= noop_llseek,
+static const struct file_operations mconsole_proc_fops = {
+	.owner		= THIS_MODULE,
+	.write		= mconsole_proc_write,
+	.llseek		= noop_llseek,
 };
 
 static int create_proc_mconsole(void)
@@ -764,7 +778,7 @@ static int create_proc_mconsole(void)
 	if (notify_socket == NULL)
 		return 0;
 
-	ent = proc_create("mconsole", 0200, NULL, &mconsole_proc_ops);
+	ent = proc_create("mconsole", 0200, NULL, &mconsole_proc_fops);
 	if (ent == NULL) {
 		printk(KERN_INFO "create_proc_mconsole : proc_create failed\n");
 		return 0;

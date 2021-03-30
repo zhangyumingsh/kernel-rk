@@ -1,7 +1,16 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Copyright 2014 Google, Inc
  * Author: Alexandru M Stan <amstan@chromium.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/slab.h>
@@ -46,7 +55,7 @@ static unsigned long rockchip_mmc_recalc(struct clk_hw *hw,
 static int rockchip_mmc_get_phase(struct clk_hw *hw)
 {
 	struct rockchip_mmc_clock *mmc_clock = to_mmc_clock(hw);
-	unsigned long rate = clk_hw_get_rate(hw);
+	unsigned long rate = clk_get_rate(hw->clk);
 	u32 raw_value;
 	u16 degrees;
 	u32 delay_num = 0;
@@ -60,13 +69,13 @@ static int rockchip_mmc_get_phase(struct clk_hw *hw)
 	degrees = (raw_value & ROCKCHIP_MMC_DEGREE_MASK) * 90;
 
 	if (raw_value & ROCKCHIP_MMC_DELAY_SEL) {
-		/* degrees/delaynum * 1000000 */
+		/* degrees/delaynum * 10000 */
 		unsigned long factor = (ROCKCHIP_MMC_DELAY_ELEMENT_PSEC / 10) *
-					36 * (rate / 10000);
+					36 * (rate / 1000000);
 
 		delay_num = (raw_value & ROCKCHIP_MMC_DELAYNUM_MASK);
 		delay_num >>= ROCKCHIP_MMC_DELAYNUM_OFFSET;
-		degrees += DIV_ROUND_CLOSEST(delay_num * factor, 1000000);
+		degrees += DIV_ROUND_CLOSEST(delay_num * factor, 10000);
 	}
 
 	return degrees % 360;
@@ -75,7 +84,7 @@ static int rockchip_mmc_get_phase(struct clk_hw *hw)
 static int rockchip_mmc_set_phase(struct clk_hw *hw, int degrees)
 {
 	struct rockchip_mmc_clock *mmc_clock = to_mmc_clock(hw);
-	unsigned long rate = clk_hw_get_rate(hw);
+	unsigned long rate = clk_get_rate(hw->clk);
 	u8 nineties, remainder;
 	u8 delay_num;
 	u32 raw_value;
@@ -135,8 +144,7 @@ static int rockchip_mmc_set_phase(struct clk_hw *hw, int degrees)
 	raw_value = delay_num ? ROCKCHIP_MMC_DELAY_SEL : 0;
 	raw_value |= delay_num << ROCKCHIP_MMC_DELAYNUM_OFFSET;
 	raw_value |= nineties;
-	writel(HIWORD_UPDATE(raw_value, 0x07ff, mmc_clock->shift),
-	       mmc_clock->reg);
+	writel(HIWORD_UPDATE(raw_value, 0x07ff, mmc_clock->shift), mmc_clock->reg);
 
 	pr_debug("%s->set_phase(%d) delay_nums=%u reg[0x%p]=0x%03x actual_degrees=%d\n",
 		clk_hw_get_name(hw), degrees, delay_num,
@@ -166,14 +174,7 @@ static int rockchip_mmc_clk_rate_notify(struct notifier_block *nb,
 	 * the intput data, which expects the fixed phase after the tuning
 	 * process. However if the clock rate is changed, the phase is stale
 	 * and may break the data sampling. So here we try to restore the phase
-	 * for that case, except that
-	 * (1) cached_phase is invaild since we inevitably cached it when the
-	 * clock provider be reparented from orphan to its real parent in the
-	 * first place. Otherwise we may mess up the initialization of MMC cards
-	 * since we only set the default sample phase and drive phase later on.
-	 * (2) the new coming rate is higher than the older one since mmc driver
-	 * set the max-frequency to match the boards' ability but we can't go
-	 * over the heads of that, otherwise the tests smoke out the issue.
+	 * for that case.
 	 */
 	if (ndata->old_rate <= ndata->new_rate)
 		return NOTIFY_DONE;
@@ -199,7 +200,7 @@ struct clk *rockchip_clk_register_mmc(const char *name,
 
 	mmc_clock = kmalloc(sizeof(*mmc_clock), GFP_KERNEL);
 	if (!mmc_clock)
-		return ERR_PTR(-ENOMEM);
+		return NULL;
 
 	init.name = name;
 	init.flags = 0;

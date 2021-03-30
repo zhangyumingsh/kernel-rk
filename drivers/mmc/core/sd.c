@@ -1,10 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  *  linux/drivers/mmc/core/sd.c
  *
  *  Copyright (C) 2003-2004 Russell King, All Rights Reserved.
  *  SD support Copyright (C) 2004 Ian Molton, All Rights Reserved.
  *  Copyright (C) 2005-2007 Pierre Ossman, All Rights Reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  */
 
 #include <linux/err.h>
@@ -18,9 +21,9 @@
 #include <linux/mmc/mmc.h>
 #include <linux/mmc/sd.h>
 
+#include <linux/regulator/consumer.h>
+
 #include "core.h"
-#include "card.h"
-#include "host.h"
 #include "bus.h"
 #include "mmc_ops.h"
 #include "sd.h"
@@ -36,11 +39,11 @@ static const unsigned char tran_mant[] = {
 	35,	40,	45,	50,	55,	60,	70,	80,
 };
 
-static const unsigned int taac_exp[] = {
+static const unsigned int tacc_exp[] = {
 	1,	10,	100,	1000,	10000,	100000,	1000000, 10000000,
 };
 
-static const unsigned int taac_mant[] = {
+static const unsigned int tacc_mant[] = {
 	0,	10,	12,	13,	15,	20,	25,	30,
 	35,	40,	45,	50,	55,	60,	70,	80,
 };
@@ -72,6 +75,8 @@ static const unsigned int sd_au_size[] = {
 void mmc_decode_cid(struct mmc_card *card)
 {
 	u32 *resp = card->raw_cid;
+
+	memset(&card->cid, 0, sizeof(struct mmc_cid));
 
 	/*
 	 * SD doesn't currently have a version field so we will
@@ -108,8 +113,8 @@ static int mmc_decode_csd(struct mmc_card *card)
 	case 0:
 		m = UNSTUFF_BITS(resp, 115, 4);
 		e = UNSTUFF_BITS(resp, 112, 3);
-		csd->taac_ns	 = (taac_exp[e] * taac_mant[m] + 9) / 10;
-		csd->taac_clks	 = UNSTUFF_BITS(resp, 104, 8) * 100;
+		csd->tacc_ns	 = (tacc_exp[e] * tacc_mant[m] + 9) / 10;
+		csd->tacc_clks	 = UNSTUFF_BITS(resp, 104, 8) * 100;
 
 		m = UNSTUFF_BITS(resp, 99, 4);
 		e = UNSTUFF_BITS(resp, 96, 3);
@@ -145,8 +150,8 @@ static int mmc_decode_csd(struct mmc_card *card)
 		 */
 		mmc_card_set_blockaddr(card);
 
-		csd->taac_ns	 = 0; /* Unused */
-		csd->taac_clks	 = 0; /* Unused */
+		csd->tacc_ns	 = 0; /* Unused */
+		csd->tacc_clks	 = 0; /* Unused */
 
 		m = UNSTUFF_BITS(resp, 99, 4);
 		e = UNSTUFF_BITS(resp, 96, 3);
@@ -206,11 +211,6 @@ static int mmc_decode_scr(struct mmc_card *card)
 		/* Check if Physical Layer Spec v3.0 is supported */
 		scr->sda_spec3 = UNSTUFF_BITS(resp, 47, 1);
 
-	if (scr->sda_spec3) {
-		scr->sda_spec4 = UNSTUFF_BITS(resp, 42, 1);
-		scr->sda_specx = UNSTUFF_BITS(resp, 38, 4);
-	}
-
 	if (UNSTUFF_BITS(resp, 55, 1))
 		card->erased_byte = 0xFF;
 	else
@@ -235,10 +235,8 @@ static int mmc_decode_scr(struct mmc_card *card)
 static int mmc_read_ssr(struct mmc_card *card)
 {
 	unsigned int au, es, et, eo;
-	__be32 *raw_ssr;
-	u32 resp[4] = {};
-	u8 discard_support;
-	int i;
+	int err, i;
+	u32 *ssr;
 
 	if (!(card->csd.cmdclass & CCC_APP_SPEC)) {
 		pr_warn("%s: card lacks mandatory SD Status function\n",
@@ -246,34 +244,33 @@ static int mmc_read_ssr(struct mmc_card *card)
 		return 0;
 	}
 
-	raw_ssr = kmalloc(sizeof(card->raw_ssr), GFP_KERNEL);
-	if (!raw_ssr)
+	ssr = kmalloc(64, GFP_KERNEL);
+	if (!ssr)
 		return -ENOMEM;
 
-	if (mmc_app_sd_status(card, raw_ssr)) {
+	err = mmc_app_sd_status(card, ssr);
+	if (err) {
 		pr_warn("%s: problem reading SD Status register\n",
 			mmc_hostname(card->host));
-		kfree(raw_ssr);
-		return 0;
+		err = 0;
+		goto out;
 	}
 
 	for (i = 0; i < 16; i++)
-		card->raw_ssr[i] = be32_to_cpu(raw_ssr[i]);
-
-	kfree(raw_ssr);
+		ssr[i] = be32_to_cpu(ssr[i]);
 
 	/*
 	 * UNSTUFF_BITS only works with four u32s so we have to offset the
 	 * bitfield positions accordingly.
 	 */
-	au = UNSTUFF_BITS(card->raw_ssr, 428 - 384, 4);
+	au = UNSTUFF_BITS(ssr, 428 - 384, 4);
 	if (au) {
 		if (au <= 9 || card->scr.sda_spec3) {
 			card->ssr.au = sd_au_size[au];
-			es = UNSTUFF_BITS(card->raw_ssr, 408 - 384, 16);
-			et = UNSTUFF_BITS(card->raw_ssr, 402 - 384, 6);
+			es = UNSTUFF_BITS(ssr, 408 - 384, 16);
+			et = UNSTUFF_BITS(ssr, 402 - 384, 6);
 			if (es && et) {
-				eo = UNSTUFF_BITS(card->raw_ssr, 400 - 384, 2);
+				eo = UNSTUFF_BITS(ssr, 400 - 384, 2);
 				card->ssr.erase_timeout = (et * 1000) / es;
 				card->ssr.erase_offset = eo * 1000;
 			}
@@ -282,16 +279,9 @@ static int mmc_read_ssr(struct mmc_card *card)
 				mmc_hostname(card->host));
 		}
 	}
-
-	/*
-	 * starting SD5.1 discard is supported if DISCARD_SUPPORT (b313) is set
-	 */
-	resp[3] = card->raw_ssr[6];
-	discard_support = UNSTUFF_BITS(resp, 313 - 288, 1);
-	card->erase_arg = (card->scr.sda_specx && discard_support) ?
-			    SD_DISCARD_ARG : SD_ERASE_ARG;
-
-	return 0;
+out:
+	kfree(ssr);
+	return err;
 }
 
 /*
@@ -311,9 +301,15 @@ static int mmc_read_switch(struct mmc_card *card)
 		return 0;
 	}
 
+	err = -EIO;
+
 	status = kmalloc(64, GFP_KERNEL);
-	if (!status)
+	if (!status) {
+		pr_err("%s: could not allocate a buffer for "
+			"switch capabilities.\n",
+			mmc_hostname(card->host));
 		return -ENOMEM;
+	}
 
 	/*
 	 * Find out the card's support bits with a mode 0 operation.
@@ -343,7 +339,6 @@ static int mmc_read_switch(struct mmc_card *card)
 		card->sw_caps.sd3_bus_mode = status[13];
 		/* Driver Strengths supported by the card */
 		card->sw_caps.sd3_drv_type = status[9];
-		card->sw_caps.sd3_curr_limit = status[7] | status[6] << 8;
 	}
 
 out:
@@ -373,8 +368,11 @@ int mmc_sd_switch_hs(struct mmc_card *card)
 		return 0;
 
 	status = kmalloc(64, GFP_KERNEL);
-	if (!status)
+	if (!status) {
+		pr_err("%s: could not allocate a buffer for "
+			"switch capabilities.\n", mmc_hostname(card->host));
 		return -ENOMEM;
+	}
 
 	err = mmc_sd_switch(card, 1, 0, 1, status);
 	if (err)
@@ -557,25 +555,14 @@ static int sd_set_current_limit(struct mmc_card *card, u8 *status)
 	 * when we set current limit to 200ma, the card will draw 200ma, and
 	 * when we set current limit to 400/600/800ma, the card will draw its
 	 * maximum 300ma from the host.
-	 *
-	 * The above is incorrect: if we try to set a current limit that is
-	 * not supported by the card, the card can rightfully error out the
-	 * attempt, and remain at the default current limit.  This results
-	 * in a 300mA card being limited to 200mA even though the host
-	 * supports 800mA. Failures seen with SanDisk 8GB UHS cards with
-	 * an iMX6 host. --rmk
 	 */
-	if (max_current >= 800 &&
-	    card->sw_caps.sd3_curr_limit & SD_MAX_CURRENT_800)
+	if (max_current >= 800)
 		current_limit = SD_SET_CURRENT_LIMIT_800;
-	else if (max_current >= 600 &&
-		 card->sw_caps.sd3_curr_limit & SD_MAX_CURRENT_600)
+	else if (max_current >= 600)
 		current_limit = SD_SET_CURRENT_LIMIT_600;
-	else if (max_current >= 400 &&
-		 card->sw_caps.sd3_curr_limit & SD_MAX_CURRENT_400)
+	else if (max_current >= 400)
 		current_limit = SD_SET_CURRENT_LIMIT_400;
-	else if (max_current >= 200 &&
-		 card->sw_caps.sd3_curr_limit & SD_MAX_CURRENT_200)
+	else if (max_current >= 200)
 		current_limit = SD_SET_CURRENT_LIMIT_200;
 
 	if (current_limit != SD_SET_CURRENT_NO_CHANGE) {
@@ -604,8 +591,11 @@ static int mmc_sd_init_uhs_card(struct mmc_card *card)
 		return 0;
 
 	status = kmalloc(64, GFP_KERNEL);
-	if (!status)
+	if (!status) {
+		pr_err("%s: could not allocate a buffer for "
+			"switch capabilities.\n", mmc_hostname(card->host));
 		return -ENOMEM;
+	}
 
 	/* Set 4-bit bus width */
 	err = mmc_app_set_bus_width(card, MMC_BUS_WIDTH_4);
@@ -670,14 +660,6 @@ MMC_DEV_ATTR(cid, "%08x%08x%08x%08x\n", card->raw_cid[0], card->raw_cid[1],
 MMC_DEV_ATTR(csd, "%08x%08x%08x%08x\n", card->raw_csd[0], card->raw_csd[1],
 	card->raw_csd[2], card->raw_csd[3]);
 MMC_DEV_ATTR(scr, "%08x%08x\n", card->raw_scr[0], card->raw_scr[1]);
-MMC_DEV_ATTR(ssr,
-	"%08x%08x%08x%08x%08x%08x%08x%08x%08x%08x%08x%08x%08x%08x%08x%08x\n",
-		card->raw_ssr[0], card->raw_ssr[1], card->raw_ssr[2],
-		card->raw_ssr[3], card->raw_ssr[4], card->raw_ssr[5],
-		card->raw_ssr[6], card->raw_ssr[7], card->raw_ssr[8],
-		card->raw_ssr[9], card->raw_ssr[10], card->raw_ssr[11],
-		card->raw_ssr[12], card->raw_ssr[13], card->raw_ssr[14],
-		card->raw_ssr[15]);
 MMC_DEV_ATTR(date, "%02d/%04d\n", card->cid.month, card->cid.year);
 MMC_DEV_ATTR(erase_size, "%u\n", card->erase_size << 9);
 MMC_DEV_ATTR(preferred_erase_size, "%u\n", card->pref_erase << 9);
@@ -687,31 +669,12 @@ MMC_DEV_ATTR(manfid, "0x%06x\n", card->cid.manfid);
 MMC_DEV_ATTR(name, "%s\n", card->cid.prod_name);
 MMC_DEV_ATTR(oemid, "0x%04x\n", card->cid.oemid);
 MMC_DEV_ATTR(serial, "0x%08x\n", card->cid.serial);
-MMC_DEV_ATTR(ocr, "0x%08x\n", card->ocr);
-MMC_DEV_ATTR(rca, "0x%04x\n", card->rca);
 
-
-static ssize_t mmc_dsr_show(struct device *dev,
-                           struct device_attribute *attr,
-                           char *buf)
-{
-       struct mmc_card *card = mmc_dev_to_card(dev);
-       struct mmc_host *host = card->host;
-
-       if (card->csd.dsr_imp && host->dsr_req)
-               return sprintf(buf, "0x%x\n", host->dsr);
-       else
-               /* return default DSR value */
-               return sprintf(buf, "0x%x\n", 0x404);
-}
-
-static DEVICE_ATTR(dsr, S_IRUGO, mmc_dsr_show, NULL);
 
 static struct attribute *sd_std_attrs[] = {
 	&dev_attr_cid.attr,
 	&dev_attr_csd.attr,
 	&dev_attr_scr.attr,
-	&dev_attr_ssr.attr,
 	&dev_attr_date.attr,
 	&dev_attr_erase_size.attr,
 	&dev_attr_preferred_erase_size.attr,
@@ -721,9 +684,6 @@ static struct attribute *sd_std_attrs[] = {
 	&dev_attr_name.attr,
 	&dev_attr_oemid.attr,
 	&dev_attr_serial.attr,
-	&dev_attr_ocr.attr,
-	&dev_attr_rca.attr,
-	&dev_attr_dsr.attr,
 	NULL,
 };
 ATTRIBUTE_GROUPS(sd_std);
@@ -792,7 +752,8 @@ try_again:
 	 */
 	if (!mmc_host_is_spi(host) && rocr &&
 	   ((*rocr & 0x41000000) == 0x41000000)) {
-		err = mmc_set_uhs_voltage(host, pocr);
+		err = mmc_set_signal_voltage(host, MMC_SIGNAL_VOLTAGE_180,
+					pocr);
 		if (err == -EAGAIN) {
 			retries--;
 			goto try_again;
@@ -802,7 +763,11 @@ try_again:
 		}
 	}
 
-	err = mmc_send_cid(host, cid);
+	if (mmc_host_is_spi(host))
+		err = mmc_send_cid(host, cid);
+	else
+		err = mmc_all_send_cid(host, cid);
+
 	return err;
 }
 
@@ -848,12 +813,15 @@ int mmc_sd_setup_card(struct mmc_host *host, struct mmc_card *card,
 	bool reinit)
 {
 	int err;
+#ifdef CONFIG_MMC_PARANOID_SD_INIT
+	int retries;
+#endif
 
 	if (!reinit) {
 		/*
 		 * Fetch SCR from card.
 		 */
-		err = mmc_app_send_scr(card);
+		err = mmc_app_send_scr(card, card->raw_scr);
 		if (err)
 			return err;
 
@@ -874,7 +842,26 @@ int mmc_sd_setup_card(struct mmc_host *host, struct mmc_card *card,
 		/*
 		 * Fetch switch information from card.
 		 */
+#ifdef CONFIG_MMC_PARANOID_SD_INIT
+		for (retries = 1; retries <= 3; retries++) {
+			err = mmc_read_switch(card);
+			if (!err) {
+				if (retries > 1) {
+					printk(KERN_WARNING
+					       "%s: recovered\n",
+					       mmc_hostname(host));
+				}
+				break;
+			} else {
+				printk(KERN_WARNING
+				       "%s: read switch failed (attempt %d)\n",
+				       mmc_hostname(host), retries);
+			}
+		}
+#else
 		err = mmc_read_switch(card);
+#endif
+
 		if (err)
 			return err;
 	}
@@ -949,18 +936,17 @@ static int mmc_sd_init_card(struct mmc_host *host, u32 ocr,
 	u32 rocr = 0;
 	bool v18_fixup_failed = false;
 
+	BUG_ON(!host);
 	WARN_ON(!host->claimed);
+
 retry:
 	err = mmc_sd_get_cid(host, ocr, cid, &rocr);
 	if (err)
 		return err;
 
 	if (oldcard) {
-		if (memcmp(cid, oldcard->raw_cid, sizeof(cid)) != 0) {
-			pr_debug("%s: Perhaps the card was replaced\n",
-				mmc_hostname(host));
+		if (memcmp(cid, oldcard->raw_cid, sizeof(cid)) != 0)
 			return -ENOENT;
-		}
 
 		card = oldcard;
 	} else {
@@ -1037,7 +1023,7 @@ retry:
 				goto free_card;
 		}
 		if (mmc_sd_card_using_v18(card)) {
-			if (mmc_host_set_uhs_voltage(host) ||
+			if (mmc_host_set_uhs_voltage(host, MMC_SIGNAL_VOLTAGE_180) ||
 			    mmc_sd_init_uhs_card(card)) {
 				v18_fixup_failed = true;
 				mmc_power_cycle(host, ocr);
@@ -1082,13 +1068,6 @@ retry:
 		}
 	}
 
-	if (host->caps2 & MMC_CAP2_AVOID_3_3V &&
-	    host->ios.signal_voltage == MMC_SIGNAL_VOLTAGE_330) {
-		pr_err("%s: Host failed to negotiate down from 3.3V\n",
-			mmc_hostname(host));
-		err = -EINVAL;
-		goto free_card;
-	}
 done:
 	host->card = card;
 	return 0;
@@ -1105,6 +1084,9 @@ free_card:
  */
 static void mmc_sd_remove(struct mmc_host *host)
 {
+	BUG_ON(!host);
+	BUG_ON(!host->card);
+
 	mmc_remove_card(host->card);
 	host->card = NULL;
 }
@@ -1122,16 +1104,38 @@ static int mmc_sd_alive(struct mmc_host *host)
  */
 static void mmc_sd_detect(struct mmc_host *host)
 {
-	int err;
+	int err = 0;
+#ifdef CONFIG_MMC_PARANOID_SD_INIT
+	int retries = 5;
+#endif
 
-	mmc_get_card(host->card, NULL);
+	BUG_ON(!host);
+	BUG_ON(!host->card);
+
+	mmc_get_card(host->card);
 
 	/*
 	 * Just check if our card has been removed.
 	 */
+#ifdef CONFIG_MMC_PARANOID_SD_INIT
+	while(retries) {
+		err = mmc_send_status(host->card, NULL);
+		if (err) {
+			retries--;
+			udelay(5);
+			continue;
+		}
+		break;
+	}
+	if (!retries) {
+		printk(KERN_ERR "%s(%s): Unable to re-detect card (%d)\n",
+		       __func__, mmc_hostname(host), err);
+	}
+#else
 	err = _mmc_detect_card_removed(host);
+#endif
 
-	mmc_put_card(host->card, NULL);
+	mmc_put_card(host->card);
 
 	if (err) {
 		mmc_sd_remove(host);
@@ -1146,6 +1150,9 @@ static void mmc_sd_detect(struct mmc_host *host)
 static int _mmc_sd_suspend(struct mmc_host *host)
 {
 	int err = 0;
+
+	BUG_ON(!host);
+	BUG_ON(!host->card);
 
 	mmc_claim_host(host);
 
@@ -1181,6 +1188,28 @@ static int mmc_sd_suspend(struct mmc_host *host)
 	return err;
 }
 
+static int mmc_sd_shutdown(struct mmc_host *host)
+{
+	int err;
+
+	err = _mmc_sd_suspend(host);
+	if (!err) {
+		pm_runtime_disable(&host->card->dev);
+		pm_runtime_set_suspended(&host->card->dev);
+	}
+
+	if (!IS_ERR(host->supply.vqmmc)) {
+		int result;
+		regulator_set_voltage(host->supply.vqmmc, 3000000, 3000000);
+		result = regulator_enable(host->supply.vqmmc);
+		if (result) {
+			pr_err("%s %d\n",__func__, __LINE__);
+		}
+	}
+
+	return err;
+}
+
 /*
  * This function tries to determine if the same card is still present
  * and, if so, restore all state to it.
@@ -1188,6 +1217,12 @@ static int mmc_sd_suspend(struct mmc_host *host)
 static int _mmc_sd_resume(struct mmc_host *host)
 {
 	int err = 0;
+#ifdef CONFIG_MMC_PARANOID_SD_INIT
+	int retries;
+#endif
+
+	BUG_ON(!host);
+	BUG_ON(!host->card);
 
 	mmc_claim_host(host);
 
@@ -1195,7 +1230,23 @@ static int _mmc_sd_resume(struct mmc_host *host)
 		goto out;
 
 	mmc_power_up(host, host->card->ocr);
+#ifdef CONFIG_MMC_PARANOID_SD_INIT
+	retries = 5;
+	while (retries) {
+		err = mmc_sd_init_card(host, host->card->ocr, host->card);
+
+		if (err) {
+			printk(KERN_ERR "%s: Re-init card rc = %d (retries = %d)\n",
+			       mmc_hostname(host), err, retries);
+			mdelay(5);
+			retries--;
+			continue;
+		}
+		break;
+	}
+#else
 	err = mmc_sd_init_card(host, host->card->ocr, host->card);
+#endif
 	mmc_card_clr_suspended(host->card);
 
 out:
@@ -1208,8 +1259,16 @@ out:
  */
 static int mmc_sd_resume(struct mmc_host *host)
 {
+	int err = 0;
+
+	if (!(host->caps & MMC_CAP_RUNTIME_RESUME)) {
+		err = _mmc_sd_resume(host);
+		pm_runtime_set_active(&host->card->dev);
+		pm_runtime_mark_last_busy(&host->card->dev);
+	}
 	pm_runtime_enable(&host->card->dev);
-	return 0;
+
+	return err;
 }
 
 /*
@@ -1237,15 +1296,18 @@ static int mmc_sd_runtime_resume(struct mmc_host *host)
 {
 	int err;
 
+	if (!(host->caps & (MMC_CAP_AGGRESSIVE_PM | MMC_CAP_RUNTIME_RESUME)))
+		return 0;
+
 	err = _mmc_sd_resume(host);
-	if (err && err != -ENOMEDIUM)
-		pr_err("%s: error %d doing runtime resume\n",
+	if (err)
+		pr_err("%s: error %d doing aggressive resume\n",
 			mmc_hostname(host), err);
 
 	return 0;
 }
 
-static int mmc_sd_hw_reset(struct mmc_host *host)
+static int mmc_sd_reset(struct mmc_host *host)
 {
 	mmc_power_cycle(host, host->card->ocr);
 	return mmc_sd_init_card(host, host->card->ocr, host->card);
@@ -1259,8 +1321,8 @@ static const struct mmc_bus_ops mmc_sd_ops = {
 	.suspend = mmc_sd_suspend,
 	.resume = mmc_sd_resume,
 	.alive = mmc_sd_alive,
-	.shutdown = mmc_sd_suspend,
-	.hw_reset = mmc_sd_hw_reset,
+	.shutdown = mmc_sd_shutdown,
+	.reset = mmc_sd_reset,
 };
 
 /*
@@ -1270,7 +1332,11 @@ int mmc_attach_sd(struct mmc_host *host)
 {
 	int err;
 	u32 ocr, rocr;
+#ifdef CONFIG_MMC_PARANOID_SD_INIT
+	int retries;
+#endif
 
+	BUG_ON(!host);
 	WARN_ON(!host->claimed);
 
 	err = mmc_send_app_op_cond(host, 0, &ocr);
@@ -1311,9 +1377,27 @@ int mmc_attach_sd(struct mmc_host *host)
 	/*
 	 * Detect and init the card.
 	 */
+#ifdef CONFIG_MMC_PARANOID_SD_INIT
+	retries = 5;
+	while (retries) {
+		err = mmc_sd_init_card(host, rocr, NULL);
+		if (err) {
+			retries--;
+			continue;
+		}
+		break;
+	}
+
+	if (!retries) {
+		printk(KERN_ERR "%s: mmc_sd_init_card() failure (err = %d)\n",
+		       mmc_hostname(host), err);
+		goto err;
+	}
+#else
 	err = mmc_sd_init_card(host, rocr, NULL);
 	if (err)
 		goto err;
+#endif
 
 	mmc_release_host(host);
 	err = mmc_add_card(host->card);

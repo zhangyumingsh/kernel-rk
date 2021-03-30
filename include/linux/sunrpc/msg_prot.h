@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * linux/include/linux/sunrpc/msg_prot.h
  *
@@ -7,6 +6,8 @@
 
 #ifndef _LINUX_SUNRPC_MSGPROT_H_
 #define _LINUX_SUNRPC_MSGPROT_H_
+
+#ifdef __KERNEL__ /* user programs should get these from the rpc header files */
 
 #define RPC_VERSION 2
 
@@ -157,9 +158,9 @@ typedef __be32	rpc_fraghdr;
 
 /*
  * Note that RFC 1833 does not put any size restrictions on the
- * netid string, but all currently defined netid's fit in 5 bytes.
+ * netid string, but all currently defined netid's fit in 4 bytes.
  */
-#define RPCBIND_MAXNETIDLEN	(5u)
+#define RPCBIND_MAXNETIDLEN	(4u)
 
 /*
  * Universal addresses are introduced in RFC 1833 and further spelled
@@ -215,4 +216,5 @@ typedef __be32	rpc_fraghdr;
 /* Assume INET6_ADDRSTRLEN will always be larger than INET_ADDRSTRLEN... */
 #define RPCBIND_MAXUADDRLEN	RPCBIND_MAXUADDR6LEN
 
+#endif /* __KERNEL__ */
 #endif /* _LINUX_SUNRPC_MSGPROT_H_ */

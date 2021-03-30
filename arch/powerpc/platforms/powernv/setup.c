@@ -1,8 +1,12 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * PowerNV setup code.
  *
  * Copyright 2011 IBM Corp.
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version
+ * 2 of the License, or (at your option) any later version.
  */
 
 #undef DEBUG
@@ -24,12 +28,10 @@
 #include <linux/bug.h>
 #include <linux/pci.h>
 #include <linux/cpufreq.h>
-#include <linux/memblock.h>
 
 #include <asm/machdep.h>
 #include <asm/firmware.h>
 #include <asm/xics.h>
-#include <asm/xive.h>
 #include <asm/opal.h>
 #include <asm/kexec.h>
 #include <asm/smp.h>
@@ -153,7 +155,7 @@ static void __init pnv_setup_arch(void)
 	/* XXX PMCS */
 }
 
-static void __init pnv_init(void)
+static void __init pnv_init_early(void)
 {
 	/*
 	 * Initialize the LPC bus now so that legacy serial
@@ -167,21 +169,11 @@ static void __init pnv_init(void)
 	else
 #endif
 		add_preferred_console("hvc", 0, NULL);
-
-	if (!radix_enabled()) {
-		int i;
-
-		/* Allocate per cpu area to save old slb contents during MCE */
-		for_each_possible_cpu(i)
-			paca_ptrs[i]->mce_faulty_slbs = memblock_alloc_node(mmu_slb_size, __alignof__(*paca_ptrs[i]->mce_faulty_slbs), cpu_to_node(i));
-	}
 }
 
 static void __init pnv_init_IRQ(void)
 {
-	/* Try using a XIVE if available, otherwise use a XICS */
-	if (!xive_native_init())
-		xics_init();
+	xics_init();
 
 	WARN_ON(!ppc_md.get_irq);
 }
@@ -200,10 +192,6 @@ static void pnv_show_cpuinfo(struct seq_file *m)
 	else
 		seq_printf(m, "firmware\t: BML\n");
 	of_node_put(root);
-	if (radix_enabled())
-		seq_printf(m, "MMU\t\t: Radix\n");
-	else
-		seq_printf(m, "MMU\t\t: Hash\n");
 }
 
 static void pnv_prepare_going_down(void)
@@ -214,55 +202,32 @@ static void pnv_prepare_going_down(void)
 	 */
 	opal_event_shutdown();
 
-	/* Print flash update message if one is scheduled. */
-	opal_flash_update_print_message();
+	/* Soft disable interrupts */
+	local_irq_disable();
 
-	smp_send_stop();
-
-	hard_irq_disable();
+	/*
+	 * Return secondary CPUs to firwmare if a flash update
+	 * is pending otherwise we will get all sort of error
+	 * messages about CPU being stuck etc.. This will also
+	 * have the side effect of hard disabling interrupts so
+	 * past this point, the kernel is effectively dead.
+	 */
+	opal_flash_term_callback();
 }
 
 static void  __noreturn pnv_restart(char *cmd)
 {
-	long rc;
+	long rc = OPAL_BUSY;
 
 	pnv_prepare_going_down();
 
-	do {
-		if (!cmd)
-			rc = opal_cec_reboot();
-		else if (strcmp(cmd, "full") == 0)
-			rc = opal_cec_reboot2(OPAL_REBOOT_FULL_IPL, NULL);
-		else if (strcmp(cmd, "mpipl") == 0)
-			rc = opal_cec_reboot2(OPAL_REBOOT_MPIPL, NULL);
-		else if (strcmp(cmd, "error") == 0)
-			rc = opal_cec_reboot2(OPAL_REBOOT_PLATFORM_ERROR, NULL);
-		else
-			rc = OPAL_UNSUPPORTED;
-
-		if (rc == OPAL_BUSY || rc == OPAL_BUSY_EVENT) {
-			/* Opal is busy wait for some time and retry */
+	while (rc == OPAL_BUSY || rc == OPAL_BUSY_EVENT) {
+		rc = opal_cec_reboot();
+		if (rc == OPAL_BUSY_EVENT)
 			opal_poll_events(NULL);
+		else
 			mdelay(10);
-
-		} else	if (cmd && rc) {
-			/* Unknown error while issuing reboot */
-			if (rc == OPAL_UNSUPPORTED)
-				pr_err("Unsupported '%s' reboot.\n", cmd);
-			else
-				pr_err("Unable to issue '%s' reboot. Err=%ld\n",
-				       cmd, rc);
-			pr_info("Forcing a cec-reboot\n");
-			cmd = NULL;
-			rc = OPAL_BUSY;
-
-		} else if (rc != OPAL_SUCCESS) {
-			/* Unknown error while issuing cec-reboot */
-			pr_err("Unable to reboot. Err=%ld\n", rc);
-		}
-
-	} while (rc == OPAL_BUSY || rc == OPAL_BUSY_EVENT);
-
+	}
 	for (;;)
 		opal_poll_events(NULL);
 }
@@ -306,7 +271,7 @@ static void pnv_shutdown(void)
 	opal_shutdown();
 }
 
-#ifdef CONFIG_KEXEC_CORE
+#ifdef CONFIG_KEXEC
 static void pnv_kexec_wait_secondaries_down(void)
 {
 	int my_cpu, i, notified = -1;
@@ -329,7 +294,7 @@ static void pnv_kexec_wait_secondaries_down(void)
 			if (i != notified) {
 				printk(KERN_INFO "kexec: waiting for cpu %d "
 				       "(physical %d) to enter OPAL\n",
-				       i, paca_ptrs[i]->hw_cpu_id);
+				       i, paca[i].hw_cpu_id);
 				notified = i;
 			}
 
@@ -341,7 +306,7 @@ static void pnv_kexec_wait_secondaries_down(void)
 			if (timeout-- == 0) {
 				printk(KERN_ERR "kexec: timed out waiting for "
 				       "cpu %d (physical %d) to enter OPAL\n",
-				       i, paca_ptrs[i]->hw_cpu_id);
+				       i, paca[i].hw_cpu_id);
 				break;
 			}
 		}
@@ -350,14 +315,10 @@ static void pnv_kexec_wait_secondaries_down(void)
 
 static void pnv_kexec_cpu_down(int crash_shutdown, int secondary)
 {
-	u64 reinit_flags;
-
-	if (xive_enabled())
-		xive_teardown_cpu();
-	else
-		xics_kexec_teardown_cpu(secondary);
+	xics_kexec_teardown_cpu(secondary);
 
 	/* On OPAL, we return all CPUs to firmware */
+
 	if (!firmware_has_feature(FW_FEATURE_OPAL))
 		return;
 
@@ -373,26 +334,15 @@ static void pnv_kexec_cpu_down(int crash_shutdown, int secondary)
 		/* Primary waits for the secondaries to have reached OPAL */
 		pnv_kexec_wait_secondaries_down();
 
-		/* Switch XIVE back to emulation mode */
-		if (xive_enabled())
-			xive_shutdown();
-
 		/*
 		 * We might be running as little-endian - now that interrupts
 		 * are disabled, reset the HILE bit to big-endian so we don't
 		 * take interrupts in the wrong endian later
-		 *
-		 * We reinit to enable both radix and hash on P9 to ensure
-		 * the mode used by the next kernel is always supported.
 		 */
-		reinit_flags = OPAL_REINIT_CPUS_HILE_BE;
-		if (cpu_has_feature(CPU_FTR_ARCH_300))
-			reinit_flags |= OPAL_REINIT_CPUS_MMU_RADIX |
-				OPAL_REINIT_CPUS_MMU_HASH;
-		opal_reinit_cpus(reinit_flags);
+		opal_reinit_cpus(OPAL_REINIT_CPUS_HILE_BE);
 	}
 }
-#endif /* CONFIG_KEXEC_CORE */
+#endif /* CONFIG_KEXEC */
 
 #ifdef CONFIG_MEMORY_HOTPLUG_SPARSE
 static unsigned long pnv_memory_block_size(void)
@@ -407,52 +357,28 @@ static void __init pnv_setup_machdep_opal(void)
 	ppc_md.restart = pnv_restart;
 	pm_power_off = pnv_power_off;
 	ppc_md.halt = pnv_halt;
-	/* ppc_md.system_reset_exception gets filled in by pnv_smp_init() */
 	ppc_md.machine_check_exception = opal_machine_check;
 	ppc_md.mce_check_early_recovery = opal_mce_check_early_recovery;
-	if (opal_check_token(OPAL_HANDLE_HMI2))
-		ppc_md.hmi_exception_early = opal_hmi_exception_early2;
-	else
-		ppc_md.hmi_exception_early = opal_hmi_exception_early;
+	ppc_md.hmi_exception_early = opal_hmi_exception_early;
 	ppc_md.handle_hmi_exception = opal_handle_hmi_exception;
 }
 
 static int __init pnv_probe(void)
 {
-	if (!of_machine_is_compatible("ibm,powernv"))
+	unsigned long root = of_get_flat_dt_root();
+
+	if (!of_flat_dt_is_compatible(root, "ibm,powernv"))
 		return 0;
+
+	hpte_init_native();
 
 	if (firmware_has_feature(FW_FEATURE_OPAL))
 		pnv_setup_machdep_opal();
 
 	pr_debug("PowerNV detected !\n");
 
-	pnv_init();
-
 	return 1;
 }
-
-#ifdef CONFIG_PPC_TRANSACTIONAL_MEM
-void __init pnv_tm_init(void)
-{
-	if (!firmware_has_feature(FW_FEATURE_OPAL) ||
-	    !pvr_version_is(PVR_POWER9) ||
-	    early_cpu_has_feature(CPU_FTR_TM))
-		return;
-
-	if (opal_reinit_cpus(OPAL_REINIT_CPUS_TM_SUSPEND_DISABLED) != OPAL_SUCCESS)
-		return;
-
-	pr_info("Enabling TM (Transactional Memory) with Suspend Disabled\n");
-	cur_cpu_spec->cpu_features |= CPU_FTR_TM;
-	/* Make sure "normal" HTM is off (it should be) */
-	cur_cpu_spec->cpu_user_features2 &= ~PPC_FEATURE2_HTM;
-	/* Turn on no suspend mode, and HTM no SC */
-	cur_cpu_spec->cpu_user_features2 |= PPC_FEATURE2_HTM_NO_SUSPEND | \
-					    PPC_FEATURE2_HTM_NOSC;
-	tm_suspend_disabled = true;
-}
-#endif /* CONFIG_PPC_TRANSACTIONAL_MEM */
 
 /*
  * Returns the cpu frequency for 'cpu' in Hz. This is used by
@@ -473,29 +399,19 @@ static unsigned long pnv_get_proc_freq(unsigned int cpu)
 	return ret_freq;
 }
 
-static long pnv_machine_check_early(struct pt_regs *regs)
-{
-	long handled = 0;
-
-	if (cur_cpu_spec && cur_cpu_spec->machine_check_early)
-		handled = cur_cpu_spec->machine_check_early(regs);
-
-	return handled;
-}
-
 define_machine(powernv) {
 	.name			= "PowerNV",
 	.probe			= pnv_probe,
+	.init_early		= pnv_init_early,
 	.setup_arch		= pnv_setup_arch,
 	.init_IRQ		= pnv_init_IRQ,
 	.show_cpuinfo		= pnv_show_cpuinfo,
 	.get_proc_freq          = pnv_get_proc_freq,
 	.progress		= pnv_progress,
 	.machine_shutdown	= pnv_shutdown,
-	.power_save             = NULL,
+	.power_save             = power7_idle,
 	.calibrate_decr		= generic_calibrate_decr,
-	.machine_check_early	= pnv_machine_check_early,
-#ifdef CONFIG_KEXEC_CORE
+#ifdef CONFIG_KEXEC
 	.kexec_cpu_down		= pnv_kexec_cpu_down,
 #endif
 #ifdef CONFIG_MEMORY_HOTPLUG_SPARSE

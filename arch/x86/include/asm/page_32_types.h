@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _ASM_X86_PAGE_32_DEFS_H
 #define _ASM_X86_PAGE_32_DEFS_H
 
@@ -14,17 +13,18 @@
  * If you want more physical memory than this then see the CONFIG_HIGHMEM4G
  * and CONFIG_HIGHMEM64G options in the kernel configuration.
  */
-#define __PAGE_OFFSET_BASE	_AC(CONFIG_PAGE_OFFSET, UL)
-#define __PAGE_OFFSET		__PAGE_OFFSET_BASE
+#define __PAGE_OFFSET		_AC(CONFIG_PAGE_OFFSET, UL)
 
 #define __START_KERNEL_map	__PAGE_OFFSET
 
 #define THREAD_SIZE_ORDER	1
 #define THREAD_SIZE		(PAGE_SIZE << THREAD_SIZE_ORDER)
 
-#define IRQ_STACK_SIZE		THREAD_SIZE
-
-#define N_EXCEPTION_STACKS	1
+#define DOUBLEFAULT_STACK 1
+#define NMI_STACK 0
+#define DEBUG_STACK 0
+#define MCE_STACK 0
+#define N_EXCEPTION_STACKS 1
 
 #ifdef CONFIG_X86_PAE
 /*

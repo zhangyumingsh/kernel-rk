@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /*
  *  linux/boot/head.S
  *
@@ -61,7 +60,72 @@
 	.hidden _egot
 
 	__HEAD
-SYM_FUNC_START(startup_32)
+ENTRY(startup_32)
+#ifdef CONFIG_EFI_STUB
+	jmp	preferred_addr
+
+	/*
+	 * We don't need the return address, so set up the stack so
+	 * efi_main() can find its arguments.
+	 */
+ENTRY(efi_pe_entry)
+	add	$0x4, %esp
+
+	call	1f
+1:	popl	%esi
+	subl	$1b, %esi
+
+	popl	%ecx
+	movl	%ecx, efi32_config(%esi)	/* Handle */
+	popl	%ecx
+	movl	%ecx, efi32_config+8(%esi)	/* EFI System table pointer */
+
+	/* Relocate efi_config->call() */
+	leal	efi32_config(%esi), %eax
+	add	%esi, 88(%eax)
+	pushl	%eax
+
+	call	make_boot_params
+	cmpl	$0, %eax
+	je	fail
+	movl	%esi, BP_code32_start(%eax)
+	popl	%ecx
+	pushl	%eax
+	pushl	%ecx
+	jmp	2f		/* Skip efi_config initialization */
+
+ENTRY(efi32_stub_entry)
+	add	$0x4, %esp
+	popl	%ecx
+	popl	%edx
+
+	call	1f
+1:	popl	%esi
+	subl	$1b, %esi
+
+	movl	%ecx, efi32_config(%esi)	/* Handle */
+	movl	%edx, efi32_config+8(%esi)	/* EFI System table pointer */
+
+	/* Relocate efi_config->call() */
+	leal	efi32_config(%esi), %eax
+	add	%esi, 88(%eax)
+	pushl	%eax
+2:
+	call	efi_main
+	cmpl	$0, %eax
+	movl	%eax, %esi
+	jne	2f
+fail:
+	/* EFI init failed, so hang. */
+	hlt
+	jmp	fail
+2:
+	movl	BP_code32_start(%esi), %eax
+	leal	preferred_addr(%eax), %eax
+	jmp	*%eax
+
+preferred_addr:
+#endif
 	cld
 	/*
 	 * Test KEEP_SEGMENTS flag to see if the bootloader is asking
@@ -106,15 +170,13 @@ SYM_FUNC_START(startup_32)
 	notl	%eax
 	andl    %eax, %ebx
 	cmpl	$LOAD_PHYSICAL_ADDR, %ebx
-	jae	1f
+	jge	1f
 #endif
 	movl	$LOAD_PHYSICAL_ADDR, %ebx
 1:
 
 	/* Target address to relocate to for decompression */
-	movl    BP_init_size(%esi), %eax
-	subl    $_end, %eax
-	addl    %eax, %ebx
+	addl	$z_extract_offset, %ebx
 
 	/* Set up the stack */
 	leal	boot_stack_end(%ebx), %esp
@@ -140,25 +202,12 @@ SYM_FUNC_START(startup_32)
 /*
  * Jump to the relocated address.
  */
-	leal	.Lrelocated(%ebx), %eax
+	leal	relocated(%ebx), %eax
 	jmp	*%eax
-SYM_FUNC_END(startup_32)
-
-#ifdef CONFIG_EFI_STUB
-SYM_FUNC_START(efi32_stub_entry)
-SYM_FUNC_START_ALIAS(efi_stub_entry)
-	add	$0x4, %esp
-	call	efi_main
-	movl	%eax, %esi
-	movl	BP_code32_start(%esi), %eax
-	leal	startup_32(%eax), %eax
-	jmp	*%eax
-SYM_FUNC_END(efi32_stub_entry)
-SYM_FUNC_END_ALIAS(efi_stub_entry)
-#endif
+ENDPROC(startup_32)
 
 	.text
-SYM_FUNC_START_LOCAL_NOALIGN(.Lrelocated)
+relocated:
 
 /*
  * Clear BSS (stack is currently empty)
@@ -184,30 +233,36 @@ SYM_FUNC_START_LOCAL_NOALIGN(.Lrelocated)
 2:
 
 /*
- * Do the extraction, and jump to the new kernel..
+ * Do the decompression, and jump to the new kernel..
  */
-				/* push arguments for extract_kernel: */
+				/* push arguments for decompress_kernel: */
+	pushl	$z_run_size	/* size of kernel with .bss and .brk */
 	pushl	$z_output_len	/* decompressed length, end of relocs */
-
-	leal	_end(%ebx), %eax
-	subl    BP_init_size(%esi), %eax
-	pushl	%eax		/* output address */
-
+	leal	z_extract_offset_negative(%ebx), %ebp
+	pushl	%ebp		/* output address */
 	pushl	$z_input_len	/* input_len */
 	leal	input_data(%ebx), %eax
 	pushl	%eax		/* input_data */
 	leal	boot_heap(%ebx), %eax
 	pushl	%eax		/* heap area */
 	pushl	%esi		/* real mode pointer */
-	call	extract_kernel	/* returns kernel location in %eax */
-	addl	$24, %esp
+	call	decompress_kernel /* returns kernel location in %eax */
+	addl	$28, %esp
 
 /*
- * Jump to the extracted kernel.
+ * Jump to the decompressed kernel.
  */
 	xorl	%ebx, %ebx
 	jmp	*%eax
-SYM_FUNC_END(.Lrelocated)
+
+#ifdef CONFIG_EFI_STUB
+	.data
+efi32_config:
+	.fill 11,8,0
+	.long efi_call_phys
+	.long 0
+	.byte 0
+#endif
 
 /*
  * Stack and heap for uncompression

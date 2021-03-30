@@ -25,11 +25,9 @@
  * Jackie Li<yaodong.li@intel.com>
  */
 
-#include <linux/delay.h>
-
 #include "mdfld_dsi_dpi.h"
-#include "mdfld_dsi_pkg_sender.h"
 #include "mdfld_output.h"
+#include "mdfld_dsi_pkg_sender.h"
 #include "psb_drv.h"
 #include "tc35876x-dsi-lvds.h"
 
@@ -981,7 +979,11 @@ struct mdfld_dsi_encoder *mdfld_dsi_dpi_init(struct drm_device *dev,
 		return NULL;
 	}
 
-	dpi_output->panel_on = 0;
+	if (dsi_connector->pipe)
+		dpi_output->panel_on = 0;
+	else
+		dpi_output->panel_on = 0;
+
 	dpi_output->dev = dev;
 	if (mdfld_get_panel_type(dev, pipe) != TC35876X)
 		dpi_output->p_funcs = p_funcs;
@@ -1001,7 +1003,7 @@ struct mdfld_dsi_encoder *mdfld_dsi_dpi_init(struct drm_device *dev,
 				p_funcs->encoder_helper_funcs);
 
 	/*attach to given connector*/
-	drm_connector_attach_encoder(connector, encoder);
+	drm_mode_connector_attach_encoder(connector, encoder);
 
 	/*set possible crtcs and clones*/
 	if (dsi_connector->pipe) {

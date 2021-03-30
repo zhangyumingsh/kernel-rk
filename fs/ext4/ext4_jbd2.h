@@ -1,10 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0+
 /*
  * ext4_jbd2.h
  *
  * Written by Stephen C. Tweedie <sct@redhat.com>, 1999
  *
  * Copyright 1998--1999 Red Hat corp --- All Rights Reserved
+ *
+ * This file is part of the Linux kernel and is made available under
+ * the terms of the GNU General Public License, version 2, or at your
+ * option, any later version, incorporated herein by reference.
  *
  * Ext4-specific journaling extensions.
  */
@@ -74,14 +77,7 @@
 
 #define EXT4_RESERVE_TRANS_BLOCKS	12U
 
-/*
- * Number of credits needed if we need to insert an entry into a
- * directory.  For each new index block, we need 4 blocks (old index
- * block, new index block, bitmap block, bg summary).  For normal
- * htree directories there are 2 levels; if the largedir feature
- * enabled it's 3 levels.
- */
-#define EXT4_INDEX_EXTRA_TRANS_BLOCKS	12U
+#define EXT4_INDEX_EXTRA_TRANS_BLOCKS	8
 
 #ifdef CONFIG_QUOTA
 /* Amount of blocks needed for quota update - we know that the structure was
@@ -107,6 +103,20 @@
 #define EXT4_MAXQUOTAS_TRANS_BLOCKS(sb) (EXT4_MAXQUOTAS*EXT4_QUOTA_TRANS_BLOCKS(sb))
 #define EXT4_MAXQUOTAS_INIT_BLOCKS(sb) (EXT4_MAXQUOTAS*EXT4_QUOTA_INIT_BLOCKS(sb))
 #define EXT4_MAXQUOTAS_DEL_BLOCKS(sb) (EXT4_MAXQUOTAS*EXT4_QUOTA_DEL_BLOCKS(sb))
+
+static inline int ext4_jbd2_credits_xattr(struct inode *inode)
+{
+	int credits = EXT4_DATA_TRANS_BLOCKS(inode->i_sb);
+
+	/*
+	 * In case of inline data, we may push out the data to a block,
+	 * so we need to reserve credits for this eventuality
+	 */
+	if (ext4_has_inline_data(inode))
+		credits += ext4_writepage_trans_blocks(inode) + 1;
+	return credits;
+}
+
 
 /*
  * Ext4 handle operation types -- for logging purposes
@@ -165,13 +175,6 @@ struct ext4_journal_cb_entry {
  * There is no guaranteed calling order of multiple registered callbacks on
  * the same transaction.
  */
-static inline void _ext4_journal_callback_add(handle_t *handle,
-			struct ext4_journal_cb_entry *jce)
-{
-	/* Add the jce to transaction's private list */
-	list_add_tail(&jce->jce_list, &handle->h_transaction->t_private_list);
-}
-
 static inline void ext4_journal_callback_add(handle_t *handle,
 			void (*func)(struct super_block *sb,
 				     struct ext4_journal_cb_entry *jce,
@@ -184,10 +187,9 @@ static inline void ext4_journal_callback_add(handle_t *handle,
 	/* Add the jce to transaction's private list */
 	jce->jce_func = func;
 	spin_lock(&sbi->s_md_lock);
-	_ext4_journal_callback_add(handle, jce);
+	list_add_tail(&jce->jce_list, &handle->h_transaction->t_private_list);
 	spin_unlock(&sbi->s_md_lock);
 }
-
 
 /**
  * ext4_journal_callback_del: delete a registered callback
@@ -224,9 +226,6 @@ int ext4_reserve_inode_write(handle_t *handle, struct inode *inode,
 
 int ext4_mark_inode_dirty(handle_t *handle, struct inode *inode);
 
-int ext4_expand_extra_isize(struct inode *inode,
-			    unsigned int new_extra_isize,
-			    struct ext4_iloc *iloc);
 /*
  * Wrapper functions with which ext4 calls into JBD.
  */
@@ -261,8 +260,7 @@ int __ext4_handle_dirty_super(const char *where, unsigned int line,
 	__ext4_handle_dirty_super(__func__, __LINE__, (handle), (sb))
 
 handle_t *__ext4_journal_start_sb(struct super_block *sb, unsigned int line,
-				  int type, int blocks, int rsv_blocks,
-				  int revoke_creds);
+				  int type, int blocks, int rsv_blocks);
 int __ext4_journal_stop(const char *where, unsigned int line, handle_t *handle);
 
 #define EXT4_NOJOURNAL_MAX_REF_COUNT ((unsigned long) 4096)
@@ -289,41 +287,28 @@ static inline int ext4_handle_is_aborted(handle_t *handle)
 	return 0;
 }
 
-static inline int ext4_free_metadata_revoke_credits(struct super_block *sb,
-						    int blocks)
+static inline int ext4_handle_has_enough_credits(handle_t *handle, int needed)
 {
-	/* Freeing each metadata block can result in freeing one cluster */
-	return blocks * EXT4_SB(sb)->s_cluster_ratio;
-}
-
-static inline int ext4_trans_default_revoke_credits(struct super_block *sb)
-{
-	return ext4_free_metadata_revoke_credits(sb, 8);
+	if (ext4_handle_valid(handle) && handle->h_buffer_credits < needed)
+		return 0;
+	return 1;
 }
 
 #define ext4_journal_start_sb(sb, type, nblocks)			\
-	__ext4_journal_start_sb((sb), __LINE__, (type), (nblocks), 0,	\
-				ext4_trans_default_revoke_credits(sb))
+	__ext4_journal_start_sb((sb), __LINE__, (type), (nblocks), 0)
 
 #define ext4_journal_start(inode, type, nblocks)			\
-	__ext4_journal_start((inode), __LINE__, (type), (nblocks), 0,	\
-			     ext4_trans_default_revoke_credits((inode)->i_sb))
+	__ext4_journal_start((inode), __LINE__, (type), (nblocks), 0)
 
-#define ext4_journal_start_with_reserve(inode, type, blocks, rsv_blocks)\
-	__ext4_journal_start((inode), __LINE__, (type), (blocks), (rsv_blocks),\
-			     ext4_trans_default_revoke_credits((inode)->i_sb))
-
-#define ext4_journal_start_with_revoke(inode, type, blocks, revoke_creds) \
-	__ext4_journal_start((inode), __LINE__, (type), (blocks), 0,	\
-			     (revoke_creds))
+#define ext4_journal_start_with_reserve(inode, type, blocks, rsv_blocks) \
+	__ext4_journal_start((inode), __LINE__, (type), (blocks), (rsv_blocks))
 
 static inline handle_t *__ext4_journal_start(struct inode *inode,
 					     unsigned int line, int type,
-					     int blocks, int rsv_blocks,
-					     int revoke_creds)
+					     int blocks, int rsv_blocks)
 {
 	return __ext4_journal_start_sb(inode->i_sb, line, type, blocks,
-				       rsv_blocks, revoke_creds);
+				       rsv_blocks);
 }
 
 #define ext4_journal_stop(handle) \
@@ -346,66 +331,18 @@ static inline handle_t *ext4_journal_current_handle(void)
 	return journal_current_handle();
 }
 
-static inline int ext4_journal_extend(handle_t *handle, int nblocks, int revoke)
+static inline int ext4_journal_extend(handle_t *handle, int nblocks)
 {
 	if (ext4_handle_valid(handle))
-		return jbd2_journal_extend(handle, nblocks, revoke);
+		return jbd2_journal_extend(handle, nblocks);
 	return 0;
 }
 
-static inline int ext4_journal_restart(handle_t *handle, int nblocks,
-				       int revoke)
+static inline int ext4_journal_restart(handle_t *handle, int nblocks)
 {
 	if (ext4_handle_valid(handle))
-		return jbd2__journal_restart(handle, nblocks, revoke, GFP_NOFS);
+		return jbd2_journal_restart(handle, nblocks);
 	return 0;
-}
-
-int __ext4_journal_ensure_credits(handle_t *handle, int check_cred,
-				  int extend_cred, int revoke_cred);
-
-
-/*
- * Ensure @handle has at least @check_creds credits available. If not,
- * transaction will be extended or restarted to contain at least @extend_cred
- * credits. Before restarting transaction @fn is executed to allow for cleanup
- * before the transaction is restarted.
- *
- * The return value is < 0 in case of error, 0 in case the handle has enough
- * credits or transaction extension succeeded, 1 in case transaction had to be
- * restarted.
- */
-#define ext4_journal_ensure_credits_fn(handle, check_cred, extend_cred,	\
-				       revoke_cred, fn) \
-({									\
-	__label__ __ensure_end;						\
-	int err = __ext4_journal_ensure_credits((handle), (check_cred),	\
-					(extend_cred), (revoke_cred));	\
-									\
-	if (err <= 0)							\
-		goto __ensure_end;					\
-	err = (fn);							\
-	if (err < 0)							\
-		goto __ensure_end;					\
-	err = ext4_journal_restart((handle), (extend_cred), (revoke_cred)); \
-	if (err == 0)							\
-		err = 1;						\
-__ensure_end:								\
-	err;								\
-})
-
-/*
- * Ensure given handle has at least requested amount of credits available,
- * possibly restarting transaction if needed. We also make sure the transaction
- * has space for at least ext4_trans_default_revoke_credits(sb) revoke records
- * as freeing one or two blocks is very common pattern and requesting this is
- * very cheap.
- */
-static inline int ext4_journal_ensure_credits(handle_t *handle, int credits,
-					      int revoke_creds)
-{
-	return ext4_journal_ensure_credits_fn(handle, credits, credits,
-				revoke_creds, 0);
 }
 
 static inline int ext4_journal_blocks_per_page(struct inode *inode)
@@ -422,21 +359,10 @@ static inline int ext4_journal_force_commit(journal_t *journal)
 	return 0;
 }
 
-static inline int ext4_jbd2_inode_add_write(handle_t *handle,
-		struct inode *inode, loff_t start_byte, loff_t length)
+static inline int ext4_jbd2_file_inode(handle_t *handle, struct inode *inode)
 {
 	if (ext4_handle_valid(handle))
-		return jbd2_journal_inode_ranged_write(handle,
-				EXT4_I(inode)->jinode, start_byte, length);
-	return 0;
-}
-
-static inline int ext4_jbd2_inode_add_wait(handle_t *handle,
-		struct inode *inode, loff_t start_byte, loff_t length)
-{
-	if (ext4_handle_valid(handle))
-		return jbd2_journal_inode_ranged_wait(handle,
-				EXT4_I(inode)->jinode, start_byte, length);
+		return jbd2_journal_file_inode(handle, EXT4_I(inode)->jinode);
 	return 0;
 }
 
@@ -463,7 +389,26 @@ int ext4_force_commit(struct super_block *sb);
 #define EXT4_INODE_ORDERED_DATA_MODE	0x02 /* ordered data mode */
 #define EXT4_INODE_WRITEBACK_DATA_MODE	0x04 /* writeback data mode */
 
-int ext4_inode_journal_mode(struct inode *inode);
+static inline int ext4_inode_journal_mode(struct inode *inode)
+{
+	if (EXT4_JOURNAL(inode) == NULL)
+		return EXT4_INODE_WRITEBACK_DATA_MODE;	/* writeback */
+	/* We do not support data journalling with delayed allocation */
+	if (!S_ISREG(inode->i_mode) ||
+	    test_opt(inode->i_sb, DATA_FLAGS) == EXT4_MOUNT_JOURNAL_DATA ||
+	    (ext4_test_inode_flag(inode, EXT4_INODE_JOURNAL_DATA) &&
+	    !test_opt(inode->i_sb, DELALLOC))) {
+		/* We do not support data journalling for encrypted data */
+		if (S_ISREG(inode->i_mode) && ext4_encrypted_inode(inode))
+			return EXT4_INODE_ORDERED_DATA_MODE;  /* ordered */
+		return EXT4_INODE_JOURNAL_DATA_MODE;	/* journal data */
+	}
+	if (test_opt(inode->i_sb, DATA_FLAGS) == EXT4_MOUNT_ORDERED_DATA)
+		return EXT4_INODE_ORDERED_DATA_MODE;	/* ordered */
+	if (test_opt(inode->i_sb, DATA_FLAGS) == EXT4_MOUNT_WRITEBACK_DATA)
+		return EXT4_INODE_WRITEBACK_DATA_MODE;	/* writeback */
+	BUG();
+}
 
 static inline int ext4_should_journal_data(struct inode *inode)
 {
@@ -478,19 +423,6 @@ static inline int ext4_should_order_data(struct inode *inode)
 static inline int ext4_should_writeback_data(struct inode *inode)
 {
 	return ext4_inode_journal_mode(inode) & EXT4_INODE_WRITEBACK_DATA_MODE;
-}
-
-static inline int ext4_free_data_revoke_credits(struct inode *inode, int blocks)
-{
-	if (test_opt(inode->i_sb, DATA_FLAGS) == EXT4_MOUNT_JOURNAL_DATA)
-		return 0;
-	if (!ext4_should_journal_data(inode))
-		return 0;
-	/*
-	 * Data blocks in one extent are contiguous, just account for partial
-	 * clusters at extent boundaries
-	 */
-	return blocks + 2*(EXT4_SB(inode->i_sb)->s_cluster_ratio - 1);
 }
 
 /*

@@ -1,6 +1,14 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright 2007-2012 Siemens AG
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2
+ * as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  *
  * Written by:
  * Dmitry Eremin-Solenikov <dbaryshkov@gmail.com>
@@ -30,6 +38,12 @@ void ieee802154_xmit_worker(struct work_struct *work)
 	struct net_device *dev = skb->dev;
 	int res;
 
+	rtnl_lock();
+
+	/* check if ifdown occurred while schedule */
+	if (!netif_running(dev))
+		goto err_tx;
+
 	res = drv_xmit_sync(local, skb);
 	if (res)
 		goto err_tx;
@@ -39,11 +53,14 @@ void ieee802154_xmit_worker(struct work_struct *work)
 	dev->stats.tx_packets++;
 	dev->stats.tx_bytes += skb->len;
 
+	rtnl_unlock();
+
 	return;
 
 err_tx:
 	/* Restart the netif queue on each sub_if_data object. */
 	ieee802154_wake_queue(&local->hw);
+	rtnl_unlock();
 	kfree_skb(skb);
 	netdev_dbg(dev, "transmission failed\n");
 }

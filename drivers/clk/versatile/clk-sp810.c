@@ -1,5 +1,12 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  *
  * Copyright (C) 2013 ARM Limited
  */
@@ -9,7 +16,6 @@
 #include <linux/clk.h>
 #include <linux/clk-provider.h>
 #include <linux/err.h>
-#include <linux/io.h>
 #include <linux/of.h>
 #include <linux/of_address.h>
 
@@ -90,12 +96,13 @@ static void __init clk_sp810_of_setup(struct device_node *node)
 	int i;
 	bool deprecated;
 
-	if (!sp810)
+	if (!sp810) {
+		pr_err("Failed to allocate memory for SP810!\n");
 		return;
+	}
 
 	if (of_clk_parent_fill(node, parent_names, num) != num) {
 		pr_warn("Failed to obtain parent clocks for SP810!\n");
-		kfree(sp810);
 		return;
 	}
 
@@ -105,7 +112,7 @@ static void __init clk_sp810_of_setup(struct device_node *node)
 
 	init.name = name;
 	init.ops = &clk_sp810_timerclken_ops;
-	init.flags = 0;
+	init.flags = CLK_IS_BASIC;
 	init.parent_names = parent_names;
 	init.num_parents = num;
 

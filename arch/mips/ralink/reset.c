@@ -1,9 +1,11 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License version 2 as published
+ * by the Free Software Foundation.
  *
  * Copyright (C) 2008-2009 Gabor Juhos <juhosg@openwrt.org>
  * Copyright (C) 2008 Imre Kaloz <kaloz@openwrt.org>
- * Copyright (C) 2013 John Crispin <john@phrozen.org>
+ * Copyright (C) 2013 John Crispin <blogic@openwrt.org>
  */
 
 #include <linux/pm.h>
@@ -59,7 +61,7 @@ static int ralink_reset_device(struct reset_controller_dev *rcdev,
 	return ralink_deassert_device(rcdev, id);
 }
 
-static const struct reset_control_ops reset_ops = {
+static struct reset_control_ops reset_ops = {
 	.reset = ralink_reset_device,
 	.assert = ralink_assert_device,
 	.deassert = ralink_deassert_device,

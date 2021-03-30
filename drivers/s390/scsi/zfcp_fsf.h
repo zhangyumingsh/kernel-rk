@@ -1,10 +1,9 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * zfcp device driver
  *
  * Interface to the FSF support functions.
  *
- * Copyright IBM Corp. 2002, 2018
+ * Copyright IBM Corp. 2002, 2016
  */
 
 #ifndef FSF_H
@@ -163,8 +162,6 @@
 #define FSF_FEATURE_ELS_CT_CHAINED_SBALS	0x00000020
 #define FSF_FEATURE_UPDATE_ALERT		0x00000100
 #define FSF_FEATURE_MEASUREMENT_DATA		0x00000200
-#define FSF_FEATURE_REQUEST_SFP_DATA		0x00000200
-#define FSF_FEATURE_REPORT_SFP_DATA		0x00000800
 #define FSF_FEATURE_DIF_PROT_TYPE1		0x00010000
 #define FSF_FEATURE_DIX_PROT_TCPIP		0x00020000
 
@@ -315,14 +312,8 @@ struct fsf_qtcb_bottom_io {
 	u32 data_block_length;
 	u32 prot_data_length;
 	u8  res2[4];
-	union {
-		u8		byte[FSF_FCP_CMND_SIZE];
-		struct fcp_cmnd iu;
-	}   fcp_cmnd;
-	union {
-		u8			 byte[FSF_FCP_RSP_SIZE];
-		struct fcp_resp_with_ext iu;
-	}   fcp_rsp;
+	u8  fcp_cmnd[FSF_FCP_CMND_SIZE];
+	u8  fcp_rsp[FSF_FCP_RSP_SIZE];
 	u8  res3[64];
 } __attribute__ ((packed));
 
@@ -358,7 +349,7 @@ struct fsf_qtcb_bottom_config {
 	u32 adapter_features;
 	u32 connection_features;
 	u32 fc_topology;
-	u32 fc_link_speed;	/* one of ZFCP_FSF_PORTSPEED_* */
+	u32 fc_link_speed;
 	u32 adapter_type;
 	u8 res0;
 	u8 peer_d_id[3];
@@ -384,7 +375,7 @@ struct fsf_qtcb_bottom_port {
 	u32 class_of_service;	/* should be 0x00000006 for class 2 and 3 */
 	u8 supported_fc4_types[32]; /* should be 0x00000100 for scsi fcp */
 	u8 active_fc4_types[32];
-	u32 supported_speed;	/* any combination of ZFCP_FSF_PORTSPEED_* */
+	u32 supported_speed;	/* 0x0001 for 1 GBit/s or 0x0002 for 2 GBit/s */
 	u32 maximum_frame_size;	/* fixed value of 2112 */
 	u64 seconds_since_last_reset;
 	u64 tx_frames;
@@ -409,24 +400,7 @@ struct fsf_qtcb_bottom_port {
 	u8 cp_util;
 	u8 cb_util;
 	u8 a_util;
-	u8 res2;
-	s16 temperature;
-	u16 vcc;
-	u16 tx_bias;
-	u16 tx_power;
-	u16 rx_power;
-	union {
-		u16 raw;
-		struct {
-			u16 fec_active		:1;
-			u16:7;
-			u16 connector_type	:2;
-			u16 sfp_invalid		:1;
-			u16 optical_port	:1;
-			u16 port_tx_type	:4;
-		};
-	} sfp_flags;
-	u8 res3[240];
+	u8 res2[253];
 } __attribute__ ((packed));
 
 union fsf_qtcb_bottom {
@@ -457,8 +431,8 @@ struct zfcp_blk_drv_data {
 
 /**
  * struct zfcp_fsf_ct_els - zfcp data for ct or els request
- * @req: scatter-gather list for request, points to &zfcp_fc_req.sg_req or BSG
- * @resp: scatter-gather list for response, points to &zfcp_fc_req.sg_rsp or BSG
+ * @req: scatter-gather list for request
+ * @resp: scatter-gather list for response
  * @handler: handler function (called for response to the request)
  * @handler_data: data passed to handler function
  * @port: Optional pointer to port for zfcp internal ELS (only test link ADISC)

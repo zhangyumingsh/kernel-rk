@@ -1,10 +1,19 @@
-// SPDX-License-Identifier: GPL-2.0+
 /*
  * dt3000.c
  * Data Translation DT3000 series driver
  *
  * COMEDI - Linux Control and Measurement Device Interface
  * Copyright (C) 1999 David A. Schleef <ds@schleef.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 /*
@@ -352,7 +361,7 @@ static int dt3k_ns_to_timer(unsigned int timer_base, unsigned int *nanosec,
 		switch (flags & CMDF_ROUND_MASK) {
 		case CMDF_ROUND_NEAREST:
 		default:
-			divider = DIV_ROUND_CLOSEST(*nanosec, base);
+			divider = (*nanosec + base / 2) / base;
 			break;
 		case CMDF_ROUND_DOWN:
 			divider = (*nanosec) / base;
@@ -508,11 +517,12 @@ static int dt3k_ai_insn_read(struct comedi_device *dev,
 			     unsigned int *data)
 {
 	int i;
-	unsigned int chan, gain;
+	unsigned int chan, gain, aref;
 
 	chan = CR_CHAN(insn->chanspec);
 	gain = CR_RANGE(insn->chanspec);
 	/* XXX docs don't explain how to select aref */
+	aref = CR_AREF(insn->chanspec);
 
 	for (i = 0; i < insn->n; i++)
 		data[i] = dt3k_readsingle(dev, DPR_SUBSYS_AI, chan, gain);

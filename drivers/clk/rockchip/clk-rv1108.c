@@ -1,12 +1,20 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Copyright (c) 2016 Rockchip Electronics Co. Ltd.
  * Author: Shawn Lin <shawn.lin@rock-chips.com>
  *         Andy Yan <andy.yan@rock-chips.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/clk-provider.h>
-#include <linux/io.h>
 #include <linux/of.h>
 #include <linux/of_address.h>
 #include <linux/syscore_ops.h>
@@ -14,6 +22,8 @@
 #include "clk.h"
 
 #define RV1108_GRF_SOC_STATUS0	0x480
+#define RV1108_I2S_FRAC_MAX_RATE	600000000
+#define RV1108_UART_FRAC_MAX_RATE	600000000
 
 enum rv1108_plls {
 	apll, dpll, gpll,
@@ -122,6 +132,7 @@ PNAME(mux_usb480m_pre_p)	= { "usbphy", "xin24m" };
 PNAME(mux_hdmiphy_phy_p)	= { "hdmiphy", "xin24m" };
 PNAME(mux_dclk_hdmiphy_pre_p)	= { "dclk_hdmiphy_src_gpll", "dclk_hdmiphy_src_dpll" };
 PNAME(mux_pll_src_4plls_p)	= { "dpll", "gpll", "hdmiphy", "usb480m" };
+PNAME(mux_pll_src_3plls_p)	= { "apll", "gpll", "dpll" };
 PNAME(mux_pll_src_2plls_p)	= { "dpll", "gpll" };
 PNAME(mux_pll_src_apll_gpll_p)	= { "apll", "gpll" };
 PNAME(mux_aclk_peri_src_p)	= { "aclk_peri_src_gpll", "aclk_peri_src_dpll" };
@@ -503,7 +514,7 @@ static struct rockchip_clk_branch rv1108_clk_branches[] __initdata = {
 	COMPOSITE_FRACMUX(0, "i2s0_frac", "i2s0_src", CLK_SET_RATE_PARENT,
 			RV1108_CLKSEL_CON(8), 0,
 			RV1108_CLKGATE_CON(2), 1, GFLAGS,
-			&rv1108_i2s0_fracmux),
+			&rv1108_i2s0_fracmux, RV1108_I2S_FRAC_MAX_RATE),
 	GATE(SCLK_I2S0, "sclk_i2s0", "i2s0_pre", CLK_SET_RATE_PARENT,
 			RV1108_CLKGATE_CON(2), 2, GFLAGS),
 	COMPOSITE_NODIV(0, "i2s_out", mux_i2s_out_p, 0,
@@ -516,7 +527,7 @@ static struct rockchip_clk_branch rv1108_clk_branches[] __initdata = {
 	COMPOSITE_FRACMUX(0, "i2s1_frac", "i2s1_src", CLK_SET_RATE_PARENT,
 			RK2928_CLKSEL_CON(9), 0,
 			RK2928_CLKGATE_CON(2), 5, GFLAGS,
-			&rv1108_i2s1_fracmux),
+			&rv1108_i2s1_fracmux, RV1108_I2S_FRAC_MAX_RATE),
 	GATE(SCLK_I2S1, "sclk_i2s1", "i2s1_pre", CLK_SET_RATE_PARENT,
 			RV1108_CLKGATE_CON(2), 6, GFLAGS),
 
@@ -526,7 +537,7 @@ static struct rockchip_clk_branch rv1108_clk_branches[] __initdata = {
 	COMPOSITE_FRACMUX(0, "i2s2_frac", "i2s2_src", CLK_SET_RATE_PARENT,
 			RV1108_CLKSEL_CON(10), 0,
 			RV1108_CLKGATE_CON(2), 9, GFLAGS,
-			&rv1108_i2s2_fracmux),
+			&rv1108_i2s2_fracmux, RV1108_I2S_FRAC_MAX_RATE),
 	GATE(SCLK_I2S2, "sclk_i2s2", "i2s2_pre", CLK_SET_RATE_PARENT,
 			RV1108_CLKGATE_CON(2), 10, GFLAGS),
 
@@ -592,15 +603,15 @@ static struct rockchip_clk_branch rv1108_clk_branches[] __initdata = {
 	COMPOSITE_FRACMUX(0, "uart0_frac", "uart0_src", CLK_SET_RATE_PARENT,
 			RV1108_CLKSEL_CON(16), 0,
 			RV1108_CLKGATE_CON(3), 2, GFLAGS,
-			&rv1108_uart0_fracmux),
+			&rv1108_uart0_fracmux, RV1108_UART_FRAC_MAX_RATE),
 	COMPOSITE_FRACMUX(0, "uart1_frac", "uart1_src", CLK_SET_RATE_PARENT,
 			RV1108_CLKSEL_CON(17), 0,
 			RV1108_CLKGATE_CON(3), 4, GFLAGS,
-			&rv1108_uart1_fracmux),
+			&rv1108_uart1_fracmux, RV1108_UART_FRAC_MAX_RATE),
 	COMPOSITE_FRACMUX(0, "uart2_frac", "uart2_src", CLK_SET_RATE_PARENT,
 			RV1108_CLKSEL_CON(18), 0,
 			RV1108_CLKGATE_CON(3), 6, GFLAGS,
-			&rv1108_uart2_fracmux),
+			&rv1108_uart2_fracmux, RV1108_UART_FRAC_MAX_RATE),
 	GATE(PCLK_UART0, "pclk_uart0", "pclk_bus_pre", 0,
 			RV1108_CLKGATE_CON(13), 10, GFLAGS),
 	GATE(PCLK_UART1, "pclk_uart1", "pclk_bus_pre", 0,
@@ -781,6 +792,18 @@ static const char *const rv1108_critical_clocks[] __initconst = {
 	"pclk_pmu",
 };
 
+static void __iomem *rv1108_cru_base;
+
+static void rv1108_dump_cru(void)
+{
+	if (rv1108_cru_base) {
+		pr_warn("CRU:\n");
+		print_hex_dump(KERN_WARNING, "", DUMP_PREFIX_OFFSET,
+			       32, 4, rv1108_cru_base,
+			       0x1f8, false);
+	}
+}
+
 static void __init rv1108_clk_init(struct device_node *np)
 {
 	struct rockchip_clk_provider *ctx;
@@ -818,5 +841,10 @@ static void __init rv1108_clk_init(struct device_node *np)
 	rockchip_register_restart_notifier(ctx, RV1108_GLB_SRST_FST, NULL);
 
 	rockchip_clk_of_add_provider(np, ctx);
+
+	if (!rk_dump_cru) {
+		rv1108_cru_base = reg_base;
+		rk_dump_cru = rv1108_dump_cru;
+	}
 }
 CLK_OF_DECLARE(rv1108_cru, "rockchip,rv1108-cru", rv1108_clk_init);
