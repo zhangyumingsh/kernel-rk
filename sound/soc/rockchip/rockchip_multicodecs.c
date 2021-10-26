@@ -87,7 +87,8 @@ static int rk_dailink_init(struct snd_soc_pcm_runtime *rtd)
 				      &mc_hp_jack, NULL, 0);
 
 #ifdef CONFIG_SND_SOC_RK3308
-		rk3308_codec_set_jack_detect(rtd->codec, &mc_hp_jack);
+		if (rk3308_codec_set_jack_detect_cb)
+			rk3308_codec_set_jack_detect_cb(rtd->codec_dai->component, &mc_hp_jack);
 #endif
 	}
 
@@ -147,8 +148,11 @@ static int wait_locked_card(struct device_node *np, struct device *dev)
 {
 	char *propname = "rockchip,wait-card-locked";
 	u32 cards[WAIT_CARDS];
-	int num, i;
+	int num;
 	int ret;
+#ifndef MODULE
+	int i;
+#endif
 
 	ret = of_property_count_u32_elems(np, propname);
 	if (ret < 0) {
@@ -185,6 +189,7 @@ static int wait_locked_card(struct device_node *np, struct device *dev)
 	}
 
 	ret = 0;
+#ifndef MODULE
 	for (i = 0; i < num; i++) {
 		if (!snd_card_locked(cards[i])) {
 			dev_warn(dev, "card: %d has not been locked, re-probe again\n",
@@ -193,6 +198,7 @@ static int wait_locked_card(struct device_node *np, struct device *dev)
 			break;
 		}
 	}
+#endif
 
 	return ret;
 }

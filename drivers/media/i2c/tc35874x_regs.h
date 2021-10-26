@@ -39,6 +39,7 @@
 #define MASK_CECRST                           0x0400
 #define MASK_CTXRST                           0x0200
 #define MASK_HDMIRST                          0x0100
+#define MASK_I2SDIS                           0x0080
 #define MASK_SLEEP                            0x0001
 
 #define CONFCTL                               0x0004
@@ -66,6 +67,10 @@
 #define MASK_VBUFEN                           0x0001
 
 #define FIFOCTL                               0x0006
+
+#define PACKETID1                             0x000C
+
+#define FCCTL                                 0x0012
 
 #define INTSTATUS                             0x0014
 #define MASK_AMUTE_INT                        0x0400
@@ -678,6 +683,7 @@
 #define MASK_MAX_EXCED                        0x08
 
 #define EDID_RAM                              0x8C00
+#define EDID_EXT_RAM                          0x8c80
 #define NO_GDB_LIMIT                          0x9007
 
 #endif

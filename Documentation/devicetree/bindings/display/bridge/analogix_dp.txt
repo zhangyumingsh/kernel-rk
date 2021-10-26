@@ -5,7 +5,9 @@ Required properties for dp-controller:
 		platform specific such as:
 		 * "samsung,exynos5-dp"
 		 * "rockchip,rk3288-dp"
+		 * "rockchip,rk3368-edp"
 		 * "rockchip,rk3399-edp"
+		 * "rockchip,rk3568-edp"
 	-reg:
 		physical base address of the controller and length
 		of memory mapped region.
@@ -15,8 +17,6 @@ Required properties for dp-controller:
 		from common clock binding: handle to dp clock.
 	-clock-names:
 		from common clock binding: Shall be "dp".
-	-interrupt-parent:
-		phandle to Interrupt combiner node.
 	-phys:
 		from general PHY binding: the phandle for the PHY device.
 	-phy-names:
@@ -31,11 +31,15 @@ Optional properties for dp-controller:
 	-hpd-gpios:
 		Hotplug detect GPIO.
 		Indicates which GPIO should be used for hotplug detection
+	-panel-self-test:
+		Enable optional LCD Panel Self Test.
 	-port@[X]: SoC specific port nodes with endpoint definitions as defined
 		in Documentation/devicetree/bindings/media/video-interfaces.txt,
 		please refer to the SoC specific binding document:
 		* Documentation/devicetree/bindings/display/exynos/exynos_dp.txt
-		* Documentation/devicetree/bindings/video/analogix_dp-rockchip.txt
+		* Documentation/devicetree/bindings/display/rockchip/analogix_dp-rockchip.txt
+	-support-psr:
+		Enable Source's PSR capability.
 
 [1]: Documentation/devicetree/bindings/media/video-interfaces.txt
 -------------------------------------------------------------------------------

@@ -19,7 +19,7 @@
 #include <linux/irq.h>
 #include <linux/miscdevice.h>
 #include <linux/gpio.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 #include <asm/atomic.h>
 #include <linux/delay.h>
 #include <linux/input.h>
@@ -109,26 +109,26 @@
   Gravity_step: gravity value indicated by per count
  */
 #define FREAD_MASK				0 /* enabled(1<<1) only if reading MSB 8bits*/
-#define MMA845X_RANGE			2000000
+#define MMA845X_RANGE		(16384 * 2)
 /* mma8451 */
 #define MMA8451_PRECISION       14
 #define MMA8451_BOUNDARY        (0x1 << (MMA8451_PRECISION - 1))
-#define MMA8451_GRAVITY_STEP    MMA845X_RANGE / MMA8451_BOUNDARY
+#define MMA8451_GRAVITY_STEP    (MMA845X_RANGE / MMA8451_BOUNDARY)
 
 /* mma8452 */
 #define MMA8452_PRECISION       12
 #define MMA8452_BOUNDARY        (0x1 << (MMA8452_PRECISION - 1))
-#define MMA8452_GRAVITY_STEP    MMA845X_RANGE / MMA8452_BOUNDARY
+#define MMA8452_GRAVITY_STEP    (MMA845X_RANGE / MMA8452_BOUNDARY)
 
 /* mma8453 */
 #define MMA8453_PRECISION       10
 #define MMA8453_BOUNDARY        (0x1 << (MMA8453_PRECISION - 1))
-#define MMA8453_GRAVITY_STEP    MMA845X_RANGE / MMA8453_BOUNDARY
+#define MMA8453_GRAVITY_STEP    (MMA845X_RANGE / MMA8453_BOUNDARY)
 
 /* mma8653 */
 #define MMA8653_PRECISION       10
 #define MMA8653_BOUNDARY        (0x1 << (MMA8653_PRECISION - 1))
-#define MMA8653_GRAVITY_STEP    MMA845X_RANGE / MMA8653_BOUNDARY
+#define MMA8653_GRAVITY_STEP    (MMA845X_RANGE / MMA8653_BOUNDARY)
 
 
 #define MMA8451_DEVID		0x1a
@@ -250,28 +250,44 @@ static int sensor_convert_data(struct i2c_client *client, char high_byte, char l
 			swap(high_byte,low_byte);
 			result = ((int)high_byte << (MMA8451_PRECISION-8)) 
 					| ((int)low_byte >> (16-MMA8451_PRECISION));
-			result *= 4;
+			if (result < MMA8451_BOUNDARY)
+				result = result * MMA8451_GRAVITY_STEP;
+			else
+				result = ~(((~result & (0x7fff >> (16 - MMA8451_PRECISION))) + 1)
+					* MMA8451_GRAVITY_STEP) + 1;
 			break;
 
 		case MMA8452_DEVID:			
 			swap(high_byte,low_byte);
 			result = ((int)high_byte << (MMA8452_PRECISION-8)) 
 					| ((int)low_byte >> (16-MMA8452_PRECISION));
-			result *= 16;
+			if (result < MMA8452_BOUNDARY)
+				result = result * MMA8452_GRAVITY_STEP;
+			else
+				result = ~(((~result & (0x7fff >> (16 - MMA8452_PRECISION))) + 1)
+					* MMA8452_GRAVITY_STEP) + 1;
 			break;
 			
 		case MMA8453_DEVID:
 			swap(high_byte,low_byte);
 			result = ((int)high_byte << (MMA8453_PRECISION-8)) 
 					| ((int)low_byte >> (16-MMA8453_PRECISION));
-			result *= 64;
+			if (result < MMA8453_BOUNDARY)
+				result = result * MMA8453_GRAVITY_STEP;
+			else
+				result = ~(((~result & (0x7fff >> (16 - MMA8453_PRECISION))) + 1)
+					* MMA8453_GRAVITY_STEP) + 1;
 			break;
 
 		case MMA8653_DEVID:
 			swap(high_byte,low_byte);
 			result = ((int)high_byte << (MMA8653_PRECISION-8)) 
 					| ((int)low_byte >> (16-MMA8653_PRECISION));
-			result *= 64;
+			if (result < MMA8653_BOUNDARY)
+				result = result * MMA8653_GRAVITY_STEP;
+			else
+				result = ~(((~result & (0x7fff >> (16 - MMA8653_PRECISION))) + 1)
+					* MMA8653_GRAVITY_STEP) + 1;
 			break;
 
 		default:
@@ -364,7 +380,7 @@ struct sensor_operate gsensor_mma8452_ops = {
 	.precision			= MMA8452_PRECISION,
 	.ctrl_reg			= MMA8452_REG_CTRL_REG1,
 	.int_status_reg	= MMA8452_REG_INTSRC,
-	.range			= {-32768, 32768},
+	.range			= {-MMA845X_RANGE, MMA845X_RANGE},
 	.trig				= IRQF_TRIGGER_LOW | IRQF_ONESHOT,
 	.active			= sensor_active,
 	.init				= sensor_init,
@@ -372,33 +388,37 @@ struct sensor_operate gsensor_mma8452_ops = {
 };
 
 /****************operate according to sensor chip:end************/
-
-//function name should not be changed
-static struct sensor_operate *gsensor_get_ops(void)
+static int gsensor_mma8452_probe(struct i2c_client *client,
+				const struct i2c_device_id *devid)
 {
-	return &gsensor_mma8452_ops;
+	return sensor_register_device(client, NULL, devid, &gsensor_mma8452_ops);
 }
 
-
-static int __init gsensor_mma8452_init(void)
+static int gsensor_mma8452_remove(struct i2c_client *client)
 {
-	struct sensor_operate *ops = gsensor_get_ops();
-	int result = 0;
-	int type = ops->type;
-	result = sensor_register_slave(type, NULL, NULL, gsensor_get_ops);	
-	return result;
+	return sensor_unregister_device(client, NULL, &gsensor_mma8452_ops);
 }
 
-static void __exit gsensor_mma8452_exit(void)
-{
-	struct sensor_operate *ops = gsensor_get_ops();
-	int type = ops->type;
-	sensor_unregister_slave(type, NULL, NULL, gsensor_get_ops);
-}
+static const struct i2c_device_id gsensor_mma8452_id[] = {
+	{"gs_mma8452", ACCEL_ID_MMA845X},
+	{}
+};
 
+static struct i2c_driver gsensor_mma8452_driver = {
+	.probe = gsensor_mma8452_probe,
+	.remove = gsensor_mma8452_remove,
+	.shutdown = sensor_shutdown,
+	.id_table = gsensor_mma8452_id,
+	.driver = {
+		.name = "gsensor_mma8452",
+	#ifdef CONFIG_PM
+		.pm = &sensor_pm_ops,
+	#endif
+	},
+};
 
-module_init(gsensor_mma8452_init);
-module_exit(gsensor_mma8452_exit);
+module_i2c_driver(gsensor_mma8452_driver);
 
-
-
+MODULE_AUTHOR("luowei <lw@rock-chips.com>");
+MODULE_DESCRIPTION("mma8452 3-Axis accelerometer driver");
+MODULE_LICENSE("GPL");

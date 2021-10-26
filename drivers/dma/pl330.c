@@ -35,7 +35,18 @@
 #define PL330_MAX_PERI		32
 #define PL330_MAX_BURST         16
 
-#define PL330_QUIRK_BROKEN_NO_FLUSHP BIT(0)
+#define PL330_QUIRK_BROKEN_NO_FLUSHP	BIT(0)
+#define PL330_QUIRK_PERIPH_BURST	BIT(1)
+
+#ifdef CONFIG_CPU_RV1126
+#undef writel
+#define writel(v, c)			\
+	do {				\
+		readl_relaxed(c);	\
+		__iowmb();		\
+		writel_relaxed(v, c);	\
+	} while (0)
+#endif
 
 enum pl330_cachectrl {
 	CCTRL0,		/* Noncacheable and nonbufferable */
@@ -240,6 +251,7 @@ enum pl330_byteswap {
 
 #define BYTE_TO_BURST(b, ccr)	((b) / BRST_SIZE(ccr) / BRST_LEN(ccr))
 #define BURST_TO_BYTE(c, ccr)	((c) * BRST_SIZE(ccr) * BRST_LEN(ccr))
+#define BYTE_MOD_BURST_LEN(b, ccr)	(((b) / BRST_SIZE(ccr)) % BRST_LEN(ccr))
 
 /*
  * With 256 bytes, we can do more than 2.5MB and 5MB xfers per req
@@ -444,10 +456,10 @@ struct dma_pl330_chan {
 	/* For D-to-M and M-to-D channels */
 	int burst_sz; /* the peripheral fifo width */
 	int burst_len; /* the number of burst */
-	dma_addr_t fifo_addr;
-
-	/* for cyclic capability */
-	bool cyclic;
+	phys_addr_t fifo_addr;
+	/* DMA-mapped view of the FIFO; may differ if an IOMMU is present */
+	dma_addr_t fifo_dma;
+	enum dma_data_direction dir;
 
 	/* for runtime pm tracking */
 	bool active;
@@ -504,6 +516,10 @@ static struct pl330_of_quirks {
 	{
 		.quirk = "arm,pl330-broken-no-flushp",
 		.id = PL330_QUIRK_BROKEN_NO_FLUSHP,
+	},
+	{
+		.quirk = "arm,pl330-periph-burst",
+		.id = PL330_QUIRK_PERIPH_BURST,
 	}
 };
 
@@ -532,6 +548,10 @@ struct dma_pl330_desc {
 	unsigned peri:5;
 	/* Hook to attach to DMAC's list of reqs with due callback */
 	struct list_head rqd;
+
+	/* For cyclic capability */
+	bool cyclic;
+	size_t num_periods;
 };
 
 struct _xfer_spec {
@@ -876,6 +896,12 @@ static inline void _execute_DBGINSN(struct pl330_thread *thrd,
 	void __iomem *regs = thrd->dmac->base;
 	u32 val;
 
+	/* If timed out due to halted state-machine */
+	if (_until_dmac_idle(thrd)) {
+		dev_err(thrd->dmac->ddma.dev, "DMAC halted!\n");
+		return;
+	}
+
 	val = (insn[0] << 16) | (insn[1] << 24);
 	if (!as_manager) {
 		val |= (1 << 0);
@@ -885,12 +911,6 @@ static inline void _execute_DBGINSN(struct pl330_thread *thrd,
 
 	val = le32_to_cpu(*((__le32 *)&insn[2]));
 	writel(val, regs + DBGINST1);
-
-	/* If timed out due to halted state-machine */
-	if (_until_dmac_idle(thrd)) {
-		dev_err(thrd->dmac->ddma.dev, "DMAC halted!\n");
-		return;
-	}
 
 	/* Get going */
 	writel(0, regs + DBGCMD);
@@ -1174,9 +1194,6 @@ static inline int _ldst_peripheral(struct pl330_dmac *pl330,
 {
 	int off = 0;
 
-	if (pl330->quirks & PL330_QUIRK_BROKEN_NO_FLUSHP)
-		cond = BURST;
-
 	/*
 	 * do FLUSHP at beginning to clear any stale dma requests before the
 	 * first WFP.
@@ -1200,6 +1217,9 @@ static int _bursts(struct pl330_dmac *pl330, unsigned dry_run, u8 buf[],
 	int off = 0;
 	enum pl330_cond cond = BRST_LEN(pxs->ccr) > 1 ? BURST : SINGLE;
 
+	if (pl330->quirks & PL330_QUIRK_PERIPH_BURST)
+		cond = BURST;
+
 	switch (pxs->desc->rqtype) {
 	case DMA_MEM_TO_DEV:
 		/* fall through */
@@ -1222,8 +1242,9 @@ static int _bursts(struct pl330_dmac *pl330, unsigned dry_run, u8 buf[],
 }
 
 /*
- * transfer dregs with single transfers to peripheral, or a reduced size burst
- * for mem-to-mem.
+ * only the unaligned bursts transfers have the dregs.
+ * transfer dregs with a reduced size burst to peripheral,
+ * or a reduced size burst for mem-to-mem.
  */
 static int _dregs(struct pl330_dmac *pl330, unsigned int dry_run, u8 buf[],
 		const struct _xfer_spec *pxs, int transfer_length)
@@ -1238,8 +1259,23 @@ static int _dregs(struct pl330_dmac *pl330, unsigned int dry_run, u8 buf[],
 	case DMA_MEM_TO_DEV:
 		/* fall through */
 	case DMA_DEV_TO_MEM:
-		off += _ldst_peripheral(pl330, dry_run, &buf[off], pxs,
-			transfer_length, SINGLE);
+		/*
+		 * dregs_len = (total bytes - BURST_TO_BYTE(bursts, ccr)) /
+		 *             BRST_SIZE(ccr)
+		 * the dregs len must be smaller than burst len,
+		 * so, for higher efficiency, we can modify CCR
+		 * to use a reduced size burst len for the dregs.
+		 */
+		dregs_ccr = pxs->ccr;
+		dregs_ccr &= ~((0xf << CC_SRCBRSTLEN_SHFT) |
+			(0xf << CC_DSTBRSTLEN_SHFT));
+		dregs_ccr |= (((transfer_length - 1) & 0xf) <<
+			CC_SRCBRSTLEN_SHFT);
+		dregs_ccr |= (((transfer_length - 1) & 0xf) <<
+			CC_DSTBRSTLEN_SHFT);
+		off += _emit_MOV(dry_run, &buf[off], CCR, dregs_ccr);
+		off += _ldst_peripheral(pl330, dry_run, &buf[off], pxs, 1,
+					BURST);
 		break;
 
 	case DMA_MEM_TO_MEM:
@@ -1345,6 +1381,108 @@ static inline int _loop(struct pl330_dmac *pl330, unsigned dry_run, u8 buf[],
 	return off;
 }
 
+static int _period(struct pl330_dmac *pl330, unsigned int dry_run, u8 buf[],
+		   unsigned long bursts, const struct _xfer_spec *pxs, int ev)
+{
+	unsigned int lcnt1, ljmp1;
+	int cyc, off = 0, num_dregs = 0;
+	struct _arg_LPEND lpend;
+	struct pl330_xfer *x = &pxs->desc->px;
+
+	if (bursts > 256) {
+		lcnt1 = 256;
+		cyc = bursts / 256;
+	} else {
+		lcnt1 = bursts;
+		cyc = 1;
+	}
+
+	/* loop1 */
+	off += _emit_LP(dry_run, &buf[off], 1, lcnt1);
+	ljmp1 = off;
+	off += _bursts(pl330, dry_run, &buf[off], pxs, cyc);
+	lpend.cond = ALWAYS;
+	lpend.forever = false;
+	lpend.loop = 1;
+	lpend.bjump = off - ljmp1;
+	off += _emit_LPEND(dry_run, &buf[off], &lpend);
+
+	/* remainder */
+	lcnt1 = bursts - (lcnt1 * cyc);
+
+	if (lcnt1) {
+		off += _emit_LP(dry_run, &buf[off], 1, lcnt1);
+		ljmp1 = off;
+		off += _bursts(pl330, dry_run, &buf[off], pxs, 1);
+		lpend.cond = ALWAYS;
+		lpend.forever = false;
+		lpend.loop = 1;
+		lpend.bjump = off - ljmp1;
+		off += _emit_LPEND(dry_run, &buf[off], &lpend);
+	}
+
+	num_dregs = BYTE_MOD_BURST_LEN(x->bytes, pxs->ccr);
+
+	if (num_dregs) {
+		off += _dregs(pl330, dry_run, &buf[off], pxs, num_dregs);
+		off += _emit_MOV(dry_run, &buf[off], CCR, pxs->ccr);
+	}
+
+	off += _emit_SEV(dry_run, &buf[off], ev);
+
+	return off;
+}
+
+static inline int _loop_cyclic(struct pl330_dmac *pl330, unsigned int dry_run,
+			       u8 buf[], unsigned long bursts,
+			       const struct _xfer_spec *pxs, int ev)
+{
+	int off, periods, residue, i;
+	unsigned int lcnt0, ljmp0, ljmpfe;
+	struct _arg_LPEND lpend;
+	struct pl330_xfer *x = &pxs->desc->px;
+
+	off = 0;
+	ljmpfe = off;
+	lcnt0 = pxs->desc->num_periods;
+	periods = 1;
+
+	while (lcnt0 > 256) {
+		periods++;
+		lcnt0 = pxs->desc->num_periods / periods;
+	}
+
+	residue = pxs->desc->num_periods % periods;
+
+	/* forever loop */
+	off += _emit_MOV(dry_run, &buf[off], SAR, x->src_addr);
+	off += _emit_MOV(dry_run, &buf[off], DAR, x->dst_addr);
+
+	/* loop0 */
+	off += _emit_LP(dry_run, &buf[off], 0,  lcnt0);
+	ljmp0 = off;
+
+	for (i = 0; i < periods; i++)
+		off += _period(pl330, dry_run, &buf[off], bursts, pxs, ev);
+
+	lpend.cond = ALWAYS;
+	lpend.forever = false;
+	lpend.loop = 0;
+	lpend.bjump = off - ljmp0;
+	off += _emit_LPEND(dry_run, &buf[off], &lpend);
+
+	for (i = 0; i < residue; i++)
+		off += _period(pl330, dry_run, &buf[off], bursts, pxs, ev);
+
+	lpend.cond = ALWAYS;
+	lpend.forever = true;
+	lpend.loop = 1;
+	lpend.bjump = off - ljmpfe;
+	off +=  _emit_LPEND(dry_run, &buf[off], &lpend);
+
+	return off;
+}
+
 static inline int _setup_loops(struct pl330_dmac *pl330,
 			       unsigned dry_run, u8 buf[],
 			       const struct _xfer_spec *pxs)
@@ -1384,6 +1522,21 @@ static inline int _setup_xfer(struct pl330_dmac *pl330,
 	return off;
 }
 
+static inline int _setup_xfer_cyclic(struct pl330_dmac *pl330,
+				     unsigned int dry_run, u8 buf[],
+				     const struct _xfer_spec *pxs, int ev)
+{
+	struct pl330_xfer *x = &pxs->desc->px;
+	u32 ccr = pxs->ccr;
+	unsigned long bursts = BYTE_TO_BURST(x->bytes, ccr);
+	int off = 0;
+
+	/* Setup Loop(s) */
+	off += _loop_cyclic(pl330, dry_run, &buf[off], bursts, pxs, ev);
+
+	return off;
+}
+
 /*
  * A req is a sequence of one or more xfer units.
  * Returns the number of bytes taken to setup the MC for the req.
@@ -1401,12 +1554,17 @@ static int _setup_req(struct pl330_dmac *pl330, unsigned dry_run,
 	/* DMAMOV CCR, ccr */
 	off += _emit_MOV(dry_run, &buf[off], CCR, pxs->ccr);
 
-	off += _setup_xfer(pl330, dry_run, &buf[off], pxs);
+	if (!pxs->desc->cyclic) {
+		off += _setup_xfer(pl330, dry_run, &buf[off], pxs);
 
-	/* DMASEV peripheral/event */
-	off += _emit_SEV(dry_run, &buf[off], thrd->ev);
-	/* DMAEND */
-	off += _emit_END(dry_run, &buf[off]);
+		/* DMASEV peripheral/event */
+		off += _emit_SEV(dry_run, &buf[off], thrd->ev);
+		/* DMAEND */
+		off += _emit_END(dry_run, &buf[off]);
+	} else {
+		off += _setup_xfer_cyclic(pl330, dry_run, &buf[off],
+					  pxs, thrd->ev);
+	}
 
 	return off;
 }
@@ -1682,15 +1840,17 @@ static int pl330_update(struct pl330_dmac *pl330)
 
 			/* Detach the req */
 			descdone = thrd->req[active].desc;
-			thrd->req[active].desc = NULL;
+			if (descdone) {
+				if (!descdone->cyclic) {
+					thrd->req[active].desc = NULL;
+					thrd->req_running = -1;
+					/* Get going again ASAP */
+					_start(thrd);
+				}
 
-			thrd->req_running = -1;
-
-			/* Get going again ASAP */
-			_start(thrd);
-
-			/* For now, just make a list of callbacks to be done */
-			list_add_tail(&descdone->rqd, &pl330->req_done);
+				/* For now, just make a list of callbacks to be done */
+				list_add_tail(&descdone->rqd, &pl330->req_done);
+			}
 		}
 	}
 
@@ -1866,7 +2026,7 @@ static int dmac_alloc_threads(struct pl330_dmac *pl330)
 	int i;
 
 	/* Allocate 1 Manager and 'chans' Channel threads */
-	pl330->channels = kzalloc((1 + chans) * sizeof(*thrd),
+	pl330->channels = kcalloc(1 + chans, sizeof(*thrd),
 					GFP_KERNEL);
 	if (!pl330->channels)
 		return -ENOMEM;
@@ -1899,9 +2059,10 @@ static int dmac_alloc_resources(struct pl330_dmac *pl330)
 	 * Alloc MicroCode buffer for 'chans' Channel threads.
 	 * A channel's buffer offset is (Channel_Id * MCODE_BUFF_PERCHAN)
 	 */
-	pl330->mcode_cpu = dma_alloc_coherent(pl330->ddma.dev,
+	pl330->mcode_cpu = dma_alloc_attrs(pl330->ddma.dev,
 				chans * pl330->mcbufsz,
-				&pl330->mcode_bus, GFP_KERNEL);
+				&pl330->mcode_bus, GFP_KERNEL,
+				DMA_ATTR_PRIVILEGED);
 	if (!pl330->mcode_cpu) {
 		dev_err(pl330->ddma.dev, "%s:%d Can't allocate memory!\n",
 			__func__, __LINE__);
@@ -2053,12 +2214,25 @@ static void pl330_tasklet(unsigned long data)
 	spin_lock_irqsave(&pch->lock, flags);
 
 	/* Pick up ripe tomatoes */
-	list_for_each_entry_safe(desc, _dt, &pch->work_list, node)
+	list_for_each_entry_safe(desc, _dt, &pch->work_list, node) {
 		if (desc->status == DONE) {
-			if (!pch->cyclic)
+			if (!desc->cyclic) {
 				dma_cookie_complete(&desc->txd);
-			list_move_tail(&desc->node, &pch->completed_list);
+				list_move_tail(&desc->node, &pch->completed_list);
+			} else {
+				struct dmaengine_desc_callback cb;
+
+				desc->status = BUSY;
+				dmaengine_desc_get_callback(&desc->txd, &cb);
+
+				if (dmaengine_desc_callback_valid(&cb)) {
+					spin_unlock_irqrestore(&pch->lock, flags);
+					dmaengine_desc_callback_invoke(&cb, NULL);
+					spin_lock_irqsave(&pch->lock, flags);
+				}
+			}
 		}
+	}
 
 	/* Try to submit a req imm. next to the last completed cookie */
 	fill_queue(pch);
@@ -2067,7 +2241,7 @@ static void pl330_tasklet(unsigned long data)
 		spin_lock(&pch->thread->dmac->lock);
 		_stop(pch->thread);
 		spin_unlock(&pch->thread->dmac->lock);
-		power_down = true;
+		power_down = pch->active;
 		pch->active = false;
 	} else {
 		/* Make sure the PL330 Channel thread is active */
@@ -2077,35 +2251,21 @@ static void pl330_tasklet(unsigned long data)
 	}
 
 	while (!list_empty(&pch->completed_list)) {
-		dma_async_tx_callback callback;
-		void *callback_param;
+		struct dmaengine_desc_callback cb;
 
 		desc = list_first_entry(&pch->completed_list,
 					struct dma_pl330_desc, node);
 
-		callback = desc->txd.callback;
-		callback_param = desc->txd.callback_param;
+		dmaengine_desc_get_callback(&desc->txd, &cb);
 
-		if (pch->cyclic) {
-			desc->status = PREP;
-			list_move_tail(&desc->node, &pch->work_list);
-			if (power_down) {
-				pch->active = true;
-				spin_lock(&pch->thread->dmac->lock);
-				_start(pch->thread);
-				spin_unlock(&pch->thread->dmac->lock);
-				power_down = false;
-			}
-		} else {
-			desc->status = FREE;
-			list_move_tail(&desc->node, &pch->dmac->desc_pool);
-		}
+		desc->status = FREE;
+		list_move_tail(&desc->node, &pch->dmac->desc_pool);
 
 		dma_descriptor_unmap(&desc->txd);
 
-		if (callback) {
+		if (dmaengine_desc_callback_valid(&cb)) {
 			spin_unlock_irqrestore(&pch->lock, flags);
-			callback(callback_param);
+			dmaengine_desc_callback_invoke(&cb, NULL);
 			spin_lock_irqsave(&pch->lock, flags);
 		}
 	}
@@ -2147,7 +2307,6 @@ static int pl330_alloc_chan_resources(struct dma_chan *chan)
 	spin_lock_irqsave(&pl330->lock, flags);
 
 	dma_cookie_init(chan);
-	pch->cyclic = false;
 
 	pch->thread = pl330_request_channel(pl330);
 	if (!pch->thread) {
@@ -2162,11 +2321,57 @@ static int pl330_alloc_chan_resources(struct dma_chan *chan)
 	return 1;
 }
 
+/*
+ * We need the data direction between the DMAC (the dma-mapping "device") and
+ * the FIFO (the dmaengine "dev"), from the FIFO's point of view. Confusing!
+ */
+static enum dma_data_direction
+pl330_dma_slave_map_dir(enum dma_transfer_direction dir)
+{
+	switch (dir) {
+	case DMA_MEM_TO_DEV:
+		return DMA_FROM_DEVICE;
+	case DMA_DEV_TO_MEM:
+		return DMA_TO_DEVICE;
+	case DMA_DEV_TO_DEV:
+		return DMA_BIDIRECTIONAL;
+	default:
+		return DMA_NONE;
+	}
+}
+
+static void pl330_unprep_slave_fifo(struct dma_pl330_chan *pch)
+{
+	if (pch->dir != DMA_NONE)
+		dma_unmap_resource(pch->chan.device->dev, pch->fifo_dma,
+				   1 << pch->burst_sz, pch->dir, 0);
+	pch->dir = DMA_NONE;
+}
+
+
+static bool pl330_prep_slave_fifo(struct dma_pl330_chan *pch,
+				  enum dma_transfer_direction dir)
+{
+	struct device *dev = pch->chan.device->dev;
+	enum dma_data_direction dma_dir = pl330_dma_slave_map_dir(dir);
+
+	/* Already mapped for this config? */
+	if (pch->dir == dma_dir)
+		return true;
+
+	pl330_unprep_slave_fifo(pch);
+	pch->fifo_dma = dma_map_resource(dev, pch->fifo_addr,
+					 1 << pch->burst_sz, dma_dir, 0);
+	if (dma_mapping_error(dev, pch->fifo_dma))
+		return false;
+
+	pch->dir = dma_dir;
+	return true;
+}
+
 static int fixup_burst_len(int max_burst_len, int quirks)
 {
-	if (quirks & PL330_QUIRK_BROKEN_NO_FLUSHP)
-		return 1;
-	else if (max_burst_len > PL330_MAX_BURST)
+	if (max_burst_len > PL330_MAX_BURST)
 		return PL330_MAX_BURST;
 	else if (max_burst_len < 1)
 		return 1;
@@ -2179,6 +2384,7 @@ static int pl330_config(struct dma_chan *chan,
 {
 	struct dma_pl330_chan *pch = to_pchan(chan);
 
+	pl330_unprep_slave_fifo(pch);
 	if (slave_config->direction == DMA_MEM_TO_DEV) {
 		if (slave_config->dst_addr)
 			pch->fifo_addr = slave_config->dst_addr;
@@ -2284,12 +2490,12 @@ static void pl330_free_chan_resources(struct dma_chan *chan)
 	pl330_release_channel(pch->thread);
 	pch->thread = NULL;
 
-	if (pch->cyclic)
-		list_splice_tail_init(&pch->work_list, &pch->dmac->desc_pool);
+	list_splice_tail_init(&pch->work_list, &pch->dmac->desc_pool);
 
 	spin_unlock_irqrestore(&pl330->lock, flags);
 	pm_runtime_mark_last_busy(pch->dmac->ddma.dev);
 	pm_runtime_put_autosuspend(pch->dmac->ddma.dev);
+	pl330_unprep_slave_fifo(pch);
 }
 
 static int pl330_get_current_xferred_count(struct dma_pl330_chan *pch,
@@ -2347,7 +2553,7 @@ pl330_tx_status(struct dma_chan *chan, dma_cookie_t cookie,
 
 	/* Check in pending list */
 	list_for_each_entry(desc, &pch->work_list, node) {
-		if (desc->status == DONE)
+		if (desc->status == DONE && !desc->cyclic)
 			transferred = desc->bytes_requested;
 		else if (running && desc == running)
 			transferred =
@@ -2429,10 +2635,7 @@ static dma_cookie_t pl330_tx_submit(struct dma_async_tx_descriptor *tx)
 	/* Assign cookies to all nodes */
 	while (!list_empty(&last->node)) {
 		desc = list_entry(last->node.next, struct dma_pl330_desc, node);
-		if (pch->cyclic) {
-			desc->txd.callback = last->txd.callback;
-			desc->txd.callback_param = last->txd.callback_param;
-		}
+
 		desc->last = false;
 
 		dma_cookie_assign(&desc->txd);
@@ -2534,6 +2737,9 @@ static struct dma_pl330_desc *pl330_get_desc(struct dma_pl330_chan *pch)
 	desc->peri = peri_id ? pch->chan.chan_id : 0;
 	desc->rqcfg.pcfg = &pch->dmac->pcfg;
 
+	desc->cyclic = false;
+	desc->num_periods = 1;
+
 	dma_async_tx_descriptor_init(&desc->txd, &pch->chan);
 
 	return desc;
@@ -2597,10 +2803,8 @@ static struct dma_async_tx_descriptor *pl330_prep_dma_cyclic(
 		size_t period_len, enum dma_transfer_direction direction,
 		unsigned long flags)
 {
-	struct dma_pl330_desc *desc = NULL, *first = NULL;
+	struct dma_pl330_desc *desc = NULL;
 	struct dma_pl330_chan *pch = to_pchan(chan);
-	struct pl330_dmac *pl330 = pch->dmac;
-	unsigned int i;
 	dma_addr_t dst;
 	dma_addr_t src;
 
@@ -2613,65 +2817,41 @@ static struct dma_async_tx_descriptor *pl330_prep_dma_cyclic(
 		return NULL;
 	}
 
-	for (i = 0; i < len / period_len; i++) {
-		desc = pl330_get_desc(pch);
-		if (!desc) {
-			dev_err(pch->dmac->ddma.dev, "%s:%d Unable to fetch desc\n",
-				__func__, __LINE__);
-
-			if (!first)
-				return NULL;
-
-			spin_lock_irqsave(&pl330->pool_lock, flags);
-
-			while (!list_empty(&first->node)) {
-				desc = list_entry(first->node.next,
-						struct dma_pl330_desc, node);
-				list_move_tail(&desc->node, &pl330->desc_pool);
-			}
-
-			list_move_tail(&first->node, &pl330->desc_pool);
-
-			spin_unlock_irqrestore(&pl330->pool_lock, flags);
-
-			return NULL;
-		}
-
-		switch (direction) {
-		case DMA_MEM_TO_DEV:
-			desc->rqcfg.src_inc = 1;
-			desc->rqcfg.dst_inc = 0;
-			src = dma_addr;
-			dst = pch->fifo_addr;
-			break;
-		case DMA_DEV_TO_MEM:
-			desc->rqcfg.src_inc = 0;
-			desc->rqcfg.dst_inc = 1;
-			src = pch->fifo_addr;
-			dst = dma_addr;
-			break;
-		default:
-			break;
-		}
-
-		desc->rqtype = direction;
-		desc->rqcfg.brst_size = pch->burst_sz;
-		desc->rqcfg.brst_len = pch->burst_len;
-		desc->bytes_requested = period_len;
-		fill_px(&desc->px, dst, src, period_len);
-
-		if (!first)
-			first = desc;
-		else
-			list_add_tail(&desc->node, &first->node);
-
-		dma_addr += period_len;
-	}
-
-	if (!desc)
+	if (!pl330_prep_slave_fifo(pch, direction))
 		return NULL;
 
-	pch->cyclic = true;
+	desc = pl330_get_desc(pch);
+	if (!desc) {
+		dev_err(pch->dmac->ddma.dev, "%s:%d Unable to fetch desc\n",
+			__func__, __LINE__);
+		return NULL;
+	}
+
+	switch (direction) {
+	case DMA_MEM_TO_DEV:
+		desc->rqcfg.src_inc = 1;
+		desc->rqcfg.dst_inc = 0;
+		src = dma_addr;
+		dst = pch->fifo_dma;
+		break;
+	case DMA_DEV_TO_MEM:
+		desc->rqcfg.src_inc = 0;
+		desc->rqcfg.dst_inc = 1;
+		src = pch->fifo_dma;
+			dst = dma_addr;
+		break;
+	default:
+		break;
+	}
+
+	desc->rqtype = direction;
+	desc->rqcfg.brst_size = pch->burst_sz;
+	desc->rqcfg.brst_len = pch->burst_len;
+	desc->bytes_requested = len;
+	fill_px(&desc->px, dst, src, period_len);
+
+	desc->cyclic = true;
+	desc->num_periods = len / period_len;
 	desc->txd.flags = flags;
 
 	return &desc->txd;
@@ -2714,14 +2894,14 @@ pl330_prep_dma_memcpy(struct dma_chan *chan, dma_addr_t dst,
 	while (burst != (1 << desc->rqcfg.brst_size))
 		desc->rqcfg.brst_size++;
 
+	desc->rqcfg.brst_len = get_burst_len(desc, len);
 	/*
 	 * If burst size is smaller than bus width then make sure we only
 	 * transfer one at a time to avoid a burst stradling an MFIFO entry.
 	 */
-	if (desc->rqcfg.brst_size * 8 < pl330->pcfg.data_bus_width)
+	if (burst * 8 < pl330->pcfg.data_bus_width)
 		desc->rqcfg.brst_len = 1;
 
-	desc->rqcfg.brst_len = get_burst_len(desc, len);
 	desc->bytes_requested = len;
 
 	desc->txd.flags = flags;
@@ -2760,12 +2940,12 @@ pl330_prep_slave_sg(struct dma_chan *chan, struct scatterlist *sgl,
 	struct dma_pl330_chan *pch = to_pchan(chan);
 	struct scatterlist *sg;
 	int i;
-	dma_addr_t addr;
 
 	if (unlikely(!pch || !sgl || !sg_len))
 		return NULL;
 
-	addr = pch->fifo_addr;
+	if (!pl330_prep_slave_fifo(pch, direction))
+		return NULL;
 
 	first = NULL;
 
@@ -2791,13 +2971,13 @@ pl330_prep_slave_sg(struct dma_chan *chan, struct scatterlist *sgl,
 		if (direction == DMA_MEM_TO_DEV) {
 			desc->rqcfg.src_inc = 1;
 			desc->rqcfg.dst_inc = 0;
-			fill_px(&desc->px,
-				addr, sg_dma_address(sg), sg_dma_len(sg));
+			fill_px(&desc->px, pch->fifo_dma, sg_dma_address(sg),
+				sg_dma_len(sg));
 		} else {
 			desc->rqcfg.src_inc = 0;
 			desc->rqcfg.dst_inc = 1;
-			fill_px(&desc->px,
-				sg_dma_address(sg), addr, sg_dma_len(sg));
+			fill_px(&desc->px, sg_dma_address(sg), pch->fifo_dma,
+				sg_dma_len(sg));
 		}
 
 		desc->rqcfg.brst_size = pch->burst_sz;
@@ -2884,10 +3064,8 @@ pl330_probe(struct amba_device *adev, const struct amba_id *id)
 
 	/* Allocate a new DMAC and its Channels */
 	pl330 = devm_kzalloc(&adev->dev, sizeof(*pl330), GFP_KERNEL);
-	if (!pl330) {
-		dev_err(&adev->dev, "unable to allocate mem\n");
+	if (!pl330)
 		return -ENOMEM;
-	}
 
 	pd = &pl330->ddma;
 	pd->dev = &adev->dev;
@@ -2941,10 +3119,9 @@ pl330_probe(struct amba_device *adev, const struct amba_id *id)
 
 	pl330->num_peripherals = num_chan;
 
-	pl330->peripherals = kzalloc(num_chan * sizeof(*pch), GFP_KERNEL);
+	pl330->peripherals = kcalloc(num_chan, sizeof(*pch), GFP_KERNEL);
 	if (!pl330->peripherals) {
 		ret = -ENOMEM;
-		dev_err(&adev->dev, "unable to allocate pl330->peripherals\n");
 		goto probe_err2;
 	}
 
@@ -2959,6 +3136,7 @@ pl330_probe(struct amba_device *adev, const struct amba_id *id)
 		pch->thread = NULL;
 		pch->chan.device = pd;
 		pch->dmac = pl330;
+		pch->dir = DMA_NONE;
 
 		/* Add the channel to the DMAC list */
 		list_add_tail(&pch->chan.device_node, &pd->channels);
@@ -2985,8 +3163,7 @@ pl330_probe(struct amba_device *adev, const struct amba_id *id)
 	pd->dst_addr_widths = PL330_DMA_BUSWIDTHS;
 	pd->directions = BIT(DMA_DEV_TO_MEM) | BIT(DMA_MEM_TO_DEV);
 	pd->residue_granularity = DMA_RESIDUE_GRANULARITY_BURST;
-	pd->max_burst = ((pl330->quirks & PL330_QUIRK_BROKEN_NO_FLUSHP) ?
-			 1 : PL330_MAX_BURST);
+	pd->max_burst = PL330_MAX_BURST;
 
 	ret = dma_async_device_register(pd);
 	if (ret) {

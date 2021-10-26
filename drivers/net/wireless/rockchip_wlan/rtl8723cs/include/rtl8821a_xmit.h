@@ -1,6 +1,6 @@
 /******************************************************************************
  *
- * Copyright(c) 2013 Realtek Corporation. All rights reserved.
+ * Copyright(c) 2013 - 2017 Realtek Corporation.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of version 2 of the GNU General Public License as
@@ -11,12 +11,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
  * more details.
  *
- * You should have received a copy of the GNU General Public License along with
- * this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110, USA
- *
- *
- ******************************************************************************/
+ *****************************************************************************/
 #ifndef __RTL8821A_XMIT_H__
 #define __RTL8821A_XMIT_H__
 
@@ -145,6 +140,9 @@ s32 InitXmitPriv8821AS(PADAPTER padapter);
 void FreeXmitPriv8821AS(PADAPTER padapter);
 s32 XmitBufHandler8821AS(PADAPTER padapter);
 s32 MgntXmit8821AS(PADAPTER padapter, struct xmit_frame *pmgntframe);
+#ifdef CONFIG_RTW_MGMT_QUEUE 
+s32 rtl8821as_hal_mgmt_xmit_enqueue(PADAPTER adapter, struct xmit_frame *pxmitframe);
+#endif
 s32	HalXmitNoLock8821AS(PADAPTER padapter, struct xmit_frame *pxmitframe);
 s32 HalXmit8821AS(PADAPTER padapter, struct xmit_frame *pxmitframe);
 #ifndef CONFIG_SDIO_TX_TASKLET

@@ -40,13 +40,13 @@ static int ixp4xx_set_mode(struct ata_link *link, struct ata_device **error)
 	return 0;
 }
 
-static unsigned int ixp4xx_mmio_data_xfer(struct ata_device *dev,
+static unsigned int ixp4xx_mmio_data_xfer(struct ata_queued_cmd *qc,
 				unsigned char *buf, unsigned int buflen, int rw)
 {
 	unsigned int i;
 	unsigned int words = buflen >> 1;
 	u16 *buf16 = (u16 *) buf;
-	struct ata_port *ap = dev->link->ap;
+	struct ata_port *ap = qc->dev->link->ap;
 	void __iomem *mmio = ap->ioaddr.data_addr;
 	struct ixp4xx_pata_data *data = dev_get_platdata(ap->host->dev);
 
@@ -169,8 +169,12 @@ static int ixp4xx_pata_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	irq = platform_get_irq(pdev, 0);
-	if (irq)
+	if (irq > 0)
 		irq_set_irq_type(irq, IRQ_TYPE_EDGE_RISING);
+	else if (irq < 0)
+		return irq;
+	else
+		return -EINVAL;
 
 	/* Setup expansion bus chip selects */
 	*data->cs0_cfg = data->cs0_bits;

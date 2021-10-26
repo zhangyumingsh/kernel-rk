@@ -46,7 +46,7 @@
 #include <linux/random.h>
 #include <linux/spinlock.h>
 #include <linux/ethtool.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 #include <asm/unaligned.h>
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 27)) && defined(CONFIG_HAS_WAKELOCK)
 #include <linux/wakelock.h>
@@ -352,9 +352,10 @@ enum dhd_bus_ds_state {
 
 enum dhd_prealloc_index {
 	DHD_PREALLOC_PROT = 0,
-	DHD_PREALLOC_RXBUF,
-	DHD_PREALLOC_DATABUF,
-	DHD_PREALLOC_OSL_BUF,
+	DHD_PREALLOC_RXBUF = 1,
+	DHD_PREALLOC_DATABUF = 2,
+	DHD_PREALLOC_OSL_BUF = 3,
+	DHD_PREALLOC_SKB_BUF = 4,
 #if defined(STATIC_WL_PRIV_STRUCT)
 	DHD_PREALLOC_WIPHY_ESCAN0 = 5,
 #endif /* STATIC_WL_PRIV_STRUCT */
@@ -370,7 +371,7 @@ enum dhd_prealloc_index {
 	DHD_PREALLOC_DHD_LOG_DUMP_BUF_EX = 16,
 	DHD_PREALLOC_DHD_PKTLOG_DUMP_BUF = 17,
 	DHD_PREALLOC_STAT_REPORT_BUF = 18,
-	DHD_PREALLOC_WL_ESCAN_INFO = 19,
+	DHD_PREALLOC_WL_ESCAN = 19,
 	DHD_PREALLOC_FW_VERBOSE_RING = 20,
 	DHD_PREALLOC_FW_EVENT_RING = 21,
 	DHD_PREALLOC_DHD_EVENT_RING = 22,
@@ -1036,13 +1037,27 @@ typedef struct dhd_pub {
 #if defined(STAT_REPORT)
 	void *stat_report_info;
 #endif
-	char		*clm_path;		/* module_param: path to clm vars file */
-	char		*conf_path;		/* module_param: path to config vars file */
+	char *clm_path;		/* module_param: path to clm vars file */
+	char *conf_path;		/* module_param: path to config vars file */
 	struct dhd_conf *conf;	/* Bus module handle */
 	void *adapter;			/* adapter information, interrupt, fw path etc. */
+	void *event_params;
 #ifdef BCMDBUS
 	bool dhd_remove;
 #endif /* BCMDBUS */
+#ifdef WL_ESCAN
+	struct wl_escan_info *escan;
+#endif
+#if defined(WL_WIRELESS_EXT)
+	void *wext_info;
+#endif
+#ifdef WL_EXT_IAPSTA
+	void *iapsta_params;
+#endif
+	int hostsleep;
+#ifdef SENDPROB
+	bool recv_probereq;
+#endif
 } dhd_pub_t;
 
 typedef struct {
@@ -1525,7 +1540,7 @@ extern void dhd_os_dhdiovar_lock(dhd_pub_t *pub);
 extern void dhd_os_dhdiovar_unlock(dhd_pub_t *pub);
 extern int dhd_os_proto_block(dhd_pub_t * pub);
 extern int dhd_os_proto_unblock(dhd_pub_t * pub);
-extern int dhd_os_ioctl_resp_wait(dhd_pub_t * pub, uint * condition, bool resched);
+extern int dhd_os_ioctl_resp_wait(dhd_pub_t * pub, uint * condition);
 extern int dhd_os_ioctl_resp_wake(dhd_pub_t * pub);
 extern unsigned int dhd_os_get_ioctl_resp_timeout(void);
 extern void dhd_os_set_ioctl_resp_timeout(unsigned int timeout_msec);
@@ -1867,6 +1882,7 @@ extern uint dhd_console_ms;
 extern uint android_msg_level;
 extern uint config_msg_level;
 extern uint sd_msglevel;
+extern uint dump_msg_level;
 #ifdef BCMDBUS
 extern uint dbus_msglevel;
 #endif /* BCMDBUS */

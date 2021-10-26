@@ -39,23 +39,14 @@ static struct completion nandc_irq_complete;
 
 unsigned long rknandc_dma_map_single(unsigned long ptr, int size, int dir)
 {
-#ifdef CONFIG_ARM64
-	__dma_map_area((void *)ptr, size, dir);
-	return ((unsigned long)virt_to_phys((void *)ptr));
-#else
-	return dma_map_single(NULL, (void *)ptr, size
+	return dma_map_single(g_nandc_dev, (void *)ptr, size
 		, dir ? DMA_TO_DEVICE : DMA_FROM_DEVICE);
-#endif
 }
 
 void rknandc_dma_unmap_single(unsigned long ptr, int size, int dir)
 {
-#ifdef CONFIG_ARM64
-	__dma_unmap_area(phys_to_virt(ptr), size, dir);
-#else
-	dma_unmap_single(NULL, (dma_addr_t)ptr, size
+	dma_unmap_single(g_nandc_dev, (dma_addr_t)ptr, size
 		, dir ? DMA_TO_DEVICE : DMA_FROM_DEVICE);
-#endif
 }
 
 static irqreturn_t rknandc_interrupt(int irq, void *dev_id)
@@ -134,20 +125,27 @@ static int rknandc_probe(struct platform_device *pdev)
 		 __func__,
 		 g_nandc_info.clk_rate);
 	rknandc_irq_init();
-	ret = rkflash_dev_init(g_nandc_info.reg_base, FLASH_CON_TYPE_NANDC);
+	ret = rkflash_dev_init(g_nandc_info.reg_base, FLASH_TYPE_NANDC_NAND, &nandc_nand_ops);
 
-	return ret;
+	if (ret)
+		return ret;
+
+	return dma_set_mask(g_nandc_dev, DMA_BIT_MASK(32));
 }
 
-static int rknandc_suspend(struct platform_device *pdev, pm_message_t state)
+static int __maybe_unused rknandc_suspend(struct device *dev)
 {
 	return rkflash_dev_suspend();
 }
 
-static int rknandc_resume(struct platform_device *pdev)
+static int __maybe_unused rknandc_resume(struct device *dev)
 {
 	return rkflash_dev_resume(g_nandc_info.reg_base);
 }
+
+static SIMPLE_DEV_PM_OPS(rknandc_pmops,
+			 rknandc_suspend,
+			 rknandc_resume);
 
 static void rknandc_shutdown(struct platform_device *pdev)
 {
@@ -164,14 +162,13 @@ static const struct of_device_id of_rknandc_match[] = {
 
 static struct platform_driver rknandc_driver = {
 	.probe		= rknandc_probe,
-	.suspend	= rknandc_suspend,
-	.resume		= rknandc_resume,
 	.shutdown	= rknandc_shutdown,
 	.driver		= {
 		.name	= "rknandc",
 #ifdef CONFIG_OF
 		.of_match_table	= of_rknandc_match,
 #endif
+		.pm		= &rknandc_pmops,
 	},
 };
 

@@ -24,6 +24,8 @@
 };
 
 &acodec {
+	rockchip,micbias1;
+	rockchip,micbias2;
 	rockchip,en-always-grps = <0 1 2>;
 };
 
@@ -38,7 +40,6 @@
 &i2s_2ch_0 {
 	status = "okay";
 	#sound-dai-cells = <0>;
-	rockchip,clk-trcm = <1>;
 };
 
 &is31fl3236 {

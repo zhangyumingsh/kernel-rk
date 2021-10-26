@@ -44,7 +44,7 @@
 	compatible = "rockchip,linux", "rockchip,rk3326";
 
 	chosen {
-		bootargs = "earlycon=uart8250,mmio32,0xff160000 swiotlb=1 console=ttyFIQ0 root=PARTUUID=614e0000-0000 rootwait";
+		bootargs = "earlycon=uart8250,mmio32,0xff160000 console=ttyFIQ0 rw root=PARTUUID=614e0000-0000 rootwait";
 	};
 
 	fiq-debugger {
@@ -70,6 +70,10 @@
 			reg = <0x0 0x0 0x0 0x0>;
 		};
 	};
+};
+
+&cpu0_opp_table {
+	rockchip,avs = <1>;
 };
 
 &display_subsystem {
@@ -105,4 +109,12 @@
 			connect = <&vopb_out_rgb>;
 		};
 	};
+};
+
+&rng {
+	status = "okay";
+};
+
+&video_phy {
+	status = "okay";
 };

@@ -95,48 +95,6 @@
 		default-brightness-level = <200>;
 	};
 
-	panel {
-		compatible = "samsung,lsl070nl01", "simple-panel";
-		backlight = <&backlight>;
-		enable-gpios = <&gpio0 RK_PB5 GPIO_ACTIVE_HIGH>;
-		enable-delay-ms = <20>;
-		prepare-delay-ms = <20>;
-		unprepare-delay-ms = <20>;
-		disable-delay-ms = <20>;
-		width-mm = <217>;
-		height-mm = <136>;
-		rockchip,data-mapping = "vesa";
-		rockchip,data-width = <24>;
-		rockchip,output = "lvds";
-		status = "disabled";
-
-		display-timings {
-			native-mode = <&timing0>;
-
-			timing0: timing0 {
-				clock-frequency = <49500000>;
-				hactive = <1024>;
-				vactive = <600>;
-				hback-porch = <90>;
-				hfront-porch = <90>;
-				vback-porch = <10>;
-				vfront-porch = <10>;
-				hsync-len = <90>;
-				vsync-len = <10>;
-				hsync-active = <0>;
-				vsync-active = <0>;
-				de-active = <0>;
-				pixelclk-active = <0>;
-			};
-		};
-
-		port {
-			panel_in_lvds: endpoint {
-				remote-endpoint = <&lvds_out_panel>;
-			};
-		};
-	};
-
 	rk809-sound {
 		compatible = "simple-audio-card";
 		simple-audio-card,name = "rockchip,rk809-codec";
@@ -171,7 +129,7 @@
 
 	bt-sound {
 		compatible = "simple-audio-card";
-		simple-audio-card,format = "dsp_b";
+		simple-audio-card,format = "dsp_a";
 		simple-audio-card,bitclock-inversion = <1>;
 		simple-audio-card,mclk-fs = <256>;
 		simple-audio-card,name = "rockchip,bt";
@@ -189,7 +147,7 @@
 		status = "okay";
 	};
 
-	rk_headset {
+	rk_headset: rk-headset {
 		compatible = "rockchip_headset";
 		headset_gpio = <&gpio3 RK_PA4 GPIO_ACTIVE_HIGH>;
 		pinctrl-names = "default";
@@ -211,6 +169,10 @@
 		 * - PDN (power down when low)
 		 */
 		reset-gpios = <&gpio0 RK_PB3 GPIO_ACTIVE_LOW>; /* GPIO3_A4 */
+	};
+
+	test-power {
+		status = "okay";
 	};
 
 	vcc5v0_sys: vccsys {
@@ -338,9 +300,9 @@
 		];
 
 		display-timings {
-			native-mode = <&st7703_timing>;
+			native-mode = <&timing0>;
 
-			st7703_timing: timing0 {
+			timing0: timing0 {
 				clock-frequency = <66000000>;
 				hactive = <720>;
 				vactive = <1280>;
@@ -356,11 +318,44 @@
 				pixelclk-active = <0>;
 			};
 		};
+
+		ports {
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			port@0 {
+				reg = <0>;
+				panel_in_dsi: endpoint {
+					remote-endpoint = <&dsi_out_panel>;
+				};
+			};
+		};
 	};
+
+	ports {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		port@1 {
+			reg = <1>;
+			dsi_out_panel: endpoint {
+				remote-endpoint = <&panel_in_dsi>;
+			};
+		};
+	};
+};
+
+&dsi_in_vopb {
+	status = "okay";
 };
 
 &dsi_in_vopl {
 	status = "disabled";
+};
+
+&route_dsi {
+	connect = <&vopb_out_dsi>;
+	status = "okay";
 };
 
 &emmc {
@@ -1029,6 +1024,33 @@
 
 &i2c2 {
 	status = "okay";
+
+	clock-frequency = <100000>;
+
+	/* These are relatively safe rise/fall times; TODO: measure */
+	i2c-scl-falling-time-ns = <50>;
+	i2c-scl-rising-time-ns = <300>;
+
+	ov5695: ov5695@36 {
+		compatible = "ovti,ov5695";
+		reg = <0x36>;
+		clocks = <&cru SCLK_CIF_OUT>;
+		clock-names = "xvclk";
+		/*reset-gpios = <&gpio2 14 GPIO_ACTIVE_HIGH>;*/
+		pwdn-gpios = <&gpio2 14 GPIO_ACTIVE_HIGH>;
+		//pinctrl-names = "default";
+		//pinctrl-0 = <&cif_clkout_m0>;
+		rockchip,camera-module-index = <0>;
+		rockchip,camera-module-facing = "back";
+		rockchip,camera-module-name = "TongJu";
+		rockchip,camera-module-lens-name = "CHT842-MD";
+		port {
+			ov5695_out: endpoint {
+				remote-endpoint = <&mipi_in>;
+				data-lanes = <1 2>;
+			};
+		};
+	};
 };
 
 &i2s1_2ch {
@@ -1056,28 +1078,6 @@
 };
 
 &isp_mmu {
-	status = "okay";
-};
-
-&lvds {
-	status = "disabled";
-
-	ports {
-		port@1 {
-			reg = <1>;
-
-			lvds_out_panel: endpoint {
-				remote-endpoint = <&panel_in_lvds>;
-			};
-		};
-	};
-};
-
-&lvds_in_vopl {
-	status = "disabled";
-};
-
-&mipi_dphy {
 	status = "okay";
 };
 
@@ -1117,12 +1117,12 @@
 
 		soc_slppin_slp: soc_slppin_slp {
 			rockchip,pins =
-				<0 RK_PA4 RK_FUNC_1 &pcfg_pull_none>;
+				<0 RK_PA4 1 &pcfg_pull_none>;
 		};
 
 		soc_slppin_rst: soc_slppin_rst {
 			rockchip,pins =
-				<0 RK_PA4 RK_FUNC_2 &pcfg_pull_none>;
+				<0 RK_PA4 2 &pcfg_pull_none>;
 		};
 	};
 
@@ -1144,10 +1144,6 @@
 	status = "okay";
 };
 
-&rk_isp {
-	status = "okay";
-};
-
 &rk_rga {
 	status = "okay";
 };
@@ -1155,14 +1151,6 @@
 &rockchip_suspend {
 	status = "okay";
 	rockchip,sleep-debug-en = <1>;
-};
-
-&route_dsi {
-	status = "okay";
-};
-
-&route_lvds {
-	status = "disabled";
 };
 
 &saradc {
@@ -1200,7 +1188,7 @@
 };
 
 &tsadc {
-	pinctrl-names = "init", "default";
+	pinctrl-names = "gpio", "otpout";
 	pinctrl-0 = <&tsadc_otp_gpio>;
 	pinctrl-1 = <&tsadc_otp_out>;
 	status = "okay";
@@ -1244,27 +1232,74 @@
 	status = "okay";
 };
 
-&vpu_combo {
+&mpp_srv {
 	status = "okay";
 };
 
-&firmware_android {
-	compatible = "android,firmware";
-	fstab {
-		compatible = "android,fstab";
-		system {
-			compatible = "android,system";
-			dev = "/dev/block/by-name/system";
-			type = "ext4";
-			mnt_flags = "ro,barrier=1,inode_readahead_blks=8";
-			fsmgr_flags = "wait";
+&vdpu {
+	status = "okay";
+};
+
+&vepu {
+	status = "okay";
+};
+
+&vpu_mmu {
+	status = "okay";
+};
+
+&hevc {
+	status = "okay";
+};
+
+&hevc_mmu {
+	status = "okay";
+};
+
+&mipi_dphy_rx0 {
+	status = "okay";
+
+	ports {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		port@0 {
+			reg = <0>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			mipi_in: endpoint@1 {
+				reg = <1>;
+				remote-endpoint = <&ov5695_out>;
+				data-lanes = <1 2>;
+			};
 		};
-		vendor {
-			compatible = "android,vendor";
-			dev = "/dev/block/by-name/vendor";
-			type = "ext4";
-			mnt_flags = "ro,barrier=1,inode_readahead_blks=8";
-			fsmgr_flags = "wait";
+
+		port@1 {
+			reg = <1>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			dphy_rx_out: endpoint@0 {
+				reg = <0>;
+				remote-endpoint = <&isp_mipi_in>;
+			};
 		};
+	};
+};
+
+&rkisp1 {
+	status = "okay";
+	pinctrl-names = "default";
+	pinctrl-0 = <&cif_clkout_m0 &dvp_d0d1_m0 &dvp_d2d9_m0>;
+	port {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		isp_mipi_in: endpoint@0 {
+			reg = <0>;
+			remote-endpoint = <&dphy_rx_out>;
+		};
+
 	};
 };

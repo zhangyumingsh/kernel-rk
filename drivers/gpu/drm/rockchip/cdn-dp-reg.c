@@ -12,15 +12,12 @@
  * GNU General Public License for more details.
  */
 
-#include <linux/arm-smccc.h>
 #include <linux/clk.h>
 #include <linux/device.h>
 #include <linux/delay.h>
 #include <linux/io.h>
 #include <linux/iopoll.h>
-#include <linux/phy/phy.h>
 #include <linux/reset.h>
-#include <soc/rockchip/rockchip_phy_typec.h>
 
 #include "cdn-dp-core.h"
 #include "cdn-dp-reg.h"
@@ -116,7 +113,7 @@ static int cdp_dp_mailbox_write(struct cdn_dp_device *dp, u8 val)
 
 static int cdn_dp_mailbox_validate_receive(struct cdn_dp_device *dp,
 					   u8 module_id, u8 opcode,
-					   u8 req_size)
+					   u16 req_size)
 {
 	u32 mbox_size, i;
 	u8 header[4];
@@ -150,7 +147,7 @@ static int cdn_dp_mailbox_validate_receive(struct cdn_dp_device *dp,
 }
 
 static int cdn_dp_mailbox_read_receive(struct cdn_dp_device *dp,
-				       u8 *buff, u8 buff_size)
+				       u8 *buff, u16 buff_size)
 {
 	u32 i;
 	int ret;
@@ -379,7 +376,7 @@ int cdn_dp_load_firmware(struct cdn_dp_device *dp, const u32 *i_mem,
 	reg = readl(dp->regs + VER_LIB_H_ADDR) & 0xff;
 	dp->fw_version |= reg << 24;
 
-	dev_dbg(dp->dev, "firmware version: %x\n", dp->fw_version);
+	DRM_DEV_DEBUG(dp->dev, "firmware version: %x\n", dp->fw_version);
 
 	return 0;
 }
@@ -628,7 +625,7 @@ int cdn_dp_train_link(struct cdn_dp_device *dp)
 	ret = cdn_dp_reg_write(dp, SOURCE_HDTX_CAR, 0xf);
 	if (ret) {
 		DRM_DEV_ERROR(dp->dev,
-		"Failed to write SOURCE_HDTX_CAR register %d\n", ret);
+			"Failed to write SOURCE_HDTX_CAR register %d\n", ret);
 		goto do_fw_training;
 	}
 	dp->use_fw_training = false;
@@ -673,7 +670,7 @@ static int cdn_dp_get_msa_misc(struct video_info *video,
 			       struct drm_display_mode *mode)
 {
 	u32 msa_misc;
-	u8 val[2];
+	u8 val[2] = {0};
 
 	switch (video->color_fmt) {
 	case PXL_RGB:
@@ -873,7 +870,6 @@ err_config_video:
 
 int cdn_dp_audio_stop(struct cdn_dp_device *dp, struct audio_info *audio)
 {
-	u32 val;
 	int ret;
 
 	ret = cdn_dp_reg_write(dp, AUDIO_PACK_CONTROL, 0);
@@ -882,11 +878,7 @@ int cdn_dp_audio_stop(struct cdn_dp_device *dp, struct audio_info *audio)
 		return ret;
 	}
 
-	val = SPDIF_AVG_SEL | SPDIF_JITTER_BYPASS;
-	val |= SPDIF_FIFO_MID_RANGE(0xe0);
-	val |= SPDIF_JITTER_THRSH(0xe0);
-	val |= SPDIF_JITTER_AVG_WIN(7);
-	writel(val, dp->regs + SPDIF_CTRL_ADDR);
+	writel(0, dp->regs + SPDIF_CTRL_ADDR);
 
 	/* clearn the audio config and reset */
 	writel(0, dp->regs + AUDIO_SRC_CNTL);
@@ -1006,26 +998,27 @@ static void cdn_dp_audio_config_i2s(struct cdn_dp_device *dp,
 	writel(I2S_DEC_START, dp->regs + AUDIO_SRC_CNTL);
 }
 
-static void cdn_dp_audio_config_spdif(struct cdn_dp_device *dp)
+static void cdn_dp_audio_config_spdif(struct cdn_dp_device *dp,
+				      struct audio_info *audio)
 {
 	u32 val;
+	int sub_pckt_num = 1;
 
-	val = SPDIF_AVG_SEL | SPDIF_JITTER_BYPASS;
-	val |= SPDIF_FIFO_MID_RANGE(0xe0);
-	val |= SPDIF_JITTER_THRSH(0xe0);
-	val |= SPDIF_JITTER_AVG_WIN(7);
-	writel(val, dp->regs + SPDIF_CTRL_ADDR);
-
+	if (audio->channels == 2) {
+		if (dp->link.num_lanes == 1)
+			sub_pckt_num = 2;
+		else
+			sub_pckt_num = 4;
+	}
 	writel(SYNC_WR_TO_CH_ZERO, dp->regs + FIFO_CNTL);
 
-	val = MAX_NUM_CH(2) | AUDIO_TYPE_LPCM | CFG_SUB_PCKT_NUM(4);
+	val = MAX_NUM_CH(audio->channels);
+	val |= AUDIO_TYPE_LPCM;
+	val |= CFG_SUB_PCKT_NUM(sub_pckt_num);
 	writel(val, dp->regs + SMPL2PKT_CNFG);
 	writel(SMPL2PKT_EN, dp->regs + SMPL2PKT_CNTL);
 
 	val = SPDIF_ENABLE | SPDIF_AVG_SEL | SPDIF_JITTER_BYPASS;
-	val |= SPDIF_FIFO_MID_RANGE(0xe0);
-	val |= SPDIF_JITTER_THRSH(0xe0);
-	val |= SPDIF_JITTER_AVG_WIN(7);
 	writel(val, dp->regs + SPDIF_CTRL_ADDR);
 
 	clk_prepare_enable(dp->spdif_clk);
@@ -1071,7 +1064,7 @@ int cdn_dp_audio_config(struct cdn_dp_device *dp, struct audio_info *audio)
 	if (audio->format == AFMT_I2S)
 		cdn_dp_audio_config_i2s(dp, audio);
 	else if (audio->format == AFMT_SPDIF)
-		cdn_dp_audio_config_spdif(dp);
+		cdn_dp_audio_config_spdif(dp, audio);
 
 	ret = cdn_dp_reg_write(dp, AUDIO_PACK_CONTROL, AUDIO_PACK_EN);
 
@@ -1080,114 +1073,3 @@ err_audio_config:
 		DRM_DEV_ERROR(dp->dev, "audio config failed: %d\n", ret);
 	return ret;
 }
-
-int cdn_dp_hdcp_tx_configuration(struct cdn_dp_device *dp, int tx_mode,
-						 bool active)
-{
-	u8 msg;
-
-	msg = tx_mode;
-	if (active)
-		msg |= HDCP_TX_ACTIVATE;
-
-	return cdn_dp_mailbox_send(dp, MB_MODULE_ID_HDCP_TX,
-				   HDCP_TX_CONFIGURATION, sizeof(msg), &msg);
-}
-
-int cdn_dp_hdcp_tx_status_req(struct cdn_dp_device *dp, uint16_t *tx_status)
-{
-	u8 status[5];
-	int ret;
-
-	ret = cdn_dp_mailbox_send(dp, MB_MODULE_ID_HDCP_TX,
-				  HDCP_TX_STATUS_CHANGE, 0, NULL);
-	if (ret)
-		goto err_hdcp_tx_status_rq;
-
-	ret = cdn_dp_mailbox_validate_receive(dp, MB_MODULE_ID_HDCP_TX,
-					      HDCP_TX_STATUS_CHANGE,
-					      sizeof(status));
-	if (ret)
-		goto err_hdcp_tx_status_rq;
-
-	ret = cdn_dp_mailbox_read_receive(dp, status, sizeof(status));
-	if (ret)
-		goto err_hdcp_tx_status_rq;
-
-	*tx_status = status[0] << 8 | status[1];
-
-err_hdcp_tx_status_rq:
-	if (ret)
-		DRM_DEV_ERROR(dp->dev, "hdcp tx status failed: %d\n", ret);
-	return ret;
-}
-
-int cdn_dp_hdcp_tx_is_receiver_id_valid_req(struct cdn_dp_device *dp)
-{
-	int ret;
-	u32 mbox_size, i;
-	u8 header[4], *resp;
-
-	ret = cdn_dp_mailbox_send(dp, MB_MODULE_ID_HDCP_TX,
-				  HDCP_TX_IS_RECEIVER_ID_VALID,
-				  0, NULL);
-	if (ret)
-		goto err_hdcp_tx_is_receiver_id_valid_req;
-
-	/*
-	 * The size of HDCP_TX_IS_RECEIVER_ID_VALID_RESP is variable, which
-	 * is dependent on HDCP device type. It will response receiver ID
-	 * list if the device is a repeater.
-	 * So we need to distinguish the size.
-	 */
-	for (i = 0; i < 4; i++) {
-		ret = cdn_dp_mailbox_read(dp);
-		if (ret < 0)
-			goto err_hdcp_tx_is_receiver_id_valid_req;
-
-		header[i] = ret;
-	}
-
-	mbox_size = (header[2] << 8) | header[3];
-
-	if (header[0] != HDCP_TX_IS_RECEIVER_ID_VALID ||
-	    header[1] != MB_MODULE_ID_HDCP_TX ||
-	    !IS_HDCP_TX_RECEIVER_ID_VALID_RESP_SIZE_VALID(mbox_size)) {
-		ret = -EINVAL;
-		for (i = 0; i < mbox_size; i++)
-			if (cdn_dp_mailbox_read(dp) < 0)
-				break;
-
-		goto err_hdcp_tx_is_receiver_id_valid_req;
-	}
-
-	resp = kzalloc(mbox_size, GFP_KERNEL);
-	if (IS_ERR(resp) || IS_ERR_OR_NULL(resp)) {
-		ret = -ENOMEM;
-		goto err_hdcp_tx_is_receiver_id_valid_req;
-	}
-
-	ret = cdn_dp_mailbox_read_receive(dp, resp, mbox_size);
-
-	/* TODO judge the all receivers are in revocation list. */
-	kfree(resp);
-
-err_hdcp_tx_is_receiver_id_valid_req:
-	if (ret)
-		DRM_DEV_ERROR(dp->dev,
-			      "hdcp receivers id verification failed: %d\n",
-			      ret);
-	return ret;
-}
-
-int cdn_dp_hdcp_tx_respond_id_valid(struct cdn_dp_device *dp, bool valid)
-{
-	u8 msg = 0;
-
-	if (valid)
-		msg = 0x01;
-	return cdn_dp_mailbox_send(dp, MB_MODULE_ID_HDCP_TX,
-				   HDCP_TX_RESPOND_RECEIVER_ID_VALID,
-				   sizeof(msg), &msg);
-}
-

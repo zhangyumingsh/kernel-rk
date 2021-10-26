@@ -879,7 +879,7 @@ static u8 gup_check_update_file(struct i2c_client *client, st_fw_head* fw_head, 
     got_file_flag = 0x00;
     if (path)
     {
-        GTP_DEBUG("Update File path:%s, %d", path, strlen(path));
+        GTP_DEBUG("Update File path:%s, %zu", path, strlen(path));
         update_msg.file = filp_open(path, O_RDONLY, 0);
 
         if (IS_ERR(update_msg.file))
@@ -2741,7 +2741,7 @@ static u32 gup_clk_count_get(void)
     s32 temp;
     s8  buf[4];
 
-    while ((ready == 0)) //Wait for measurement complete
+    while (ready == 0) //Wait for measurement complete
     {
         i2c_read_bytes(i2c_connect_client, _bRO_MISCTL__MEA_RDY, buf, 1);
         ready = buf[0];
