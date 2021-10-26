@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 /*
  * Media Bus API header
  *
@@ -33,7 +34,7 @@
 
 #define MEDIA_BUS_FMT_FIXED			0x0001
 
-/* RGB - next is	0x101b */
+/* RGB - next is	0x1024 */
 #define MEDIA_BUS_FMT_RGB444_1X12		0x1016
 #define MEDIA_BUS_FMT_RGB444_2X8_PADHI_BE	0x1001
 #define MEDIA_BUS_FMT_RGB444_2X8_PADHI_LE	0x1002
@@ -60,8 +61,17 @@
 #define MEDIA_BUS_FMT_RGB101010_1X30		0x1018
 #define MEDIA_BUS_FMT_RGB121212_1X36		0x1019
 #define MEDIA_BUS_FMT_RGB161616_1X48		0x101a
+#define MEDIA_BUS_FMT_RGB666_1X7X3_JEIDA	0x101b
+#define MEDIA_BUS_FMT_SRGB888_3X8		0x101c
+#define MEDIA_BUS_FMT_SBGR888_3X8		0x101d
+#define MEDIA_BUS_FMT_SRBG888_3X8		0x101e
+#define MEDIA_BUS_FMT_SRGB888_DUMMY_4X8		0x101f
+#define MEDIA_BUS_FMT_SBGR888_DUMMY_4X8		0x1020
+#define MEDIA_BUS_FMT_SRBG888_DUMMY_4X8		0x1021
+#define MEDIA_BUS_FMT_RGB101010_1X7X5_SPWG      0x1022
+#define MEDIA_BUS_FMT_RGB101010_1X7X5_JEIDA     0x1023
 
-/* YUV (including grey) - next is	0x202c */
+/* YUV (including grey) - next is	0x202d */
 #define MEDIA_BUS_FMT_Y8_1X8			0x2001
 #define MEDIA_BUS_FMT_UV8_1X8			0x2015
 #define MEDIA_BUS_FMT_UYVY8_1_5X8		0x2002
@@ -73,6 +83,7 @@
 #define MEDIA_BUS_FMT_YUYV8_2X8			0x2008
 #define MEDIA_BUS_FMT_YVYU8_2X8			0x2009
 #define MEDIA_BUS_FMT_Y10_1X10			0x200a
+#define MEDIA_BUS_FMT_Y10_2X8_PADHI_LE		0x202c
 #define MEDIA_BUS_FMT_UYVY10_2X10		0x2018
 #define MEDIA_BUS_FMT_VYUY10_2X10		0x2019
 #define MEDIA_BUS_FMT_YUYV10_2X10		0x200b
@@ -106,7 +117,7 @@
 #define MEDIA_BUS_FMT_YUV16_1X48		0x202a
 #define MEDIA_BUS_FMT_UYYVYY16_0_5X48		0x202b
 
-/* Bayer - next is	0x3019 */
+/* Bayer - next is	0x3021 */
 #define MEDIA_BUS_FMT_SBGGR8_1X8		0x3001
 #define MEDIA_BUS_FMT_SGBRG8_1X8		0x3013
 #define MEDIA_BUS_FMT_SGRBG8_1X8		0x3002
@@ -131,14 +142,26 @@
 #define MEDIA_BUS_FMT_SGBRG12_1X12		0x3010
 #define MEDIA_BUS_FMT_SGRBG12_1X12		0x3011
 #define MEDIA_BUS_FMT_SRGGB12_1X12		0x3012
+#define MEDIA_BUS_FMT_SBGGR14_1X14		0x3019
+#define MEDIA_BUS_FMT_SGBRG14_1X14		0x301a
+#define MEDIA_BUS_FMT_SGRBG14_1X14		0x301b
+#define MEDIA_BUS_FMT_SRGGB14_1X14		0x301c
+#define MEDIA_BUS_FMT_SBGGR16_1X16		0x301d
+#define MEDIA_BUS_FMT_SGBRG16_1X16		0x301e
+#define MEDIA_BUS_FMT_SGRBG16_1X16		0x301f
+#define MEDIA_BUS_FMT_SRGGB16_1X16		0x3020
 
 /* JPEG compressed formats - next is	0x4002 */
 #define MEDIA_BUS_FMT_JPEG_1X8			0x4001
 
-/* Vendor specific formats - next is	0x5002 */
+/* Vendor specific formats - next is	0x5004 */
 
 /* S5C73M3 sensor specific interleaved UYVY and JPEG */
 #define MEDIA_BUS_FMT_S5C_UYVY_JPEG_1X8		0x5001
+/* sensor embedded data format */
+#define MEDIA_BUS_FMT_EBD_1X8			0x5002
+/* sensor shield pix data format */
+#define MEDIA_BUS_FMT_SPD_2X8			0x5003
 
 /* HSV - next is	0x6002 */
 #define MEDIA_BUS_FMT_AHSV8888_1X32		0x6001

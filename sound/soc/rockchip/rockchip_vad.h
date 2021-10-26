@@ -161,6 +161,9 @@
 #define NOISE_ABS(x)			(x)
 
 #define VAD_INT				0x74
+#define VAD_DATA_TRANS_INT_FLAG_MASK	BIT(11)
+#define VAD_DATA_TRANS_INT_EN_MASK	BIT(10)
+#define VAD_DATA_TRANS_INT_EN		BIT(10)
 #define VAD_IDLE_MASK			BIT(9)
 #define RAM_LOOP_FLGA_MASK		BIT(8)
 #define WORK_TIMEOUT_FLAG_MASK		BIT(7)
@@ -176,8 +179,49 @@
 #define VAD_DET_INT_EN_MASK		BIT(0)
 #define VAD_DET_INT_EN			BIT(0)
 
-/* acodec */
+#define VAD_AUX_CONTROL			0x78
+#define SAMPLE_CNT_EN_MASK		BIT(29)
+#define SAMPLE_CNT_EN			BIT(29)
+#define SAMPLE_CNT_DIS			0
+#define INT_TRIG_CTRL_EN_MASK		BIT(28)
+#define INT_TRIG_CTRL_EN		BIT(28)
+#define INT_TRIG_CTRL_DIS		0
+#define INT_TRIG_VALID_THD_MASK		GENMASK(27, 16)
+#define INT_TRIG_VALID_THD(x)		(((x) - 1) << 16)
+#define DATA_TRANS_KBYTE_THD_MASK	GENMASK(11, 4)
+#define DATA_TRANS_KBYTE_THD(x)		(((x) - 1) << 4)
+#define DATA_TRANS_TRIG_INT_EN_MASK	BIT(2)
+#define DATA_TRANS_TRIG_INT_EN		BIT(2)
+#define DATA_TRANS_TRIG_INT_DIS		0
+#define RAM_ITF_EN_MASK			BIT(1)
+#define RAM_ITF_EN			0
+#define RAM_ITF_DIS			BIT(1)
+#define BUS_WRITE_EN_MASK		BIT(0)
+#define BUS_WRITE_EN			BIT(0)
+#define BUS_WRITE_DIS			0
+
+#define VAD_SAMPLE_CNT			0x7c
+#define VAD_NOISE_DATA			0x100
+
+/* RK1808 SOC */
+#define RK1808_I2S0			0xff7e0800
+#define RK1808_I2S1			0xff7f0800
+#define RK1808_PDM			0xff800400
+
+/* RK3308 SOC */
 #define ACODEC_BASE			0xff560000
 #define ACODEC_ADC_ANA_CON0		0X340
+
+#define RK3308_I2S_8CH_0		0xff300800
+#define RK3308_I2S_8CH_1		0xff310800
+#define RK3308_I2S_8CH_2		0xff320800
+#define RK3308_I2S_8CH_3		0xff330800
+#define RK3308_PDM_8CH			0xff380400
+
+/* RK3568 SOC */
+#define RK3568_I2S_8CH_1		0xfe410800
+#define RK3568_I2S_2CH_2		0xfe420800
+#define RK3568_I2S_2CH_3		0xfe430800
+#define RK3568_PDM			0xfe440400
 
 #endif

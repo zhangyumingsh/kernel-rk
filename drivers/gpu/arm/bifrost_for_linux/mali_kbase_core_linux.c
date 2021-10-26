@@ -3928,19 +3928,9 @@ static int power_control_init(struct platform_device *pdev)
 		}
 	}
 
-#if defined(CONFIG_OF) && defined(CONFIG_PM_OPP)
-	/* Register the OPPs if they are available in device tree */
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 4, 0)) \
-	|| defined(LSK_OPPV2_BACKPORT)
-	err = dev_pm_opp_of_add_table(kbdev->dev);
-#elif (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 7, 0))
-	err = of_init_opp_table(kbdev->dev);
-#else
-	err = 0;
-#endif /* LINUX_VERSION_CODE */
+	err = kbase_platform_rk_init_opp_table(kbdev);
 	if (err)
-		dev_dbg(kbdev->dev, "OPP table not found\n");
-#endif /* CONFIG_OF && CONFIG_PM_OPP */
+		dev_err(kbdev->dev, "Failed to init_opp_table (%d)\n", err);
 
 	return 0;
 
@@ -4145,7 +4135,7 @@ static int kbase_device_debugfs_init(struct kbase_device *kbdev)
 
 #ifdef CONFIG_MALI_BIFROST_DEVFREQ
 #ifdef CONFIG_DEVFREQ_THERMAL
-	if (kbdev->inited_subsys & inited_devfreq)
+	if ((kbdev->inited_subsys & inited_devfreq) && !kbdev->model_data)
 		kbase_ipa_debugfs_init(kbdev);
 #endif /* CONFIG_DEVFREQ_THERMAL */
 #endif /* CONFIG_MALI_BIFROST_DEVFREQ */

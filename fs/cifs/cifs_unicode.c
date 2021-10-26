@@ -79,6 +79,10 @@ convert_sfu_char(const __u16 src_char, char *target)
 static bool
 convert_sfm_char(const __u16 src_char, char *target)
 {
+	if (src_char >= 0xF001 && src_char <= 0xF01F) {
+		*target = src_char - 0xF000;
+		return true;
+	}
 	switch (src_char) {
 	case SFM_COLON:
 		*target = ':';
@@ -100,9 +104,6 @@ convert_sfm_char(const __u16 src_char, char *target)
 		break;
 	case SFM_LESSTHAN:
 		*target = '<';
-		break;
-	case SFM_SLASH:
-		*target = '\\';
 		break;
 	case SFM_SPACE:
 		*target = ' ';
@@ -370,14 +371,9 @@ cifs_strndup_from_utf16(const char *src, const int maxlen,
 		if (!dst)
 			return NULL;
 		cifs_from_utf16(dst, (__le16 *) src, len, maxlen, codepage,
-			       NO_MAP_UNI_RSVD);
+				NO_MAP_UNI_RSVD);
 	} else {
-		len = strnlen(src, maxlen);
-		len++;
-		dst = kmalloc(len, GFP_KERNEL);
-		if (!dst)
-			return NULL;
-		strlcpy(dst, src, len);
+		dst = kstrndup(src, maxlen, GFP_KERNEL);
 	}
 
 	return dst;
@@ -417,6 +413,10 @@ static __le16 convert_to_sfm_char(char src_char, bool end_of_string)
 {
 	__le16 dest_char;
 
+	if (src_char >= 0x01 && src_char <= 0x1F) {
+		dest_char = cpu_to_le16(src_char + 0xF000);
+		return dest_char;
+	}
 	switch (src_char) {
 	case ':':
 		dest_char = cpu_to_le16(SFM_COLON);
@@ -496,7 +496,13 @@ cifsConvertToUTF16(__le16 *target, const char *source, int srclen,
 		else if (map_chars == SFM_MAP_UNI_RSVD) {
 			bool end_of_string;
 
-			if (i == srclen - 1)
+			/**
+			 * Remap spaces and periods found at the end of every
+			 * component of the path. The special cases of '.' and
+			 * '..' do not need to be dealt with explicitly because
+			 * they are addressed in namei.c:link_path_walk().
+			 **/
+			if ((i == srclen - 1) || (source[i+1] == '\\'))
 				end_of_string = true;
 			else
 				end_of_string = false;
@@ -580,7 +586,6 @@ ctoUTF16_out:
 	return j;
 }
 
-#ifdef CONFIG_CIFS_SMB2
 /*
  * cifs_local_to_utf16_bytes - how long will a string be after conversion?
  * @from - pointer to input string
@@ -639,4 +644,3 @@ cifs_strndup_to_utf16(const char *src, const int maxlen, int *utf16_len,
 	*utf16_len = len;
 	return dst;
 }
-#endif /* CONFIG_CIFS_SMB2 */

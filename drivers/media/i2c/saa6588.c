@@ -29,9 +29,9 @@
 #include <linux/slab.h>
 #include <linux/poll.h>
 #include <linux/wait.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 
-#include <media/saa6588.h>
+#include <media/i2c/saa6588.h>
 #include <media/v4l2-device.h>
 
 
@@ -392,7 +392,7 @@ static void saa6588_configure(struct saa6588 *s)
 
 /* ---------------------------------------------------------------------- */
 
-static long saa6588_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
+static long saa6588_command(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
 {
 	struct saa6588 *s = to_saa6588(sd);
 	struct saa6588_command *a = arg;
@@ -411,9 +411,9 @@ static long saa6588_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
 		break;
 		/* --- poll() for /dev/radio --- */
 	case SAA6588_CMD_POLL:
-		a->result = 0;
+		a->poll_mask = 0;
 		if (s->data_available_for_read)
-			a->result |= POLLIN | POLLRDNORM;
+			a->poll_mask |= EPOLLIN | EPOLLRDNORM;
 		poll_wait(a->instance, &s->read_queue, a->event_list);
 		break;
 
@@ -445,7 +445,7 @@ static int saa6588_s_tuner(struct v4l2_subdev *sd, const struct v4l2_tuner *vt)
 /* ----------------------------------------------------------------------- */
 
 static const struct v4l2_subdev_core_ops saa6588_core_ops = {
-	.ioctl = saa6588_ioctl,
+	.command = saa6588_command,
 };
 
 static const struct v4l2_subdev_tuner_ops saa6588_tuner_ops = {

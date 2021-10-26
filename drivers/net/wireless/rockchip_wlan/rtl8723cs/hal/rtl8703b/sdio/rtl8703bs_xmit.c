@@ -1,6 +1,6 @@
 /******************************************************************************
  *
- * Copyright(c) 2007 - 2012 Realtek Corporation. All rights reserved.
+ * Copyright(c) 2007 - 2017 Realtek Corporation.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of version 2 of the GNU General Public License as
@@ -11,12 +11,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
  * more details.
  *
- * You should have received a copy of the GNU General Public License along with
- * this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110, USA
- *
- *
- ******************************************************************************/
+ *****************************************************************************/
 #define _RTL8703BS_XMIT_C_
 
 #include <rtl8703b_hal.h>
@@ -124,7 +119,10 @@ query_free_page:
 		goto free_xmitbuf;
 
 #ifdef CONFIG_CHECK_LEAVE_LPS
-	traffic_check_for_leave_lps(padapter, _TRUE, pxmitbuf->agg_num);
+	#ifdef CONFIG_LPS_CHK_BY_TP
+	if (!adapter_to_pwrctl(padapter)->lps_chk_by_tp)
+	#endif
+		traffic_check_for_leave_lps(padapter, _TRUE, pxmitbuf->agg_num);
 #endif
 
 	rtw_write_port(padapter, deviceId, pxmitbuf->len, (u8 *)pxmitbuf);
@@ -197,6 +195,10 @@ s32 rtl8703bs_xmit_buf_handler(PADAPTER padapter)
 	}
 
 	if (RTW_CANNOT_RUN(padapter)) {
+		RTW_DBG(FUNC_ADPT_FMT "- bDriverStopped(%s) bSurpriseRemoved(%s)\n",
+			FUNC_ADPT_ARG(padapter),
+			rtw_is_drv_stopped(padapter) ? "True" : "False",
+			rtw_is_surprise_removed(padapter) ? "True" : "False");
 		return _FAIL;
 	}
 
@@ -256,6 +258,17 @@ static s32 xmit_xmitframes(PADAPTER padapter, struct xmit_priv *pxmitpriv)
 	pframe_queue = NULL;
 	pxmitbuf = NULL;
 	rtw_hal_get_def_var(padapter, HAL_DEF_TX_PAGE_SIZE, &page_size);
+
+#ifdef CONFIG_RTW_MGMT_QUEUE 
+	/* dump management frame directly */
+	do {
+		pxmitframe = rtw_dequeue_mgmt_xframe(pxmitpriv);
+		if (pxmitframe)
+			padapter->hal_func.mgnt_xmit(padapter, pxmitframe);
+	} while (pxmitframe != NULL);
+
+	hwentry--;
+#endif
 
 	if (padapter->registrypriv.wifi_spec == 1) {
 		for (idx = 0; idx < 4; idx++)
@@ -355,7 +368,7 @@ static s32 xmit_xmitframes(PADAPTER padapter, struct xmit_priv *pxmitpriv)
 
 				/* ok to send, remove frame from queue */
 #ifdef CONFIG_AP_MODE
-				if (check_fwstate(&padapter->mlmepriv, WIFI_AP_STATE) == _TRUE) {
+				if (MLME_IS_AP(padapter) || MLME_IS_MESH(padapter)) {
 					if ((pxmitframe->attrib.psta->state & WIFI_SLEEP_STATE) &&
 					    (pxmitframe->attrib.triggered == 0)) {
 						RTW_INFO("%s: one not triggered pkt in queue when this STA sleep,"
@@ -456,7 +469,6 @@ s32 rtl8703bs_xmit_handler(PADAPTER padapter)
 
 	pxmitpriv = &padapter->xmitpriv;
 
-wait:
 	ret = _rtw_down_sema(&pxmitpriv->SdioXmitSema);
 	if (_FAIL == ret) {
 		RTW_ERR("%s: down sema fail!\n", __FUNCTION__);
@@ -465,6 +477,10 @@ wait:
 
 next:
 	if (RTW_CANNOT_RUN(padapter)) {
+		RTW_DBG(FUNC_ADPT_FMT "- bDriverStopped(%s) bSurpriseRemoved(%s)\n",
+			FUNC_ADPT_ARG(padapter),
+			rtw_is_drv_stopped(padapter) ? "True" : "False",
+			rtw_is_surprise_removed(padapter) ? "True" : "False");
 		return _FAIL;
 	}
 
@@ -509,32 +525,28 @@ thread_return rtl8703bs_xmit_thread(thread_context context)
 	s32 ret;
 	PADAPTER padapter;
 	struct xmit_priv *pxmitpriv;
-	u8 thread_name[20] = "RTWHALXT";
+	u8 thread_name[20] = {0};
 
 
 	ret = _SUCCESS;
 	padapter = (PADAPTER)context;
 	pxmitpriv = &padapter->xmitpriv;
 
-	rtw_sprintf(thread_name, 20, "%s-"ADPT_FMT, thread_name, ADPT_ARG(padapter));
+	rtw_sprintf(thread_name, 20, "RTWHALXT-"ADPT_FMT, ADPT_ARG(padapter));
 	thread_enter(thread_name);
 
 	RTW_INFO("start "FUNC_ADPT_FMT"\n", FUNC_ADPT_ARG(padapter));
 
-	/* For now, no one would down sema to check thread is running, */
-	/* so mark this temporary, Lucas@20130820
-	*	_rtw_up_sema(&pxmitpriv->SdioXmitTerminateSema); */
-
 	do {
 		ret = rtl8703bs_xmit_handler(padapter);
-		if (signal_pending(current))
-			flush_signals(current);
+		flush_signals_thread();
 	} while (_SUCCESS == ret);
 
-	_rtw_up_sema(&pxmitpriv->SdioXmitTerminateSema);
+	RTW_INFO(FUNC_ADPT_FMT " Exit\n", FUNC_ADPT_ARG(padapter));
 
+	rtw_thread_wait_stop();
 
-	thread_exit();
+	return 0;
 }
 
 s32 rtl8703bs_mgnt_xmit(PADAPTER padapter, struct xmit_frame *pmgntframe)
@@ -600,8 +612,7 @@ s32 rtl8703bs_hal_xmit(PADAPTER padapter, struct xmit_frame *pxmitframe)
 	    (pxmitframe->attrib.ether_type != 0x0806) &&
 	    (pxmitframe->attrib.ether_type != 0x888e) &&
 	    (pxmitframe->attrib.dhcp_pkt != 1)) {
-		if (padapter->mlmepriv.LinkDetectInfo.bBusyTraffic == _TRUE)
-			rtw_issue_addbareq_cmd(padapter, pxmitframe);
+		rtw_issue_addbareq_cmd(padapter, pxmitframe, _TRUE);
 	}
 #endif
 
@@ -619,6 +630,31 @@ s32 rtl8703bs_hal_xmit(PADAPTER padapter, struct xmit_frame *pxmitframe)
 
 	return _FALSE;
 }
+
+#ifdef CONFIG_RTW_MGMT_QUEUE 
+s32 rtl8703bs_hal_mgmt_xmitframe_enqueue(PADAPTER adapter, struct xmit_frame *pxmitframe)
+{
+	struct xmit_priv *pxmitpriv;
+	s32 ret;
+
+	pxmitpriv = &adapter->xmitpriv;
+
+	ret = rtw_mgmt_xmitframe_enqueue(adapter, pxmitframe);
+	if (ret != _SUCCESS) {
+		rtw_free_xmitframe(pxmitpriv, pxmitframe);
+		pxmitpriv->tx_drop++;
+		return _FALSE;
+	}
+
+#ifdef CONFIG_SDIO_TX_TASKLET
+	tasklet_hi_schedule(&pxmitpriv->xmit_tasklet);
+#else
+	_rtw_up_sema(&pxmitpriv->SdioXmitSema);
+#endif
+
+	return _TRUE;
+}
+#endif
 
 s32	rtl8703bs_hal_xmitframe_enqueue(_adapter *padapter, struct xmit_frame *pxmitframe)
 {
@@ -658,7 +694,6 @@ s32 rtl8703bs_init_xmit_priv(PADAPTER padapter)
 
 	_rtw_spinlock_init(&phal->SdioTxFIFOFreePageLock);
 	_rtw_init_sema(&xmitpriv->SdioXmitSema, 0);
-	_rtw_init_sema(&xmitpriv->SdioXmitTerminateSema, 0);
 
 	return _SUCCESS;
 }

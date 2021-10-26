@@ -4,9 +4,6 @@
  */
 
 #include <linux/slab.h>
-#include <linux/bitops.h>
-#include <linux/regmap.h>
-#include <linux/clk.h>
 #include <linux/clk-provider.h>
 #include "clk.h"
 
@@ -53,7 +50,7 @@ static int clk_half_divider_bestdiv(struct clk_hw *hw, unsigned long rate,
 		if (bestdiv < 3)
 			bestdiv = 0;
 		else
-			bestdiv = (bestdiv - 3) / 2;
+			bestdiv = DIV_ROUND_UP(bestdiv - 3, 2);
 		bestdiv = bestdiv > maxdiv ? maxdiv : bestdiv;
 		return bestdiv;
 	}
@@ -108,7 +105,7 @@ static int clk_half_divider_set_rate(struct clk_hw *hw, unsigned long rate,
 	u32 val;
 
 	value = DIV_ROUND_UP_ULL(((u64)parent_rate * 2), rate);
-	value = (value - 3) / 2;
+	value = DIV_ROUND_UP(value - 3, 2);
 	value =  min_t(unsigned int, value, div_mask(divider->width));
 
 	if (divider->lock)
@@ -155,13 +152,13 @@ struct clk *rockchip_clk_register_halfdiv(const char *name,
 					  u8 num_parents, void __iomem *base,
 					  int muxdiv_offset, u8 mux_shift,
 					  u8 mux_width, u8 mux_flags,
-					  u8 div_shift, u8 div_width,
-					  u8 div_flags, int gate_offset,
-					  u8 gate_shift, u8 gate_flags,
-					  unsigned long flags,
+					  int div_offset, u8 div_shift,
+					  u8 div_width, u8 div_flags,
+					  int gate_offset, u8 gate_shift,
+					  u8 gate_flags, unsigned long flags,
 					  spinlock_t *lock)
 {
-	struct clk *clk;
+	struct clk *clk = ERR_PTR(-ENOMEM);
 	struct clk_mux *mux = NULL;
 	struct clk_gate *gate = NULL;
 	struct clk_divider *div = NULL;
@@ -200,7 +197,10 @@ struct clk *rockchip_clk_register_halfdiv(const char *name,
 			goto err_div;
 
 		div->flags = div_flags;
-		div->reg = base + muxdiv_offset;
+		if (div_offset)
+			div->reg = base + div_offset;
+		else
+			div->reg = base + muxdiv_offset;
 		div->shift = div_shift;
 		div->width = div_width;
 		div->lock = lock;

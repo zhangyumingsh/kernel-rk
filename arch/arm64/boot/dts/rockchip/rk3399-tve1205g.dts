@@ -319,7 +319,7 @@
 		status = "okay";
 	};
 
-	rk_headset {
+	rk_headset: rk-headset {
 		compatible = "rockchip_headset";
 		headset_gpio = <&gpio4 28 GPIO_ACTIVE_HIGH>;
 		pinctrl-names = "default";
@@ -413,6 +413,8 @@
 
 &edp {
 	status = "okay";
+	pinctrl-names = "default";
+	pinctrl-0 = <&edp_hpd>;
 
 	ports {
 		edp_out: port@1 {
@@ -433,6 +435,27 @@
 
 &emmc_phy {
 	status = "okay";
+};
+
+&firmware_android {
+	compatible = "android,firmware";
+	fstab {
+		compatible = "android,fstab";
+		system {
+			compatible = "android,system";
+			dev = "/dev/block/by-name/system";
+			type = "ext4";
+			mnt_flags = "ro,barrier=1,inode_readahead_blks=8";
+			fsmgr_flags = "wait,verify";
+		};
+		vendor {
+			compatible = "android,vendor";
+			dev = "/dev/block/by-name/vendor";
+			type = "ext4";
+			mnt_flags = "ro,barrier=1,inode_readahead_blks=8";
+			fsmgr_flags = "wait,verify";
+		};
+	};
 };
 
 &gpu {
@@ -868,6 +891,8 @@
 
 &pwm2 {
 	status = "okay";
+	pinctrl-names = "active";
+	pinctrl-0 = <&pwm2_pin_pull_down>;
 };
 
 &route_edp {
@@ -995,12 +1020,12 @@
 };
 
 &usbdrd3_0 {
-	extcon = <&fusb0>;
 	status = "okay";
 };
 
 &usbdrd_dwc3_0 {
 	status = "okay";
+	extcon = <&fusb0>;
 };
 
 &usb_host1_ehci {
@@ -1012,12 +1037,12 @@
 };
 
 &usbdrd3_1 {
-	extcon = <&fusb1>;
 	status = "okay";
 };
 
 &usbdrd_dwc3_1 {
 	status = "okay";
+	extcon = <&fusb1>;
 };
 
 &rockchip_suspend {
@@ -1052,34 +1077,34 @@
 &pinctrl {
 	sdio-pwrseq {
 		wifi_enable_h: wifi-enable-h {
-			rockchip,pins = <0 10 RK_FUNC_GPIO &pcfg_pull_none>;
+			rockchip,pins = <0 RK_PB2 RK_FUNC_GPIO &pcfg_pull_none>;
 		};
 	};
 
 	wireless-bluetooth {
 		uart0_gpios: uart0-gpios {
-			rockchip,pins = <2 19 RK_FUNC_GPIO &pcfg_pull_none>;
+			rockchip,pins = <2 RK_PC3 RK_FUNC_GPIO &pcfg_pull_none>;
 		};
 	};
 
 	pmic {
 		pmic_int_l: pmic-int-l {
 			rockchip,pins =
-				<1 21 RK_FUNC_GPIO &pcfg_pull_up>;
+				<1 RK_PC5 RK_FUNC_GPIO &pcfg_pull_up>;
 		};
 		vsel1_gpio: vsel1-gpio {
 			rockchip,pins =
-				<1 17 RK_FUNC_GPIO &pcfg_pull_down>;
+				<1 RK_PC1 RK_FUNC_GPIO &pcfg_pull_down>;
 		};
 		vsel2_gpio: vsel2-gpio {
 			rockchip,pins =
-				<1 14 RK_FUNC_GPIO &pcfg_pull_down>;
+				<1 RK_PB6 RK_FUNC_GPIO &pcfg_pull_down>;
 		};
 	};
 
 	headphone {
 		hp_det: hp-det {
-			rockchip,pins = <4 28 RK_FUNC_GPIO &pcfg_pull_up>;
+			rockchip,pins = <4 RK_PD4 RK_FUNC_GPIO &pcfg_pull_up>;
 		};
 	};
 
@@ -1104,7 +1129,7 @@
 	charger {
 		charger_ok: charge-ok {
 			rockchip,pins =
-				<1 23 RK_FUNC_GPIO &pcfg_pull_up>;
+				<1 RK_PC7 RK_FUNC_GPIO &pcfg_pull_up>;
 		};
 	};
 
@@ -1124,7 +1149,7 @@
 	usb2 {
 		host_vbus_drv: host-vbus-drv {
 			rockchip,pins =
-				<4 25 RK_FUNC_GPIO &pcfg_pull_none>;
+				<4 RK_PD1 RK_FUNC_GPIO &pcfg_pull_none>;
 		};
 	};
 

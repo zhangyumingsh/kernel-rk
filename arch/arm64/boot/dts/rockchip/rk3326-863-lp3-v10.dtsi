@@ -103,7 +103,7 @@
 		};
 	};
 
-	rk_headset {
+	rk_headset: rk-headset {
 		compatible = "rockchip_headset";
 		headset_gpio = <&gpio2 RK_PC6 GPIO_ACTIVE_LOW>;
 		pinctrl-names = "default";
@@ -214,7 +214,44 @@
 				pixelclk-active = <0>;
 			};
 		};
+
+		ports {
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			port@0 {
+				reg = <0>;
+				panel_in_dsi: endpoint {
+					remote-endpoint = <&dsi_out_panel>;
+				};
+			};
+		};
 	};
+
+	ports {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		port@1 {
+			reg = <1>;
+			dsi_out_panel: endpoint {
+				remote-endpoint = <&panel_in_dsi>;
+			};
+		};
+	};
+};
+
+&dsi_in_vopb {
+	status = "okay";
+};
+
+&dsi_in_vopl {
+	status = "disabled";
+};
+
+&route_dsi {
+	connect = <&vopb_out_dsi>;
+	status = "okay";
 };
 
 &bus_apll {
@@ -246,10 +283,6 @@
 		/*MHz	MHz	uV */
 		451	800	75000
 	>;
-};
-
-&dsi_in_vopl {
-	status = "disabled";
 };
 
 &dfi {
@@ -534,7 +567,6 @@
 			};
 
 			otg_switch: OTG_SWITCH {
-				regulator-boot-on;
 				regulator-name = "otg_switch";
 			};
 		};
@@ -629,10 +661,6 @@
 	vccio5-supply = <&vcc_3v0>;
 };
 
-&mipi_dphy {
-	status = "okay";
-};
-
 &nandc0 {
 	status = "okay";
 };
@@ -657,12 +685,12 @@
 
 		soc_slppin_slp: soc_slppin_slp {
 			rockchip,pins =
-				<0 RK_PA4 RK_FUNC_1 &pcfg_pull_none>;
+				<0 RK_PA4 1 &pcfg_pull_none>;
 		};
 
 		soc_slppin_rst: soc_slppin_rst {
 			rockchip,pins =
-				<0 RK_PA4 RK_FUNC_2 &pcfg_pull_none>;
+				<0 RK_PA4 2 &pcfg_pull_none>;
 		};
 	};
 
@@ -691,10 +719,6 @@
 &rockchip_suspend {
 	status = "okay";
 	rockchip,sleep-debug-en = <1>;
-};
-
-&route_dsi {
-	status = "okay";
 };
 
 &saradc {
@@ -731,7 +755,7 @@
 };
 
 &tsadc {
-	pinctrl-names = "init", "default";
+	pinctrl-names = "gpio", "otpout";
 	pinctrl-0 = <&tsadc_otp_gpio>;
 	pinctrl-1 = <&tsadc_otp_out>;
 	status = "okay";
@@ -781,6 +805,26 @@
 	status = "okay";
 };
 
-&vpu_combo {
+&mpp_srv {
+	status = "okay";
+};
+
+&vdpu {
+	status = "okay";
+};
+
+&vepu {
+	status = "okay";
+};
+
+&vpu_mmu {
+	status = "okay";
+};
+
+&hevc {
+	status = "okay";
+};
+
+&hevc_mmu {
 	status = "okay";
 };

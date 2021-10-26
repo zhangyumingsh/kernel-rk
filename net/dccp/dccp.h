@@ -44,9 +44,9 @@ extern bool dccp_debug;
 #define dccp_pr_debug_cat(format, a...)   DCCP_PRINTK(dccp_debug, format, ##a)
 #define dccp_debug(fmt, a...)		  dccp_pr_debug_cat(KERN_DEBUG fmt, ##a)
 #else
-#define dccp_pr_debug(format, a...)
-#define dccp_pr_debug_cat(format, a...)
-#define dccp_debug(format, a...)
+#define dccp_pr_debug(format, a...)	  do {} while (0)
+#define dccp_pr_debug_cat(format, a...)	  do {} while (0)
+#define dccp_debug(format, a...)	  do {} while (0)
 #endif
 
 extern struct inet_hashinfo dccp_hashinfo;
@@ -198,9 +198,9 @@ struct dccp_mib {
 };
 
 DECLARE_SNMP_STAT(struct dccp_mib, dccp_statistics);
-#define DCCP_INC_STATS(field)	    SNMP_INC_STATS(dccp_statistics, field)
-#define DCCP_INC_STATS_BH(field)    SNMP_INC_STATS_BH(dccp_statistics, field)
-#define DCCP_DEC_STATS(field)	    SNMP_DEC_STATS(dccp_statistics, field)
+#define DCCP_INC_STATS(field)	SNMP_INC_STATS(dccp_statistics, field)
+#define __DCCP_INC_STATS(field)	__SNMP_INC_STATS(dccp_statistics, field)
+#define DCCP_DEC_STATS(field)	SNMP_DEC_STATS(dccp_statistics, field)
 
 /*
  * 	Checksumming routines
@@ -316,7 +316,7 @@ int dccp_recvmsg(struct sock *sk, struct msghdr *msg, size_t len, int nonblock,
 		 int flags, int *addr_len);
 void dccp_shutdown(struct sock *sk, int how);
 int inet_dccp_listen(struct socket *sock, int backlog);
-unsigned int dccp_poll(struct file *file, struct socket *sock,
+__poll_t dccp_poll(struct file *file, struct socket *sock,
 		       poll_table *wait);
 int dccp_v4_connect(struct sock *sk, struct sockaddr *uaddr, int addr_len);
 void dccp_req_err(struct sock *sk, u64 seq);

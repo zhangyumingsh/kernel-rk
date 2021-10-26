@@ -49,6 +49,40 @@
 	model = "PopMetal-RK3288";
 	compatible = "chipspark,popmetal-rk3288", "rockchip,rk3288";
 
+	panel {
+		compatible ="simple-panel";
+		power-supply = <&vcc_lcd>;
+		enable-gpios = <&gpio7 21 GPIO_ACTIVE_HIGH>;
+		enable-delay-ms = <10>;
+		ddc-i2c-bus = <&i2c2>;
+
+		display-timings {
+			native-mode = <&timing0>;
+
+			timing0: timing0 {
+				clock-frequency = <74250000>;
+				hactive = <1280>;
+				vactive = <720>;
+				hback-porch = <220>;
+				hfront-porch = <120>;
+				vback-porch = <20>;
+				vfront-porch = <5>;
+				hsync-len = <40>;
+				vsync-len = <5>;
+				hsync-active = <0>;
+				vsync-active = <0>;
+				de-active = <0>;
+				pixelclk-active = <0>;
+			};
+		};
+
+		port {
+			panel_in_rgb: endpoint {
+				remote-endpoint = <&rgb_out_panel>;
+			};
+		};
+	};
+
 	sdio_pwrseq: sdio-pwrseq {
 		compatible = "mmc-pwrseq-simple";
 		clocks = <&rk808 1>;
@@ -225,43 +259,31 @@
 	status = "okay";
 };
 
-&route_lvds {
+&rgb {
 	status = "okay";
-};
 
-&lvds {
-	pinctrl-names = "default";
-	pinctrl-0 = <&lcdc_ctl>;
-	status = "okay";
-};
+	ports {
+		port@1 {
+			reg = <1>;
 
-&lvds_panel {
-	status = "okay";
-	compatible ="simple-panel";
-	enable-gpios = <&gpio7 21 GPIO_ACTIVE_HIGH>;
-	enable-delay-ms = <10>;
-	power-supply = <&vcc_lcd>;
-	ddc-i2c-bus = <&i2c2>;
-	rockchip,output = "rgb";
-
-	display-timings {
-		native-mode = <&timing0>;
-		timing0: timing0 {
-			clock-frequency = <74250000>;
-			hactive = <1280>;
-			vactive = <720>;
-			hback-porch = <220>;
-			hfront-porch = <120>;
-			vback-porch = <20>;
-			vfront-porch = <5>;
-			hsync-len = <40>;
-			vsync-len = <5>;
-			hsync-active = <0>;
-			vsync-active = <0>;
-			de-active = <0>;
-			pixelclk-active = <0>;
+			rgb_out_panel: endpoint {
+				remote-endpoint = <&panel_in_rgb>;
+			};
 		};
 	};
+};
+
+&rgb_in_vopl {
+	status = "okay";
+};
+
+&rgb_in_vopb {
+	status = "disabled";
+};
+
+&route_rgb {
+	connect = <&vopl_out_rgb>;
+	status = "okay";
 };
 
 &hevc_service {
@@ -517,43 +539,43 @@
 &pinctrl {
 	ak8963 {
 		comp_int: comp-int {
-			rockchip,pins = <8 1 RK_FUNC_GPIO &pcfg_pull_up>;
+			rockchip,pins = <8 RK_PA1 RK_FUNC_GPIO &pcfg_pull_up>;
 		};
 	};
 
 	buttons {
 		pwrbtn: pwrbtn {
-			rockchip,pins = <0 5 RK_FUNC_GPIO &pcfg_pull_up>;
+			rockchip,pins = <0 RK_PA5 RK_FUNC_GPIO &pcfg_pull_up>;
 		};
 	};
 
 	dvp {
 		dvp_pwr: dvp-pwr {
-			rockchip,pins = <0 17 RK_FUNC_GPIO &pcfg_pull_none>;
+			rockchip,pins = <0 RK_PC1 RK_FUNC_GPIO &pcfg_pull_none>;
 		};
 	};
 
 	ir {
 		ir_int: ir-int {
-			rockchip,pins = <0 6 RK_FUNC_GPIO &pcfg_pull_up>;
+			rockchip,pins = <0 RK_PA6 RK_FUNC_GPIO &pcfg_pull_up>;
 		};
 	};
 
 	mma8452 {
 		gsensor_int: gsensor-int {
-			rockchip,pins = <8 0 RK_FUNC_GPIO &pcfg_pull_up>;
+			rockchip,pins = <8 RK_PA0 RK_FUNC_GPIO &pcfg_pull_up>;
 		};
 	};
 
 	pmic {
 		pmic_int: pmic-int {
-			rockchip,pins = <RK_GPIO0 4 RK_FUNC_GPIO &pcfg_pull_up>;
+			rockchip,pins = <0 RK_PA4 RK_FUNC_GPIO &pcfg_pull_up>;
 		};
 	};
 
 	sdmmc {
 		sdmmc_pwr: sdmmc-pwr {
-			rockchip,pins = <7 11 RK_FUNC_GPIO &pcfg_pull_none>;
+			rockchip,pins = <7 RK_PB3 RK_FUNC_GPIO &pcfg_pull_none>;
 		};
 	};
 };

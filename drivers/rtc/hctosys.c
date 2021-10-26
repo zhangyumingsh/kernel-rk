@@ -24,7 +24,7 @@
  * the best guess is to add 0.5s.
  */
 
-static int __init rtc_hctosys(void)
+int rtc_hctosys(void)
 {
 	int err = -ENODEV;
 	struct rtc_time tm;
@@ -50,8 +50,10 @@ static int __init rtc_hctosys(void)
 	tv64.tv_sec = rtc_tm_to_time64(&tm);
 
 #if BITS_PER_LONG == 32
-	if (tv64.tv_sec > INT_MAX)
+	if (tv64.tv_sec > INT_MAX) {
+		err = -ERANGE;
 		goto err_read;
+	}
 #endif
 
 	err = do_settimeofday64(&tv64);
@@ -71,5 +73,3 @@ err_open:
 
 	return err;
 }
-
-late_initcall(rtc_hctosys);

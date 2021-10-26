@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _PARISC_PAGE_H
 #define _PARISC_PAGE_H
 
@@ -116,11 +117,15 @@ extern int npmem_ranges;
 /* This governs the relationship between virtual and physical addresses.
  * If you alter it, make sure to take care of our various fixed mapping
  * segments in fixmap.h */
+#if defined(BOOTLOADER)
+#define __PAGE_OFFSET	(0)		/* bootloader uses physical addresses */
+#else
 #ifdef CONFIG_64BIT
 #define __PAGE_OFFSET	(0x40000000)	/* 1GB */
 #else
 #define __PAGE_OFFSET	(0x10000000)	/* 256MB */
 #endif
+#endif /* BOOTLOADER */
 
 #define PAGE_OFFSET		((unsigned long)__PAGE_OFFSET)
 
@@ -140,9 +145,9 @@ extern int npmem_ranges;
 #define __pa(x)			((unsigned long)(x)-PAGE_OFFSET)
 #define __va(x)			((void *)((unsigned long)(x)+PAGE_OFFSET))
 
-#ifndef CONFIG_DISCONTIGMEM
+#ifndef CONFIG_SPARSEMEM
 #define pfn_valid(pfn)		((pfn) < max_mapnr)
-#endif /* CONFIG_DISCONTIGMEM */
+#endif
 
 #ifdef CONFIG_HUGETLB_PAGE
 #define HPAGE_SHIFT		PMD_SHIFT /* fixed for transparent huge pages */
@@ -174,7 +179,7 @@ extern int npmem_ranges;
 #include <asm-generic/getorder.h>
 #include <asm/pdc.h>
 
-#define PAGE0   ((struct zeropage *)__PAGE_OFFSET)
+#define PAGE0   ((struct zeropage *)absolute_pointer(__PAGE_OFFSET))
 
 /* DEFINITION OF THE ZERO-PAGE (PAG0) */
 /* based on work by Jason Eckhardt (jason@equator.com) */

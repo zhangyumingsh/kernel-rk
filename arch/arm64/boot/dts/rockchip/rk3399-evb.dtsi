@@ -40,12 +40,57 @@
  *     OTHER DEALINGS IN THE SOFTWARE.
  */
 
+#include <dt-bindings/input/input.h>
 #include <dt-bindings/pwm/pwm.h>
 #include "rk3399.dtsi"
 #include "rk3399-opp.dtsi"
 
 / {
 	compatible = "rockchip,rk3399-evb", "rockchip,rk3399";
+
+	adc_keys: adc-keys {
+		compatible = "adc-keys";
+		io-channels = <&saradc 1>;
+		io-channel-names = "buttons";
+		keyup-threshold-microvolt = <1800000>;
+		poll-interval = <100>;
+
+		vol-up-key {
+			label = "volume up";
+			linux,code = <KEY_VOLUMEUP>;
+			press-threshold-microvolt = <1750>;
+		};
+
+		vol-down-key {
+			label = "volume down";
+			linux,code = <KEY_VOLUMEDOWN>;
+			press-threshold-microvolt = <297500>;
+		};
+
+		menu-key {
+			label = "menu";
+			linux,code = <KEY_MENU>;
+			press-threshold-microvolt = <1305500>;
+		};
+
+		home-key {
+			label = "home";
+			linux,code = <KEY_HOME>;
+			press-threshold-microvolt = <621250>;
+		};
+
+		back-key {
+			label = "back";
+			linux,code = <KEY_BACK>;
+			press-threshold-microvolt = <980000>;
+		};
+
+		camera-key {
+			label = "camera";
+			linux,code = <KEY_CAMERA>;
+			press-threshold-microvolt = <787500>;
+		};
+	};
 
 	vcc3v3_sys: vcc3v3-sys {
 		compatible = "regulator-fixed";
@@ -490,21 +535,21 @@
 };
 
 &usbdrd3_0 {
-	extcon = <&fusb0>;
 	status = "okay";
 };
 
 &usbdrd_dwc3_0 {
 	status = "okay";
+	extcon = <&fusb0>;
 };
 
 &usbdrd3_1 {
-	extcon = <&fusb1>;
 	status = "okay";
 };
 
 &usbdrd_dwc3_1 {
 	status = "okay";
+	extcon = <&fusb1>;
 };
 
 &pwm0 {
@@ -529,55 +574,56 @@
 
 &saradc {
 	status = "okay";
+	vref-supply = <&vcc_1v8>;
 };
 
 &pinctrl {
 	sdio-pwrseq {
 		wifi_enable_h: wifi-enable-h {
-			rockchip,pins = <0 10 RK_FUNC_GPIO &pcfg_pull_none>;
+			rockchip,pins = <0 RK_PB2 RK_FUNC_GPIO &pcfg_pull_none>;
 		};
 	};
 
 	wireless-bluetooth {
 		uart0_gpios: uart0-gpios {
-			rockchip,pins = <2 19 RK_FUNC_GPIO &pcfg_pull_none>;
+			rockchip,pins = <2 RK_PC3 RK_FUNC_GPIO &pcfg_pull_none>;
 		};
 	};
 
 	pmic {
 		pmic_int_l: pmic-int-l {
 			rockchip,pins =
-				<1 21 RK_FUNC_GPIO &pcfg_pull_up>;
+				<1 RK_PC5 RK_FUNC_GPIO &pcfg_pull_up>;
 		};
 
 		pmic_dvs2: pmic-dvs2 {
 			rockchip,pins =
-				<1 18 RK_FUNC_GPIO &pcfg_pull_down>;
+				<1 RK_PC2 RK_FUNC_GPIO &pcfg_pull_down>;
 		};
 		vsel1_gpio: vsel1-gpio {
 			rockchip,pins =
-				<1 17 RK_FUNC_GPIO &pcfg_pull_down>;
+				<1 RK_PC1 RK_FUNC_GPIO &pcfg_pull_down>;
 		};
 		vsel2_gpio: vsel2-gpio {
 			rockchip,pins =
-				<1 14 RK_FUNC_GPIO &pcfg_pull_down>;
+				<1 RK_PB6 RK_FUNC_GPIO &pcfg_pull_down>;
 		};
 	};
 
 	usb2 {
 		host_vbus_drv: host-vbus-drv {
 			rockchip,pins =
-				<4 25 RK_FUNC_GPIO &pcfg_pull_none>;
+				<4 RK_PD1 RK_FUNC_GPIO &pcfg_pull_none>;
 		};
 	};
 
 	fusb30x {
 		fusb0_int: fusb0-int {
-			rockchip,pins = <1 2 RK_FUNC_GPIO &pcfg_pull_up>;
+			rockchip,pins = <1 RK_PA2 RK_FUNC_GPIO &pcfg_pull_up>;
 		};
 
 		fusb1_int: fusb1-int {
-			rockchip,pins = <1 24 RK_FUNC_GPIO &pcfg_pull_up>;
+			rockchip,pins = <1 RK_PD0 RK_FUNC_GPIO &pcfg_pull_up>;
 		};
 	};
 };

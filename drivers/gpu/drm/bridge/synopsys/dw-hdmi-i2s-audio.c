@@ -1,7 +1,8 @@
 /*
  * dw-hdmi-i2s-audio.c
  *
- * Copyright (c) 2016 Kuninori Morimoto <kuninori.morimoto.gx@renesas.com>
+ * Copyright (c) 2017 Renesas Solutions Corp.
+ * Kuninori Morimoto <kuninori.morimoto.gx@renesas.com>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -10,8 +11,6 @@
 #include <drm/bridge/dw_hdmi.h>
 
 #include <sound/hdmi-codec.h>
-
-#include <drm/drm_crtc.h> /* This is only to get MAX_ELD_BYTES */
 
 #include "dw-hdmi.h"
 #include "dw-hdmi-audio.h"
@@ -110,7 +109,8 @@ static int dw_hdmi_i2s_hw_params(struct device *dev, void *data,
 			 HDMI_AUD_INT_FIFO_FULL_MSK, HDMI_AUD_INT);
 	hdmi_update_bits(audio, HDMI_AUD_CONF0_SW_RESET,
 			 HDMI_AUD_CONF0_SW_RESET, HDMI_AUD_CONF0);
-	hdmi_write(audio, (u8)~HDMI_MC_SWRSTZ_I2S_RESET_MSK, HDMI_MC_SWRSTZ);
+	hdmi_update_bits(audio, HDMI_MC_SWRSTZ_I2S_RESET_MSK,
+			 HDMI_MC_SWRSTZ_I2S_RESET_MSK, HDMI_MC_SWRSTZ);
 
 	switch (hparms->mode) {
 	case NLPCM:
@@ -170,7 +170,7 @@ static int dw_hdmi_i2s_hw_params(struct device *dev, void *data,
 			 HDMI_FC_AUDSCHNLS7_SAMPFREQ_MASK,
 			 HDMI_FC_AUDSCHNLS7);
 	hdmi_write(audio,
-		   ((~val) << HDMI_FC_AUDSCHNLS8_ORIGSAMPFREQ_OFFSET),
+		   (((u8)~val) << HDMI_FC_AUDSCHNLS8_ORIGSAMPFREQ_OFFSET),
 		   HDMI_FC_AUDSCHNLS8);
 
 	/* Refer to CEA861-E Audio infoFrame
@@ -187,12 +187,17 @@ static int dw_hdmi_i2s_hw_params(struct device *dev, void *data,
 	hdmi_write(audio, 0x00, HDMI_FC_AUDICONF1);
 
 	/* Set Channel Allocation */
-	hdmi_write(audio, hparms->cea.channel_allocation, HDMI_FC_AUDICONF2);
+	hdmi_write(audio, 0x00, HDMI_FC_AUDICONF2);
 
 	/* Set LFEPBLDOWN-MIX INH and LSV */
 	hdmi_write(audio, 0x00, HDMI_FC_AUDICONF3);
 
 	dw_hdmi_audio_enable(hdmi);
+
+	hdmi_update_bits(audio, HDMI_AUD_CONF0_SW_RESET,
+			 HDMI_AUD_CONF0_SW_RESET, HDMI_AUD_CONF0);
+	hdmi_update_bits(audio, HDMI_MC_SWRSTZ_I2S_RESET_MSK,
+			 HDMI_MC_SWRSTZ_I2S_RESET_MSK, HDMI_MC_SWRSTZ);
 
 	return 0;
 }
@@ -204,23 +209,38 @@ static void dw_hdmi_i2s_audio_shutdown(struct device *dev, void *data)
 
 	dw_hdmi_audio_disable(hdmi);
 
-	hdmi_write(audio, HDMI_AUD_CONF0_SW_RESET, HDMI_AUD_CONF0);
-	hdmi_write(audio, (u8)~HDMI_MC_SWRSTZ_I2S_RESET_MSK, HDMI_MC_SWRSTZ);
+	hdmi_update_bits(audio,
+			 HDMI_AUD_CONF0_SW_RESET,
+			 HDMI_AUD_CONF0_SW_RESET |
+				(HDMI_AUD_CONF0_I2S_ALL_ENABLE ^
+				 HDMI_AUD_CONF0_I2S_SELECT_MASK),
+			 HDMI_AUD_CONF0);
 }
 
-static int dw_hdmi_i2s_get_eld(struct device *dev, void *data, u8 *buf, size_t len)
+static int dw_hdmi_i2s_get_dai_id(struct snd_soc_component *component,
+				  struct device_node *endpoint)
 {
-	struct dw_hdmi_i2s_audio_data *audio = data;
+	struct of_endpoint of_ep;
+	int ret;
 
-	memcpy(buf, audio->eld, min(len, (size_t)MAX_ELD_BYTES));
+	ret = of_graph_parse_endpoint(endpoint, &of_ep);
+	if (ret < 0)
+		return ret;
 
-	return 0;
+	/*
+	 * HDMI sound should be located as reg = <2>
+	 * Then, it is sound port 0
+	 */
+	if (of_ep.port == 2)
+		return 0;
+
+	return -EINVAL;
 }
 
 static struct hdmi_codec_ops dw_hdmi_i2s_ops = {
 	.hw_params	= dw_hdmi_i2s_hw_params,
 	.audio_shutdown	= dw_hdmi_i2s_audio_shutdown,
-	.get_eld	= dw_hdmi_i2s_get_eld,
+	.get_dai_id	= dw_hdmi_i2s_get_dai_id,
 };
 
 static int snd_dw_hdmi_probe(struct platform_device *pdev)
@@ -266,7 +286,6 @@ static struct platform_driver snd_dw_hdmi_driver = {
 	.remove	= snd_dw_hdmi_remove,
 	.driver	= {
 		.name = DRIVER_NAME,
-		.owner = THIS_MODULE,
 	},
 };
 module_platform_driver(snd_dw_hdmi_driver);

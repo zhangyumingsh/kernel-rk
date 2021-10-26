@@ -121,17 +121,6 @@
 		};
 	};
 
-	fiq_debugger: fiq-debugger {
-		compatible = "rockchip,fiq-debugger";
-		rockchip,serial-id = <2>;
-		rockchip,signal-irq = <182>;
-		rockchip,wake-irq = <0>;
-		rockchip,irq-mode-enable = <1>;  /* If enable uart uses irq instead of fiq */
-		rockchip,baudrate = <1500000>;  /* Only 115200 and 1500000 */
-		pinctrl-names = "default";
-		pinctrl-0 = <&uart2c_xfer>;
-	};
-
 	gpio-keys {
 		compatible = "gpio-keys";
 		#address-cells = <1>;
@@ -287,7 +276,14 @@
 		pwms = <&pwm2 0 25000 1>;
 		regulator-name = "vdd_log";
 		regulator-min-microvolt = <800000>;
-		regulator-max-microvolt = <1400000>;
+		/*
+		 * the firefly hardware using 3.0 v as APIO2_VDD
+		 * voltage, but the pwm divider resistance is designed
+		 * based on hardware which the APIO2_VDD is 1.8v, so we
+		 * need to change the regulator-max-microvolt from 1.4v
+		 * to 1.0v, so the pwm can output 0.9v voltage.
+		 */
+		regulator-max-microvolt = <1000000>;
 		regulator-always-on;
 		regulator-boot-on;
 
@@ -805,85 +801,85 @@
 &pinctrl {
 	buttons {
 		pwrbtn: pwrbtn {
-			rockchip,pins = <0 5 RK_FUNC_GPIO &pcfg_pull_up>;
+			rockchip,pins = <0 RK_PA5 RK_FUNC_GPIO &pcfg_pull_up>;
 		};
 	};
 
 	lcd-panel {
 		lcd_panel_reset: lcd-panel-reset {
-			rockchip,pins = <4 29 RK_FUNC_GPIO &pcfg_pull_up>;
+			rockchip,pins = <4 RK_PD5 RK_FUNC_GPIO &pcfg_pull_up>;
 		};
 
 		lcd_en: lcd-en {
-			rockchip,pins = <1 1 RK_FUNC_GPIO &pcfg_pull_up>;
+			rockchip,pins = <1 RK_PA1 RK_FUNC_GPIO &pcfg_pull_up>;
 		};
 	};
 
 	pcie {
 		pcie_drv: pcie-drv {
 			rockchip,pins =
-				<1 17 RK_FUNC_GPIO &pcfg_pull_none>;
+				<1 RK_PC1 RK_FUNC_GPIO &pcfg_pull_none>;
 			};
 			pcie_3g_drv: pcie-3g-drv {
 			rockchip,pins =
-				<0 2 RK_FUNC_GPIO &pcfg_pull_up>;
+				<0 RK_PA2 RK_FUNC_GPIO &pcfg_pull_up>;
 		};
 	};
 
 	pmic {
 		vsel1_gpio: vsel1-gpio {
 			rockchip,pins =
-				<1 18 RK_FUNC_GPIO &pcfg_pull_down>;
+				<1 RK_PC2 RK_FUNC_GPIO &pcfg_pull_down>;
 		};
 
 		vsel2_gpio: vsel2-gpio {
 			rockchip,pins =
-			<1 14 RK_FUNC_GPIO &pcfg_pull_down>;
+			<1 RK_PB6 RK_FUNC_GPIO &pcfg_pull_down>;
 		};
 	};
 
 	sdio-pwrseq {
 		wifi_enable_h: wifi-enable-h {
 			rockchip,pins =
-				<0 10 RK_FUNC_GPIO &pcfg_pull_none>;
+				<0 RK_PB2 RK_FUNC_GPIO &pcfg_pull_none>;
 		};
 	};
 
 	wireless-bluetooth {
 		uart0_gpios: uart0-gpios {
 			rockchip,pins =
-				<2 19 RK_FUNC_GPIO &pcfg_pull_none>;
+				<2 RK_PC3 RK_FUNC_GPIO &pcfg_pull_none>;
 		};
 	};
 
 	rt5640 {
 		rt5640_hpcon: rt5640-hpcon {
-			rockchip,pins = <4 21 RK_FUNC_GPIO &pcfg_pull_none>;
+			rockchip,pins = <4 RK_PC5 RK_FUNC_GPIO &pcfg_pull_none>;
 		};
 	};
 
 	pmic {
 		pmic_int_l: pmic-int-l {
 			rockchip,pins =
-				<1 21 RK_FUNC_GPIO &pcfg_pull_up>;
+				<1 RK_PC5 RK_FUNC_GPIO &pcfg_pull_up>;
 		};
 
 		pmic_dvs2: pmic-dvs2 {
 			rockchip,pins =
-				<1 18 RK_FUNC_GPIO &pcfg_pull_down>;
+				<1 RK_PC2 RK_FUNC_GPIO &pcfg_pull_down>;
 		};
 	};
 
 	usb2 {
 		host_vbus_drv: host-vbus-drv {
 			rockchip,pins =
-				<4 25 RK_FUNC_GPIO &pcfg_pull_none>;
+				<4 RK_PD1 RK_FUNC_GPIO &pcfg_pull_none>;
 		};
 	};
 
 	fusb30x {
 		fusb0_int: fusb0-int {
-			rockchip,pins = <1 2 RK_FUNC_GPIO &pcfg_pull_up>;
+			rockchip,pins = <1 RK_PA2 RK_FUNC_GPIO &pcfg_pull_up>;
 		};
 	};
 };
@@ -896,10 +892,6 @@
 	status = "okay";
 	pinctrl-names = "active";
 	pinctrl-0 = <&pwm2_pin_pull_down>;
-};
-
-&rkvdec {
-	status = "okay";
 };
 
 &rockchip_suspend {
@@ -1021,7 +1013,6 @@
 
 &usbdrd3_0 {
 	status = "okay";
-	extcon = <&fusb0>;
 };
 
 &usbdrd3_1 {
@@ -1030,6 +1021,7 @@
 
 &usbdrd_dwc3_0 {
 	status = "okay";
+	extcon = <&fusb0>;
 };
 
 &usbdrd_dwc3_1 {
@@ -1075,9 +1067,5 @@
 };
 
 &vopl_mmu {
-	status = "okay";
-};
-
-&vpu {
 	status = "okay";
 };

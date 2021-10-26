@@ -50,12 +50,15 @@ MODULE_SUPPORTED_DEVICE("{{ALSA,Loopback soundcard}}");
 
 #define MAX_PCM_SUBSTREAMS	8
 
+static bool use_raw_jiffies;
 static int index[SNDRV_CARDS] = SNDRV_DEFAULT_IDX;	/* Index 0-MAX */
 static char *id[SNDRV_CARDS] = SNDRV_DEFAULT_STR;	/* ID for this card */
 static bool enable[SNDRV_CARDS] = {1, [1 ... (SNDRV_CARDS - 1)] = 0};
 static int pcm_substreams[SNDRV_CARDS] = {[0 ... (SNDRV_CARDS - 1)] = 8};
 static int pcm_notify[SNDRV_CARDS];
 
+module_param(use_raw_jiffies, bool, 0444);
+MODULE_PARM_DESC(use_raw_jiffies, "Use raw jiffies follows local clocks.");
 module_param_array(index, int, NULL, 0444);
 MODULE_PARM_DESC(index, "Index value for loopback soundcard.");
 module_param_array(id, charp, NULL, 0444);
@@ -124,6 +127,22 @@ struct loopback_pcm {
 };
 
 static struct platform_device *devices[SNDRV_CARDS];
+
+static inline unsigned long get_raw_jiffies(void)
+{
+	struct timespec64 ts64;
+
+	getrawmonotonic64(&ts64);
+	return timespec64_to_jiffies(&ts64);
+}
+
+static inline unsigned long cycles_to_jiffies(void)
+{
+	if (likely(use_raw_jiffies))
+		return get_raw_jiffies();
+
+	return jiffies;
+}
 
 static inline unsigned int byte_pos(struct loopback_pcm *dpcm, unsigned int x)
 {
@@ -270,7 +289,7 @@ static int loopback_trigger(struct snd_pcm_substream *substream, int cmd)
 		err = loopback_check_format(cable, substream->stream);
 		if (err < 0)
 			return err;
-		dpcm->last_jiffies = jiffies;
+		dpcm->last_jiffies = cycles_to_jiffies();
 		dpcm->pcm_rate_shift = 0;
 		dpcm->last_drift = 0;
 		spin_lock(&cable->lock);	
@@ -302,7 +321,7 @@ static int loopback_trigger(struct snd_pcm_substream *substream, int cmd)
 	case SNDRV_PCM_TRIGGER_PAUSE_RELEASE:
 	case SNDRV_PCM_TRIGGER_RESUME:
 		spin_lock(&cable->lock);
-		dpcm->last_jiffies = jiffies;
+		dpcm->last_jiffies = cycles_to_jiffies();
 		cable->pause &= ~stream;
 		loopback_timer_start(dpcm);
 		spin_unlock(&cable->lock);
@@ -479,15 +498,16 @@ static unsigned int loopback_pos_update(struct loopback_cable *cable)
 			cable->streams[SNDRV_PCM_STREAM_CAPTURE];
 	unsigned long delta_play = 0, delta_capt = 0;
 	unsigned int running, count1, count2;
+	unsigned long cur_jiffies = cycles_to_jiffies();
 
 	running = cable->running ^ cable->pause;
 	if (running & (1 << SNDRV_PCM_STREAM_PLAYBACK)) {
-		delta_play = jiffies - dpcm_play->last_jiffies;
+		delta_play = cur_jiffies - dpcm_play->last_jiffies;
 		dpcm_play->last_jiffies += delta_play;
 	}
 
 	if (running & (1 << SNDRV_PCM_STREAM_CAPTURE)) {
-		delta_capt = jiffies - dpcm_capt->last_jiffies;
+		delta_capt = cur_jiffies - dpcm_capt->last_jiffies;
 		dpcm_capt->last_jiffies += delta_capt;
 	}
 
@@ -524,9 +544,9 @@ static unsigned int loopback_pos_update(struct loopback_cable *cable)
 	return running;
 }
 
-static void loopback_timer_function(unsigned long data)
+static void loopback_timer_function(struct timer_list *t)
 {
-	struct loopback_pcm *dpcm = (struct loopback_pcm *)data;
+	struct loopback_pcm *dpcm = from_timer(dpcm, t, timer);
 	unsigned long flags;
 
 	spin_lock_irqsave(&dpcm->cable->lock, flags);
@@ -556,7 +576,7 @@ static snd_pcm_uframes_t loopback_pointer(struct snd_pcm_substream *substream)
 	return bytes_to_frames(runtime, pos);
 }
 
-static struct snd_pcm_hardware loopback_pcm_hardware =
+static const struct snd_pcm_hardware loopback_pcm_hardware =
 {
 	.info =		(SNDRV_PCM_INFO_INTERLEAVED | SNDRV_PCM_INFO_MMAP |
 			 SNDRV_PCM_INFO_MMAP_VALID | SNDRV_PCM_INFO_PAUSE |
@@ -697,8 +717,7 @@ static int loopback_open(struct snd_pcm_substream *substream)
 	}
 	dpcm->loopback = loopback;
 	dpcm->substream = substream;
-	setup_timer(&dpcm->timer, loopback_timer_function,
-		    (unsigned long)dpcm);
+	timer_setup(&dpcm->timer, loopback_timer_function, 0);
 
 	cable = loopback->cables[substream->number][dev];
 	if (!cable) {
@@ -769,7 +788,7 @@ static int loopback_close(struct snd_pcm_substream *substream)
 	return 0;
 }
 
-static struct snd_pcm_ops loopback_playback_ops = {
+static const struct snd_pcm_ops loopback_pcm_ops = {
 	.open =		loopback_open,
 	.close =	loopback_close,
 	.ioctl =	snd_pcm_lib_ioctl,
@@ -779,20 +798,6 @@ static struct snd_pcm_ops loopback_playback_ops = {
 	.trigger =	loopback_trigger,
 	.pointer =	loopback_pointer,
 	.page =		snd_pcm_lib_get_vmalloc_page,
-	.mmap =		snd_pcm_lib_mmap_vmalloc,
-};
-
-static struct snd_pcm_ops loopback_capture_ops = {
-	.open =		loopback_open,
-	.close =	loopback_close,
-	.ioctl =	snd_pcm_lib_ioctl,
-	.hw_params =	loopback_hw_params,
-	.hw_free =	loopback_hw_free,
-	.prepare =	loopback_prepare,
-	.trigger =	loopback_trigger,
-	.pointer =	loopback_pointer,
-	.page =		snd_pcm_lib_get_vmalloc_page,
-	.mmap =		snd_pcm_lib_mmap_vmalloc,
 };
 
 static int loopback_pcm_new(struct loopback *loopback,
@@ -805,8 +810,8 @@ static int loopback_pcm_new(struct loopback *loopback,
 			  substreams, substreams, &pcm);
 	if (err < 0)
 		return err;
-	snd_pcm_set_ops(pcm, SNDRV_PCM_STREAM_PLAYBACK, &loopback_playback_ops);
-	snd_pcm_set_ops(pcm, SNDRV_PCM_STREAM_CAPTURE, &loopback_capture_ops);
+	snd_pcm_set_ops(pcm, SNDRV_PCM_STREAM_PLAYBACK, &loopback_pcm_ops);
+	snd_pcm_set_ops(pcm, SNDRV_PCM_STREAM_CAPTURE, &loopback_pcm_ops);
 
 	pcm->private_data = loopback;
 	pcm->info_flags = 0;
@@ -1062,6 +1067,14 @@ static int loopback_mixer_new(struct loopback *loopback, int notify)
 					return -ENOMEM;
 				kctl->id.device = dev;
 				kctl->id.subdevice = substr;
+
+				/* Add the control before copying the id so that
+				 * the numid field of the id is set in the copy.
+				 */
+				err = snd_ctl_add(card, kctl);
+				if (err < 0)
+					return err;
+
 				switch (idx) {
 				case ACTIVE_IDX:
 					setup->active_id = kctl->id;
@@ -1078,9 +1091,6 @@ static int loopback_mixer_new(struct loopback *loopback, int notify)
 				default:
 					break;
 				}
-				err = snd_ctl_add(card, kctl);
-				if (err < 0)
-					return err;
 			}
 		}
 	}
@@ -1108,7 +1118,7 @@ static void print_dpcm_info(struct snd_info_buffer *buffer,
 	snd_iprintf(buffer, "    irq_pos:\t\t%u\n", dpcm->irq_pos);
 	snd_iprintf(buffer, "    period_frac:\t%u\n", dpcm->period_size_frac);
 	snd_iprintf(buffer, "    last_jiffies:\t%lu (%lu)\n",
-					dpcm->last_jiffies, jiffies);
+					dpcm->last_jiffies, cycles_to_jiffies());
 	snd_iprintf(buffer, "    timer_expires:\t%lu\n", dpcm->timer.expires);
 }
 

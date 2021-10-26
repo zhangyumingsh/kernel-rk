@@ -160,7 +160,7 @@ static struct rc_map_list cec_map = {
 	.map = {
 		.scan		= cec,
 		.size		= ARRAY_SIZE(cec),
-		.rc_type	= RC_TYPE_CEC,
+		.rc_proto	= RC_PROTO_CEC,
 		.name		= RC_MAP_CEC,
 	}
 };
@@ -175,7 +175,7 @@ static void __exit exit_rc_map_cec(void)
 	rc_map_unregister(&cec_map);
 }
 
-subsys_initcall(init_rc_map_cec);
+module_init(init_rc_map_cec);
 module_exit(exit_rc_map_cec);
 
 MODULE_LICENSE("GPL");

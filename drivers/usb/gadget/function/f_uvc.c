@@ -1,25 +1,22 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  *	uvc_gadget.c  --  USB Video Class Gadget driver
  *
  *	Copyright (C) 2009-2010
  *	    Laurent Pinchart (laurent.pinchart@ideasonboard.com)
- *
- *	This program is free software; you can redistribute it and/or modify
- *	it under the terms of the GNU General Public License as published by
- *	the Free Software Foundation; either version 2 of the License, or
- *	(at your option) any later version.
  */
 
-#include <linux/kernel.h>
-#include <linux/module.h>
 #include <linux/device.h>
 #include <linux/errno.h>
 #include <linux/fs.h>
+#include <linux/kernel.h>
 #include <linux/list.h>
+#include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/string.h>
 #include <linux/usb/ch9.h>
 #include <linux/usb/gadget.h>
+#include <linux/usb/g_uvc.h>
 #include <linux/usb/video.h>
 #include <linux/vmalloc.h>
 #include <linux/wait.h>
@@ -34,6 +31,8 @@
 #include "uvc_video.h"
 
 unsigned int uvc_gadget_trace_param;
+module_param_named(trace, uvc_gadget_trace_param, uint, 0644);
+MODULE_PARM_DESC(trace, "Trace level bitmask");
 
 /* --------------------------------------------------------------------------
  * Function descriptors
@@ -125,6 +124,18 @@ static struct usb_interface_descriptor uvc_streaming_intf_alt0 = {
 	.iInterface		= 0,
 };
 
+static struct usb_interface_descriptor uvc_bulk_streaming_intf_alt0 = {
+	.bLength		= USB_DT_INTERFACE_SIZE,
+	.bDescriptorType	= USB_DT_INTERFACE,
+	.bInterfaceNumber	= UVC_INTF_VIDEO_STREAMING,
+	.bAlternateSetting	= 0,
+	.bNumEndpoints		= 1,
+	.bInterfaceClass	= USB_CLASS_VIDEO,
+	.bInterfaceSubClass	= UVC_SC_VIDEOSTREAMING,
+	.bInterfaceProtocol	= 0x00,
+	.iInterface		= 0,
+};
+
 static struct usb_interface_descriptor uvc_streaming_intf_alt1 = {
 	.bLength		= USB_DT_INTERFACE_SIZE,
 	.bDescriptorType	= USB_DT_INTERFACE,
@@ -148,12 +159,32 @@ static struct usb_endpoint_descriptor uvc_fs_streaming_ep = {
 	 */
 };
 
+static struct usb_endpoint_descriptor uvc_fs_bulk_streaming_ep = {
+	.bLength		= USB_DT_ENDPOINT_SIZE,
+	.bDescriptorType	= USB_DT_ENDPOINT,
+	.bEndpointAddress	= USB_DIR_IN,
+	.bmAttributes		= USB_ENDPOINT_XFER_BULK,
+	/* The wMaxPacketSize and bInterval values will be initialized from
+	 * module parameters.
+	 */
+};
+
 static struct usb_endpoint_descriptor uvc_hs_streaming_ep = {
 	.bLength		= USB_DT_ENDPOINT_SIZE,
 	.bDescriptorType	= USB_DT_ENDPOINT,
 	.bEndpointAddress	= USB_DIR_IN,
 	.bmAttributes		= USB_ENDPOINT_SYNC_ASYNC
 				| USB_ENDPOINT_XFER_ISOC,
+	/* The wMaxPacketSize and bInterval values will be initialized from
+	 * module parameters.
+	 */
+};
+
+static struct usb_endpoint_descriptor uvc_hs_bulk_streaming_ep = {
+	.bLength		= USB_DT_ENDPOINT_SIZE,
+	.bDescriptorType	= USB_DT_ENDPOINT,
+	.bEndpointAddress	= USB_DIR_IN,
+	.bmAttributes		= USB_ENDPOINT_XFER_BULK,
 	/* The wMaxPacketSize and bInterval values will be initialized from
 	 * module parameters.
 	 */
@@ -171,8 +202,27 @@ static struct usb_endpoint_descriptor uvc_ss_streaming_ep = {
 	 */
 };
 
+static struct usb_endpoint_descriptor uvc_ss_bulk_streaming_ep = {
+	.bLength		= USB_DT_ENDPOINT_SIZE,
+	.bDescriptorType	= USB_DT_ENDPOINT,
+
+	.bEndpointAddress	= USB_DIR_IN,
+	.bmAttributes		= USB_ENDPOINT_XFER_BULK,
+	/* The wMaxPacketSize and bInterval values will be initialized from
+	 * module parameters.
+	 */
+};
+
 static struct usb_ss_ep_comp_descriptor uvc_ss_streaming_comp = {
 	.bLength		= sizeof(uvc_ss_streaming_comp),
+	.bDescriptorType	= USB_DT_SS_ENDPOINT_COMP,
+	/* The bMaxBurst, bmAttributes and wBytesPerInterval values will be
+	 * initialized from module parameters.
+	 */
+};
+
+static struct usb_ss_ep_comp_descriptor uvc_ss_bulk_streaming_comp = {
+	.bLength		= sizeof(uvc_ss_bulk_streaming_comp),
 	.bDescriptorType	= USB_DT_SS_ENDPOINT_COMP,
 	/* The bMaxBurst, bmAttributes and wBytesPerInterval values will be
 	 * initialized from module parameters.
@@ -185,9 +235,19 @@ static const struct usb_descriptor_header * const uvc_fs_streaming[] = {
 	NULL,
 };
 
+static const struct usb_descriptor_header * const uvc_fs_bulk_streaming[] = {
+	(struct usb_descriptor_header *)&uvc_fs_bulk_streaming_ep,
+	NULL,
+};
+
 static const struct usb_descriptor_header * const uvc_hs_streaming[] = {
 	(struct usb_descriptor_header *) &uvc_streaming_intf_alt1,
 	(struct usb_descriptor_header *) &uvc_hs_streaming_ep,
+	NULL,
+};
+
+static const struct usb_descriptor_header * const uvc_hs_bulk_streaming[] = {
+	(struct usb_descriptor_header *)&uvc_hs_bulk_streaming_ep,
 	NULL,
 };
 
@@ -198,6 +258,11 @@ static const struct usb_descriptor_header * const uvc_ss_streaming[] = {
 	NULL,
 };
 
+static const struct usb_descriptor_header * const uvc_ss_bulk_streaming[] = {
+	(struct usb_descriptor_header *)&uvc_ss_bulk_streaming_ep,
+	(struct usb_descriptor_header *)&uvc_ss_bulk_streaming_comp,
+	NULL,
+};
 void uvc_set_trace_param(unsigned int trace)
 {
 	uvc_gadget_trace_param = trace;
@@ -214,6 +279,10 @@ uvc_function_ep0_complete(struct usb_ep *ep, struct usb_request *req)
 	struct uvc_device *uvc = req->context;
 	struct v4l2_event v4l2_event;
 	struct uvc_event *uvc_event = (void *)&v4l2_event.u.data;
+
+	uvc_trace(UVC_TRACE_CONTROL,
+		  "event_setup_out %d, data len %d\n",
+		  uvc->event_setup_out, req->actual);
 
 	if (uvc->event_setup_out) {
 		uvc->event_setup_out = 0;
@@ -237,6 +306,11 @@ uvc_function_setup(struct usb_function *f, const struct usb_ctrlrequest *ctrl)
 	 *	ctrl->bRequestType, ctrl->bRequest, le16_to_cpu(ctrl->wValue),
 	 *	le16_to_cpu(ctrl->wIndex), le16_to_cpu(ctrl->wLength));
 	 */
+
+	uvc_trace(UVC_TRACE_CONTROL,
+		  "setup request %02x %02x value %04x index %04x %04x\n",
+		  ctrl->bRequestType, ctrl->bRequest, le16_to_cpu(ctrl->wValue),
+		  le16_to_cpu(ctrl->wIndex), le16_to_cpu(ctrl->wLength));
 
 	if ((ctrl->bRequestType & USB_TYPE_MASK) != USB_TYPE_CLASS) {
 		INFO(f->config->cdev, "invalid request type\n");
@@ -272,15 +346,27 @@ static int
 uvc_function_get_alt(struct usb_function *f, unsigned interface)
 {
 	struct uvc_device *uvc = to_uvc(f);
+	struct f_uvc_opts *opts;
 
 	INFO(f->config->cdev, "uvc_function_get_alt(%u)\n", interface);
+
+	opts = fi_to_f_uvc_opts(f->fi);
 
 	if (interface == uvc->control_intf)
 		return 0;
 	else if (interface != uvc->streaming_intf)
 		return -EINVAL;
-	else
+	else if (!opts->streaming_bulk)
 		return uvc->video.ep->enabled ? 1 : 0;
+	else
+		/*
+		 * Alt settings in an interface are supported only for
+		 * ISOC endpoints as there are different alt-settings for
+		 * zero-bandwidth and full-bandwidth cases, but the same
+		 * is not true for BULK endpoints, as they have a single
+		 * alt-setting.
+		 */
+		return 0;
 }
 
 static int
@@ -290,9 +376,12 @@ uvc_function_set_alt(struct usb_function *f, unsigned interface, unsigned alt)
 	struct usb_composite_dev *cdev = f->config->cdev;
 	struct v4l2_event v4l2_event;
 	struct uvc_event *uvc_event = (void *)&v4l2_event.u.data;
+	struct f_uvc_opts *opts;
 	int ret;
 
 	INFO(cdev, "uvc_function_set_alt(%u, %u)\n", interface, alt);
+
+	opts = fi_to_f_uvc_opts(f->fi);
 
 	if (interface == uvc->control_intf) {
 		if (alt)
@@ -306,6 +395,14 @@ uvc_function_set_alt(struct usb_function *f, unsigned interface, unsigned alt)
 				return -EINVAL;
 
 		usb_ep_enable(uvc->control_ep);
+
+		if (uvc->event_suspend) {
+			memset(&v4l2_event, 0, sizeof(v4l2_event));
+			v4l2_event.type = UVC_EVENT_RESUME;
+			v4l2_event_queue(&uvc->vdev, &v4l2_event);
+			uvc->event_suspend = 0;
+			uvc_trace(UVC_TRACE_SUSPEND, "send UVC_EVENT_RESUME\n");
+		}
 
 		if (uvc->state == UVC_STATE_DISCONNECTED) {
 			memset(&v4l2_event, 0, sizeof(v4l2_event));
@@ -322,49 +419,94 @@ uvc_function_set_alt(struct usb_function *f, unsigned interface, unsigned alt)
 	if (interface != uvc->streaming_intf)
 		return -EINVAL;
 
-	/* TODO
-	if (usb_endpoint_xfer_bulk(&uvc->desc.vs_ep))
-		return alt ? -EINVAL : 0;
-	*/
+	if (!opts->streaming_bulk) {
+		switch (alt) {
+		case 0:
+			if (uvc->state != UVC_STATE_STREAMING)
+				return 0;
 
-	switch (alt) {
-	case 0:
-		if (uvc->state != UVC_STATE_STREAMING)
+			if (uvc->video.ep)
+				usb_ep_disable(uvc->video.ep);
+
+			memset(&v4l2_event, 0, sizeof(v4l2_event));
+			v4l2_event.type = UVC_EVENT_STREAMOFF;
+			v4l2_event_queue(&uvc->vdev, &v4l2_event);
+
+			uvc->state = UVC_STATE_CONNECTED;
 			return 0;
 
-		if (uvc->video.ep)
+		case 1:
+			if (uvc->state != UVC_STATE_CONNECTED)
+				return 0;
+
+			if (!uvc->video.ep)
+				return -EINVAL;
+
+			INFO(cdev, "reset UVC\n");
 			usb_ep_disable(uvc->video.ep);
 
-		memset(&v4l2_event, 0, sizeof(v4l2_event));
-		v4l2_event.type = UVC_EVENT_STREAMOFF;
-		v4l2_event_queue(&uvc->vdev, &v4l2_event);
+			ret = config_ep_by_speed(f->config->cdev->gadget,
+						 &uvc->func, uvc->video.ep);
+			if (ret)
+				return ret;
+			usb_ep_enable(uvc->video.ep);
 
-		uvc->state = UVC_STATE_CONNECTED;
-		return 0;
+			memset(&v4l2_event, 0, sizeof(v4l2_event));
+			v4l2_event.type = UVC_EVENT_STREAMON;
+			v4l2_event_queue(&uvc->vdev, &v4l2_event);
+			return USB_GADGET_DELAYED_STATUS;
 
-	case 1:
-		if (uvc->state != UVC_STATE_CONNECTED)
+		default:
+			return -EINVAL;
+		}
+	} else {
+		switch (uvc->state) {
+		case UVC_STATE_CONNECTED:
+			if (uvc->video.ep &&
+			    !uvc->video.ep->enabled) {
+				/*
+				 * Enable the video streaming endpoint,
+				 * but don't change the 'uvc->state'.
+				 */
+				ret = config_ep_by_speed(cdev->gadget,
+							 &uvc->func,
+							 uvc->video.ep);
+				if (ret)
+					return ret;
+				ret = usb_ep_enable(uvc->video.ep);
+				if (ret)
+					return ret;
+			} else {
+				memset(&v4l2_event, 0, sizeof(v4l2_event));
+				v4l2_event.type = UVC_EVENT_STREAMON;
+				v4l2_event_queue(&uvc->vdev, &v4l2_event);
+
+				uvc->state = UVC_STATE_STREAMING;
+			}
 			return 0;
 
-		if (!uvc->video.ep)
+		case UVC_STATE_STREAMING:
+			if (!alt) {
+				INFO(cdev, "bulk streaming intf not support alt 0\n");
+				return 0;
+			}
+
+			if (uvc->video.ep &&
+			    uvc->video.ep->enabled) {
+				ret = usb_ep_disable(uvc->video.ep);
+				if (ret)
+					return ret;
+			}
+
+			memset(&v4l2_event, 0, sizeof(v4l2_event));
+			v4l2_event.type = UVC_EVENT_STREAMOFF;
+			v4l2_event_queue(&uvc->vdev, &v4l2_event);
+			uvc->state = UVC_STATE_CONNECTED;
+			return 0;
+
+		default:
 			return -EINVAL;
-
-		INFO(cdev, "reset UVC\n");
-		usb_ep_disable(uvc->video.ep);
-
-		ret = config_ep_by_speed(f->config->cdev->gadget,
-				&(uvc->func), uvc->video.ep);
-		if (ret)
-			return ret;
-		usb_ep_enable(uvc->video.ep);
-
-		memset(&v4l2_event, 0, sizeof(v4l2_event));
-		v4l2_event.type = UVC_EVENT_STREAMON;
-		v4l2_event_queue(&uvc->vdev, &v4l2_event);
-		return USB_GADGET_DELAYED_STATUS;
-
-	default:
-		return -EINVAL;
+		}
 	}
 }
 
@@ -381,9 +523,34 @@ uvc_function_disable(struct usb_function *f)
 	v4l2_event_queue(&uvc->vdev, &v4l2_event);
 
 	uvc->state = UVC_STATE_DISCONNECTED;
+	f->config->cdev->gadget->uvc_enabled = false;
 
 	usb_ep_disable(uvc->video.ep);
 	usb_ep_disable(uvc->control_ep);
+}
+
+static void uvc_function_suspend(struct usb_function *f)
+{
+	struct uvc_device *uvc = to_uvc(f);
+	struct v4l2_event v4l2_event;
+
+	memset(&v4l2_event, 0, sizeof(v4l2_event));
+	v4l2_event.type = UVC_EVENT_SUSPEND;
+	v4l2_event_queue(&uvc->vdev, &v4l2_event);
+	uvc->event_suspend = 1;
+	uvc_trace(UVC_TRACE_SUSPEND, "send UVC_EVENT_SUSPEND\n");
+}
+
+static void uvc_function_resume(struct usb_function *f)
+{
+	struct uvc_device *uvc = to_uvc(f);
+	struct v4l2_event v4l2_event;
+
+	memset(&v4l2_event, 0, sizeof(v4l2_event));
+	v4l2_event.type = UVC_EVENT_RESUME;
+	v4l2_event_queue(&uvc->vdev, &v4l2_event);
+	uvc->event_suspend = 0;
+	uvc_trace(UVC_TRACE_SUSPEND, "send UVC_EVENT_RESUME\n");
 }
 
 /* --------------------------------------------------------------------------
@@ -395,6 +562,8 @@ uvc_function_connect(struct uvc_device *uvc)
 {
 	struct usb_composite_dev *cdev = uvc->func.config->cdev;
 	int ret;
+
+	cdev->gadget->uvc_enabled = true;
 
 	if ((ret = usb_function_activate(&uvc->func)) < 0)
 		INFO(cdev, "UVC connect failed with %d\n", ret);
@@ -414,10 +583,21 @@ uvc_function_disconnect(struct uvc_device *uvc)
  * USB probe and disconnect
  */
 
+static ssize_t function_name_show(struct device *dev,
+				  struct device_attribute *attr, char *buf)
+{
+	struct uvc_device *uvc = dev_get_drvdata(dev);
+
+	return sprintf(buf, "%s\n", uvc->func.fi->group.cg_item.ci_name);
+}
+
+static DEVICE_ATTR_RO(function_name);
+
 static int
 uvc_register_video(struct uvc_device *uvc)
 {
 	struct usb_composite_dev *cdev = uvc->func.config->cdev;
+	int ret;
 
 	/* TODO reference counting. */
 	uvc->vdev.v4l2_dev = &uvc->v4l2_dev;
@@ -430,7 +610,17 @@ uvc_register_video(struct uvc_device *uvc)
 
 	video_set_drvdata(&uvc->vdev, uvc);
 
-	return video_register_device(&uvc->vdev, VFL_TYPE_GRABBER, -1);
+	ret = video_register_device(&uvc->vdev, VFL_TYPE_GRABBER, -1);
+	if (ret < 0)
+		return ret;
+
+	ret = device_create_file(&uvc->vdev.dev, &dev_attr_function_name);
+	if (ret < 0) {
+		video_unregister_device(&uvc->vdev);
+		return ret;
+	}
+
+	return 0;
 }
 
 #define UVC_COPY_DESCRIPTOR(mem, dst, desc) \
@@ -459,32 +649,45 @@ uvc_copy_descriptors(struct uvc_device *uvc, enum usb_device_speed speed)
 	const struct uvc_descriptor_header * const *uvc_streaming_cls;
 	const struct usb_descriptor_header * const *uvc_streaming_std;
 	const struct usb_descriptor_header * const *src;
+	struct usb_interface_descriptor *streaming_intf_alt0;
 	struct usb_descriptor_header **dst;
 	struct usb_descriptor_header **hdr;
+	struct f_uvc_opts *opts;
 	unsigned int control_size;
 	unsigned int streaming_size;
 	unsigned int n_desc;
 	unsigned int bytes;
 	void *mem;
 
+	opts = fi_to_f_uvc_opts(uvc->func.fi);
+
 	switch (speed) {
 	case USB_SPEED_SUPER:
 		uvc_control_desc = uvc->desc.ss_control;
 		uvc_streaming_cls = uvc->desc.ss_streaming;
-		uvc_streaming_std = uvc_ss_streaming;
+		if (!opts->streaming_bulk)
+			uvc_streaming_std = uvc_ss_streaming;
+		else
+			uvc_streaming_std = uvc_ss_bulk_streaming;
 		break;
 
 	case USB_SPEED_HIGH:
 		uvc_control_desc = uvc->desc.fs_control;
 		uvc_streaming_cls = uvc->desc.hs_streaming;
-		uvc_streaming_std = uvc_hs_streaming;
+		if (!opts->streaming_bulk)
+			uvc_streaming_std = uvc_hs_streaming;
+		else
+			uvc_streaming_std = uvc_hs_bulk_streaming;
 		break;
 
 	case USB_SPEED_FULL:
 	default:
 		uvc_control_desc = uvc->desc.fs_control;
 		uvc_streaming_cls = uvc->desc.fs_streaming;
-		uvc_streaming_std = uvc_fs_streaming;
+		if (!opts->streaming_bulk)
+			uvc_streaming_std = uvc_fs_streaming;
+		else
+			uvc_streaming_std = uvc_fs_bulk_streaming;
 		break;
 	}
 
@@ -504,12 +707,17 @@ uvc_copy_descriptors(struct uvc_device *uvc, enum usb_device_speed speed)
 	 * uvc_{fs|hs}_streaming
 	 */
 
+	if (!opts->streaming_bulk)
+		streaming_intf_alt0 = &uvc_streaming_intf_alt0;
+	else
+		streaming_intf_alt0 = &uvc_bulk_streaming_intf_alt0;
+
 	/* Count descriptors and compute their size. */
 	control_size = 0;
 	streaming_size = 0;
 	bytes = uvc_iad.bLength + uvc_control_intf.bLength
 	      + uvc_control_ep.bLength + uvc_control_cs_ep.bLength
-	      + uvc_streaming_intf_alt0.bLength;
+	      + streaming_intf_alt0->bLength;
 
 	if (speed == USB_SPEED_SUPER) {
 		bytes += uvc_ss_control_comp.bLength;
@@ -559,7 +767,7 @@ uvc_copy_descriptors(struct uvc_device *uvc, enum usb_device_speed speed)
 		UVC_COPY_DESCRIPTOR(mem, dst, &uvc_ss_control_comp);
 
 	UVC_COPY_DESCRIPTOR(mem, dst, &uvc_control_cs_ep);
-	UVC_COPY_DESCRIPTOR(mem, dst, &uvc_streaming_intf_alt0);
+	UVC_COPY_DESCRIPTOR(mem, dst, streaming_intf_alt0);
 
 	uvc_streaming_header = mem;
 	UVC_COPY_DESCRIPTORS(mem, dst,
@@ -584,15 +792,24 @@ uvc_function_bind(struct usb_configuration *c, struct usb_function *f)
 	struct usb_ep *ep;
 	struct f_uvc_opts *opts;
 	int ret = -EINVAL;
+	u8 address;
 
 	INFO(cdev, "uvc_function_bind\n");
 
 	opts = fi_to_f_uvc_opts(f->fi);
 	/* Sanity check the streaming endpoint module parameters.
 	 */
-	opts->streaming_interval = clamp(opts->streaming_interval, 1U, 16U);
-	opts->streaming_maxpacket = clamp(opts->streaming_maxpacket, 1U, 3072U);
-	opts->streaming_maxburst = min(opts->streaming_maxburst, 15U);
+	if (!opts->streaming_bulk) {
+		opts->streaming_interval = clamp(opts->streaming_interval,
+						 1U, 16U);
+		opts->streaming_maxpacket = clamp(opts->streaming_maxpacket,
+						  1U, 3072U);
+		opts->streaming_maxburst = min(opts->streaming_maxburst, 15U);
+	} else {
+		opts->streaming_maxpacket = clamp(opts->streaming_maxpacket,
+						  1U, 1024U);
+		opts->streaming_maxburst = min(opts->streaming_maxburst, 15U);
+	}
 
 	/* For SS, wMaxPacketSize has to be 1024 if bMaxBurst is not 0 */
 	if (opts->streaming_maxburst &&
@@ -619,21 +836,46 @@ uvc_function_bind(struct usb_configuration *c, struct usb_function *f)
 		max_packet_size = opts->streaming_maxpacket / 3;
 	}
 
-	uvc_fs_streaming_ep.wMaxPacketSize =
-		cpu_to_le16(min(opts->streaming_maxpacket, 1023U));
-	uvc_fs_streaming_ep.bInterval = opts->streaming_interval;
+	if (!opts->streaming_bulk) {
+		uvc_fs_streaming_ep.wMaxPacketSize =
+			cpu_to_le16(min(opts->streaming_maxpacket, 1023U));
+		uvc_fs_streaming_ep.bInterval = opts->streaming_interval;
 
-	uvc_hs_streaming_ep.wMaxPacketSize =
-		cpu_to_le16(max_packet_size | ((max_packet_mult - 1) << 11));
-	uvc_hs_streaming_ep.bInterval = opts->streaming_interval;
+		uvc_hs_streaming_ep.wMaxPacketSize =
+			cpu_to_le16(max_packet_size |
+				    ((max_packet_mult - 1) << 11));
 
-	uvc_ss_streaming_ep.wMaxPacketSize = cpu_to_le16(max_packet_size);
-	uvc_ss_streaming_ep.bInterval = opts->streaming_interval;
-	uvc_ss_streaming_comp.bmAttributes = max_packet_mult - 1;
-	uvc_ss_streaming_comp.bMaxBurst = opts->streaming_maxburst;
-	uvc_ss_streaming_comp.wBytesPerInterval =
-		cpu_to_le16(max_packet_size * max_packet_mult *
-			    (opts->streaming_maxburst + 1));
+		/* A high-bandwidth endpoint must specify a bInterval value of 1 */
+		if (max_packet_mult > 1)
+			uvc_hs_streaming_ep.bInterval = 1;
+		else
+			uvc_hs_streaming_ep.bInterval = opts->streaming_interval;
+
+		uvc_ss_streaming_ep.wMaxPacketSize =
+			cpu_to_le16(max_packet_size);
+		uvc_ss_streaming_ep.bInterval = opts->streaming_interval;
+		uvc_ss_streaming_comp.bmAttributes = max_packet_mult - 1;
+		uvc_ss_streaming_comp.bMaxBurst = opts->streaming_maxburst;
+		uvc_ss_streaming_comp.wBytesPerInterval =
+			cpu_to_le16(max_packet_size * max_packet_mult *
+				    (opts->streaming_maxburst + 1));
+	} else {
+		uvc_fs_bulk_streaming_ep.wMaxPacketSize =
+			cpu_to_le16(min(opts->streaming_maxpacket, 64U));
+
+		uvc_hs_bulk_streaming_ep.wMaxPacketSize =
+			cpu_to_le16(min(opts->streaming_maxpacket, 512U));
+
+		uvc_ss_bulk_streaming_ep.wMaxPacketSize =
+			cpu_to_le16(max_packet_size);
+		uvc_ss_bulk_streaming_comp.bMaxBurst = opts->streaming_maxburst;
+		/*
+		 * As per USB 3.1 spec "Table 9-26. SuperSpeed Endpoint
+		 * Companion Descriptor", the wBytesPerInterval must be
+		 * set to zero for bulk endpoints.
+		 */
+		uvc_ss_bulk_streaming_comp.wBytesPerInterval = 0;
+	}
 
 	/* Allocate endpoints. */
 	ep = usb_ep_autoconfig(cdev->gadget, &uvc_control_ep);
@@ -643,23 +885,60 @@ uvc_function_bind(struct usb_configuration *c, struct usb_function *f)
 	}
 	uvc->control_ep = ep;
 
-	if (gadget_is_superspeed(c->cdev->gadget))
-		ep = usb_ep_autoconfig_ss(cdev->gadget, &uvc_ss_streaming_ep,
-					  &uvc_ss_streaming_comp);
-	else if (gadget_is_dualspeed(cdev->gadget))
-		ep = usb_ep_autoconfig(cdev->gadget, &uvc_hs_streaming_ep);
-	else
-		ep = usb_ep_autoconfig(cdev->gadget, &uvc_fs_streaming_ep);
+	if (gadget_is_superspeed(c->cdev->gadget)) {
+		if (!opts->streaming_bulk)
+			ep = usb_ep_autoconfig_ss(cdev->gadget,
+						  &uvc_ss_streaming_ep,
+						  &uvc_ss_streaming_comp);
+		else
+			ep = usb_ep_autoconfig_ss(cdev->gadget,
+						  &uvc_ss_bulk_streaming_ep,
+						  &uvc_ss_bulk_streaming_comp);
+	} else if (gadget_is_dualspeed(cdev->gadget)) {
+		if (!opts->streaming_bulk) {
+			ep = usb_ep_autoconfig(cdev->gadget,
+					       &uvc_hs_streaming_ep);
+		} else {
+			ep = usb_ep_autoconfig(cdev->gadget,
+					       &uvc_hs_bulk_streaming_ep);
+			/*
+			 * In ep_matches(), it will set wMaxPacketSize to 64
+			 * bytes if ep is Bulk and ep_comp is NULL for hs/fs
+			 * bulk maxpacket. So we need to set hs bulk maxpacket
+			 * 512 bytes again here.
+			 */
+			uvc_hs_bulk_streaming_ep.wMaxPacketSize =
+				cpu_to_le16(min(opts->streaming_maxpacket,
+						512U));
+		}
+	} else {
+		if (!opts->streaming_bulk)
+			ep = usb_ep_autoconfig(cdev->gadget,
+					       &uvc_fs_streaming_ep);
+		else
+			ep = usb_ep_autoconfig(cdev->gadget,
+					       &uvc_fs_bulk_streaming_ep);
+	}
 
 	if (!ep) {
 		INFO(cdev, "Unable to allocate streaming EP\n");
 		goto error;
 	}
 	uvc->video.ep = ep;
+	address = uvc->video.ep->address;
 
-	uvc_fs_streaming_ep.bEndpointAddress = uvc->video.ep->address;
-	uvc_hs_streaming_ep.bEndpointAddress = uvc->video.ep->address;
-	uvc_ss_streaming_ep.bEndpointAddress = uvc->video.ep->address;
+	if (!opts->streaming_bulk) {
+		uvc_fs_streaming_ep.bEndpointAddress = address;
+		uvc_hs_streaming_ep.bEndpointAddress = address;
+		uvc_ss_streaming_ep.bEndpointAddress = address;
+	} else {
+		uvc_fs_bulk_streaming_ep.bEndpointAddress = address;
+		uvc_hs_bulk_streaming_ep.bEndpointAddress = address;
+		uvc_ss_bulk_streaming_ep.bEndpointAddress = address;
+	}
+
+	if (opts->device_name)
+		uvc_en_us_strings[UVC_STRING_CONTROL_IDX].s = opts->device_name;
 
 	us = usb_gstrings_attach(cdev, uvc_function_strings,
 				 ARRAY_SIZE(uvc_en_us_strings));
@@ -670,8 +949,12 @@ uvc_function_bind(struct usb_configuration *c, struct usb_function *f)
 	uvc_iad.iFunction = us[UVC_STRING_CONTROL_IDX].id;
 	uvc_control_intf.iInterface = us[UVC_STRING_CONTROL_IDX].id;
 	ret = us[UVC_STRING_STREAMING_IDX].id;
-	uvc_streaming_intf_alt0.iInterface = ret;
-	uvc_streaming_intf_alt1.iInterface = ret;
+	if (!opts->streaming_bulk) {
+		uvc_streaming_intf_alt0.iInterface = ret;
+		uvc_streaming_intf_alt1.iInterface = ret;
+	} else {
+		uvc_bulk_streaming_intf_alt0.iInterface = ret;
+	}
 
 	/* Allocate interface IDs. */
 	if ((ret = usb_interface_id(c, f)) < 0)
@@ -679,12 +962,20 @@ uvc_function_bind(struct usb_configuration *c, struct usb_function *f)
 	uvc_iad.bFirstInterface = ret;
 	uvc_control_intf.bInterfaceNumber = ret;
 	uvc->control_intf = ret;
+	opts->control_interface = ret;
 
 	if ((ret = usb_interface_id(c, f)) < 0)
 		goto error;
-	uvc_streaming_intf_alt0.bInterfaceNumber = ret;
-	uvc_streaming_intf_alt1.bInterfaceNumber = ret;
+
+	if (!opts->streaming_bulk) {
+		uvc_streaming_intf_alt0.bInterfaceNumber = ret;
+		uvc_streaming_intf_alt1.bInterfaceNumber = ret;
+	} else {
+		uvc_bulk_streaming_intf_alt0.bInterfaceNumber = ret;
+	}
+
 	uvc->streaming_intf = ret;
+	opts->streaming_interface = ret;
 
 	/* Copy descriptors */
 	f->fs_descriptors = uvc_copy_descriptors(uvc, USB_SPEED_FULL);
@@ -732,6 +1023,8 @@ uvc_function_bind(struct usb_configuration *c, struct usb_function *f)
 	if (ret < 0)
 		goto error;
 
+	if (opts->streaming_bulk)
+		uvc->video.max_payload_size = uvc->video.imagesize;
 	/* Register a V4L2 device. */
 	ret = uvc_register_video(uvc);
 	if (ret < 0) {
@@ -761,6 +1054,13 @@ static void uvc_free_inst(struct usb_function_instance *f)
 	struct f_uvc_opts *opts = fi_to_f_uvc_opts(f);
 
 	mutex_destroy(&opts->lock);
+
+	if (opts->device_name_allocated) {
+		opts->device_name_allocated = false;
+		kfree(opts->device_name);
+		opts->device_name = NULL;
+	}
+
 	kfree(opts);
 }
 
@@ -773,6 +1073,7 @@ static struct usb_function_instance *uvc_alloc_inst(void)
 	struct UVC_EXTENSION_UNIT_DESCRIPTOR(1, 1) *ed;
 	struct uvc_color_matching_descriptor *md;
 	struct uvc_descriptor_header **ctl_cls;
+	int ret;
 
 	opts = kzalloc(sizeof(*opts), GFP_KERNEL);
 	if (!opts)
@@ -878,8 +1179,15 @@ static struct usb_function_instance *uvc_alloc_inst(void)
 
 	opts->streaming_interval = 1;
 	opts->streaming_maxpacket = 1024;
+	opts->uvc_num_request = UVC_NUM_REQUESTS;
+	opts->pm_qos_latency = 0;
 
-	uvcg_attach_configfs(opts);
+	ret = uvcg_attach_configfs(opts);
+	if (ret < 0) {
+		kfree(opts);
+		return ERR_PTR(ret);
+	}
+
 	return &opts->func_inst;
 }
 
@@ -899,6 +1207,7 @@ static void uvc_unbind(struct usb_configuration *c, struct usb_function *f)
 
 	INFO(cdev, "%s\n", __func__);
 
+	device_remove_file(&uvc->vdev.dev, &dev_attr_function_name);
 	video_unregister_device(&uvc->vdev);
 	v4l2_device_unregister(&uvc->v4l2_dev);
 
@@ -956,6 +1265,8 @@ static struct usb_function *uvc_alloc(struct usb_function_instance *fi)
 	uvc->func.disable = uvc_function_disable;
 	uvc->func.setup = uvc_function_setup;
 	uvc->func.free_func = uvc_free;
+	uvc->func.suspend = uvc_function_suspend;
+	uvc->func.resume = uvc_function_resume;
 	uvc->func.bind_deactivated = true;
 
 	return &uvc->func;

@@ -60,7 +60,7 @@
  */
 
 #include <linux/init.h>
-#include <linux/module.h>
+#include <linux/export.h>
 #include <linux/list.h>
 #include <linux/hash.h>
 #include <linux/sched.h>
@@ -71,7 +71,7 @@
 
 #include <asm/cache.h>
 #include <asm/setup.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 
 #include <asm/xen/page.h>
 #include <asm/xen/hypercall.h>
@@ -182,7 +182,7 @@ static void * __ref alloc_p2m_page(void)
 	if (unlikely(!slab_is_available()))
 		return alloc_bootmem_align(PAGE_SIZE, PAGE_SIZE);
 
-	return (void *)__get_free_page(GFP_KERNEL | __GFP_REPEAT);
+	return (void *)__get_free_page(GFP_KERNEL);
 }
 
 static void __ref free_p2m_page(void *p)
@@ -212,8 +212,7 @@ void __ref xen_build_mfn_list_list(void)
 	unsigned int level, topidx, mididx;
 	unsigned long *mid_mfn_p;
 
-	if (xen_feature(XENFEAT_auto_translated_physmap) ||
-	    xen_start_info->flags & SIF_VIRT_P2M_4TOOLS)
+	if (xen_start_info->flags & SIF_VIRT_P2M_4TOOLS)
 		return;
 
 	/* Pre-initialize p2m_top_mfn to be completely missing */
@@ -269,9 +268,6 @@ void __ref xen_build_mfn_list_list(void)
 
 void xen_setup_mfn_list_list(void)
 {
-	if (xen_feature(XENFEAT_auto_translated_physmap))
-		return;
-
 	BUG_ON(HYPERVISOR_shared_info == &xen_dummy_shared_info);
 
 	if (xen_start_info->flags & SIF_VIRT_P2M_4TOOLS)
@@ -290,9 +286,6 @@ void xen_setup_mfn_list_list(void)
 void __init xen_build_dynamic_phys_to_machine(void)
 {
 	unsigned long pfn;
-
-	 if (xen_feature(XENFEAT_auto_translated_physmap))
-		return;
 
 	xen_p2m_addr = (unsigned long *)xen_start_info->mfn_list;
 	xen_p2m_size = ALIGN(xen_start_info->nr_pages, P2M_PER_PAGE);
@@ -540,9 +533,6 @@ int xen_alloc_p2m_entry(unsigned long pfn)
 	unsigned long addr = (unsigned long)(xen_p2m_addr + pfn);
 	unsigned long p2m_pfn;
 
-	if (xen_feature(XENFEAT_auto_translated_physmap))
-		return 0;
-
 	ptep = lookup_address(addr, &level);
 	BUG_ON(!ptep || level != PG_LEVEL_4K);
 	pte_pg = (pte_t *)((unsigned long)ptep & ~(PAGE_SIZE - 1));
@@ -557,7 +547,7 @@ int xen_alloc_p2m_entry(unsigned long pfn)
 	if (p2m_top_mfn && pfn < MAX_P2M_PFN) {
 		topidx = p2m_top_index(pfn);
 		top_mfn_p = &p2m_top_mfn[topidx];
-		mid_mfn = ACCESS_ONCE(p2m_top_mfn_p[topidx]);
+		mid_mfn = READ_ONCE(p2m_top_mfn_p[topidx]);
 
 		BUG_ON(virt_to_mfn(mid_mfn) != *top_mfn_p);
 
@@ -623,8 +613,8 @@ int xen_alloc_p2m_entry(unsigned long pfn)
 	}
 
 	/* Expanded the p2m? */
-	if (pfn > xen_p2m_last_pfn) {
-		xen_p2m_last_pfn = pfn;
+	if (pfn >= xen_p2m_last_pfn) {
+		xen_p2m_last_pfn = ALIGN(pfn + 1, P2M_PER_PAGE);
 		HYPERVISOR_shared_info->arch.max_pfn = xen_p2m_last_pfn;
 	}
 
@@ -639,9 +629,6 @@ unsigned long __init set_phys_range_identity(unsigned long pfn_s,
 
 	if (unlikely(pfn_s >= xen_p2m_size))
 		return 0;
-
-	if (unlikely(xen_feature(XENFEAT_auto_translated_physmap)))
-		return pfn_e - pfn_s;
 
 	if (pfn_s > pfn_e)
 		return 0;
@@ -659,10 +646,6 @@ bool __set_phys_to_machine(unsigned long pfn, unsigned long mfn)
 {
 	pte_t *ptep;
 	unsigned int level;
-
-	/* don't track P2M changes in autotranslate guests */
-	if (unlikely(xen_feature(XENFEAT_auto_translated_physmap)))
-		return true;
 
 	if (unlikely(pfn >= xen_p2m_size)) {
 		BUG_ON(mfn != INVALID_P2M_ENTRY);
@@ -723,9 +706,12 @@ int set_foreign_p2m_mapping(struct gnttab_map_grant_ref *map_ops,
 
 	for (i = 0; i < count; i++) {
 		unsigned long mfn, pfn;
+		struct gnttab_unmap_grant_ref unmap[2];
+		int rc;
 
 		/* Do not add to override if the map failed. */
-		if (map_ops[i].status)
+		if (map_ops[i].status != GNTST_okay ||
+		    (kmap_ops && kmap_ops[i].status != GNTST_okay))
 			continue;
 
 		if (map_ops[i].flags & GNTMAP_contains_pte) {
@@ -739,10 +725,46 @@ int set_foreign_p2m_mapping(struct gnttab_map_grant_ref *map_ops,
 
 		WARN(pfn_to_mfn(pfn) != INVALID_P2M_ENTRY, "page must be ballooned");
 
-		if (unlikely(!set_phys_to_machine(pfn, FOREIGN_FRAME(mfn)))) {
-			ret = -ENOMEM;
-			goto out;
+		if (likely(set_phys_to_machine(pfn, FOREIGN_FRAME(mfn))))
+			continue;
+
+		/*
+		 * Signal an error for this slot. This in turn requires
+		 * immediate unmapping.
+		 */
+		map_ops[i].status = GNTST_general_error;
+		unmap[0].host_addr = map_ops[i].host_addr,
+		unmap[0].handle = map_ops[i].handle;
+		map_ops[i].handle = ~0;
+		if (map_ops[i].flags & GNTMAP_device_map)
+			unmap[0].dev_bus_addr = map_ops[i].dev_bus_addr;
+		else
+			unmap[0].dev_bus_addr = 0;
+
+		if (kmap_ops) {
+			kmap_ops[i].status = GNTST_general_error;
+			unmap[1].host_addr = kmap_ops[i].host_addr,
+			unmap[1].handle = kmap_ops[i].handle;
+			kmap_ops[i].handle = ~0;
+			if (kmap_ops[i].flags & GNTMAP_device_map)
+				unmap[1].dev_bus_addr = kmap_ops[i].dev_bus_addr;
+			else
+				unmap[1].dev_bus_addr = 0;
 		}
+
+		/*
+		 * Pre-populate both status fields, to be recognizable in
+		 * the log message below.
+		 */
+		unmap[0].status = 1;
+		unmap[1].status = 1;
+
+		rc = HYPERVISOR_grant_table_op(GNTTABOP_unmap_grant_ref,
+					       unmap, 1 + !!kmap_ops);
+		if (rc || unmap[0].status != GNTST_okay ||
+		    unmap[1].status != GNTST_okay)
+			pr_err_once("gnttab unmap failed: rc=%d st0=%d st1=%d\n",
+				    rc, unmap[0].status, unmap[1].status);
 	}
 
 out:
@@ -763,17 +785,15 @@ int clear_foreign_p2m_mapping(struct gnttab_unmap_grant_ref *unmap_ops,
 		unsigned long mfn = __pfn_to_mfn(page_to_pfn(pages[i]));
 		unsigned long pfn = page_to_pfn(pages[i]);
 
-		if (mfn == INVALID_P2M_ENTRY || !(mfn & FOREIGN_FRAME_BIT)) {
+		if (mfn != INVALID_P2M_ENTRY && (mfn & FOREIGN_FRAME_BIT))
+			set_phys_to_machine(pfn, INVALID_P2M_ENTRY);
+		else
 			ret = -EINVAL;
-			goto out;
-		}
-
-		set_phys_to_machine(pfn, INVALID_P2M_ENTRY);
 	}
 	if (kunmap_ops)
 		ret = HYPERVISOR_grant_table_op(GNTTABOP_unmap_grant_ref,
-						kunmap_ops, count);
-out:
+						kunmap_ops, count) ?: ret;
+
 	return ret;
 }
 EXPORT_SYMBOL_GPL(clear_foreign_p2m_mapping);

@@ -8,6 +8,8 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  */
 
+#include "../platform/rk/custom_log.h"
+
 #include <linux/list.h>
 #include <linux/mm.h>
 #include <linux/mm_types.h>
@@ -25,11 +27,6 @@
 /* Minimum size of allocator page pool */
 #define MALI_OS_MEMORY_KERNEL_BUFFER_SIZE_IN_PAGES (MALI_OS_MEMORY_KERNEL_BUFFER_SIZE_IN_MB * 256)
 #define MALI_OS_MEMORY_POOL_TRIM_JIFFIES (10 * CONFIG_HZ) /* Default to 10s */
-
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 8, 0)
-/* Write combine dma_attrs */
-static DEFINE_DMA_ATTRS(dma_attrs_wc);
-#endif
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(3, 0, 0)
 #if LINUX_VERSION_CODE < KERNEL_VERSION(2, 6, 35)
@@ -200,7 +197,7 @@ int mali_mem_os_alloc_pages(mali_mem_os_mem *os_mem, u32 size)
 	/* Allocate new pages, if needed. */
 	for (i = 0; i < remaining; i++) {
 		dma_addr_t dma_addr;
-		gfp_t flags = __GFP_ZERO | __GFP_REPEAT | __GFP_NOWARN | __GFP_COLD;
+		gfp_t flags = __GFP_ZERO | GFP_HIGHUSER;
 		int err;
 
 #if defined(CONFIG_ARM) && !defined(CONFIG_ARM_LPAE)
@@ -210,7 +207,6 @@ int mali_mem_os_alloc_pages(mali_mem_os_mem *os_mem, u32 size)
 		flags |= GFP_DMA32;
 #else
 #ifdef CONFIG_ZONE_DMA
-		flags |= GFP_DMA;
 #else
 		/* arm64 utgard only work on < 4G, but the kernel
 		 * didn't provide method to allocte memory < 4G
@@ -223,6 +219,7 @@ int mali_mem_os_alloc_pages(mali_mem_os_mem *os_mem, u32 size)
 		new_page = alloc_page(flags);
 
 		if (unlikely(NULL == new_page)) {
+			E("err.");
 			/* Calculate the number of pages actually allocated, and free them. */
 			os_mem->count = (page_count - remaining) + i;
 			atomic_add(os_mem->count, &mali_mem_os_allocator.allocated_pages);
@@ -518,7 +515,7 @@ _mali_osk_errcode_t mali_mem_os_get_table_page(mali_dma_addr *phys, mali_io_addr
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 8, 0)
 		*mapping = dma_alloc_attrs(&mali_platform_device->dev,
 					   _MALI_OSK_MALI_PAGE_SIZE, &tmp_phys,
-					   GFP_KERNEL, &dma_attrs_wc);
+					   GFP_KERNEL, DMA_ATTR_WRITE_COMBINE);
 #else
 		*mapping = dma_alloc_writecombine(&mali_platform_device->dev,
 						  _MALI_OSK_MALI_PAGE_SIZE, &tmp_phys, GFP_KERNEL);
@@ -557,7 +554,7 @@ void mali_mem_os_release_table_page(mali_dma_addr phys, void *virt)
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 8, 0)
 		dma_free_attrs(&mali_platform_device->dev,
 			       _MALI_OSK_MALI_PAGE_SIZE, virt, phys,
-			       &dma_attrs_wc);
+			       DMA_ATTR_WRITE_COMBINE);
 #else
 		dma_free_writecombine(&mali_platform_device->dev,
 				      _MALI_OSK_MALI_PAGE_SIZE, virt, phys);
@@ -612,7 +609,8 @@ static void mali_mem_os_page_table_pool_free(size_t nr_to_free)
 	for (i = 0; i < nr_to_free; i++) {
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 8, 0)
 		dma_free_attrs(&mali_platform_device->dev, _MALI_OSK_MALI_PAGE_SIZE,
-			       virt_arr[i], (dma_addr_t)phys_arr[i], &dma_attrs_wc);
+			       virt_arr[i], (dma_addr_t)phys_arr[i],
+			       DMA_ATTR_WRITE_COMBINE);
 #else
 		dma_free_writecombine(&mali_platform_device->dev,
 				      _MALI_OSK_MALI_PAGE_SIZE,
@@ -760,10 +758,6 @@ _mali_osk_errcode_t mali_mem_os_init(void)
 	if (NULL == mali_mem_os_allocator.wq) {
 		return _MALI_OSK_ERR_NOMEM;
 	}
-
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 8, 0)
-	dma_set_attr(DMA_ATTR_WRITE_COMBINE, &dma_attrs_wc);
-#endif
 
 	register_shrinker(&mali_mem_os_allocator.shrinker);
 

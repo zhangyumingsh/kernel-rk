@@ -100,6 +100,8 @@
 #define SCLK_MAC_PLL		150
 #define SCLK_MAC		151
 #define SCLK_MACREF_OUT		152
+#define SCLK_TESTOUT_SRC	153
+#define SCLK_TESTOUT		154
 
 #define DCLK_VOP0		190
 #define DCLK_VOP1		191
@@ -180,8 +182,8 @@
 #define PCLK_EFUSE256		369
 #define PCLK_EFUSE1024		370
 #define PCLK_ISP_IN		371
-#define PCLK_VIP                372
-#define PCLK_VIP_IN             373
+#define PCLK_VIP		372
+#define PCLK_VIP_IN		373
 #define PCLK_PD_ALIVE		374
 #define PCLK_PD_PMU		375
 

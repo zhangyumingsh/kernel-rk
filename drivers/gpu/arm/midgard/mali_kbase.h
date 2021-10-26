@@ -40,6 +40,7 @@
 #include <linux/vmalloc.h>
 #include <linux/wait.h>
 #include <linux/workqueue.h>
+#include <linux/sched/task_stack.h>
 
 #include "mali_base_kernel.h"
 #include <mali_kbase_uku.h>
@@ -208,7 +209,7 @@ int kbase_soft_event_update(struct kbase_context *kctx,
 
 bool kbase_replay_process(struct kbase_jd_atom *katom);
 
-void kbasep_soft_job_timeout_worker(unsigned long data);
+void kbasep_soft_job_timeout_worker(struct timer_list *t);
 void kbasep_complete_triggered_soft_events(struct kbase_context *kctx, u64 evt);
 
 /* api used internally for register access. Contains validation and tracing */
@@ -594,13 +595,13 @@ int kbase_io_history_resize(struct kbase_io_history *h, u16 new_size);
 
 #else /* CONFIG_DEBUG_FS */
 
-#define kbase_io_history_init(...) ((int)0)
+#define midgard_kbase_io_history_init(...) ((int)0)
 
-#define kbase_io_history_term CSTD_NOP
+#define midgard_kbase_io_history_term CSTD_NOP
 
-#define kbase_io_history_dump CSTD_NOP
+#define midgard_kbase_io_history_dump CSTD_NOP
 
-#define kbase_io_history_resize CSTD_NOP
+#define midgard_kbase_io_history_resize CSTD_NOP
 
 #endif /* CONFIG_DEBUG_FS */
 

@@ -52,7 +52,7 @@
 	compatible = "firefly,firefly-rk3288", "rockchip,rk3288";
 
 	chosen {
-		bootargs = "earlycon=uart8250,mmio32,0xff690000 swiotlb=1";
+		bootargs = "earlycon=uart8250,mmio32,0xff690000";
 	};
 
 	sdio_pwrseq: sdio-pwrseq {
@@ -148,23 +148,19 @@
 	};
 
 	reserved-memory {
-		ramoops_mem: ramoops@00000000 {
+		ramoops: ramoops@8000000 {
+			compatible = "ramoops";
 			reg = <0x0 0x8000000 0x0 0xF0000>;
+			record-size = <0x0 0x20000>;
+			console-size = <0x0 0x80000>;
+			ftrace-size = <0x0 0x00000>;
+			pmsg-size = <0x0 0x50000>;
 		};
 
 		drm_logo: drm-logo@00000000 {
 			compatible = "rockchip,drm-logo";
 			reg = <0x0 0x0 0x0 0x0>;
 		};
-	};
-
-	ramoops {
-		compatible = "ramoops";
-		record-size = <0x0 0x20000>;
-		console-size = <0x0 0x80000>;
-		ftrace-size = <0x0 0x00000>;
-		pmsg-size = <0x0 0x50000>;
-		memory-region = <&ramoops_mem>;
 	};
 
 	fiq-debugger {
@@ -275,48 +271,6 @@
 			linux,code = <212>;
 			label = "camera";
 			rockchip,adc_value = <450>;
-		};
-	};
-
-	dwc_control_usb: dwc-control-usb@ff770284 {
-		compatible = "rockchip,rk3288-dwc-control-usb";
-		status = "okay";
-		reg = <0x0 0xff770284 0x0 0x04>, <0x0 0xff770288 0x0 0x04>,
-			<0x0 0xff7702cc 0x0 0x04>, <0x0 0xff7702d4 0x0 0x04>,
-			<0x0 0xff770320 0x0 0x14>, <0x0 0xff770334 0x0 0x14>,
-			<0x0 0xff770348 0x0 0x10>, <0x0 0xff770358 0x0 0x08>,
-			<0x0 0xff770360 0x0 0x08>;
-		reg-names = "GRF_SOC_STATUS1" ,"GRF_SOC_STATUS2",
-					"GRF_SOC_STATUS19", "GRF_SOC_STATUS21",
-					"GRF_UOC0_BASE", "GRF_UOC1_BASE",
-					"GRF_UOC2_BASE", "GRF_UOC3_BASE",
-					"GRF_UOC4_BASE";
-		interrupts = <GIC_SPI 93 IRQ_TYPE_LEVEL_HIGH>,
-					<GIC_SPI 94 IRQ_TYPE_LEVEL_HIGH>,
-					<GIC_SPI 95 IRQ_TYPE_LEVEL_HIGH>,
-					<GIC_SPI 96 IRQ_TYPE_LEVEL_HIGH>,
-					<GIC_SPI 97 IRQ_TYPE_LEVEL_HIGH>;
-		interrupt-names = "otg_id", "otg_bvalid",
-					"otg_linestate", "host0_linestate",
-					"host1_linestate";
-		clocks = <&cru HCLK_USB_PERI>;
-		clock-names = "hclk_usb_peri";
-
-		otg_drv_gpio = <&gpio0 12 GPIO_ACTIVE_HIGH>;
-		rockchip,remote_wakeup;
-		rockchip,usb_irq_wakeup;
-
-		usb_bc {
-			compatible = "synopsys,phy";
-			rk_usb,bvalid     = <0x288 14 1>;
-			rk_usb,iddig      = <0x288 17 1>;
-			rk_usb,dcdenb     = <0x328 14 1>;
-			rk_usb,vdatsrcenb = <0x328  7 1>;
-			rk_usb,vdatdetenb = <0x328  6 1>;
-			rk_usb,chrgsel    = <0x328  5 1>;
-			rk_usb,chgdet     = <0x2cc 23 1>;
-			rk_usb,fsvminus   = <0x2cc 25 1>;
-			rk_usb,fsvplus    = <0x2cc 24 1>;
 		};
 	};
 
@@ -573,8 +527,6 @@
 				regulator-always-on;
 				regulator-boot-on;
 				regulator-name = "vcc_18";
-				regulator-min-microvolt = <1800000>;
-				regulator-max-microvolt = <1800000>;
 				regulator-state-mem {
 					regulator-on-in-suspend;
 				};
@@ -723,18 +675,6 @@
 &rockchip_suspend {
 	status = "okay";
 };
-&usb_otg {
-	compatible = "rockchip,rk3288_usb20_otg";
-	clocks = <&usbphy0>, <&cru HCLK_OTG0>;
-	clock-names = "clk_usbphy0", "hclk_usb0";
-	resets = <&cru SRST_USBOTG_AHB>,
-		 <&cru SRST_USBOTG_PHY>,
-		 <&cru SRST_USBOTG_CON>;
-	reset-names = "otg_ahb", "otg_phy", "otg_controller";
-	/*0 - Normal, 1 - Force Host, 2 - Force Device*/
-	rockchip,usb-mode = <0>;
-	status = "okay";
-};
 
 &pwm0 {
 	status = "okay";
@@ -780,55 +720,55 @@
 
 	pmic {
 		pmic_int: pmic-int {
-			rockchip,pins = <RK_GPIO0 4 RK_FUNC_GPIO &pcfg_pull_up>;
+			rockchip,pins = <0 RK_PA4 RK_FUNC_GPIO &pcfg_pull_up>;
 		};
 	};
 
 	eth_phy {
 		eth_phy_pwr: eth-phy-pwr {
-			rockchip,pins = <0 6 RK_FUNC_GPIO &pcfg_pull_none>;
+			rockchip,pins = <0 RK_PA6 RK_FUNC_GPIO &pcfg_pull_none>;
 		};
 	};
 
 	lcd {
 		lcd_cs: lcd-cs {
-			rockchip,pins = <7 4 RK_FUNC_GPIO &pcfg_pull_none>;
+			rockchip,pins = <7 RK_PA4 RK_FUNC_GPIO &pcfg_pull_none>;
 		};
 
 		lcd_en: lcd-en  {
-			rockchip,pins = <7 3 RK_FUNC_GPIO &pcfg_pull_none>;
+			rockchip,pins = <7 RK_PA3 RK_FUNC_GPIO &pcfg_pull_none>;
 		};
 	};
 
 	act8846 {
 		pmic_vsel: pmic-vsel {
-			rockchip,pins = <7 14 RK_FUNC_GPIO &pcfg_output_low>;
+			rockchip,pins = <7 RK_PB6 RK_FUNC_GPIO &pcfg_output_low>;
 		};
 
 		pwr_hold: pwr-hold {
-			rockchip,pins = <0 1 RK_FUNC_GPIO &pcfg_output_high>;
+			rockchip,pins = <0 RK_PA1 RK_FUNC_GPIO &pcfg_output_high>;
 		};
 	};
 
 	backlight {
 		bl_en: bl-en {
-			rockchip,pins = <7 2 RK_FUNC_GPIO &pcfg_pull_none>;
+			rockchip,pins = <7 RK_PA2 RK_FUNC_GPIO &pcfg_pull_none>;
 		};
 	};
 
 	buttons {
 		pwrbtn: pwrbtn {
-			rockchip,pins = <0 5 RK_FUNC_GPIO &pcfg_pull_up>;
+			rockchip,pins = <0 RK_PA5 RK_FUNC_GPIO &pcfg_pull_up>;
 		};
 	};
 
 	hdmiin {
 		hdmiin_gpios: hdmiin_gpios {
 			rockchip,pins =
-				<7 5 RK_FUNC_GPIO &pcfg_pull_none>,
-				<7 21 RK_FUNC_GPIO &pcfg_pull_none>,
-				<8 8 RK_FUNC_GPIO &pcfg_pull_none>,
-				<8 9 RK_FUNC_GPIO &pcfg_pull_none>;
+				<7 RK_PA5 RK_FUNC_GPIO &pcfg_pull_none>,
+				<7 RK_PC5 RK_FUNC_GPIO &pcfg_pull_none>,
+				<8 RK_PB0 RK_FUNC_GPIO &pcfg_pull_none>,
+				<8 RK_PB1 RK_FUNC_GPIO &pcfg_pull_none>;
 		};
 	};
 };
