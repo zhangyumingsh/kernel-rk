@@ -382,6 +382,8 @@ static void RGA2_set_reg_dst_info(u8 *base, struct rga2_req *msg)
     RK_U32 u_lt_addr, u_ld_addr, u_rt_addr, u_rd_addr;
     RK_U32 v_lt_addr, v_ld_addr, v_rt_addr, v_rd_addr;
 
+    RK_U32 s_y_lt_addr, s_y_ld_addr, s_y_rt_addr, s_y_rd_addr;
+
     dpw = 1;
     x_div = y_div = 1;
 
@@ -541,9 +543,12 @@ static void RGA2_set_reg_dst_info(u8 *base, struct rga2_req *msg)
 		*RGA_DST_NN_QUANTIZE_OFFSET = (msg->gr_color.gr_y_r & 0xffff) | (msg->gr_color.gr_y_g << 10) | (msg->gr_color.gr_y_b << 20);
 	}
 
-    s_yrgb_addr = (RK_U32)msg->src1.yrgb_addr + (msg->src1.y_offset * s_stride) + (msg->src1.x_offset * spw);
+    yrgb_addr = (RK_U32)msg->src1.yrgb_addr + (msg->src1.y_offset * s_stride) + (msg->src1.x_offset * spw);
 
-    *bRGA_SRC_BASE3 = s_yrgb_addr;
+    s_y_lt_addr = yrgb_addr;
+    s_y_ld_addr = yrgb_addr + (msg->src1.act_h - 1) * s_stride;
+    s_y_rt_addr = yrgb_addr + (msg->dst.act_w - 1) * spw;
+    s_y_rd_addr = s_y_ld_addr + (msg->dst.act_w - 1) * spw;
 
 	if (dst_fmt_y4_en) {
 		yrgb_addr = (RK_U32)msg->dst.yrgb_addr + (msg->dst.y_offset * d_stride) + ((msg->dst.x_offset * dpw)>>1);
@@ -602,12 +607,16 @@ static void RGA2_set_reg_dst_info(u8 *base, struct rga2_req *msg)
                 yrgb_addr = y_rd_addr;
                 u_addr = u_rd_addr;
                 v_addr = v_rd_addr;
+
+                s_yrgb_addr = s_y_rd_addr;
             }
             else
             {
                 yrgb_addr = y_ld_addr;
                 u_addr = u_ld_addr;
                 v_addr = v_ld_addr;
+
+                s_yrgb_addr = s_y_ld_addr;
             }
         }
         else
@@ -617,12 +626,16 @@ static void RGA2_set_reg_dst_info(u8 *base, struct rga2_req *msg)
                 yrgb_addr = y_rt_addr;
                 u_addr = u_rt_addr;
                 v_addr = v_rt_addr;
+
+                s_yrgb_addr = s_y_rt_addr;
             }
             else
             {
                 yrgb_addr = y_lt_addr;
                 u_addr = u_lt_addr;
                 v_addr = v_lt_addr;
+
+                s_yrgb_addr = s_y_lt_addr;
             }
         }
     }
@@ -635,12 +648,16 @@ static void RGA2_set_reg_dst_info(u8 *base, struct rga2_req *msg)
                 yrgb_addr = y_ld_addr;
                 u_addr = u_ld_addr;
                 v_addr = v_ld_addr;
+
+                s_yrgb_addr = s_y_ld_addr;
             }
             else
             {
                 yrgb_addr = y_rd_addr;
                 u_addr = u_rd_addr;
                 v_addr = v_rd_addr;
+
+                s_yrgb_addr = s_y_rd_addr;
             }
         }
         else
@@ -650,12 +667,16 @@ static void RGA2_set_reg_dst_info(u8 *base, struct rga2_req *msg)
                 yrgb_addr = y_lt_addr;
                 u_addr = u_lt_addr;
                 v_addr = v_lt_addr;
+
+                s_yrgb_addr = s_y_lt_addr;
             }
             else
             {
                 yrgb_addr = y_rt_addr;
                 u_addr = u_rt_addr;
                 v_addr = v_rt_addr;
+
+                s_yrgb_addr = s_y_rt_addr;
             }
         }
     }
@@ -681,6 +702,7 @@ static void RGA2_set_reg_dst_info(u8 *base, struct rga2_req *msg)
 	//if (msg->dst.format >= 0x18) {
 	//	*bRGA_DST_BASE1 = msg->dst.x_offset;
 	//}
+    *bRGA_SRC_BASE3 = (RK_U32)s_y_lt_addr;
 }
 
 static void RGA2_set_reg_alpha_info(u8 *base, struct rga2_req *msg)

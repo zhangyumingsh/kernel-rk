@@ -202,7 +202,7 @@ int sfc_nor_mtd_init(struct SFNOR_DEV *p_dev, struct mutex *lock)
 	priv_dev->mtd.erasesize = p_dev->blk_size << 9;
 	priv_dev->mtd.writebufsize = NOR_PAGE_SIZE;
 	priv_dev->lock = lock;
-	priv_dev->dma_buf = (u8 *)__get_free_pages(GFP_KERNEL | GFP_DMA32, get_order(SFC_NOR_MTD_DMA_MAX));
+	priv_dev->dma_buf = kmalloc(SFC_NOR_MTD_DMA_MAX, GFP_KERNEL | GFP_DMA);
 	if (!priv_dev->dma_buf) {
 		rkflash_print_error("%s %d alloc failed\n", __func__, __LINE__);
 		ret = -ENOMEM;
@@ -258,7 +258,7 @@ int sfc_nor_mtd_init(struct SFNOR_DEV *p_dev, struct mutex *lock)
 		return 0;
 	}
 
-	free_pages((unsigned long)priv_dev->dma_buf, get_order(SFC_NOR_MTD_DMA_MAX));
+	kfree(priv_dev->dma_buf);
 error_out:
 	kfree(priv_dev);
 

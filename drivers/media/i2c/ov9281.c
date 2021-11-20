@@ -66,15 +66,6 @@
 
 #define OV9281_REG_VTS			0x380e
 
-#define OV9281_AEC_STROBE_REG		0x3927
-#define OV9281_AEC_STROBE_REG_H		0x3927
-#define OV9281_AEC_STROBE_REG_L		0x3928
-
-#define OV9282_AEC_GROUP_UPDATE_ADDRESS		0x3208
-#define OV9282_AEC_GROUP_UPDATE_START_DATA	0x00
-#define OV9282_AEC_GROUP_UPDATE_END_DATA	0x10
-#define OV9282_AEC_GROUP_UPDATE_END_LAUNCH	0xA0
-
 #define REG_NULL			0xFFFF
 
 #define OV9281_REG_VALUE_08BIT		1
@@ -158,13 +149,9 @@ struct ov9281 {
 	struct v4l2_ctrl	*hblank;
 	struct v4l2_ctrl	*vblank;
 	struct v4l2_ctrl	*test_pattern;
-	struct v4l2_ctrl	*strobe;
 	struct mutex		mutex;
 	bool			streaming;
 	bool			power_on;
-	bool			is_thunderboot;
-	bool			is_thunderboot_ng;
-	bool			is_first_streamoff;
 	const struct ov9281_mode *cur_mode;
 	u32			module_index;
 	const char		*module_facing;
@@ -766,11 +753,10 @@ static int __ov9281_start_stream(struct ov9281 *ov9281)
 {
 	int ret;
 
-	if (!ov9281->is_thunderboot) {
-		ret = ov9281_write_array(ov9281->client, ov9281->cur_mode->reg_list);
-		if (ret)
-			return ret;
-	}
+	ret = ov9281_write_array(ov9281->client, ov9281->cur_mode->reg_list);
+	if (ret)
+		return ret;
+
 	/* In case these controls are set before streaming */
 	mutex_unlock(&ov9281->mutex);
 	ret = v4l2_ctrl_handler_setup(&ov9281->ctrl_handler);
@@ -784,8 +770,6 @@ static int __ov9281_start_stream(struct ov9281 *ov9281)
 
 static int __ov9281_stop_stream(struct ov9281 *ov9281)
 {
-	if (ov9281->is_thunderboot)
-		ov9281->is_first_streamoff = true;
 	return ov9281_write_reg(ov9281->client, OV9281_REG_CTRL_MODE,
 				OV9281_REG_VALUE_08BIT, OV9281_MODE_SW_STANDBY);
 }
@@ -875,11 +859,6 @@ static int __ov9281_power_on(struct ov9281 *ov9281)
 	u32 delay_us;
 	struct device *dev = &ov9281->client->dev;
 
-	/* No need when thunderboot. */
-	if (ov9281->is_thunderboot) {
-		return 0;
-	}
-
 	if (!IS_ERR_OR_NULL(ov9281->pins_default)) {
 		ret = pinctrl_select_state(ov9281->pinctrl,
 					   ov9281->pins_default);
@@ -930,15 +909,6 @@ static void __ov9281_power_off(struct ov9281 *ov9281)
 {
 	int ret;
 	struct device *dev = &ov9281->client->dev;
-
-	if (ov9281->is_thunderboot) {
-		if (ov9281->is_first_streamoff) {
-			ov9281->is_thunderboot = false;
-			ov9281->is_first_streamoff = false;
-		} else {
-			return;
-		}
-	}
 
 	if (!IS_ERR(ov9281->pwdn_gpio))
 		gpiod_set_value_cansleep(ov9281->pwdn_gpio, 0);
@@ -1090,17 +1060,9 @@ static int ov9281_set_ctrl(struct v4l2_ctrl *ctrl)
 
 	switch (ctrl->id) {
 	case V4L2_CID_EXPOSURE:
-		ov9281_write_reg(ov9281->client, OV9282_AEC_GROUP_UPDATE_ADDRESS,
-				       OV9281_REG_VALUE_08BIT, OV9282_AEC_GROUP_UPDATE_START_DATA);
-
 		/* 4 least significant bits of expsoure are fractional part */
 		ret = ov9281_write_reg(ov9281->client, OV9281_REG_EXPOSURE,
 				       OV9281_REG_VALUE_24BIT, ctrl->val << 4);
-
-		ov9281_write_reg(ov9281->client, OV9282_AEC_GROUP_UPDATE_ADDRESS,
-				       OV9281_REG_VALUE_08BIT, OV9282_AEC_GROUP_UPDATE_END_DATA);
-		ov9281_write_reg(ov9281->client, OV9282_AEC_GROUP_UPDATE_ADDRESS,
-				       OV9281_REG_VALUE_08BIT, OV9282_AEC_GROUP_UPDATE_END_LAUNCH);
 		break;
 	case V4L2_CID_ANALOGUE_GAIN:
 		ret = ov9281_write_reg(ov9281->client, OV9281_REG_GAIN_H,
@@ -1114,14 +1076,6 @@ static int ov9281_set_ctrl(struct v4l2_ctrl *ctrl)
 		ret = ov9281_write_reg(ov9281->client, OV9281_REG_VTS,
 				       OV9281_REG_VALUE_16BIT,
 				       ctrl->val + ov9281->cur_mode->height);
-		break;
-	case V4L2_CID_BRIGHTNESS:
-		ret = ov9281_write_reg(ov9281->client, OV9281_AEC_STROBE_REG_H,
-					   OV9281_REG_VALUE_08BIT,
-					   (ctrl->val >> 8) & 0xff);
-		ret |= ov9281_write_reg(ov9281->client, OV9281_AEC_STROBE_REG_L,
-					   OV9281_REG_VALUE_08BIT,
-					   ctrl->val & 0xff);
 		break;
 	case V4L2_CID_TEST_PATTERN:
 		ret = ov9281_enable_test_pattern(ov9281, ctrl->val);
@@ -1188,11 +1142,6 @@ static int ov9281_initialize_controls(struct ov9281 *ov9281)
 				OV9281_GAIN_MAX, OV9281_GAIN_STEP,
 				OV9281_GAIN_DEFAULT);
 
-	ov9281->strobe = v4l2_ctrl_new_std(handler, &ov9281_ctrl_ops,
-				V4L2_CID_BRIGHTNESS, 1,
-				exposure_max/16, 1,
-				0xc8);
-
 	ov9281->test_pattern = v4l2_ctrl_new_std_menu_items(handler,
 				&ov9281_ctrl_ops, V4L2_CID_TEST_PATTERN,
 				ARRAY_SIZE(ov9281_test_pattern_menu) - 1,
@@ -1221,11 +1170,6 @@ static int ov9281_check_sensor_id(struct ov9281 *ov9281,
 	struct device *dev = &ov9281->client->dev;
 	u32 id = 0;
 	int ret;
-
-	if (ov9281->is_thunderboot) {
-		dev_info(dev, "Enable thunderboot mode, skip sensor id check\n");
-		return 0;
-	}
 
 	ret = ov9281_read_reg(client, OV9281_REG_CHIP_ID,
 			      OV9281_REG_VALUE_16BIT, &id);
@@ -1285,7 +1229,6 @@ static int ov9281_probe(struct i2c_client *client,
 
 	ov9281->client = client;
 	ov9281->cur_mode = &supported_modes[0];
-	ov9281->is_thunderboot = IS_ENABLED(CONFIG_VIDEO_ROCKCHIP_THUNDER_BOOT_ISP);
 
 	ov9281->xvclk = devm_clk_get(dev, "xvclk");
 	if (IS_ERR(ov9281->xvclk)) {
@@ -1293,11 +1236,11 @@ static int ov9281_probe(struct i2c_client *client,
 		return -EINVAL;
 	}
 
-	ov9281->reset_gpio = devm_gpiod_get(dev, "reset", GPIOD_ASIS);
+	ov9281->reset_gpio = devm_gpiod_get(dev, "reset", GPIOD_OUT_LOW);
 	if (IS_ERR(ov9281->reset_gpio))
 		dev_warn(dev, "Failed to get reset-gpios\n");
 
-	ov9281->pwdn_gpio = devm_gpiod_get(dev, "pwdn", GPIOD_ASIS);
+	ov9281->pwdn_gpio = devm_gpiod_get(dev, "pwdn", GPIOD_OUT_LOW);
 	if (IS_ERR(ov9281->pwdn_gpio))
 		dev_warn(dev, "Failed to get pwdn-gpios\n");
 
