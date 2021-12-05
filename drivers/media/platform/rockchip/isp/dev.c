@@ -75,6 +75,10 @@ u64 rkisp_debug_reg = 0xFFFFFFFFFLL;
 module_param_named(debug_reg, rkisp_debug_reg, ullong, 0644);
 MODULE_PARM_DESC(debug_reg, "rkisp debug register");
 
+static unsigned int rkisp_wait_line;
+module_param_named(wait_line, rkisp_wait_line, uint, 0644);
+MODULE_PARM_DESC(wait_line, "rkisp wait line to buf done early");
+
 static DEFINE_MUTEX(rkisp_dev_mutex);
 static LIST_HEAD(rkisp_device_list);
 
@@ -407,7 +411,7 @@ static int _set_pipeline_default_fmt(struct rkisp_device *dev)
 		rkisp_set_stream_def_fmt(dev, RKISP_STREAM_SP,
 					 width, height, V4L2_PIX_FMT_NV12);
 	if ((dev->isp_ver == ISP_V20 || dev->isp_ver == ISP_V21) &&
-	    dev->active_sensor->mbus.type == V4L2_MBUS_CSI2) {
+	    dev->isp_inp == INP_CSI) {
 		width = dev->active_sensor->fmt[1].format.width;
 		height = dev->active_sensor->fmt[1].format.height;
 		code = dev->active_sensor->fmt[1].format.code;
@@ -427,7 +431,7 @@ static int _set_pipeline_default_fmt(struct rkisp_device *dev)
 			width, height, rkisp_mbus_pixelcode_to_v4l2(code));
 	}
 
-	if (dev->isp_ver == ISP_V20) {
+	if (dev->isp_ver == ISP_V20 && dev->isp_inp == INP_CSI) {
 		width = dev->active_sensor->fmt[2].format.width;
 		height = dev->active_sensor->fmt[2].format.height;
 		code = dev->active_sensor->fmt[2].format.code;
@@ -776,6 +780,9 @@ static int rkisp_plat_probe(struct platform_device *pdev)
 	if (ret < 0)
 		goto err_unreg_media_dev;
 
+	rkisp_wait_line = 0;
+	of_property_read_u32(dev->of_node, "wait-line", &rkisp_wait_line);
+
 	rkisp_proc_init(isp_dev);
 
 	mutex_lock(&rkisp_dev_mutex);
@@ -804,6 +811,7 @@ static int rkisp_plat_remove(struct platform_device *pdev)
 	rkisp_unregister_luma_vdev(&isp_dev->luma_vdev);
 	rkisp_unregister_params_vdev(&isp_dev->params_vdev);
 	rkisp_unregister_stats_vdev(&isp_dev->stats_vdev);
+	rkisp_unregister_dmarx_vdev(isp_dev);
 	rkisp_unregister_stream_vdevs(isp_dev);
 	rkisp_unregister_bridge_subdev(isp_dev);
 	rkisp_unregister_csi_subdev(isp_dev);
@@ -828,6 +836,7 @@ static int __maybe_unused rkisp_runtime_resume(struct device *dev)
 	struct rkisp_device *isp_dev = dev_get_drvdata(dev);
 	int ret;
 
+	isp_dev->cap_dev.wait_line = rkisp_wait_line;
 	mutex_lock(&isp_dev->hw_dev->dev_lock);
 	ret = pm_runtime_get_sync(isp_dev->hw_dev->dev);
 	mutex_unlock(&isp_dev->hw_dev->dev_lock);

@@ -395,6 +395,13 @@ config VIDEO_VM149C
 	help
 	  This is a driver for the VM149C camera lens voice coil.
 
+config VIDEO_OTP_EEPROM
+	tristate "sensor otp from eeprom support"
+	depends on VIDEO_V4L2 && I2C
+	select V4L2_FWNODE
+	help
+	  This driver supports OTP load from eeprom.
+
 config VIDEO_SAA7110
 	tristate "Philips SAA7110 video decoder"
 	depends on VIDEO_V4L2 && I2C
@@ -453,6 +460,28 @@ config VIDEO_RK628_CSI
 
 	  To compile this driver as a module, choose M here: the
 	  module will be called rk628-csi.
+
+config VIDEO_LT6911UXC
+	tristate "Lontium LT6911UXC decoder"
+	depends on VIDEO_V4L2 && I2C && VIDEO_V4L2_SUBDEV_API
+	select HDMI
+	select V4L2_FWNODE
+	help
+	  Support for the Lontium LT6911UXC series HDMI to MIPI CSI-2 bridge.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called lt6911uxc.
+
+config VIDEO_LT8619C
+	tristate "Lontium LT8619C decoder"
+	depends on VIDEO_V4L2 && I2C && VIDEO_V4L2_SUBDEV_API
+	select HDMI
+	select V4L2_FWNODE
+	help
+	  Support for the Lontium LT8619C HDMI to BT656/BT1120 bridge.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called lt8619c.
 
 config VIDEO_TECHPOINT
 	tristate "TechPoint decoder"
@@ -884,6 +913,15 @@ config VIDEO_OS08A10
 	  This is a Video4Linux2 sensor driver for the OmniVision
 	  OS08A10 camera.
 
+config VIDEO_OS08A20
+	tristate "OmniVision OS08A20 sensor support"
+	depends on I2C && VIDEO_V4L2 && VIDEO_V4L2_SUBDEV_API
+	depends on MEDIA_CAMERA_SUPPORT
+	select V4L2_FWNODE
+	help
+	  This is a Video4Linux2 sensor driver for the OmniVision
+	  OS08A20 camera.
+
 config VIDEO_OV02B10
 	tristate "OmniVision OV02B10 sensor support"
 	depends on I2C && VIDEO_V4L2 && VIDEO_V4L2_SUBDEV_API
@@ -1238,6 +1276,15 @@ config VIDEO_OV13858
 	---help---
 	  This is a Video4Linux2 sensor driver for the OmniVision
 	  OV13858 camera.
+
+config VIDEO_OV13B10
+	tristate "OmniVision OV13B10 sensor support"
+	depends on I2C && VIDEO_V4L2 && VIDEO_V4L2_SUBDEV_API
+	depends on MEDIA_CAMERA_SUPPORT
+	select V4L2_FWNODE
+	---help---
+	  This is a Video4Linux2 sensor driver for the OmniVision
+	  OV13B10 camera.
 
 config VIDEO_PREISP_DUMMY_SENSOR
 	tristate "Preisp dummy sensor support"
@@ -1771,6 +1818,17 @@ config VIDEO_SC2239
 	  To compile this driver as a module, choose M here: the
 	  module will be called sc2239.
 
+config VIDEO_SC223A
+	tristate "SmartSens SC223A sensor support"
+	depends on I2C && VIDEO_V4L2 && VIDEO_V4L2_SUBDEV_API
+	depends on MEDIA_CAMERA_SUPPORT
+	select V4L2_FWNODE
+	help
+	  Support for the SmartSens SC223A sensor.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called sc223a.
+
 config VIDEO_SC2310
 	tristate "SmartSens SC2310 sensor support"
 	depends on I2C && VIDEO_V4L2 && VIDEO_V4L2_SUBDEV_API
@@ -1837,6 +1895,17 @@ config VIDEO_SC500AI
 	  To compile this driver as a module, choose M here: the
 	  module will be called SC500AI.
 
+config VIDEO_SC5239
+	tristate "SmartSens SC5239 sensor support"
+	depends on I2C && VIDEO_V4L2 && VIDEO_V4L2_SUBDEV_API
+	depends on MEDIA_CAMERA_SUPPORT
+	select V4L2_FWNODE
+	help
+	  Support for the SmartSens SC5239 sensor.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called SC5239.
+
 config VIDEO_SC8220
 	tristate "SmartSens SC8220 sensor support"
 	depends on I2C && VIDEO_V4L2 && VIDEO_V4L2_SUBDEV_API
@@ -1882,6 +1951,18 @@ config VIDEO_HYNIX_HI846
 
 	  To compile this driver as a module, choose M here: the
 	  module will be called hynix_hi846.
+
+config VIDEO_HM5040
+	tristate "Himax HM5040 sensor support"
+	depends on VIDEO_V4L2 && I2C && MEDIA_CONTROLLER
+	depends on MEDIA_CAMERA_SUPPORT
+	select V4L2_FWNODE
+	help
+	  This is a Video4Linux2 sensor driver for the Hynix
+	  HM5040 camera.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called hm5040.
 
 comment "Flash devices"
 
@@ -2051,6 +2132,18 @@ config VIDEO_MP6507
 	depends on PWM
 	help
 	  This a driver used pwm to drive motor
+
+config VIDEO_XC7022
+	tristate "Firefly XC7022/XC6130 support."
+	depends on VIDEO_V4L2 && I2C
+	help
+		Driver for sv-taysh camera.
+
+config VIDEO_XC7160
+	tristate "Firefly XC7160_SC8238 support."
+	depends on VIDEO_V4L2 && I2C
+	help
+		Driver for sv-taysh camera.
 
 endmenu
 

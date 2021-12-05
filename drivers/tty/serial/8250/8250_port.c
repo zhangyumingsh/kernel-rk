@@ -132,8 +132,7 @@ static const struct serial8250_config uart_config[] = {
 		.name		= "16C950/954",
 		.fifo_size	= 128,
 		.tx_loadsz	= 128,
-		.fcr		= UART_FCR_ENABLE_FIFO | UART_FCR_R_TRIG_01,
-		.rxtrig_bytes	= {16, 32, 112, 120},
+		.fcr		= UART_FCR_ENABLE_FIFO | UART_FCR_R_TRIG_10,
 		/* UART_CAP_EFR breaks billionon CF bluetooth card. */
 		.flags		= UART_CAP_FIFO | UART_CAP_SLEEP,
 	},
@@ -2688,14 +2687,16 @@ void serial8250_do_set_divisor(struct uart_port *port, unsigned int baud,
 		serial_port_out(port, UART_LCR, up->lcr | UART_LCR_DLAB);
 
 	serial_dl_write(up, quot);
+#ifdef CONFIG_ARCH_ROCKCHIP
+	if (quot != serial_dl_read(up))
+		dev_warn_ratelimited(port->dev, "ttyS%d set divisor fail, quot:%d != dll,dlh:%d\n",
+					serial_index(port), quot, serial_dl_read(up));
+#endif
 	if (port->type != PORT_16750)
 		serial_port_out(port, UART_LCR, up->lcr);	/* reset DLAB */
 
 #ifdef CONFIG_ARCH_ROCKCHIP
 	serial_port_out(port, UART_MCR, up->mcr);
-	if (quot != serial_dl_read(up))
-		pr_warn_ratelimited("ttyS%d set divisor fail, quot:%d != dll,dlh:%d\n",
-					 serial_index(port), quot, serial_dl_read(up));
 #endif
 
 	/* XR17V35x UARTs have an extra fractional divisor register (DLD) */

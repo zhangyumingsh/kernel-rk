@@ -103,6 +103,24 @@
  * v1.6.1
  * 1. reserved memory using rdma_sg ops
  * 2. destory ispp buffers if start_stream failed
+ *
+ * v1.6.2
+ * 1. fix isp and ispp share dmabuf release fail
+ * 2. fix bug that ispp register isn't included in SEI
+ * 3. frame buffer done early
+ * 4. reset at frame end
+ * 5. fix page fault due to scl exit early
+ * 6. fbc error handle
+ * 7. first frame handle for multi dev
+ * 8. fix driver mode sync with ispserver
+ *
+ * v1.7.0
+ * 1. off unused interrupt
+ * 2. fix monitor switch if don't power off
+ * 3. frame start to check stream output buffer
+ * 4. add frame loss info to procfs
+ * 5. fix monitor no working
+ * 6. disable scl dma write if no output buffer
  */
 
 #define RKISPP_DRIVER_VERSION ISPP_API_VERSION

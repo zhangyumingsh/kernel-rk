@@ -268,10 +268,10 @@ static int dwc3_gadget_resize_tx_fifos(struct dwc3 *dwc)
 
 			/*
 			 * REVIST: we assume that the maxpacket of interrupt
-			 * endpoint is 16 Bytes.
+			 * endpoint is 64 Bytes for MTP and the other functions.
 			 */
 			mult = 1;
-			maxpacket = 16;
+			maxpacket = 64;
 			break;
 		default:
 			/*
@@ -2871,12 +2871,15 @@ static int dwc3_gadget_ep_cleanup_completed_request(struct dwc3_ep *dep,
 		 */
 		req->remaining = 0;
 		req->needs_extra_trb = false;
-		dwc3_gadget_move_queued_request(req);
-		if (req->trb)
+		dwc3_gadget_move_cancelled_request(req);
+		if (req->trb) {
 			usb_gadget_unmap_request_by_dev(dwc->sysdev,
 							&req->request,
 							req->direction);
-		req->trb = NULL;
+			req->trb->ctrl &= ~DWC3_TRB_CTRL_HWO;
+			req->trb = NULL;
+		}
+		ret = 0;
 
 		goto out;
 	}
@@ -2932,6 +2935,8 @@ static void dwc3_gadget_endpoint_transfer_in_progress(struct dwc3_ep *dep,
 {
 	struct dwc3		*dwc = dep->dwc;
 	unsigned		status = 0;
+	struct dwc3_request	*req;
+	struct dwc3_request	*tmp;
 
 	dwc3_gadget_endpoint_frame_from_event(dep, event);
 
@@ -2942,6 +2947,19 @@ static void dwc3_gadget_endpoint_transfer_in_progress(struct dwc3_ep *dep,
 		status = -EXDEV;
 
 	dwc3_gadget_ep_cleanup_completed_requests(dep, event, status);
+
+	if (event->status & DEPEVT_STATUS_MISSED_ISOC &&
+	    !list_empty(&dep->cancelled_list) &&
+	    !list_empty(&dep->pending_list)) {
+		list_for_each_entry_safe(req, tmp, &dep->pending_list, list)
+			dwc3_gadget_move_cancelled_request(req);
+	}
+
+	if (event->status & DEPEVT_STATUS_MISSED_ISOC &&
+	    !list_empty(&dep->cancelled_list)) {
+		list_for_each_entry_safe(req, tmp, &dep->cancelled_list, list)
+			dwc3_gadget_move_queued_request(req);
+	}
 
 	if (event->status & DEPEVT_STATUS_MISSED_ISOC &&
 	    list_empty(&dep->started_list))
@@ -3003,8 +3021,10 @@ static void dwc3_endpoint_interrupt(struct dwc3 *dwc,
 
 	if (epnum == 0 || epnum == 1) {
 		if (!dwc->connected &&
-		    event->endpoint_event == DWC3_DEPEVT_XFERCOMPLETE)
+		    event->endpoint_event == DWC3_DEPEVT_XFERCOMPLETE) {
+			reinit_completion(&dwc->discon_done);
 			dwc->connected = true;
+		}
 		dwc3_ep0_interrupt(dwc, event);
 		return;
 	}
@@ -3169,6 +3189,7 @@ static void dwc3_gadget_disconnect_interrupt(struct dwc3 *dwc)
 	usb_gadget_set_state(&dwc->gadget, USB_STATE_NOTATTACHED);
 
 	dwc->connected = false;
+	complete(&dwc->discon_done);
 }
 
 static void dwc3_gadget_reset_interrupt(struct dwc3 *dwc)
@@ -3768,6 +3789,7 @@ int dwc3_gadget_init(struct dwc3 *dwc)
 	}
 
 	init_completion(&dwc->ep0_in_setup);
+	init_completion(&dwc->discon_done);
 
 	dwc->gadget.ops			= &dwc3_gadget_ops;
 	dwc->gadget.speed		= USB_SPEED_UNKNOWN;

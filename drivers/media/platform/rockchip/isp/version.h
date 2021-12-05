@@ -140,6 +140,35 @@
  * 13.apply en params if no match for isp21
  * 14.isp21 get 3a stats from ddr
  * 15.reserved memory using rdma_sg ops
+ *
+ * v1.6.2:
+ * 1.hdr direct for isp21
+ * 2.fix same frame id
+ * 3.fix isp and ispp share dmabuf release fail
+ * 4.clear rdbk fifo at dmarx stop
+ * 5.add lock for isp stream
+ * 6.disable params when it stream off
+ * 7.dmarx support yuv format
+ * 8.frame buffer done early
+ * 9.fix set pdaf in dpcc error
+ * 10.add v-blank to procfs
+ *
+ * v1.7.0:
+ * 1.off unused interrupt of csi
+ * 2.fix sp no output when hdr dynamic switch
+ * 3.check the output status of statistics v2x
+ * 4.selfpath bytesperline 16 align
+ * 5.compiled with differe hardware version
+ * 6.add frame loss info to procfs
+ * 7.remove associated of cproc and ie
+ * 8.fix input crop config for isp21 multi device
+ * 9.enable soft reset for other isp version
+ * 10.rawrd support uncompact mode
+ * 11.fix default params config for mode switch
+ * 12.before frame start to update bridge mi
+ * 13.disable tmo interrupt
+ * 14.fix bottom image for debayer with extend line
+ * 15.unregister dmarx at driver remove
  */
 
 #define RKISP_DRIVER_VERSION RKISP_API_VERSION

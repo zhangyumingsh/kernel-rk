@@ -49,6 +49,7 @@
 
 #include "queue.h"
 #include "block.h"
+#include "block_data.h"
 #include "core.h"
 #include "card.h"
 #include "crypto.h"
@@ -97,6 +98,7 @@ static int max_devices;
 static DEFINE_IDA(mmc_blk_ida);
 static DEFINE_IDA(mmc_rpmb_ida);
 
+#ifndef _MMC_CORE_BLOCK_DATA_H
 /*
  * There is one mmc_blk_data per slot.
  */
@@ -136,6 +138,7 @@ struct mmc_blk_data {
 	struct dentry *status_dentry;
 	struct dentry *ext_csd_dentry;
 };
+#endif /* _MMC_CORE_BLOCK_DATA_H */
 
 /* Device type for RPMB character devices */
 static dev_t mmc_rpmb_devt;
@@ -145,6 +148,7 @@ static struct bus_type mmc_rpmb_bus_type = {
 	.name = "mmc_rpmb",
 };
 
+#ifndef _MMC_CORE_BLOCK_DATA_H
 /**
  * struct mmc_rpmb_data - special RPMB device type for these areas
  * @dev: the device for the RPMB area
@@ -162,6 +166,7 @@ struct mmc_rpmb_data {
 	struct mmc_blk_data *md;
 	struct list_head node;
 };
+#endif /* _MMC_CORE_BLOCK_DATA_H */
 
 static DEFINE_MUTEX(open_lock);
 
@@ -342,12 +347,14 @@ mmc_blk_getgeo(struct block_device *bdev, struct hd_geometry *geo)
 	return 0;
 }
 
+#ifndef _MMC_CORE_BLOCK_DATA_H
 struct mmc_blk_ioc_data {
 	struct mmc_ioc_cmd ic;
 	unsigned char *buf;
 	u64 buf_bytes;
 	struct mmc_rpmb_data *rpmb;
 };
+#endif /* _MMC_CORE_BLOCK_DATA_H */
 
 static struct mmc_blk_ioc_data *mmc_blk_ioctl_copy_from_user(
 	struct mmc_ioc_cmd __user *user)
@@ -599,7 +606,6 @@ static int __mmc_blk_ioctl_cmd(struct mmc_card *card, struct mmc_blk_data *md,
 	}
 
 	mmc_wait_for_req(card->host, &mrq);
-	memcpy(&idata->ic.response, cmd.resp, sizeof(cmd.resp));
 
 	if (cmd.error) {
 		dev_err(mmc_dev(card->host), "%s: cmd error %d\n",
@@ -648,6 +654,8 @@ static int __mmc_blk_ioctl_cmd(struct mmc_card *card, struct mmc_blk_data *md,
 	 */
 	if (idata->ic.postsleep_min_us)
 		usleep_range(idata->ic.postsleep_min_us, idata->ic.postsleep_max_us);
+
+	memcpy(&(idata->ic.response), cmd.resp, sizeof(cmd.resp));
 
 	if (idata->rpmb || (cmd.flags & MMC_RSP_R1B) == MMC_RSP_R1B) {
 		/*
@@ -2955,6 +2963,10 @@ static int mmc_blk_probe(struct mmc_card *card)
 			goto out;
 	}
 
+    if (card->host->restrict_caps & RESTRICT_CARD_TYPE_EMMC) {
+        mmc_blk_data_init(md);
+    }
+
 	/* Add two debugfs entries */
 	mmc_blk_add_debugfs(card, md);
 
@@ -2988,6 +3000,10 @@ static void mmc_blk_remove(struct mmc_card *card)
 	if (card->host->restrict_caps & RESTRICT_CARD_TYPE_EMMC)
 		this_card = NULL;
 	#endif
+
+    if (card->host->restrict_caps & RESTRICT_CARD_TYPE_EMMC) {
+        mmc_blk_data_deinit(md);
+    }
 
 	mmc_blk_remove_parts(card, md);
 	pm_runtime_get_sync(&card->dev);

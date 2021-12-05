@@ -22,7 +22,6 @@
 #include <sound/pcm_params.h>
 #include <sound/dmaengine_pcm.h>
 
-#include "rockchip_pcm.h"
 #include "rockchip_spdif.h"
 
 enum rk_spdif_type {
@@ -333,7 +332,7 @@ static int rk_spdif_probe(struct platform_device *pdev)
 
 	spdif->playback_dma_data.addr = res->start + SPDIF_SMPDR;
 	spdif->playback_dma_data.addr_width = DMA_SLAVE_BUSWIDTH_4_BYTES;
-	spdif->playback_dma_data.maxburst = 4;
+	spdif->playback_dma_data.maxburst = 8;
 
 	spdif->dev = &pdev->dev;
 	dev_set_drvdata(&pdev->dev, spdif);
@@ -353,7 +352,7 @@ static int rk_spdif_probe(struct platform_device *pdev)
 		goto err_pm_suspend;
 	}
 
-	ret = rockchip_pcm_platform_register(&pdev->dev);
+	ret = devm_snd_dmaengine_pcm_register(&pdev->dev, NULL, 0);
 	if (ret) {
 		dev_err(&pdev->dev, "Could not register PCM\n");
 		goto err_pm_suspend;
