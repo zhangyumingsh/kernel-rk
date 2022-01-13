@@ -1,23 +1,28 @@
+# SPDX-License-Identifier: GPL-2.0-only
 if ARCH_ROCKCHIP || COMPILE_TEST
 
 source "drivers/soc/rockchip/Kconfig.cpu"
 
 #
-# Rockchip Soc drivers
+# Rockchip Android Features
 #
 
-config ANDROID_VERSION
-	hex "Android Version"
-	depends on ANDROID
-	default "0x08010000"
+config NO_GKI
+	bool "Disable Android GKI support"
+	default y if !GKI_HACKS_TO_FIX
 	help
-	  The version of Android kernel supported.
-	  The value is 0xAABBCCRR, corresponding to Android A.B.C release R
+	  Say y here to disable Android GKI support. Then
+	  all the ABI compatibilities are not applicable.
+
+	  If unsure, say Y.
+
+#
+# Rockchip Soc drivers
+#
 
 config ROCKCHIP_CPUINFO
 	tristate "Rockchip cpuinfo support"
 	depends on (ROCKCHIP_EFUSE || ROCKCHIP_OTP) && (ARM64 || ARM)
-	default y
 	help
 	  Say y here to enable Rockchip cpuinfo support.
 	  Set system_serial_low/high from eFuse ID.
@@ -26,8 +31,7 @@ config ROCKCHIP_CPUINFO
 	  If unsure, say N.
 
 config ROCKCHIP_GRF
-	tristate "Rockchip GRF"
-	default y
+	tristate "Rockchip General Register Files support"
 	help
 	  The General Register Files are a central component providing
 	  special additional settings registers for a lot of soc-components.
@@ -40,10 +44,17 @@ config ROCKCHIP_HW_DECOMPRESS
 	  This driver support Decompress IP built-in Rockchip SoC, support
 	  LZ4, GZIP, ZLIB.
 
+config ROCKCHIP_IODOMAIN
+	tristate "Rockchip IO domain support"
+	depends on OF
+	help
+	  Say y here to enable support io domains on Rockchip SoCs. It is
+	  necessary for the io domain setting of the SoC to match the
+	  voltage supplied by the regulators.
+
 config ROCKCHIP_IPA
 	tristate "Rockchip IPA support"
 	depends on THERMAL && OF
-	default y
 	help
 	  Say y here to enable rockchip IPA.
 	  Add a simple power model for ipa to calculate static power and
@@ -54,7 +65,6 @@ config ROCKCHIP_IPA
 config ROCKCHIP_OPP
 	tristate "Rockchip OPP select support"
 	depends on PM_DEVFREQ
-	default y
 	help
 	  Say y here to enable rockchip OPP support.
 
@@ -78,12 +88,6 @@ config ROCKCHIP_PVTM
 	  the chip performance variance caused by chip process, voltage and
 	  temperature.
 
-config ROCKCHIP_RAMDISK
-	bool "Rockchip RAM disk support"
-	help
-	  Saying Y here will allow you to use reserved RAM memory as a block
-	  device.
-
 config ROCKCHIP_SUSPEND_MODE
 	tristate "Rockchip suspend mode config"
 	depends on ROCKCHIP_SIP
@@ -92,14 +96,29 @@ config ROCKCHIP_SUSPEND_MODE
 
 config ROCKCHIP_SYSTEM_MONITOR
 	tristate "Rockchip system monitor support"
-	default y
 	help
 	  Say y here to enable rockchip system monitor support.
 
+config ROCKCHIP_VENDOR_STORAGE
+	tristate "Rockchip vendor storage support"
+	help
+	  Say y here to enable rockchip vendor storage support.
+
+config ROCKCHIP_MMC_VENDOR_STORAGE
+	tristate "Rockchip mmc vendor storage support"
+	depends on ROCKCHIP_VENDOR_STORAGE && MMC
+	help
+	  Say y here to enable rockchip mmc vendor storage support.
+
+config ROCKCHIP_FLASH_VENDOR_STORAGE
+	tristate "Rockchip flash vendor storage support"
+	depends on ROCKCHIP_VENDOR_STORAGE && RK_FLASH
+	help
+	  Say y here to enable rockchip flash vendor storage support.
+
 config ROCKCHIP_MTD_VENDOR_STORAGE
-	bool "Rockchip mtd vendor storage support"
-	depends on MTD
-	default y
+	tristate "Rockchip mtd vendor storage support"
+	depends on ROCKCHIP_VENDOR_STORAGE && MTD
 	help
 	  Say y here to enable rockchip mtd vendor storage support.
 
@@ -110,47 +129,28 @@ config ROCKCHIP_VENDOR_STORAGE_UPDATE_LOADER
 	  Say y here to enable rockchip vendor storage update loader support.
 	  The /dev/vendor_storage must set root user access only.
 
+config ROCKCHIP_FIQ_DEBUGGER
+	tristate "Rockchip FIQ Debugger"
+	depends on FIQ_DEBUGGER
+	help
+	  Say y here to enable Rockchip FIQ Debugger platform driver.
+
 config ROCKCHIP_DEBUG
 	tristate "Rockchip DEBUG"
-	default y
 	help
 	  Print dbgpcsr for every cpu when panic.
 
-config ROCKCHIP_LOW_PERFORMANCE
-	bool "Rockchip low performance support"
-	help
-	  Say y here to enable Rockchip low performance support.
-	  This option make the SoC low power.
-
 config ROCKCHIP_THUNDER_BOOT
 	bool "Rockchip Thunder Boot support"
+	depends on NO_GKI
 	help
 	  Say y here to enable Rockchip thunder boot support.
 	  This option make the kernel boot faster.
-
-config ROCKCHIP_THUNDER_BOOT_MMC
-	bool "Rockchip Thunder Boot from MMC"
-	depends on ROCKCHIP_THUNDER_BOOT
-	help
-	  Say y if boot from MMC.
 
 config ROCKCHIP_THUNDER_BOOT_SFC
 	bool "Rockchip Thunder Boot from SFC"
 	depends on ROCKCHIP_THUNDER_BOOT
 	help
 	  Say y if boot from SPI Flash from SFC controller.
-
-config ROCKCHIP_THUNDER_BOOT_CRYPTO
-	bool "Rockchip Thunder Boot support hardware crypto"
-	depends on ROCKCHIP_THUNDER_BOOT
-	help
-	  Say y if boot need hardware crypto.
-
-config ROCKCHIP_SCHED_PERFORMANCE_BIAS
-	bool "Rockchip task scheduler optimization"
-	default y
-	help
-	  Say y here to enable rockchip optimize task scheduler for performance bias,
-	  this would cause a little more power consumption.
 
 endif

@@ -16,6 +16,7 @@
 #define _UAPI_ROCKCHIP_DRM_H
 
 #include <drm/drm.h>
+#include <drm/drm_file.h>
 
 /*
  * Send vcnt event instead of blocking,
@@ -36,7 +37,7 @@ enum drm_rockchip_gem_mem_type {
 	/* keep kmap for cma buffer or alloc kmap for other type memory */
 	ROCKCHIP_BO_ALLOC_KMAP	= 1 << 4,
 	ROCKCHIP_BO_MASK	= ROCKCHIP_BO_CONTIG | ROCKCHIP_BO_CACHABLE |
-				ROCKCHIP_BO_WC
+				ROCKCHIP_BO_WC | ROCKCHIP_BO_SECURE | ROCKCHIP_BO_ALLOC_KMAP,
 };
 
 /**
@@ -78,6 +79,12 @@ enum drm_rockchip_gem_cpu_acquire_type {
 	DRM_ROCKCHIP_GEM_CPU_ACQUIRE_EXCLUSIVE = 0x1,
 };
 
+enum rockchip_crtc_feture {
+	ROCKCHIP_DRM_CRTC_FEATURE_ALPHA_SCALE,
+	ROCKCHIP_DRM_CRTC_FEATURE_HDR10,
+	ROCKCHIP_DRM_CRTC_FEATURE_NEXT_HDR,
+};
+
 enum rockchip_plane_feture {
 	ROCKCHIP_DRM_PLANE_FEATURE_SCALE,
 	ROCKCHIP_DRM_PLANE_FEATURE_ALPHA,
@@ -86,10 +93,6 @@ enum rockchip_plane_feture {
 	ROCKCHIP_DRM_PLANE_FEATURE_AFBDC,
 	ROCKCHIP_DRM_PLANE_FEATURE_PDAF_POS,
 	ROCKCHIP_DRM_PLANE_FEATURE_MAX,
-};
-
-enum rockchip_crtc_feture {
-	ROCKCHIP_DRM_CRTC_FEATURE_AFBDC,
 };
 
 enum rockchip_cabc_mode {

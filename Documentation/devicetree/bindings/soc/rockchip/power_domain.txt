@@ -9,7 +9,9 @@ Required properties for power domain controller:
 	"rockchip,rv1126-power-controller" - for RV1126 SoCs
 	"rockchip,rk1808-power-controller" - for RK1808 SoCs
 	"rockchip,rk3036-power-controller" - for RK3036 SoCs.
+	"rockchip,rk3066-power-controller" - for RK3066 SoCs.
 	"rockchip,rk3128-power-controller" - for RK3128 SoCs.
+	"rockchip,rk3188-power-controller" - for RK3188 SoCs.
 	"rockchip,rk3228-power-controller" - for RK3228 SoCs.
 	"rockchip,rk3288-power-controller" - for RK3288 SoCs.
 	"rockchip,rk3328-power-controller" - for RK3328 SoCs.
@@ -28,7 +30,9 @@ Required properties for power domain sub nodes:
 	"include/dt-bindings/power/rv1126-power.h" - for RV1126 type power domain.
 	"include/dt-bindings/power/rk1808-power.h" - for RK1808 type power domain.
 	"include/dt-bindings/power/rk3036-power.h" - for RK3036 type power domain.
+	"include/dt-bindings/power/rk3066-power.h" - for RK3066 type power domain.
 	"include/dt-bindings/power/rk3128-power.h" - for RK3128 type power domain.
+	"include/dt-bindings/power/rk3188-power.h" - for RK3188 type power domain.
 	"include/dt-bindings/power/rk3228-power.h" - for RK3228 type power domain.
 	"include/dt-bindings/power/rk3288-power.h" - for RK3288 type power domain.
 	"include/dt-bindings/power/rk3328-power.h" - for RK3328 type power domain.

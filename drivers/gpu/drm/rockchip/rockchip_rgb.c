@@ -1,24 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (C) Fuzhou Rockchip Electronics Co.Ltd
  * Author:
  *      Sandy Huang <hjc@rock-chips.com>
- *
- * This software is licensed under the terms of the GNU General Public
- * License version 2, as published by the Free Software Foundation, and
- * may be copied, distributed, and modified under those terms.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
-
-#include <drm/drmP.h>
-#include <drm/drm_atomic_helper.h>
-#include <drm/drm_crtc_helper.h>
-#include <drm/drm_dp_helper.h>
-#include <drm/drm_panel.h>
-#include <drm/drm_of.h>
 
 #include <linux/component.h>
 #include <linux/of_device.h>
@@ -27,6 +12,14 @@
 #include <linux/mfd/syscon.h>
 #include <linux/phy/phy.h>
 #include <linux/pinctrl/consumer.h>
+
+#include <drm/drm_atomic_helper.h>
+#include <drm/drm_crtc_helper.h>
+#include <drm/drm_dp_helper.h>
+#include <drm/drm_of.h>
+#include <drm/drm_panel.h>
+#include <drm/drm_probe_helper.h>
+
 #include <uapi/linux/videodev2.h>
 
 #include "rockchip_drm_drv.h"
@@ -112,7 +105,6 @@ rockchip_rgb_atomic_connector_get_property(struct drm_connector *connector,
 }
 
 static const struct drm_connector_funcs rockchip_rgb_connector_funcs = {
-	.dpms = drm_helper_connector_dpms,
 	.detect = rockchip_rgb_connector_detect,
 	.fill_modes = drm_helper_probe_single_connector_modes,
 	.destroy = drm_connector_cleanup,
@@ -127,7 +119,7 @@ static int rockchip_rgb_connector_get_modes(struct drm_connector *connector)
 	struct rockchip_rgb *rgb = connector_to_rgb(connector);
 	struct drm_panel *panel = rgb->panel;
 
-	return drm_panel_get_modes(panel);
+	return drm_panel_get_modes(panel, connector);
 }
 
 static struct drm_encoder *
@@ -147,22 +139,14 @@ struct drm_connector_helper_funcs rockchip_rgb_connector_helper_funcs = {
 static void rockchip_rgb_encoder_enable(struct drm_encoder *encoder)
 {
 	struct rockchip_rgb *rgb = encoder_to_rgb(encoder);
-	int ret;
 
 	pinctrl_pm_select_default_state(rgb->dev);
 
 	if (rgb->funcs && rgb->funcs->enable)
 		rgb->funcs->enable(rgb);
 
-	if (rgb->phy) {
-		ret = phy_set_mode(rgb->phy, PHY_MODE_VIDEO_TTL);
-		if (ret) {
-			dev_err(rgb->dev, "failed to set phy mode: %d\n", ret);
-			return;
-		}
-
+	if (rgb->phy)
 		phy_power_on(rgb->phy);
-	}
 
 	if (rgb->panel) {
 		drm_panel_prepare(rgb->panel);
@@ -211,11 +195,11 @@ rockchip_rgb_encoder_atomic_check(struct drm_encoder *encoder,
 		s->output_mode = ROCKCHIP_OUT_MODE_P565;
 		s->output_if = VOP_OUTPUT_IF_RGB;
 		break;
-	case MEDIA_BUS_FMT_SRGB888_3X8:
+	case MEDIA_BUS_FMT_RGB888_3X8:
 		s->output_mode = ROCKCHIP_OUT_MODE_S888;
 		s->output_if = VOP_OUTPUT_IF_RGB;
 		break;
-	case MEDIA_BUS_FMT_SRGB888_DUMMY_4X8:
+	case MEDIA_BUS_FMT_RGB888_DUMMY_4X8:
 		s->output_mode = ROCKCHIP_OUT_MODE_S888_DUMMY;
 		s->output_if = VOP_OUTPUT_IF_RGB;
 		break;
@@ -244,21 +228,19 @@ rockchip_rgb_encoder_atomic_check(struct drm_encoder *encoder,
 	s->output_type = DRM_MODE_CONNECTOR_DPI;
 	s->bus_flags = info->bus_flags;
 	s->tv_state = &conn_state->tv;
-	s->eotf = TRADITIONAL_GAMMA_SDR;
+	s->eotf = HDMI_EOTF_TRADITIONAL_GAMMA_SDR;
 	s->color_space = V4L2_COLORSPACE_DEFAULT;
 
 	return 0;
 }
 
-static int rockchip_rgb_encoder_loader_protect(struct drm_encoder *encoder,
-					       bool on)
+static void rockchip_rgb_encoder_loader_protect(struct drm_encoder *encoder,
+						bool on)
 {
 	struct rockchip_rgb *rgb = encoder_to_rgb(encoder);
 
 	if (rgb->panel)
-		drm_panel_loader_protect(rgb->panel, on);
-
-	return 0;
+		panel_simple_loader_protect(rgb->panel);
 }
 
 static const
@@ -266,7 +248,6 @@ struct drm_encoder_helper_funcs rockchip_rgb_encoder_helper_funcs = {
 	.enable = rockchip_rgb_encoder_enable,
 	.disable = rockchip_rgb_encoder_disable,
 	.atomic_check = rockchip_rgb_encoder_atomic_check,
-	.loader_protect = rockchip_rgb_encoder_loader_protect,
 };
 
 static const struct drm_encoder_funcs rockchip_rgb_encoder_funcs = {
@@ -289,8 +270,8 @@ static int rockchip_rgb_bind(struct device *dev, struct device *master,
 		return ret;
 	}
 
-	encoder->possible_crtcs = drm_of_find_possible_crtcs(drm_dev,
-							     dev->of_node);
+	encoder->possible_crtcs = rockchip_drm_of_find_possible_crtcs(drm_dev,
+								      dev->of_node);
 
 	ret = drm_encoder_init(drm_dev, encoder, &rockchip_rgb_encoder_funcs,
 			       DRM_MODE_ENCODER_DPI, NULL);
@@ -325,25 +306,19 @@ static int rockchip_rgb_bind(struct device *dev, struct device *master,
 				      "failed to attach encoder: %d\n", ret);
 			goto err_free_connector;
 		}
-
-		ret = drm_panel_attach(rgb->panel, connector);
-		if (ret < 0) {
-			DRM_DEV_ERROR(dev, "failed to attach panel: %d\n", ret);
-			goto err_free_connector;
-		}
 		rgb->sub_dev.connector = &rgb->connector;
 		rgb->sub_dev.of_node = rgb->dev->of_node;
+		rgb->sub_dev.loader_protect = rockchip_rgb_encoder_loader_protect;
 		drm_object_attach_property(&connector->base, private->connector_id_prop, 0);
 		rockchip_drm_register_sub_dev(&rgb->sub_dev);
 	} else {
 		rgb->bridge->encoder = encoder;
-		ret = drm_bridge_attach(encoder, rgb->bridge, NULL);
+		ret = drm_bridge_attach(encoder, rgb->bridge, NULL, 0);
 		if (ret) {
 			DRM_DEV_ERROR(dev,
 				      "failed to attach bridge: %d\n", ret);
 			goto err_free_encoder;
 		}
-		encoder->bridge = rgb->bridge;
 	}
 
 	return 0;
@@ -362,10 +337,8 @@ static void rockchip_rgb_unbind(struct device *dev, struct device *master,
 
 	if (rgb->sub_dev.connector)
 		rockchip_drm_register_sub_dev(&rgb->sub_dev);
-	if (rgb->panel) {
-		drm_panel_detach(rgb->panel);
+	if (rgb->panel)
 		drm_connector_cleanup(&rgb->connector);
-	}
 
 	drm_encoder_cleanup(&rgb->encoder);
 }
@@ -499,6 +472,7 @@ static const struct of_device_id rockchip_rgb_dt_ids[] = {
 	{ .compatible = "rockchip,rk3308-rgb", },
 	{ .compatible = "rockchip,rk3368-rgb", },
 	{ .compatible = "rockchip,rk3568-rgb", .data = &rk3568_rgb_funcs },
+	{ .compatible = "rockchip,rk3588-rgb", },
 	{ .compatible = "rockchip,rv1108-rgb", },
 	{ .compatible = "rockchip,rv1126-rgb", .data = &rv1126_rgb_funcs},
 	{}

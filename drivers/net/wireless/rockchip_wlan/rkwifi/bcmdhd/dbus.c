@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /** @file dbus.c
  *
  * Hides details of USB / SDIO / SPI interfaces and OS details. It is intended to shield details and
@@ -1054,7 +1055,7 @@ dbus_if_send_irb_timeout(void *handle, dbus_irb_tx_t *txirb)
  * When lower DBUS level signals that a send IRB completed, either successful or not, the higher
  * level (e.g. dhd_linux.c) has to be notified, and transmit flow control has to be evaluated.
  */
-static void BCMFASTPATH
+static void
 dbus_if_send_irb_complete(void *handle, dbus_irb_tx_t *txirb, int status)
 {
 	dhd_bus_t *dhd_bus = (dhd_bus_t *) handle;
@@ -1125,7 +1126,7 @@ dbus_if_send_irb_complete(void *handle, dbus_irb_tx_t *txirb, int status)
  * level (e.g. dhd_linux.c) has to be notified, and fresh free receive IRBs may have to be given
  * to lower levels.
  */
-static void BCMFASTPATH
+static void
 dbus_if_recv_irb_complete(void *handle, dbus_irb_rx_t *rxirb, int status)
 {
 	dhd_bus_t *dhd_bus = (dhd_bus_t *) handle;

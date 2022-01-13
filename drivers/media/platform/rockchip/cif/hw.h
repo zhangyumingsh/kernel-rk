@@ -19,7 +19,7 @@
 #include "regs.h"
 #include "version.h"
 
-#define RKCIF_DEV_MAX		2
+#define RKCIF_DEV_MAX		7
 #define RKCIF_HW_DRIVER_NAME	"rkcifhw"
 #define RKCIF_MAX_BUS_CLK	8
 #define RKCIF_MAX_RESET		15
@@ -32,6 +32,38 @@
 	writel(readl((addr) + (base)) | (val), (addr) + (base))
 #define write_cif_reg_and(base, addr, val) \
 	writel(readl((addr) + (base)) & (val), (addr) + (base))
+
+/*
+ * multi sensor sync mode
+ * RKCIF_NOSYNC_MODE: not used sync mode
+ * RKCIF_MASTER_MASTER:	internal master->external master
+ * RKCIF_MASTER_SLAVE:	internal master->slave
+ * RKCIF_MASTER_MASTER: pwm/gpio->external master
+ * RKCIF_MASTER_MASTER: pwm/gpio->slave
+ */
+enum rkcif_sync_mode {
+	RKCIF_NOSYNC_MODE,
+	RKCIF_MASTER_MASTER,
+	RKCIF_MASTER_SLAVE,
+	RKCIF_EXT_MASTER,
+	RKCIF_EXT_SLAVE,
+};
+
+struct rkcif_sync_dev {
+	struct rkcif_device *cif_dev[RKCIF_DEV_MAX];
+	int count;
+	bool is_streaming[RKCIF_DEV_MAX];
+};
+
+struct rkcif_multi_sync_config {
+	struct rkcif_sync_dev int_master;
+	struct rkcif_sync_dev ext_master;
+	struct rkcif_sync_dev slave;
+	enum rkcif_sync_mode mode;
+	int dev_cnt;
+	int streaming_cnt;
+	bool is_attach;
+};
 
 /*
  * add new chip id in tail in time order
@@ -47,6 +79,7 @@ enum rkcif_chip_id {
 	CHIP_RV1126_CIF,
 	CHIP_RV1126_CIF_LITE,
 	CHIP_RK3568_CIF,
+	CHIP_RK3588_CIF,
 };
 
 struct rkcif_hw_match_data {
@@ -72,18 +105,22 @@ struct rkcif_hw {
 	struct regmap			*grf;
 	struct clk			*clks[RKCIF_MAX_BUS_CLK];
 	int				clk_size;
-	bool				iommu_en;
 	struct iommu_domain		*domain;
 	struct reset_control		*cif_rst[RKCIF_MAX_RESET];
 	int				chip_id;
 	const struct cif_reg		*cif_regs;
+	const struct vb2_mem_ops	*mem_ops;
+	bool				iommu_en;
 	bool				can_be_reset;
+	bool				is_dma_sg_ops;
+	bool				is_dma_contig;
+	struct rkcif_device		*cif_dev[RKCIF_DEV_MAX];
+	int				dev_num;
 
-	struct rkcif_device *cif_dev[RKCIF_DEV_MAX];
-	int dev_num;
-
-	atomic_t power_cnt;
+	atomic_t			power_cnt;
 	const struct rkcif_hw_match_data *match_data;
+	struct mutex			dev_lock;
+	struct rkcif_multi_sync_config	sync_config;
 };
 
 void rkcif_hw_soft_reset(struct rkcif_hw *cif_hw, bool is_rst_iommu);

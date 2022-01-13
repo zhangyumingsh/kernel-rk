@@ -1,4 +1,4 @@
-
+// SPDX-License-Identifier: GPL-2.0
 #ifdef CCODE_LIST
 #ifdef CONFIG_COMPAT
 #include <linux/compat.h>
@@ -247,7 +247,7 @@ dhd_ccode_map_country_list(dhd_pub_t *dhd, wl_country_t *cspec)
 	const char *ccode_list = NULL, *ccode_ww = NULL;
 	char *pch;
 
-	for (i=0; i<sizeof(ccode_list_map)/sizeof(ccode_list_map[0]); i++) {
+	for (i=0;  i<sizeof(ccode_list_map)/sizeof(ccode_list_map[0]);  i++) {
 		const ccode_list_map_t* row = &ccode_list_map[i];
 		if (row->chip == chip && row->chiprev == chiprev) {
 			ccode_list = row->ccode_list;

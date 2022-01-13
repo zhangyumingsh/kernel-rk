@@ -1,4 +1,4 @@
-
+/* SPDX-License-Identifier: GPL-2.0 */
 #include <linux/module.h>
 #include <linux/netdevice.h>
 #include <net/netlink.h>
@@ -1233,7 +1233,8 @@ exit:
 }
 #endif /* WLEASYMESH */
 
-int
+#if defined(SENDPROB) || (defined(WLMESH) && defined(WL_ESCAN))
+static int
 wl_ext_add_del_ie(struct net_device *dev, uint pktflag, char *ie_data, const char* add_del_cmd)
 {
 	vndr_ie_setbuf_t *vndr_ie = NULL;
@@ -1290,6 +1291,7 @@ exit:
 	}
 	return err;
 }
+#endif /* SENDPROB || (WLMESH && WL_ESCAN) */
 
 #ifdef IDHCP
 /*
@@ -3058,7 +3060,7 @@ wl_ext_fw_apcs(struct net_device *dev, uint32 band)
 	}
 
 	if (spect > 0) {
-		ret = wl_cfg80211_set_spect(dev, 0);
+		ret = wl_android_set_spect(dev, 0);
 		if (ret < 0) {
 			AEXT_ERROR(dev->name, "ACS: error while setting spect, ret=%d\n", ret);
 			goto done;
@@ -3077,7 +3079,9 @@ wl_ext_fw_apcs(struct net_device *dev, uint32 band)
 		reqbuf[0] = htod32(0);
 	} else if (band == WLC_BAND_5G) {
 		AEXT_INFO(dev->name, "ACS 5G band scan \n");
-		if ((ret = wl_cfg80211_get_chanspecs_5g(dev, reqbuf, CHANSPEC_BUF_SIZE)) < 0) {
+		ret = wl_android_get_band_chanspecs(dev, (void *)reqbuf, CHANSPEC_BUF_SIZE,
+			WL_CHANSPEC_BAND_5G, false);
+		if (ret < 0) {
 			AEXT_ERROR(dev->name, "ACS 5g chanspec retreival failed! \n");
 			goto done;
 		}
@@ -3087,7 +3091,9 @@ wl_ext_fw_apcs(struct net_device *dev, uint32 band)
 		 * Restrict channel to 2GHz, 20MHz BW, No SB
 		 */
 		AEXT_INFO(dev->name, "ACS 2G band scan \n");
-		if ((ret = wl_cfg80211_get_chanspecs_2g(dev, reqbuf, CHANSPEC_BUF_SIZE)) < 0) {
+		ret = wl_android_get_band_chanspecs(dev, (void *)reqbuf, CHANSPEC_BUF_SIZE,
+			WL_CHANSPEC_BAND_2G, false);
+		if (ret < 0) {
 			AEXT_ERROR(dev->name, "ACS 2g chanspec retreival failed! \n");
 			goto done;
 		}
@@ -3152,7 +3158,7 @@ wl_ext_fw_apcs(struct net_device *dev, uint32 band)
 
 done:
 	if (spect > 0) {
-		if ((ret = wl_cfg80211_set_spect(dev, spect) < 0)) {
+		if ((ret = wl_android_set_spect(dev, spect) < 0)) {
 			AEXT_ERROR(dev->name, "ACS: error while setting spect\n");
 		}
 	}

@@ -11,6 +11,7 @@
  * where 64 is the setting for infinity and 0 for macro
  */
 #define VCMDRV_MAX_LOG			64U
+#define VCMDRV_SETZOOM_MAXCNT	300U
 
 #define OF_CAMERA_VCMDRV_MAX_CURRENT	"rockchip,vcm-max-current"
 #define OF_CAMERA_VCMDRV_START_CURRENT	"rockchip,vcm-start-current"
@@ -19,6 +20,7 @@
 #define OF_CAMERA_VCMDRV_DLC_ENABLE	"rockchip,vcm-dlc-enable"
 #define OF_CAMERA_VCMDRV_MCLK		"rockchip,vcm-mclk"
 #define OF_CAMERA_VCMDRV_T_SRC		"rockchip,vcm-t-src"
+#define OF_CAMERA_VCMDRV_T_DIV          "rockchip,vcm-t-div"
 #define VCMDRV_SETZOOM_MAXCNT	300U
 
 #define RK_VIDIOC_VCM_TIMEINFO \
@@ -61,7 +63,6 @@
 #define RK_VIDIOC_MODIFY_POSITION \
 	_IOW('V', BASE_VIDIOC_PRIVATE + 16, struct rk_cam_modify_pos)
 
-#ifdef CONFIG_COMPAT
 #define RK_VIDIOC_COMPAT_VCM_TIMEINFO \
 	_IOR('V', BASE_VIDIOC_PRIVATE + 0, struct rk_cam_compat_vcm_tim)
 #define RK_VIDIOC_COMPAT_IRIS_TIMEINFO \
@@ -70,7 +71,6 @@
 	_IOR('V', BASE_VIDIOC_PRIVATE + 2, struct rk_cam_compat_vcm_tim)
 #define RK_VIDIOC_COMPAT_ZOOM1_TIMEINFO \
 	_IOR('V', BASE_VIDIOC_PRIVATE + 11, struct rk_cam_compat_vcm_tim)
-#endif
 
 struct rk_cam_modify_pos {
 	s32 focus_pos;
@@ -96,16 +96,14 @@ struct rk_cam_set_zoom {
 };
 
 struct rk_cam_vcm_tim {
-	struct timeval vcm_start_t;
-	struct timeval vcm_end_t;
+	struct __kernel_old_timeval vcm_start_t;
+	struct __kernel_old_timeval vcm_end_t;
 };
 
-#ifdef CONFIG_COMPAT
 struct rk_cam_compat_vcm_tim {
-	struct compat_timeval vcm_start_t;
-	struct compat_timeval vcm_end_t;
+	struct old_timeval32 vcm_start_t;
+	struct old_timeval32 vcm_end_t;
 };
-#endif
 
 struct rk_cam_vcm_cfg {
 	int start_ma;

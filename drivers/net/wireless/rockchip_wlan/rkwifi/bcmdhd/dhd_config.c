@@ -1,4 +1,4 @@
-
+/* SPDX-License-Identifier: GPL-2.0 */
 #include <typedefs.h>
 #include <osl.h>
 
@@ -1841,6 +1841,17 @@ dhd_conf_set_roam(dhd_pub_t *dhd)
 {
 	int bcmerror = -1;
 	struct dhd_conf *conf = dhd->conf;
+	uint wnm_bsstrans_resp = 0;
+
+	if (dhd->conf->chip == BCM4359_CHIP_ID) {
+		dhd_conf_get_iovar(dhd, 0, WLC_GET_VAR, "wnm_bsstrans_resp",
+			(char *)&wnm_bsstrans_resp, sizeof(wnm_bsstrans_resp));
+		if (wnm_bsstrans_resp == WL_BSSTRANS_POLICY_PRODUCT) {
+			dhd->wbtext_policy = WL_BSSTRANS_POLICY_ROAM_ALWAYS;
+			dhd_conf_set_intiovar(dhd, WLC_SET_VAR, "wnm_bsstrans_resp",
+				WL_BSSTRANS_POLICY_ROAM_ALWAYS, 0, FALSE);
+		}
+	}
 
 	dhd_roam_disable = conf->roam_off;
 	dhd_conf_set_intiovar(dhd, WLC_SET_VAR, "roam_off", dhd->conf->roam_off, 0, FALSE);
@@ -4198,19 +4209,6 @@ dhd_conf_read_others(dhd_pub_t *dhd, char *full_param, uint len_param)
 		CONFIG_MSG("fwchk = %d\n", conf->fwchk);
 	}
 #endif
-	else if (!strncmp("vndr_ie_assocreq=", full_param, len_param)) {
-		if (conf->vndr_ie_assocreq) {
-			kfree(conf->vndr_ie_assocreq);
-			conf->vndr_ie_assocreq = NULL;
-		}
-		if (!(conf->vndr_ie_assocreq = kmalloc(strlen(data)+1, GFP_KERNEL))) {
-			CONFIG_ERROR("kmalloc failed\n");
-		} else {
-			memset(conf->vndr_ie_assocreq, 0, strlen(data)+1);
-			strcpy(conf->vndr_ie_assocreq, data);
-			CONFIG_MSG("vndr_ie_assocreq = %s\n", conf->vndr_ie_assocreq);
-		}
-	}
 	else
 		return false;
 
@@ -4629,10 +4627,6 @@ dhd_conf_preinit(dhd_pub_t *dhd)
 		kfree(conf->wl_resume);
 		conf->wl_resume = NULL;
 	}
-	if (conf->vndr_ie_assocreq) {
-		kfree(conf->vndr_ie_assocreq);
-		conf->vndr_ie_assocreq = NULL;
-	}
 	conf->band = -1;
 	memset(&conf->bw_cap, -1, sizeof(conf->bw_cap));
 	if (conf->chip == BCM43362_CHIP_ID || conf->chip == BCM4330_CHIP_ID) {
@@ -4898,10 +4892,6 @@ dhd_conf_reset(dhd_pub_t *dhd)
 		kfree(conf->wl_resume);
 		conf->wl_resume = NULL;
 	}
-	if (conf->vndr_ie_assocreq) {
-		kfree(conf->vndr_ie_assocreq);
-		conf->vndr_ie_assocreq = NULL;
-	}
 	memset(conf, 0, sizeof(dhd_conf_t));
 	return 0;
 }
@@ -4965,10 +4955,6 @@ dhd_conf_detach(dhd_pub_t *dhd)
 		if (conf->wl_resume) {
 			kfree(conf->wl_resume);
 			conf->wl_resume = NULL;
-		}
-		if (conf->vndr_ie_assocreq) {
-			kfree(conf->vndr_ie_assocreq);
-			conf->vndr_ie_assocreq = NULL;
 		}
 		MFREE(dhd->osh, conf, sizeof(dhd_conf_t));
 	}

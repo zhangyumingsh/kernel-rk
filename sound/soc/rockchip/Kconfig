@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-only
 config SND_SOC_ROCKCHIP
 	tristate "ASoC support for Rockchip"
 	depends on COMPILE_TEST || ARCH_ROCKCHIP
@@ -5,22 +6,6 @@ config SND_SOC_ROCKCHIP
 	  Say Y or M if you want to add support for codecs attached to
 	  the Rockchip SoCs' Audio interfaces. You will also need to
 	  select the audio interfaces to support below.
-
-config SND_SOC_ROCKCHIP_PREALLOC_BUFFER_SIZE
-	int "Default prealloc buffer size (kbytes)"
-	depends on SND_SOC_ROCKCHIP
-	default "512"
-	help
-	  The default value is 512 kilobytes. Only change this if you know
-	  what you are doing.
-
-config SND_SOC_ROCKCHIP_AUDIO_PWM
-	tristate "Rockchip Audio PWM Driver"
-	depends on CLKDEV_LOOKUP && SND_SOC_ROCKCHIP
-	select SND_SOC_GENERIC_DMAENGINE_PCM
-	help
-	  Say Y or M if you want to add support for Audio PWM driver for
-	  Rockchip Audio PWM Controller.
 
 config SND_SOC_ROCKCHIP_I2S
 	tristate "Rockchip I2S Device Driver"
@@ -44,6 +29,7 @@ config SND_SOC_ROCKCHIP_PDM
 	tristate "Rockchip PDM Controller Driver"
 	depends on CLKDEV_LOOKUP && SND_SOC_ROCKCHIP
 	select SND_SOC_GENERIC_DMAENGINE_PCM
+	select RATIONAL
 	help
 	  Say Y or M if you want to add support for PDM driver for
 	  Rockchip PDM Controller. The Controller supports up to maximum of
@@ -56,6 +42,14 @@ config SND_SOC_ROCKCHIP_SPDIF
 	help
 	  Say Y or M if you want to add support for SPDIF driver for
 	  Rockchip SPDIF transceiver device.
+
+config SND_SOC_ROCKCHIP_SPDIFRX
+	tristate "Rockchip SPDIFRX Device Driver"
+	depends on CLKDEV_LOOKUP && SND_SOC_ROCKCHIP
+	select SND_SOC_GENERIC_DMAENGINE_PCM
+	help
+	  Say Y or M if you want to add support for SPDIFRX driver for
+	  Rockchip SPDIF receiver device.
 
 config SND_SOC_ROCKCHIP_VAD
 	tristate "Rockchip Voice Activity Detection Driver"
@@ -70,9 +64,10 @@ config SND_SOC_ROCKCHIP_MAX98090
 	select SND_SOC_ROCKCHIP_I2S
 	select SND_SOC_MAX98090
 	select SND_SOC_TS3A227E
+	select SND_SOC_HDMI_CODEC
 	help
 	  Say Y or M here if you want to add support for SoC audio on Rockchip
-	  boards using the MAX98090 codec, such as Veyron.
+	  boards using the MAX98090 codec and HDMI codec, such as Veyron.
 
 config SND_SOC_ROCKCHIP_MULTICODECS
 	tristate "ASoC support for Rockchip multicodecs"
@@ -90,23 +85,13 @@ config SND_SOC_ROCKCHIP_RT5645
 	  Say Y or M here if you want to add support for SoC audio on Rockchip
 	  boards using the RT5645/RT5650 codec, such as Veyron.
 
-config SND_SOC_ROCKCHIP_RT5651
-	tristate "ASoC support for Rockchip boards using a RT5651 codec"
-	depends on SND_SOC_ROCKCHIP && I2C && GPIOLIB && CLKDEV_LOOKUP
-	select SND_SOC_ROCKCHIP_I2S
-	select SND_SOC_RT5651
+config SND_SOC_ROCKCHIP_HDMI
+	tristate "ASoC support for Rockchip HDMI audio"
+	depends on SND_SOC_ROCKCHIP && CLKDEV_LOOKUP
+	select SND_SOC_HDMI_CODEC
 	help
 	  Say Y or M here if you want to add support for SoC audio on Rockchip
-	  boards using the RT5651 codec.
-
-config SND_SOC_ROCKCHIP_RT5651_RK628
-	tristate "ASoC support for Rockchip boards RT5651 RK628 HDMIIN"
-	depends on SND_SOC_ROCKCHIP && I2C && GPIOLIB && CLKDEV_LOOKUP
-	select SND_SOC_ROCKCHIP_I2S
-	select SND_SOC_RT5651
-	help
-	  Say Y or M here if you want to add support for SoC audio on Rockchip
-	  boards for RT5651 RK628 HDMIIn
+	  boards using built-in HDMI or external HDMI.
 
 config SND_SOC_RK3288_HDMI_ANALOG
 	tristate "ASoC support multiple codecs for Rockchip RK3288 boards"

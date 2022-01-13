@@ -59,6 +59,10 @@
 #define SW_TX_CTL_CON5(x)	UPDATE(x, 10, 10)
 #define SW_TX_CTL_CON4_MASK	GENMASK(9, 8)
 #define SW_TX_CTL_CON4(x)	UPDATE(x, 9, 8)
+#define BYPASS_095V_LDO_MASK	BIT(3)
+#define BYPASS_095V_LDO(x)	UPDATE(x, 3, 3)
+#define TX_COM_VOLT_ADJ_MASK	GENMASK(2, 0)
+#define TX_COM_VOLT_ADJ(x)	UPDATE(x, 2, 0)
 #define COMBTXPHY_CON8		REG(0x0020)
 #define COMBTXPHY_CON9		REG(0x0024)
 #define SW_DSI_FSET_EN_MASK	BIT(29)
@@ -86,7 +90,6 @@ struct rk628_combtxphy {
 	struct clk *pclk;
 	struct clk *ref_clk;
 	struct reset_control *rstc;
-	enum phy_mode mode;
 	unsigned int flags;
 
 	u16 frac_div;
@@ -143,8 +146,13 @@ static int rk628_combtxphy_lvds_power_on(struct rk628_combtxphy *combtxphy)
 	u32 val;
 	int ret;
 
+	/* Adjust terminal resistance 133 ohm, bypass 0.95v ldo for driver. */
 	regmap_update_bits(combtxphy->regmap, COMBTXPHY_CON7,
-			   SW_TX_MODE_MASK, SW_TX_MODE(3));
+			   SW_TX_RTERM_MASK | SW_TX_MODE_MASK |
+			   BYPASS_095V_LDO_MASK | TX_COM_VOLT_ADJ_MASK,
+			   SW_TX_RTERM(6) | SW_TX_MODE(3) |
+			   BYPASS_095V_LDO(1) | TX_COM_VOLT_ADJ(0));
+
 	regmap_write(combtxphy->regmap, COMBTXPHY_CON10,
 		     TX7_CKDRV_EN | TX2_CKDRV_EN);
 	regmap_update_bits(combtxphy->regmap, COMBTXPHY_CON0,
@@ -165,7 +173,7 @@ static int rk628_combtxphy_lvds_power_on(struct rk628_combtxphy *combtxphy)
 		     SW_PLL_FRAC_DIV(combtxphy->frac_div) |
 		     SW_RATE(combtxphy->rate_div / 2));
 	regmap_update_bits(combtxphy->regmap, COMBTXPHY_CON0,
-			   SW_PD_PLL | SW_TX_PD_MASK, 0);
+			   SW_PD_PLL, 0);
 
 	ret = regmap_read_poll_timeout(combtxphy->grf, GRF_DPHY0_STATUS,
 				       val, val & DPHY_PHYLOCK, 0, 1000);
@@ -176,7 +184,7 @@ static int rk628_combtxphy_lvds_power_on(struct rk628_combtxphy *combtxphy)
 
 	usleep_range(100, 200);
 	regmap_update_bits(combtxphy->regmap, COMBTXPHY_CON0,
-			   SW_TX_IDLE_MASK, 0);
+			   SW_TX_IDLE_MASK | SW_TX_PD_MASK, 0);
 
 	return 0;
 }
@@ -220,10 +228,12 @@ int rk628_combtxphy_set_gvi_division_mode(struct phy *phy, u8 mode)
 
 	return 0;
 }
+EXPORT_SYMBOL(rk628_combtxphy_set_gvi_division_mode);
 
 static int rk628_combtxphy_power_on(struct phy *phy)
 {
 	struct rk628_combtxphy *combtxphy = phy_get_drvdata(phy);
+	enum phy_mode mode = phy_get_mode(phy);
 
 	clk_prepare_enable(combtxphy->pclk);
 	reset_control_assert(combtxphy->rstc);
@@ -238,24 +248,22 @@ static int rk628_combtxphy_power_on(struct phy *phy)
 			   SW_TX_IDLE_MASK | SW_TX_PD_MASK | SW_PD_PLL_MASK,
 			   SW_TX_IDLE(0x3ff) | SW_TX_PD(0x3ff) | SW_PD_PLL);
 
-	switch (combtxphy->mode) {
-	case PHY_MODE_VIDEO_MIPI:
+	switch (mode) {
+	case PHY_MODE_MIPI_DPHY:
 		regmap_update_bits(combtxphy->grf, GRF_POST_PROC_CON,
 				   SW_TXPHY_REFCLK_SEL_MASK,
 				   SW_TXPHY_REFCLK_SEL(0));
 		return rk628_combtxphy_dsi_power_on(combtxphy);
-	case PHY_MODE_VIDEO_LVDS:
+	case PHY_MODE_LVDS:
 		regmap_update_bits(combtxphy->grf, GRF_POST_PROC_CON,
 				   SW_TXPHY_REFCLK_SEL_MASK,
 				   SW_TXPHY_REFCLK_SEL(1));
 		return rk628_combtxphy_lvds_power_on(combtxphy);
-	case PHY_MODE_GVI:
+	default:
 		regmap_update_bits(combtxphy->grf, GRF_POST_PROC_CON,
 				   SW_TXPHY_REFCLK_SEL_MASK,
 				   SW_TXPHY_REFCLK_SEL(2));
 		return rk628_combtxphy_gvi_power_on(combtxphy);
-	default:
-		return -EINVAL;
 	}
 
 	return 0;
@@ -275,7 +283,8 @@ static int rk628_combtxphy_power_off(struct phy *phy)
 	return 0;
 }
 
-static int rk628_combtxphy_set_mode(struct phy *phy, enum phy_mode mode)
+static int rk628_combtxphy_set_mode(struct phy *phy, enum phy_mode mode,
+				    int submode)
 {
 	struct rk628_combtxphy *combtxphy = phy_get_drvdata(phy);
 	unsigned int bus_width = phy_get_bus_width(phy);
@@ -283,7 +292,7 @@ static int rk628_combtxphy_set_mode(struct phy *phy, enum phy_mode mode)
 	unsigned long fvco, fpfd;
 
 	switch (mode) {
-	case PHY_MODE_VIDEO_MIPI:
+	case PHY_MODE_MIPI_DPHY:
 	{
 		unsigned int fhsc = bus_width >> 8;
 		unsigned int flags = bus_width & 0xff;
@@ -321,7 +330,7 @@ static int rk628_combtxphy_set_mode(struct phy *phy, enum phy_mode mode)
 		phy_set_bus_width(phy, fhsc);
 		break;
 	}
-	case PHY_MODE_VIDEO_LVDS:
+	case PHY_MODE_LVDS:
 	{
 		unsigned int flags = bus_width & 0xff;
 		unsigned int rate = (bus_width >> 8) * 7;
@@ -339,7 +348,7 @@ static int rk628_combtxphy_set_mode(struct phy *phy, enum phy_mode mode)
 			combtxphy->rate_div = 1;
 		break;
 	}
-	case PHY_MODE_GVI:
+	default:
 	{
 		unsigned int i, delta_freq, best_delta_freq, fb_div;
 		unsigned long ref_clk;
@@ -390,14 +399,9 @@ static int rk628_combtxphy_set_mode(struct phy *phy, enum phy_mode mode)
 		combtxphy->fb_div = fb_div;
 
 		phy_set_bus_width(phy, bus_width);
-
 		break;
 	}
-	default:
-		return -EINVAL;
 	}
-
-	combtxphy->mode = mode;
 
 	return 0;
 }
@@ -472,9 +476,6 @@ static int rk628_combtxphy_probe(struct platform_device *pdev)
 		dev_err(dev, "failed to allocate register map: %d\n", ret);
 		return ret;
 	}
-
-	regmap_write(combtxphy->regmap, COMBTXPHY_CON0,
-		     SW_TX_IDLE(0x3ff) | SW_TX_PD(0x3ff) | SW_PD_PLL);
 
 	phy = devm_phy_create(dev, NULL, &rk628_combtxphy_ops);
 	if (IS_ERR(phy)) {

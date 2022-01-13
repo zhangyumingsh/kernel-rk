@@ -1,14 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Synopsys DesignWare Multimedia Card Interface driver
  *  (Based on NXP driver for lpc 31xx)
  *
  * Copyright (C) 2009 NXP Semiconductors
  * Copyright (C) 2009, 2010 Imagination Technologies Ltd.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
  */
 
 #include <linux/blkdev.h>
@@ -175,40 +171,18 @@ static void dw_mci_init_debugfs(struct dw_mci_slot *slot)
 	struct mmc_host	*mmc = slot->mmc;
 	struct dw_mci *host = slot->host;
 	struct dentry *root;
-	struct dentry *node;
 
 	root = mmc->debugfs_root;
 	if (!root)
 		return;
 
-	node = debugfs_create_file("regs", S_IRUSR, root, host,
-				   &dw_mci_regs_fops);
-	if (!node)
-		goto err;
-
-	node = debugfs_create_file("req", S_IRUSR, root, slot,
-				   &dw_mci_req_fops);
-	if (!node)
-		goto err;
-
-	node = debugfs_create_u32("state", S_IRUSR, root, (u32 *)&host->state);
-	if (!node)
-		goto err;
-
-	node = debugfs_create_x32("pending_events", S_IRUSR, root,
-				  (u32 *)&host->pending_events);
-	if (!node)
-		goto err;
-
-	node = debugfs_create_x32("completed_events", S_IRUSR, root,
-				  (u32 *)&host->completed_events);
-	if (!node)
-		goto err;
-
-	return;
-
-err:
-	dev_err(&mmc->class_dev, "failed to initialize debugfs for slot\n");
+	debugfs_create_file("regs", S_IRUSR, root, host, &dw_mci_regs_fops);
+	debugfs_create_file("req", S_IRUSR, root, slot, &dw_mci_req_fops);
+	debugfs_create_u32("state", S_IRUSR, root, &host->state);
+	debugfs_create_xul("pending_events", S_IRUSR, root,
+			   &host->pending_events);
+	debugfs_create_xul("completed_events", S_IRUSR, root,
+			   &host->completed_events);
 }
 #endif /* defined(CONFIG_DEBUG_FS) */
 
@@ -247,7 +221,8 @@ static void dw_mci_wait_while_busy(struct dw_mci *host, u32 cmd_flags)
 	 * expected.
 	 */
 #ifdef CONFIG_ROCKCHIP_THUNDER_BOOT
-	if (host->slot->mmc->restrict_caps & RESTRICT_CARD_TYPE_EMMC)
+	if (host->slot->mmc->caps2 & MMC_CAP2_NO_SD &&
+	    host->slot->mmc->caps2 & MMC_CAP2_NO_SDIO)
 		delay = 0;
 #endif
 	if ((cmd_flags & SDMMC_CMD_PRV_DAT_WAIT) &&
@@ -871,12 +846,14 @@ static int dw_mci_edmac_init(struct dw_mci *host)
 	if (!host->dms)
 		return -ENOMEM;
 
-	host->dms->ch = dma_request_slave_channel(host->dev, "rx-tx");
-	if (!host->dms->ch) {
+	host->dms->ch = dma_request_chan(host->dev, "rx-tx");
+	if (IS_ERR(host->dms->ch)) {
+		int ret = PTR_ERR(host->dms->ch);
+
 		dev_err(host->dev, "Failed to get external DMA channel.\n");
 		kfree(host->dms);
 		host->dms = NULL;
-		return -ENXIO;
+		return ret;
 	}
 
 	return 0;
@@ -976,39 +953,12 @@ static void dw_mci_post_req(struct mmc_host *mmc,
 	data->host_cookie = COOKIE_UNMAPPED;
 }
 
-static int dw_mci_set_sdio_status(struct mmc_host *mmc, int val)
-{
-	struct dw_mci_slot *slot = mmc_priv(mmc);
-	struct dw_mci *host = slot->host;
-
-	if (!(mmc->restrict_caps & RESTRICT_CARD_TYPE_SDIO))
-		return 0;
-
-	spin_lock_bh(&host->lock);
-
-	if (val)
-		set_bit(DW_MMC_CARD_PRESENT, &slot->flags);
-	else
-		clear_bit(DW_MMC_CARD_PRESENT, &slot->flags);
-
-	spin_unlock_bh(&host->lock);
-
-	mmc_detect_change(slot->mmc, 20);
-
-	return 0;
-}
-
 static int dw_mci_get_cd(struct mmc_host *mmc)
 {
 	int present;
 	struct dw_mci_slot *slot = mmc_priv(mmc);
 	struct dw_mci *host = slot->host;
 	int gpio_cd = mmc_gpio_get_cd(mmc);
-
-#ifdef CONFIG_SDIO_KEEPALIVE
-	if (mmc->logic_remove_card)
-		return test_bit(DW_MMC_CARD_PRESENT, &slot->flags);
-#endif
 
 	/* Use platform get_cd function, else try onboard card detect */
 	if (((mmc->caps & MMC_CAP_NEEDS_POLL)
@@ -1609,8 +1559,7 @@ static int dw_mci_switch_voltage(struct mmc_host *mmc, struct mmc_ios *ios)
 
 	if (!IS_ERR(mmc->supply.vqmmc)) {
 		ret = mmc_regulator_set_vqmmc(mmc, ios);
-
-		if (ret) {
+		if (ret < 0) {
 			dev_dbg(&mmc->class_dev,
 					 "Regulator set error %d - %s V\n",
 					 ret, uhs & v18 ? "1.8" : "3.3");
@@ -1840,7 +1789,6 @@ static const struct mmc_host_ops dw_mci_ops = {
 	.pre_req		= dw_mci_pre_req,
 	.post_req		= dw_mci_post_req,
 	.set_ios		= dw_mci_set_ios,
-	.set_sdio_status	= dw_mci_set_sdio_status,
 	.get_ro			= dw_mci_get_ro,
 	.get_cd			= dw_mci_get_cd,
 	.hw_reset               = dw_mci_hw_reset,
@@ -2119,7 +2067,7 @@ static void dw_mci_tasklet_func(unsigned long priv)
 			}
 
 			prev_state = state = STATE_SENDING_DATA;
-			/* fall through */
+			fallthrough;
 
 		case STATE_SENDING_DATA:
 			/*
@@ -2180,7 +2128,7 @@ static void dw_mci_tasklet_func(unsigned long priv)
 			}
 			prev_state = state = STATE_DATA_BUSY;
 
-			/* fall through */
+			fallthrough;
 
 		case STATE_DATA_BUSY:
 			if (!dw_mci_clear_pending_data_complete(host)) {
@@ -2233,7 +2181,7 @@ static void dw_mci_tasklet_func(unsigned long priv)
 			 */
 			prev_state = state = STATE_SENDING_STOP;
 
-			/* fall through */
+			fallthrough;
 
 		case STATE_SENDING_STOP:
 			if (!dw_mci_clear_pending_cmd_complete(host))
@@ -2848,12 +2796,6 @@ static int dw_mci_init_slot_caps(struct dw_mci_slot *slot)
 	if (host->pdata->caps)
 		mmc->caps = host->pdata->caps;
 
-	/*
-	 * Support MMC_CAP_ERASE by default.
-	 * It needs to use trim/discard/erase commands.
-	 */
-	mmc->caps |= MMC_CAP_ERASE;
-
 	if (host->pdata->pm_caps)
 		mmc->pm_caps = host->pdata->pm_caps;
 
@@ -2871,15 +2813,7 @@ static int dw_mci_init_slot_caps(struct dw_mci_slot *slot)
 				ctrl_id);
 			return -EINVAL;
 		}
-		/*
-		 * Some sd cards violate the spec. They claim to support
-		 * CMD23 but actually not. We don't have a good method to
-		 * work around them except for adding MMC_QUIRK_BLK_NO_CMD23
-		 * one by one. But it's not a acceptable way for our custmors.
-		 * So removing CMD23 support for all sd cards to solve it.
-		 */
-		if (!(mmc->restrict_caps & RESTRICT_CARD_TYPE_SD))
-			mmc->caps |= drv_data->caps[ctrl_id];
+		mmc->caps |= drv_data->caps[ctrl_id];
 	}
 
 	if (host->pdata->caps2)
@@ -2956,11 +2890,6 @@ static int dw_mci_init_slot(struct dw_mci *host)
 	}
 
 	dw_mci_get_cd(mmc);
-
-#ifdef CONFIG_SDIO_KEEPALIVE
-	if (mmc->logic_remove_card)
-		clear_bit(DW_MMC_CARD_PRESENT, &slot->flags);
-#endif
 
 	ret = mmc_add_host(mmc);
 	if (ret)
@@ -3305,14 +3234,65 @@ int dw_mci_probe(struct dw_mci *host)
 	int width, i, ret = 0;
 	u32 fifo_size;
 
-	if (!host->pdata) {
-		host->pdata = dw_mci_parse_dt(host);
-		if (PTR_ERR(host->pdata) == -EPROBE_DEFER) {
-			return -EPROBE_DEFER;
-		} else if (IS_ERR(host->pdata)) {
-			dev_err(host->dev, "platform data not available\n");
+#if defined(CONFIG_ROCKCHIP_THUNDER_BOOT) && defined(CONFIG_ROCKCHIP_HW_DECOMPRESS)
+	struct resource idmac, ramdisk_src, ramdisk_dst;
+	struct device_node *dma, *rds, *rdd;
+	struct device *dev = host->dev;
+	u32 intr;
+
+	if (host->slot->mmc->caps2 & MMC_CAP2_NO_SD &&
+	    host->slot->mmc->caps2 & MMC_CAP2_NO_SDIO) {
+		if (readl_poll_timeout(host->regs + SDMMC_STATUS,
+				fifo_size,
+				!(fifo_size & (BIT(10) | GENMASK(7, 4))),
+				0, 500 * USEC_PER_MSEC))
+			dev_err(dev, "Controller is occupied!\n");
+
+		if (readl_poll_timeout(host->regs + SDMMC_IDSTS,
+				fifo_size, !(fifo_size & GENMASK(16, 13)),
+				0, 500 * USEC_PER_MSEC))
+			dev_err(dev, "DMA is still running!\n");
+
+		intr = mci_readl(host, RINTSTS);
+		if (intr & DW_MCI_CMD_ERROR_FLAGS || intr & DW_MCI_DATA_ERROR_FLAGS) {
+			WARN_ON(1);
 			return -EINVAL;
 		}
+
+		/* Release idmac descriptor */
+		dma = of_parse_phandle(dev->of_node, "memory-region-idamc", 0);
+		if (dma) {
+			ret = of_address_to_resource(dma, 0, &idmac);
+			if (ret >= 0)
+				free_reserved_area(phys_to_virt(idmac.start),
+					phys_to_virt(idmac.start) + resource_size(&idmac),
+					-1, NULL);
+		}
+
+		/* Parse ramdisk addr and help start decompressing */
+		rds = of_parse_phandle(dev->of_node, "memory-region-src", 0);
+		rdd = of_parse_phandle(dev->of_node, "memory-region-dst", 0);
+		if (rds && rdd) {
+			if (of_address_to_resource(rds, 0, &ramdisk_src) >= 0 &&
+				of_address_to_resource(rdd, 0, &ramdisk_dst) >= 0)
+				/*
+				 * Decompress HW driver will free reserved area of
+				 * memory-region-src.
+				 */
+				ret = rk_decom_start(GZIP_MOD, ramdisk_src.start,
+						     ramdisk_dst.start,
+						     resource_size(&ramdisk_dst));
+			if (ret < 0)
+				dev_err(dev, "fail to start decom\n");
+		}
+	}
+#endif
+
+	if (!host->pdata) {
+		host->pdata = dw_mci_parse_dt(host);
+		if (IS_ERR(host->pdata))
+			return dev_err_probe(host->dev, PTR_ERR(host->pdata),
+					     "platform data not available\n");
 	}
 
 	host->biu_clk = devm_clk_get(host->dev, "biu");
@@ -3325,22 +3305,6 @@ int dw_mci_probe(struct dw_mci *host)
 			return ret;
 		}
 	}
-#ifdef CONFIG_ROCKCHIP_THUNDER_BOOT
-	if (device_property_read_bool(host->dev, "supports-emmc")) {
-		if (readl_poll_timeout(host->regs + SDMMC_STATUS,
-				fifo_size,
-				!(fifo_size & (BIT(10) | GENMASK(7, 4))),
-				0, 500 * USEC_PER_MSEC))
-			dev_err(host->dev, "Controller is occupied!\n");
-
-		if (readl_poll_timeout(host->regs + SDMMC_IDSTS,
-				fifo_size, !(fifo_size & GENMASK(16, 13)),
-				0, 500 * USEC_PER_MSEC))
-			dev_err(host->dev, "DMA is still running!\n");
-
-		BUG_ON(mci_readl(host, RINTSTS) & DW_MCI_ERROR_FLAGS);
-	}
-#endif
 
 	host->ciu_clk = devm_clk_get(host->dev, "ciu");
 	if (IS_ERR(host->ciu_clk)) {
@@ -3600,8 +3564,8 @@ int dw_mci_runtime_resume(struct device *dev)
 	 * Restore the initial value at FIFOTH register
 	 * And Invalidate the prev_blksz with zero
 	 */
-	 mci_writel(host, FIFOTH, host->fifoth_val);
-	 host->prev_blksz = 0;
+	mci_writel(host, FIFOTH, host->fifoth_val);
+	host->prev_blksz = 0;
 
 	/* Put in max timeout */
 	mci_writel(host, TMOUT, 0xFFFFFFFF);

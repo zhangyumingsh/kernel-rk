@@ -6257,9 +6257,6 @@ static int
 dhd_stop(struct net_device *net)
 {
 	int ifidx = 0;
-#ifdef WL_CFG80211
-	unsigned long flags = 0;
-#endif
 	dhd_info_t *dhd = DHD_DEV_INFO(net);
 	DHD_OS_WAKE_LOCK(&dhd->pub);
 	DHD_PERIM_LOCK(&dhd->pub);
@@ -6283,13 +6280,7 @@ dhd_stop(struct net_device *net)
 
 	/* Set state and stop OS transmissions */
 	netif_stop_queue(net);
-#ifdef WL_CFG80211
-	spin_lock_irqsave(&dhd->pub.up_lock, flags);
 	dhd->pub.up = 0;
-	spin_unlock_irqrestore(&dhd->pub.up_lock, flags);
-#else
-	dhd->pub.up = 0;
-#endif
 
 #ifdef WL_CFG80211
 	if (ifidx == 0) {
@@ -7552,7 +7543,6 @@ dhd_attach(osl_t *osh, struct dhd_bus *bus, uint bus_hdrlen)
 	dhd_state |= DHD_ATTACH_STATE_PROT_ATTACH;
 
 #ifdef WL_CFG80211
-	spin_lock_init(&dhd->pub.up_lock);
 	/* Attach and link in the cfg80211 */
 	if (unlikely(wl_cfg80211_attach(net, &dhd->pub))) {
 		DHD_ERROR(("wl_cfg80211_attach failed\n"));
@@ -7797,8 +7787,8 @@ unsigned short cis_device = 0;
 char fw_path[1024] = {0};
 char nv_path[1024] = {0};
 
-#define DEFAULT_BCMDHD_FW_PATH "/lib/firmware/"
-#define DEFAULT_BCMDHD_NVRAM_PATH "/lib/firmware/"
+#define DEFAULT_BCMDHD_FW_PATH "/vendor/etc/firmware/"
+#define DEFAULT_BCMDHD_NVRAM_PATH "/vendor/etc/firmware/"
 
 #define FW_CYW43364 "fw_cyw43364.bin"
 #define FW_CYW43438 "fw_cyw43438.bin"
@@ -11034,9 +11024,6 @@ dhd_wl_host_event(dhd_info_t *dhd, int *ifidx, void *pktdata, uint16 pktlen,
 	wl_event_msg_t *event, void **data)
 {
 	int bcmerror = 0;
-#ifdef WL_CFG80211
-	unsigned long flags = 0;
-#endif /* WL_CFG80211 */
 	ASSERT(dhd != NULL);
 
 #ifdef SHOW_LOGTRACE
@@ -11068,13 +11055,8 @@ dhd_wl_host_event(dhd_info_t *dhd, int *ifidx, void *pktdata, uint16 pktlen,
 #ifdef WL_CFG80211
 	ASSERT(dhd->iflist[*ifidx] != NULL);
 	ASSERT(dhd->iflist[*ifidx]->net != NULL);
-	if (dhd->iflist[*ifidx]->net) {
-		spin_lock_irqsave(&dhd->pub.up_lock, flags);
-		if (dhd->pub.up) {
-			wl_cfg80211_event(dhd->iflist[*ifidx]->net, event, *data);
-		}
-		spin_unlock_irqrestore(&dhd->pub.up_lock, flags);
-	}
+	if (dhd->iflist[*ifidx]->net)
+		wl_cfg80211_event(dhd->iflist[*ifidx]->net, event, *data);
 #endif /* defined(WL_CFG80211) */
 
 	return (bcmerror);

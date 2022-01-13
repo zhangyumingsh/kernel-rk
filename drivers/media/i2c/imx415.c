@@ -23,6 +23,10 @@
  * V0.0X01.0X06
  * 1. support DOL3 10bit 20fps 1485Mbps
  * 2. fixed linkfreq error
+ * V0.0X01.0X07
+ * 1. fix set_fmt & ioctl get mode unmatched issue.
+ * 2. need to set default vblank when change format.
+ * 3. enum all supported mode mbus_code, not just cur_mode.
  */
 
 #define DEBUG
@@ -46,7 +50,7 @@
 #include <linux/rk-preisp.h>
 #include "../platform/rockchip/isp/rkisp_tb_helper.h"
 
-#define DRIVER_VERSION			KERNEL_VERSION(0, 0x01, 0x06)
+#define DRIVER_VERSION			KERNEL_VERSION(0, 0x01, 0x07)
 
 #ifndef V4L2_CID_DIGITAL_GAIN
 #define V4L2_CID_DIGITAL_GAIN		V4L2_CID_GAIN
@@ -55,6 +59,7 @@
 #define MIPI_FREQ_891M			891000000
 #define MIPI_FREQ_446M			446000000
 #define MIPI_FREQ_743M			743000000
+#define MIPI_FREQ_297M			297000000
 
 #define IMX415_4LANES			4
 
@@ -145,13 +150,14 @@
 #define IMX415_GROUP_HOLD_END		0x00
 
 /* Basic Readout Lines. Number of necessary readout lines in sensor */
-#define BRL				2228u
+#define BRL_ALL				2228u
+#define BRL_BINNING			1115u
 /* Readout timing setting of SEF1(DOL2): RHS1 < 2 * BRL and should be 4n + 1 */
-#define RHS1_MAX_X2			((BRL * 2 - 1) / 4 * 4 + 1)
+#define RHS1_MAX_X2(VAL)		(((VAL) * 2 - 1) / 4 * 4 + 1)
 #define SHR1_MIN_X2			9u
 
 /* Readout timing setting of SEF1(DOL3): RHS1 < 3 * BRL and should be 6n + 1 */
-#define RHS1_MAX_X3			((BRL * 3 - 1) / 6 * 6 + 1)
+#define RHS1_MAX_X3(VAL)		(((VAL) * 3 - 1) / 6 * 6 + 1)
 #define SHR1_MIN_X3			13u
 
 #define OF_CAMERA_PINCTRL_STATE_DEFAULT	"rockchip,camera_default"
@@ -166,14 +172,6 @@ static const char * const imx415_supply_names[] = {
 };
 
 #define IMX415_NUM_SUPPLIES ARRAY_SIZE(imx415_supply_names)
-
-enum imx415_max_pad {
-	PAD0, /* link to isp */
-	PAD1, /* link to csi wr0 | hdr x2:L x3:M */
-	PAD2, /* link to csi wr1 | hdr      x3:L */
-	PAD3, /* link to csi wr2 | hdr x2:M x3:S */
-	PAD_MAX,
-};
 
 struct regval {
 	u16 addr;
@@ -244,7 +242,11 @@ static __maybe_unused const struct regval imx415_global_12bit_3864x2192_regs[] =
 	{0x3008, 0x7F},
 	{0x300A, 0x5B},
 	{0x30C1, 0x00},
+	{0x3031, 0x01},
+	{0x3032, 0x01},
+	{0x30D9, 0x06},
 	{0x3116, 0x24},
+	{0x3118, 0xC0},
 	{0x311E, 0x24},
 	{0x32D4, 0x21},
 	{0x32EC, 0xA1},
@@ -265,6 +267,7 @@ static __maybe_unused const struct regval imx415_global_12bit_3864x2192_regs[] =
 	{0x36D8, 0x71},
 	{0x36DA, 0x8C},
 	{0x36DB, 0x00},
+	{0x3701, 0x03},
 	{0x3724, 0x02},
 	{0x3726, 0x02},
 	{0x3732, 0x02},
@@ -323,6 +326,9 @@ static __maybe_unused const struct regval imx415_global_12bit_3864x2192_regs[] =
 };
 
 static __maybe_unused const struct regval imx415_linear_12bit_3864x2192_891M_regs[] = {
+	{0x3020, 0x00},
+	{0x3021, 0x00},
+	{0x3022, 0x00},
 	{0x3024, 0xCA},
 	{0x3025, 0x08},
 	{0x3028, 0x4C},
@@ -354,6 +360,9 @@ static __maybe_unused const struct regval imx415_linear_12bit_3864x2192_891M_reg
 };
 
 static __maybe_unused const struct regval imx415_hdr2_12bit_3864x2192_1782M_regs[] = {
+	{0x3020, 0x00},
+	{0x3021, 0x00},
+	{0x3022, 0x00},
 	{0x3024, 0xCA},
 	{0x3025, 0x08},
 	{0x3028, 0x26},
@@ -385,6 +394,9 @@ static __maybe_unused const struct regval imx415_hdr2_12bit_3864x2192_1782M_regs
 };
 
 static __maybe_unused const struct regval imx415_hdr3_12bit_3864x2192_1782M_regs[] = {
+	{0x3020, 0x00},
+	{0x3021, 0x00},
+	{0x3022, 0x00},
 	{0x3024, 0x96},
 	{0x3025, 0x06},
 	{0x3028, 0x26},
@@ -422,6 +434,7 @@ static __maybe_unused const struct regval imx415_global_10bit_3864x2192_regs[] =
 	{0x3031, 0x00},
 	{0x3032, 0x00},
 	{0x30C1, 0x00},
+	{0x30D9, 0x06},
 	{0x3116, 0x24},
 	{0x311E, 0x24},
 	{0x32D4, 0x21},
@@ -502,6 +515,9 @@ static __maybe_unused const struct regval imx415_global_10bit_3864x2192_regs[] =
 };
 
 static __maybe_unused const struct regval imx415_hdr3_10bit_3864x2192_1485M_regs[] = {
+	{0x3020, 0x00},
+	{0x3021, 0x00},
+	{0x3022, 0x00},
 	{0x3024, 0xBD},
 	{0x3025, 0x06},
 	{0x3028, 0x1A},
@@ -534,6 +550,9 @@ static __maybe_unused const struct regval imx415_hdr3_10bit_3864x2192_1485M_regs
 };
 
 static __maybe_unused const struct regval imx415_hdr3_10bit_3864x2192_1782M_regs[] = {
+	{0x3020, 0x00},
+	{0x3021, 0x00},
+	{0x3022, 0x00},
 	{0x3024, 0xEA},
 	{0x3025, 0x07},
 	{0x3028, 0xCA},
@@ -566,6 +585,9 @@ static __maybe_unused const struct regval imx415_hdr3_10bit_3864x2192_1782M_regs
 };
 
 static __maybe_unused const struct regval imx415_hdr2_10bit_3864x2192_1485M_regs[] = {
+	{0x3020, 0x00},
+	{0x3021, 0x00},
+	{0x3022, 0x00},
 	{0x3024, 0xFC},
 	{0x3025, 0x08},
 	{0x3028, 0x1A},
@@ -598,6 +620,9 @@ static __maybe_unused const struct regval imx415_hdr2_10bit_3864x2192_1485M_regs
 };
 
 static __maybe_unused const struct regval imx415_linear_10bit_3864x2192_891M_regs[] = {
+	{0x3020, 0x00},
+	{0x3021, 0x00},
+	{0x3022, 0x00},
 	{0x3024, 0xCA},
 	{0x3025, 0x08},
 	{0x3028, 0x4C},
@@ -625,6 +650,84 @@ static __maybe_unused const struct regval imx415_linear_10bit_3864x2192_891M_reg
 	{0x4024, 0x3F},
 	{0x4026, 0x5F},
 	{0x4028, 0x2F},
+	{0x4074, 0x01},
+	{REG_NULL, 0x00},
+};
+
+static __maybe_unused const struct regval imx415_linear_12bit_1932x1096_594M_regs[] = {
+	{0x3020, 0x01},
+	{0x3021, 0x01},
+	{0x3022, 0x01},
+	{0x3024, 0x5D},
+	{0x3025, 0x0C},
+	{0x3028, 0x0E},
+	{0x3029, 0x03},
+	{0x302C, 0x00},
+	{0x302D, 0x00},
+	{0x3031, 0x00},
+	{0x3033, 0x07},
+	{0x3050, 0x08},
+	{0x3051, 0x00},
+	{0x3054, 0x19},
+	{0x3058, 0x3E},
+	{0x3060, 0x25},
+	{0x3064, 0x4A},
+	{0x30CF, 0x00},
+	{0x30D9, 0x02},
+	{0x30DA, 0x01},
+	{0x3118, 0x80},
+	{0x3260, 0x01},
+	{0x3701, 0x00},
+	{0x400C, 0x00},
+	{0x4018, 0x67},
+	{0x401A, 0x27},
+	{0x401C, 0x27},
+	{0x401E, 0xB7},
+	{0x401F, 0x00},
+	{0x4020, 0x2F},
+	{0x4022, 0x4F},
+	{0x4024, 0x2F},
+	{0x4026, 0x47},
+	{0x4028, 0x27},
+	{0x4074, 0x01},
+	{REG_NULL, 0x00},
+};
+
+static __maybe_unused const struct regval imx415_hdr2_12bit_1932x1096_891M_regs[] = {
+	{0x3020, 0x01},
+	{0x3021, 0x01},
+	{0x3022, 0x01},
+	{0x3024, 0xFC},
+	{0x3025, 0x08},
+	{0x3028, 0x1A},
+	{0x3029, 0x02},
+	{0x302C, 0x01},
+	{0x302D, 0x01},
+	{0x3031, 0x00},
+	{0x3033, 0x05},
+	{0x3050, 0xB8},
+	{0x3051, 0x00},
+	{0x3054, 0x09},
+	{0x3058, 0x3E},
+	{0x3060, 0x25},
+	{0x3064, 0x4A},
+	{0x30CF, 0x01},
+	{0x30D9, 0x02},
+	{0x30DA, 0x01},
+	{0x3118, 0xC0},
+	{0x3260, 0x00},
+	{0x3701, 0x00},
+	{0x400C, 0x00},
+	{0x4018, 0xA7},
+	{0x401A, 0x57},
+	{0x401C, 0x5F},
+	{0x401E, 0x97},
+	{0x401F, 0x01},
+	{0x4020, 0x5F},
+	{0x4022, 0xAF},
+	{0x4024, 0x5F},
+	{0x4026, 0x9F},
+	{0x4028, 0x4F},
 	{0x4074, 0x01},
 	{REG_NULL, 0x00},
 };
@@ -660,8 +763,9 @@ static const struct imx415_mode supported_modes[] = {
 		.global_reg_list = imx415_global_10bit_3864x2192_regs,
 		.reg_list = imx415_linear_10bit_3864x2192_891M_regs,
 		.hdr_mode = NO_HDR,
-		.mipi_freq_idx = 0,
+		.mipi_freq_idx = 1,
 		.bpp = 10,
+		.vc[PAD0] = V4L2_MBUS_CSI2_CHANNEL_0,
 	},
 	{
 		.bus_fmt = MEDIA_BUS_FMT_SGBRG10_1X10,
@@ -681,7 +785,7 @@ static const struct imx415_mode supported_modes[] = {
 		.global_reg_list = imx415_global_10bit_3864x2192_regs,
 		.reg_list = imx415_hdr2_10bit_3864x2192_1485M_regs,
 		.hdr_mode = HDR_X2,
-		.mipi_freq_idx = 1,
+		.mipi_freq_idx = 2,
 		.bpp = 10,
 		.vc[PAD0] = V4L2_MBUS_CSI2_CHANNEL_1,
 		.vc[PAD1] = V4L2_MBUS_CSI2_CHANNEL_0,//L->csi wr0
@@ -706,7 +810,7 @@ static const struct imx415_mode supported_modes[] = {
 		.global_reg_list = imx415_global_10bit_3864x2192_regs,
 		.reg_list = imx415_hdr3_10bit_3864x2192_1485M_regs,
 		.hdr_mode = HDR_X3,
-		.mipi_freq_idx = 1,
+		.mipi_freq_idx = 2,
 		.bpp = 10,
 		.vc[PAD0] = V4L2_MBUS_CSI2_CHANNEL_2,
 		.vc[PAD1] = V4L2_MBUS_CSI2_CHANNEL_1,//M->csi wr0
@@ -731,7 +835,7 @@ static const struct imx415_mode supported_modes[] = {
 		.global_reg_list = imx415_global_10bit_3864x2192_regs,
 		.reg_list = imx415_hdr3_10bit_3864x2192_1782M_regs,
 		.hdr_mode = HDR_X3,
-		.mipi_freq_idx = 2,
+		.mipi_freq_idx = 3,
 		.bpp = 10,
 		.vc[PAD0] = V4L2_MBUS_CSI2_CHANNEL_2,
 		.vc[PAD1] = V4L2_MBUS_CSI2_CHANNEL_1,//M->csi wr0
@@ -753,8 +857,9 @@ static const struct imx415_mode supported_modes[] = {
 		.global_reg_list = imx415_global_12bit_3864x2192_regs,
 		.reg_list = imx415_linear_12bit_3864x2192_891M_regs,
 		.hdr_mode = NO_HDR,
-		.mipi_freq_idx = 0,
+		.mipi_freq_idx = 1,
 		.bpp = 12,
+		.vc[PAD0] = V4L2_MBUS_CSI2_CHANNEL_0,
 	},
 	{
 		.bus_fmt = MEDIA_BUS_FMT_SGBRG12_1X12,
@@ -774,7 +879,7 @@ static const struct imx415_mode supported_modes[] = {
 		.global_reg_list = imx415_global_12bit_3864x2192_regs,
 		.reg_list = imx415_hdr2_12bit_3864x2192_1782M_regs,
 		.hdr_mode = HDR_X2,
-		.mipi_freq_idx = 2,
+		.mipi_freq_idx = 3,
 		.bpp = 12,
 		.vc[PAD0] = V4L2_MBUS_CSI2_CHANNEL_1,
 		.vc[PAD1] = V4L2_MBUS_CSI2_CHANNEL_0,//L->csi wr0
@@ -799,16 +904,60 @@ static const struct imx415_mode supported_modes[] = {
 		.global_reg_list = imx415_global_12bit_3864x2192_regs,
 		.reg_list = imx415_hdr3_12bit_3864x2192_1782M_regs,
 		.hdr_mode = HDR_X3,
-		.mipi_freq_idx = 2,
+		.mipi_freq_idx = 3,
 		.bpp = 12,
 		.vc[PAD0] = V4L2_MBUS_CSI2_CHANNEL_2,
 		.vc[PAD1] = V4L2_MBUS_CSI2_CHANNEL_1,//M->csi wr0
 		.vc[PAD2] = V4L2_MBUS_CSI2_CHANNEL_0,//L->csi wr0
 		.vc[PAD3] = V4L2_MBUS_CSI2_CHANNEL_2,//S->csi wr2
 	},
+	{
+		.bus_fmt = MEDIA_BUS_FMT_SGBRG12_1X12,
+		.width = 1944,
+		.height = 1097,
+		.max_fps = {
+			.numerator = 10000,
+			.denominator = 300000,
+		},
+		.exp_def = 0x05dc - 0x08,
+		.hts_def = 0x030e * 3,
+		.vts_def = 0x0c5d,
+		.global_reg_list = imx415_global_12bit_3864x2192_regs,
+		.reg_list = imx415_linear_12bit_1932x1096_594M_regs,
+		.hdr_mode = NO_HDR,
+		.mipi_freq_idx = 0,
+		.bpp = 12,
+		.vc[PAD0] = V4L2_MBUS_CSI2_CHANNEL_0,
+	},
+	{
+		.bus_fmt = MEDIA_BUS_FMT_SGBRG12_1X12,
+		.width = 1944,
+		.height = 1097,
+		.max_fps = {
+			.numerator = 10000,
+			.denominator = 300000,
+		},
+		.exp_def = 0x08FC / 4,
+		.hts_def = 0x021A * 4,
+		/*
+		 * IMX415 HDR mode T-line is half of Linear mode,
+		 * make vts double(that is FSC) to workaround.
+		 */
+		.vts_def = 0x08FC * 2,
+		.global_reg_list = imx415_global_12bit_3864x2192_regs,
+		.reg_list = imx415_hdr2_12bit_1932x1096_891M_regs,
+		.hdr_mode = HDR_X2,
+		.mipi_freq_idx = 1,
+		.bpp = 12,
+		.vc[PAD0] = V4L2_MBUS_CSI2_CHANNEL_1,
+		.vc[PAD1] = V4L2_MBUS_CSI2_CHANNEL_0,//L->csi wr0
+		.vc[PAD2] = V4L2_MBUS_CSI2_CHANNEL_1,
+		.vc[PAD3] = V4L2_MBUS_CSI2_CHANNEL_1,//M->csi wr2
+	},
 };
 
 static const s64 link_freq_items[] = {
+	MIPI_FREQ_297M,
 	MIPI_FREQ_446M,
 	MIPI_FREQ_743M,
 	MIPI_FREQ_891M,
@@ -909,12 +1058,14 @@ imx415_find_best_fit(struct imx415 *imx415, struct v4l2_subdev_format *fmt)
 
 	for (i = 0; i < imx415->cfg_num; i++) {
 		dist = imx415_get_reso_dist(&supported_modes[i], framefmt);
-		if ((cur_best_fit_dist == -1 || dist <= cur_best_fit_dist) &&
+		if ((cur_best_fit_dist == -1 || dist < cur_best_fit_dist) &&
 			supported_modes[i].bus_fmt == framefmt->code) {
 			cur_best_fit_dist = dist;
 			cur_best_fit = i;
 		}
 	}
+	dev_info(&imx415->client->dev, "%s: cur_best_fit(%d)",
+		 __func__, cur_best_fit);
 
 	return &supported_modes[cur_best_fit];
 }
@@ -968,11 +1119,14 @@ static int imx415_set_fmt(struct v4l2_subdev *sd,
 		__v4l2_ctrl_modify_range(imx415->vblank, vblank_min,
 					 IMX415_VTS_MAX - mode->height,
 					 1, vblank_def);
+		__v4l2_ctrl_s_ctrl(imx415->vblank, vblank_def);
 		__v4l2_ctrl_s_ctrl(imx415->link_freq, mode->mipi_freq_idx);
 		pixel_rate = (u32)link_freq_items[mode->mipi_freq_idx] / mode->bpp * 2 * IMX415_4LANES;
 		__v4l2_ctrl_s_ctrl_int64(imx415->pixel_rate,
 					 pixel_rate);
 	}
+	dev_info(&imx415->client->dev, "%s: mode->mipi_freq_idx(%d)",
+		 __func__, mode->mipi_freq_idx);
 
 	mutex_unlock(&imx415->mutex);
 
@@ -1015,9 +1169,10 @@ static int imx415_enum_mbus_code(struct v4l2_subdev *sd,
 {
 	struct imx415 *imx415 = to_imx415(sd);
 
-	if (code->index != 0)
+	if (code->index >= imx415->cfg_num)
 		return -EINVAL;
-	code->code = imx415->cur_mode->bus_fmt;
+
+	code->code = supported_modes[code->index].bus_fmt;
 
 	return 0;
 }
@@ -1055,7 +1210,7 @@ static int imx415_g_frame_interval(struct v4l2_subdev *sd,
 	return 0;
 }
 
-static int imx415_g_mbus_config(struct v4l2_subdev *sd,
+static int imx415_g_mbus_config(struct v4l2_subdev *sd, unsigned int pad_id,
 				struct v4l2_mbus_config *config)
 {
 	struct imx415 *imx415 = to_imx415(sd);
@@ -1069,7 +1224,7 @@ static int imx415_g_mbus_config(struct v4l2_subdev *sd,
 		val |= V4L2_MBUS_CSI2_CHANNEL_1;
 	if (mode->hdr_mode == HDR_X3)
 		val |= V4L2_MBUS_CSI2_CHANNEL_2;
-	config->type = V4L2_MBUS_CSI2;
+	config->type = V4L2_MBUS_CSI2_DPHY;
 	config->flags = val;
 
 	return 0;
@@ -1174,7 +1329,10 @@ static int imx415_set_hdrae_3frame(struct imx415 *imx415,
 		__LINE__, shr0, l_exp_time, fsc);
 
 	rhs1 = (SHR1_MIN_X3 + m_exp_time + 5) / 6 * 6 + 1;
-	rhs1_max = RHS1_MAX_X3;
+	if (imx415->cur_mode->height == 2192)
+		rhs1_max = RHS1_MAX_X3(BRL_ALL);
+	else
+		rhs1_max = RHS1_MAX_X3(BRL_BINNING);
 	if (rhs1 < 25)
 		rhs1 = 25;
 	else if (rhs1 > rhs1_max)
@@ -1184,7 +1342,10 @@ static int imx415_set_hdrae_3frame(struct imx415 *imx415,
 		__LINE__, rhs1, m_exp_time, rhs1_old);
 
 	//Dynamic adjustment rhs2 must meet the following conditions
-	rhs1_change_limit = rhs1_old + 3 * BRL - fsc + 3;
+	if (imx415->cur_mode->height == 2192)
+		rhs1_change_limit = rhs1_old + 3 * BRL_ALL - fsc + 3;
+	else
+		rhs1_change_limit = rhs1_old + 3 * BRL_BINNING - fsc + 3;
 	rhs1_change_limit = (rhs1_change_limit < 25) ? 25 : rhs1_change_limit;
 	rhs1_change_limit = (rhs1_change_limit + 5) / 6 * 6 + 1;
 	if (rhs1_max < rhs1_change_limit) {
@@ -1221,7 +1382,10 @@ static int imx415_set_hdrae_3frame(struct imx415 *imx415,
 		__LINE__, rhs2, s_exp_time, rhs2_old);
 
 	//Dynamic adjustment rhs2 must meet the following conditions
-	rhs2_change_limit = rhs2_old + 3 * BRL - fsc + 3;
+	if (imx415->cur_mode->height == 2192)
+		rhs2_change_limit = rhs2_old + 3 * BRL_ALL - fsc + 3;
+	else
+		rhs2_change_limit = rhs2_old + 3 * BRL_BINNING - fsc + 3;
 	rhs2_change_limit = (rhs2_change_limit < 50) ?  50 : rhs2_change_limit;
 	rhs2_change_limit = (rhs2_change_limit + 5) / 6 * 6 + 2;
 	if ((shr0 - 13) < rhs2_change_limit) {
@@ -1403,8 +1567,13 @@ static int imx415_set_hdrae(struct imx415 *imx415,
 	fsc = imx415->cur_vts;
 	shr0 = fsc - l_exp_time;
 
-	rhs1_max = min(RHS1_MAX_X2, ((shr0 - 9u) / 4 * 4 + 1));
-	rhs1_min = max(SHR1_MIN_X2 + 8u, rhs1_old + 2 * BRL - fsc + 2);
+	if (imx415->cur_mode->height == 2192) {
+		rhs1_max = min(RHS1_MAX_X2(BRL_ALL), ((shr0 - 9u) / 4 * 4 + 1));
+		rhs1_min = max(SHR1_MIN_X2 + 8u, rhs1_old + 2 * BRL_ALL - fsc + 2);
+	} else {
+		rhs1_max = min(RHS1_MAX_X2(BRL_BINNING), ((shr0 - 9u) / 4 * 4 + 1));
+		rhs1_min = max(SHR1_MIN_X2 + 8u, rhs1_old + 2 * BRL_BINNING - fsc + 2);
+	}
 	rhs1_min = (rhs1_min + 3) / 4 * 4 + 1;
 	rhs1 = (SHR1_MIN_X2 + s_exp_time + 3) / 4 * 4 + 1;/* shall be 4n + 1 */
 	dev_dbg(&client->dev,
@@ -1438,7 +1607,7 @@ static int imx415_set_hdrae(struct imx415 *imx415,
 
 	dev_dbg(&client->dev,
 		"fsc=%d,RHS1_MAX=%d,SHR1_MIN=%d,rhs1_max=%d\n",
-		fsc, RHS1_MAX_X2, SHR1_MIN_X2, rhs1_max);
+		fsc, RHS1_MAX_X2(BRL_ALL), SHR1_MIN_X2, rhs1_max);
 	dev_dbg(&client->dev,
 		"l_exp_time=%d,s_exp_time=%d,shr0=%d,shr1=%d,rhs1=%d,l_a_gain=%d,s_a_gain=%d\n",
 		l_exp_time, s_exp_time, shr0, shr1, rhs1, l_a_gain, s_a_gain);
@@ -1486,10 +1655,22 @@ static int imx415_set_hdrae(struct imx415 *imx415,
 	return ret;
 }
 
+static int imx415_get_channel_info(struct imx415 *imx415, struct rkmodule_channel_info *ch_info)
+{
+	if (ch_info->index < PAD0 || ch_info->index >= PAD_MAX)
+		return -EINVAL;
+	ch_info->vc = imx415->cur_mode->vc[ch_info->index];
+	ch_info->width = imx415->cur_mode->width;
+	ch_info->height = imx415->cur_mode->height;
+	ch_info->bus_fmt = imx415->cur_mode->bus_fmt;
+	return 0;
+}
+
 static long imx415_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
 {
 	struct imx415 *imx415 = to_imx415(sd);
 	struct rkmodule_hdr_cfg *hdr;
+	struct rkmodule_channel_info *ch_info;
 	u32 i, h, w, stream;
 	long ret = 0;
 	const struct imx415_mode *mode;
@@ -1565,7 +1746,13 @@ static long imx415_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
 		break;
 	case RKMODULE_GET_SONY_BRL:
 		if (imx415->cur_mode->width == 3864 && imx415->cur_mode->height == 2192)
-			*((u32 *)arg) = BRL;
+			*((u32 *)arg) = BRL_ALL;
+		else
+			*((u32 *)arg) = BRL_BINNING;
+		break;
+	case RKMODULE_GET_CHANNEL_INFO:
+		ch_info = (struct rkmodule_channel_info *)arg;
+		ret = imx415_get_channel_info(imx415, ch_info);
 		break;
 	default:
 		ret = -ENOIOCTLCMD;
@@ -1584,6 +1771,7 @@ static long imx415_compat_ioctl32(struct v4l2_subdev *sd,
 	struct rkmodule_awb_cfg *cfg;
 	struct rkmodule_hdr_cfg *hdr;
 	struct preisp_hdrae_exp_s *hdrae;
+	struct rkmodule_channel_info *ch_info;
 	long ret;
 	u32  stream;
 	u32 brl = 0;
@@ -1675,6 +1863,21 @@ static long imx415_compat_ioctl32(struct v4l2_subdev *sd,
 				return -EFAULT;
 		}
 		break;
+	case RKMODULE_GET_CHANNEL_INFO:
+		ch_info = kzalloc(sizeof(*ch_info), GFP_KERNEL);
+		if (!ch_info) {
+			ret = -ENOMEM;
+			return ret;
+		}
+
+		ret = imx415_ioctl(sd, cmd, ch_info);
+		if (!ret) {
+			ret = copy_to_user(up, ch_info, sizeof(*ch_info));
+			if (ret)
+				ret = -EFAULT;
+		}
+		kfree(ch_info);
+		break;
 	default:
 		ret = -ENOIOCTLCMD;
 		break;
@@ -1730,7 +1933,7 @@ static int imx415_s_stream(struct v4l2_subdev *sd, int on)
 	struct i2c_client *client = imx415->client;
 	int ret = 0;
 
-	dev_dbg(&imx415->client->dev, "s_stream: %d. %dx%d, hdr: %d, bpp: %d\n",
+	dev_info(&imx415->client->dev, "s_stream: %d. %dx%d, hdr: %d, bpp: %d\n",
 	       on, imx415->cur_mode->width, imx415->cur_mode->height,
 	       imx415->cur_mode->hdr_mode, imx415->cur_mode->bpp);
 
@@ -1945,8 +2148,10 @@ static int imx415_enum_frame_interval(struct v4l2_subdev *sd,
 }
 
 #define CROP_START(SRC, DST) (((SRC) - (DST)) / 2 / 4 * 4)
-#define DST_WIDTH 3840
-#define DST_HEIGHT 2160
+#define DST_WIDTH_3840 3840
+#define DST_HEIGHT_2160 2160
+#define DST_WIDTH_1920 1920
+#define DST_HEIGHT_1080 1080
 
 /*
  * The resolution of the driver configuration needs to be exactly
@@ -1964,10 +2169,22 @@ static int imx415_get_selection(struct v4l2_subdev *sd,
 	struct imx415 *imx415 = to_imx415(sd);
 
 	if (sel->target == V4L2_SEL_TGT_CROP_BOUNDS) {
-		sel->r.left = CROP_START(imx415->cur_mode->width, DST_WIDTH);
-		sel->r.width = DST_WIDTH;
-		sel->r.top = CROP_START(imx415->cur_mode->height, DST_HEIGHT);
-		sel->r.height = DST_HEIGHT;
+		if (imx415->cur_mode->width == 3864) {
+			sel->r.left = CROP_START(imx415->cur_mode->width, DST_WIDTH_3840);
+			sel->r.width = DST_WIDTH_3840;
+			sel->r.top = CROP_START(imx415->cur_mode->height, DST_HEIGHT_2160);
+			sel->r.height = DST_HEIGHT_2160;
+		} else if (imx415->cur_mode->width == 1944) {
+			sel->r.left = CROP_START(imx415->cur_mode->width, DST_WIDTH_1920);
+			sel->r.width = DST_WIDTH_1920;
+			sel->r.top = CROP_START(imx415->cur_mode->height, DST_HEIGHT_1080);
+			sel->r.height = DST_HEIGHT_1080;
+		} else {
+			sel->r.left = CROP_START(imx415->cur_mode->width, imx415->cur_mode->width);
+			sel->r.width = imx415->cur_mode->width;
+			sel->r.top = CROP_START(imx415->cur_mode->height, imx415->cur_mode->height);
+			sel->r.height = imx415->cur_mode->height;
+		}
 		return 0;
 	}
 	return -EINVAL;
@@ -1995,7 +2212,6 @@ static const struct v4l2_subdev_core_ops imx415_core_ops = {
 static const struct v4l2_subdev_video_ops imx415_video_ops = {
 	.s_stream = imx415_s_stream,
 	.g_frame_interval = imx415_g_frame_interval,
-	.g_mbus_config = imx415_g_mbus_config,
 };
 
 static const struct v4l2_subdev_pad_ops imx415_pad_ops = {
@@ -2005,6 +2221,7 @@ static const struct v4l2_subdev_pad_ops imx415_pad_ops = {
 	.get_fmt = imx415_get_fmt,
 	.set_fmt = imx415_set_fmt,
 	.get_selection = imx415_get_selection,
+	.get_mbus_config = imx415_g_mbus_config,
 };
 
 static const struct v4l2_subdev_ops imx415_subdev_ops = {

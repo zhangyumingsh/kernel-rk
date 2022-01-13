@@ -1032,9 +1032,6 @@ endif
 endif
 
 ########### END OF PATH  #################################
-+EXTRA_CFLAGS += -DDBG_IO
-#WIFIDBG
-EXTRA_CFLAGS += -DDBG_C2H_MAC_HIDDEN_RPT_HANDLE
 
 ifeq ($(CONFIG_AP_MODE), y)
 EXTRA_CFLAGS += -DCONFIG_AP_MODE
@@ -1096,7 +1093,7 @@ EXTRA_CFLAGS += -DEFUSE_MAP_PATH=\"/system/etc/wifi/wifi_efuse_8189e.map\"
 else ifeq ($(MODULE_NAME), 8723bs)
 EXTRA_CFLAGS += -DEFUSE_MAP_PATH=\"/system/etc/wifi/wifi_efuse_8723bs.map\"
 else
-EXTRA_CFLAGS += -DEFUSE_MAP_PATH=\"/lib/firmware/wifi_efuse_$(MODULE_NAME).map\"
+EXTRA_CFLAGS += -DEFUSE_MAP_PATH=\"/vendor/etc/firmware/wifi_efuse_$(MODULE_NAME).map\"
 endif
 
 #WIFIMAC_PATH

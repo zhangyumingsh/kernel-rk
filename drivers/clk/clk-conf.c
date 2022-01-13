@@ -1,10 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (C) 2014 Samsung Electronics Co., Ltd.
  * Sylwester Nawrocki <s.nawrocki@samsung.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/clk.h>
@@ -13,7 +10,6 @@
 #include <linux/device.h>
 #include <linux/of.h>
 #include <linux/printk.h>
-#include "clk.h"
 
 static int __set_clk_parents(struct device_node *node, bool clk_supplier)
 {
@@ -39,7 +35,7 @@ static int __set_clk_parents(struct device_node *node, bool clk_supplier)
 		}
 		if (clkspec.np == node && !clk_supplier)
 			return 0;
-		pclk = of_clk_get_from_provider_with_orphans(&clkspec);
+		pclk = of_clk_get_from_provider(&clkspec);
 		if (IS_ERR(pclk)) {
 			if (PTR_ERR(pclk) != -EPROBE_DEFER)
 				pr_warn("clk: couldn't get parent clock %d for %pOF\n",
@@ -55,7 +51,7 @@ static int __set_clk_parents(struct device_node *node, bool clk_supplier)
 			rc = 0;
 			goto err;
 		}
-		clk = of_clk_get_from_provider_with_orphans(&clkspec);
+		clk = of_clk_get_from_provider(&clkspec);
 		if (IS_ERR(clk)) {
 			if (PTR_ERR(clk) != -EPROBE_DEFER)
 				pr_warn("clk: couldn't get assigned clock %d for %pOF\n",

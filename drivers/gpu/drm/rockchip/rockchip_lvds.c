@@ -1,30 +1,24 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) Fuzhou Rockchip Electronics Co.Ltd
  * Author:
  *      Mark Yao <mark.yao@rock-chips.com>
  *      Sandy Huang <hjc@rock-chips.com>
- *
- * This software is licensed under the terms of the GNU General Public
- * License version 2, as published by the Free Software Foundation, and
- * may be copied, distributed, and modified under those terms.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
-
-#include <drm/drm_atomic_helper.h>
-#include <drm/drm_crtc_helper.h>
-#include <drm/drm_panel.h>
-#include <drm/drm_of.h>
 
 #include <linux/component.h>
 #include <linux/mfd/syscon.h>
-#include <linux/of_device.h>
 #include <linux/of_graph.h>
-#include <linux/regmap.h>
 #include <linux/phy/phy.h>
+#include <linux/of_platform.h>
+#include <linux/regmap.h>
+#include <drm/drm_atomic_helper.h>
+#include <drm/drm_bridge.h>
+#include <drm/drm_of.h>
+#include <drm/drm_panel.h>
+#include <drm/drm_probe_helper.h>
+#include <drm/drm_simple_kms_helper.h>
+
 #include <uapi/linux/videodev2.h>
 
 #include "rockchip_drm_drv.h"
@@ -164,7 +158,7 @@ static int rockchip_lvds_connector_get_modes(struct drm_connector *connector)
 	struct rockchip_lvds *lvds = connector_to_lvds(connector);
 	struct drm_panel *panel = lvds->panel;
 
-	return drm_panel_get_modes(panel);
+	return drm_panel_get_modes(panel, connector);
 }
 
 static const
@@ -186,9 +180,6 @@ rockchip_lvds_encoder_atomic_mode_set(struct drm_encoder *encoder,
 		bus_format = info->bus_formats[0];
 
 	switch (bus_format) {
-	case MEDIA_BUS_FMT_RGB666_1X7X3_JEIDA:	/* jeida-18 */
-		lvds->format = LVDS_6BIT_MODE;
-		break;
 	case MEDIA_BUS_FMT_RGB888_1X7X4_JEIDA:	/* jeida-24 */
 		lvds->format = LVDS_8BIT_MODE_FORMAT_2;
 		break;
@@ -237,7 +228,7 @@ rockchip_lvds_encoder_atomic_check(struct drm_encoder *encoder,
 	s->output_type = DRM_MODE_CONNECTOR_LVDS;
 	s->bus_flags = info->bus_flags;
 	s->tv_state = &conn_state->tv;
-	s->eotf = TRADITIONAL_GAMMA_SDR;
+	s->eotf = HDMI_EOTF_TRADITIONAL_GAMMA_SDR;
 	s->color_space = V4L2_COLORSPACE_DEFAULT;
 
 	switch (lvds->pixel_order) {
@@ -250,6 +241,10 @@ rockchip_lvds_encoder_atomic_check(struct drm_encoder *encoder,
 		s->output_flags |= ROCKCHIP_OUTPUT_DATA_SWAP;
 		s->output_if |= VOP_OUTPUT_IF_LVDS1 | VOP_OUTPUT_IF_LVDS0;
 		break;
+/*
+ * Fix me: To do it with a GKI compatible version.
+ */
+#if 0
 	case DRM_LVDS_DUAL_LINK_LEFT_RIGHT_PIXELS:
 		s->output_flags |= ROCKCHIP_OUTPUT_DUAL_CHANNEL_LEFT_RIGHT_MODE;
 		s->output_if |= VOP_OUTPUT_IF_LVDS1 | VOP_OUTPUT_IF_LVDS0;
@@ -259,6 +254,7 @@ rockchip_lvds_encoder_atomic_check(struct drm_encoder *encoder,
 		s->output_flags |= ROCKCHIP_OUTPUT_DATA_SWAP;
 		s->output_if |= VOP_OUTPUT_IF_LVDS1 | VOP_OUTPUT_IF_LVDS0;
 		break;
+#endif
 	default:
 		if (lvds->id)
 			s->output_if |= VOP_OUTPUT_IF_LVDS1;
@@ -277,7 +273,7 @@ static void rockchip_lvds_enable(struct rockchip_lvds *lvds)
 	if (lvds->funcs->enable)
 		lvds->funcs->enable(lvds);
 
-	ret = phy_set_mode(lvds->phy, PHY_MODE_VIDEO_LVDS);
+	ret = phy_set_mode(lvds->phy, PHY_MODE_LVDS);
 	if (ret) {
 		DRM_DEV_ERROR(lvds->dev, "failed to set phy mode: %d\n", ret);
 		return;
@@ -322,15 +318,13 @@ static void rockchip_lvds_encoder_disable(struct drm_encoder *encoder)
 		drm_panel_unprepare(lvds->panel);
 }
 
-static int rockchip_lvds_encoder_loader_protect(struct drm_encoder *encoder,
-						bool on)
+static void rockchip_lvds_encoder_loader_protect(struct drm_encoder *encoder,
+						 bool on)
 {
 	struct rockchip_lvds *lvds = encoder_to_lvds(encoder);
 
 	if (lvds->panel)
-		return drm_panel_loader_protect(lvds->panel, on);
-
-	return 0;
+		panel_simple_loader_protect(lvds->panel);
 }
 
 static const
@@ -339,23 +333,22 @@ struct drm_encoder_helper_funcs rockchip_lvds_encoder_helper_funcs = {
 	.disable = rockchip_lvds_encoder_disable,
 	.atomic_check = rockchip_lvds_encoder_atomic_check,
 	.atomic_mode_set = rockchip_lvds_encoder_atomic_mode_set,
-	.loader_protect = rockchip_lvds_encoder_loader_protect,
 };
 
 static const struct drm_encoder_funcs rockchip_lvds_encoder_funcs = {
 	.destroy = drm_encoder_cleanup,
 };
 
-static int rockchip_lvds_match_by_id(struct device *dev, void *data)
+static int rockchip_lvds_match_by_id(struct device *dev, const void *data)
 {
 	struct rockchip_lvds *lvds = dev_get_drvdata(dev);
-	unsigned int *id = data;
+	unsigned int *id = (unsigned int *)data;
 
 	return lvds->id == *id;
 }
 
 static struct rockchip_lvds *rockchip_lvds_find_by_id(struct device_driver *drv,
-						  unsigned int id)
+						      unsigned int id)
 {
 	struct device *dev;
 
@@ -386,8 +379,8 @@ static int rockchip_lvds_bind(struct device *dev, struct device *master,
 	if (ret)
 		return ret;
 
-	encoder->possible_crtcs = drm_of_find_possible_crtcs(drm_dev,
-							     dev->of_node);
+	encoder->possible_crtcs = rockchip_drm_of_find_possible_crtcs(drm_dev,
+								      dev->of_node);
 
 	ret = drm_encoder_init(drm_dev, encoder, &rockchip_lvds_encoder_funcs,
 			       DRM_MODE_ENCODER_LVDS, NULL);
@@ -421,18 +414,13 @@ static int rockchip_lvds_bind(struct device *dev, struct device *master,
 			goto err_free_connector;
 		}
 
-		ret = drm_panel_attach(lvds->panel, connector);
-		if (ret < 0) {
-			DRM_DEV_ERROR(lvds->dev,
-				      "failed to attach panel: %d\n", ret);
-			goto err_free_connector;
-		}
 		lvds->sub_dev.connector = &lvds->connector;
 		lvds->sub_dev.of_node = lvds->dev->of_node;
+		lvds->sub_dev.loader_protect = rockchip_lvds_encoder_loader_protect;
 		rockchip_drm_register_sub_dev(&lvds->sub_dev);
 		drm_object_attach_property(&connector->base, private->connector_id_prop, 0);
 	} else {
-		ret = drm_bridge_attach(encoder, lvds->bridge, NULL);
+		ret = drm_bridge_attach(encoder, lvds->bridge, NULL, 0);
 		if (ret) {
 			DRM_DEV_ERROR(lvds->dev,
 				      "failed to attach bridge: %d\n", ret);
@@ -456,10 +444,8 @@ static void rockchip_lvds_unbind(struct device *dev, struct device *master,
 
 	if (lvds->sub_dev.connector)
 		rockchip_drm_unregister_sub_dev(&lvds->sub_dev);
-	if (lvds->panel) {
-		drm_panel_detach(lvds->panel);
+	if (lvds->panel)
 		drm_connector_cleanup(&lvds->connector);
-	}
 
 	if (lvds->encoder.dev)
 		drm_encoder_cleanup(&lvds->encoder);

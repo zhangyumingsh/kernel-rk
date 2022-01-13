@@ -4,6 +4,7 @@
 #include <media/videobuf2-dma-contig.h>
 #include <media/videobuf2-dma-sg.h>
 #include <linux/of_platform.h>
+#include <linux/slab.h>
 #include "dev.h"
 #include "isp_ispp.h"
 #include "regs.h"
@@ -21,6 +22,20 @@ void rkisp_write(struct rkisp_device *dev, u32 reg, u32 val, bool is_direct)
 	}
 }
 
+void rkisp_next_write(struct rkisp_device *dev, u32 reg, u32 val, bool is_direct)
+{
+	u32 offset = RKISP_ISP_SW_MAX_SIZE + reg;
+	u32 *mem = dev->sw_base_addr + offset;
+	u32 *flag = dev->sw_base_addr + offset + RKISP_ISP_SW_REG_SIZE;
+
+	*mem = val;
+	*flag = SW_REG_CACHE;
+	if (dev->hw_dev->is_single || is_direct) {
+		*flag = SW_REG_CACHE_SYNC;
+		writel(val, dev->hw_dev->base_next_addr + reg);
+	}
+}
+
 u32 rkisp_read(struct rkisp_device *dev, u32 reg, bool is_direct)
 {
 	u32 val;
@@ -32,9 +47,25 @@ u32 rkisp_read(struct rkisp_device *dev, u32 reg, bool is_direct)
 	return val;
 }
 
+u32 rkisp_next_read(struct rkisp_device *dev, u32 reg, bool is_direct)
+{
+	u32 val;
+
+	if (dev->hw_dev->is_single || is_direct)
+		val = readl(dev->hw_dev->base_next_addr + reg);
+	else
+		val = *(u32 *)(dev->sw_base_addr + RKISP_ISP_SW_MAX_SIZE + reg);
+	return val;
+}
+
 u32 rkisp_read_reg_cache(struct rkisp_device *dev, u32 reg)
 {
 	return *(u32 *)(dev->sw_base_addr + reg);
+}
+
+u32 rkisp_next_read_reg_cache(struct rkisp_device *dev, u32 reg)
+{
+	return *(u32 *)(dev->sw_base_addr + RKISP_ISP_SW_MAX_SIZE + reg);
 }
 
 void rkisp_set_bits(struct rkisp_device *dev, u32 reg, u32 mask, u32 val, bool is_direct)
@@ -44,11 +75,25 @@ void rkisp_set_bits(struct rkisp_device *dev, u32 reg, u32 mask, u32 val, bool i
 	rkisp_write(dev, reg, val | tmp, is_direct);
 }
 
+void rkisp_next_set_bits(struct rkisp_device *dev, u32 reg, u32 mask, u32 val, bool is_direct)
+{
+	u32 tmp = rkisp_next_read(dev, reg, is_direct) & ~mask;
+
+	rkisp_next_write(dev, reg, val | tmp, is_direct);
+}
+
 void rkisp_clear_bits(struct rkisp_device *dev, u32 reg, u32 mask, bool is_direct)
 {
 	u32 tmp = rkisp_read(dev, reg, is_direct);
 
 	rkisp_write(dev, reg, tmp & ~mask, is_direct);
+}
+
+void rkisp_next_clear_bits(struct rkisp_device *dev, u32 reg, u32 mask, bool is_direct)
+{
+	u32 tmp = rkisp_next_read(dev, reg, is_direct);
+
+	rkisp_next_write(dev, reg, tmp & ~mask, is_direct);
 }
 
 void rkisp_update_regs(struct rkisp_device *dev, u32 start, u32 end)
@@ -97,6 +142,7 @@ int rkisp_alloc_buffer(struct rkisp_device *dev,
 	if (dev->hw_dev->is_dma_sg_ops) {
 		sg_tbl = (struct sg_table *)g_ops->cookie(mem_priv);
 		buf->dma_addr = sg_dma_address(sg_tbl->sgl);
+		g_ops->prepare(mem_priv);
 	} else {
 		buf->dma_addr = *((dma_addr_t *)g_ops->cookie(mem_priv));
 	}
@@ -267,10 +313,9 @@ int rkisp_alloc_common_dummy_buf(struct rkisp_device *dev)
 	struct rkisp_dummy_buffer *dummy_buf = &hw->dummy_buf;
 	struct rkisp_stream *stream;
 	struct rkisp_device *isp;
-	u32 i, j, size = 0;
+	u32 i, j, val, size = 0;
 	int ret = 0;
 
-	mutex_lock(&hw->dev_lock);
 	if (dummy_buf->mem_priv)
 		goto end;
 
@@ -282,9 +327,11 @@ int rkisp_alloc_common_dummy_buf(struct rkisp_device *dev)
 			stream = &isp->cap_dev.stream[j];
 			if (!stream->linked)
 				continue;
-			size = max(size,
-				   stream->out_fmt.plane_fmt[0].bytesperline *
-				   stream->out_fmt.height);
+			val = stream->out_isp_fmt.fmt_type == FMT_FBC ?
+				stream->out_fmt.plane_fmt[1].sizeimage :
+				stream->out_fmt.plane_fmt[0].bytesperline *
+				stream->out_fmt.height;
+			size = max(size, val);
 		}
 	}
 	if (size == 0)
@@ -304,7 +351,6 @@ int rkisp_alloc_common_dummy_buf(struct rkisp_device *dev)
 end:
 	if (ret < 0)
 		v4l2_err(&dev->v4l2_dev, "%s failed:%d\n", __func__, ret);
-	mutex_unlock(&hw->dev_lock);
 	return ret;
 }
 
@@ -312,15 +358,12 @@ void rkisp_free_common_dummy_buf(struct rkisp_device *dev)
 {
 	struct rkisp_hw_dev *hw = dev->hw_dev;
 
-	mutex_lock(&hw->dev_lock);
 	if (atomic_read(&hw->refcnt) ||
 	    atomic_read(&dev->cap_dev.refcnt) > 1)
-		goto end;
+		return;
 
 	if (hw->is_mmu)
 		rkisp_free_page_dummy_buf(dev);
 	else
 		rkisp_free_buffer(dev, &hw->dummy_buf);
-end:
-	mutex_unlock(&hw->dev_lock);
 }

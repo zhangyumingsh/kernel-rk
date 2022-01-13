@@ -26,7 +26,7 @@ struct scmi_shared_mem {
 #define SCMI_SHMEM_FLAG_INTR_ENABLED	BIT(0)
 	__le32 length;
 	__le32 msg_header;
-	u8 msg_payload[0];
+	u8 msg_payload[];
 };
 
 void shmem_tx_prepare(struct scmi_shared_mem __iomem *shmem,
@@ -65,6 +65,21 @@ void shmem_fetch_response(struct scmi_shared_mem __iomem *shmem,
 
 	/* Take a copy to the rx buffer.. */
 	memcpy_fromio(xfer->rx.buf, shmem->msg_payload + 4, xfer->rx.len);
+}
+
+void shmem_fetch_notification(struct scmi_shared_mem __iomem *shmem,
+			      size_t max_len, struct scmi_xfer *xfer)
+{
+	/* Skip only the length of header in shmem area i.e 4 bytes */
+	xfer->rx.len = min_t(size_t, max_len, ioread32(&shmem->length) - 4);
+
+	/* Take a copy to the rx buffer.. */
+	memcpy_fromio(xfer->rx.buf, shmem->msg_payload, xfer->rx.len);
+}
+
+void shmem_clear_channel(struct scmi_shared_mem __iomem *shmem)
+{
+	iowrite32(SCMI_SHMEM_CHAN_STAT_CHANNEL_FREE, &shmem->channel_status);
 }
 
 bool shmem_poll_done(struct scmi_shared_mem __iomem *shmem,

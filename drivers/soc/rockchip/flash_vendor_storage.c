@@ -174,7 +174,8 @@ static int flash_vendor_write(u32 id, void *pbuf, u32 size)
 				item->size = size;
 				memcpy(&p_data[item->offset], pbuf, size);
 				g_vendor->free_offset = offset + align_size;
-				g_vendor->free_size = sizeof(g_vendor->data) - g_vendor->free_offset;
+				g_vendor->free_size -= (align_size -
+							alloc_size);
 			} else {
 				memcpy(&p_data[item->offset],
 				       pbuf,
@@ -359,3 +360,4 @@ static __exit void vendor_storage_deinit(void)
 
 device_initcall_sync(vendor_storage_init);
 module_exit(vendor_storage_deinit);
+MODULE_LICENSE("GPL");

@@ -1,7 +1,7 @@
 /*
  * Linux cfg80211 driver - Android related functions
  *
- * Copyright (C) 1999-2019, Broadcom.
+ * Copyright (C) 2020, Broadcom.
  *
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -17,14 +17,8 @@
  * derived from this software.  The special exception does not apply to any
  * modifications of the software.
  *
- *      Notwithstanding the above, under no circumstances may you combine this
- * software in any way with any other Broadcom software provided under a license
- * other than the GPL, without Broadcom's express prior written consent.
  *
- *
- * <<Broadcom-WL-IPTag/Open:>>
- *
- * $Id: wl_android.h 794110 2018-12-12 05:03:21Z $
+ * <<Broadcom-WL-IPTag/Dual:>>
  */
 
 #ifndef _wl_android_
@@ -50,13 +44,13 @@
 /* If any feature uses the Generic Netlink Interface, put it here to enable WL_GENL
  * automatically
  */
-#if defined(BT_WIFI_HANDOVER)
+#if defined(WL_SDO) || defined(BT_WIFI_HANDOVER)
 #define WL_GENL
-#endif // endif
+#endif
 
 #ifdef WL_GENL
 #include <net/genetlink.h>
-#endif // endif
+#endif
 
 typedef struct _android_wifi_priv_cmd {
     char *buf;
@@ -115,8 +109,6 @@ do {	\
 		} \
 	}	\
 } while (0)
-#define	WL_GET_BAND(ch)	(((uint)(ch) <= CH_MAX_2G_CHANNEL) ?	\
-	WLC_BAND_2G : WLC_BAND_5G)
 
 /**
  * wl_android_init will be called from module init function (dhd_module_init now), similarly
@@ -125,10 +117,20 @@ do {	\
 int wl_android_init(void);
 int wl_android_exit(void);
 void wl_android_post_init(void);
+void wl_android_set_wifi_on_flag(bool enable);
+#if defined(WLAN_ACCEL_BOOT)
+int wl_android_wifi_accel_on(struct net_device *dev, bool force_reg_on);
+int wl_android_wifi_accel_off(struct net_device *dev, bool force_reg_on);
+#endif /* WLAN_ACCEL_BOOT */
 int wl_android_wifi_on(struct net_device *dev);
 int wl_android_wifi_off(struct net_device *dev, bool on_failure);
 int wl_android_priv_cmd(struct net_device *net, struct ifreq *ifr);
 int wl_handle_private_cmd(struct net_device *net, char *command, u32 cmd_len);
+#ifdef WL_CFG80211
+int wl_android_set_spect(struct net_device *dev, int spect);
+s32 wl_android_get_band_chanspecs(struct net_device *ndev, void *buf, s32 buflen,
+	chanspec_band_t band, bool acs_req);
+#endif
 
 #ifdef WL_GENL
 typedef struct bcm_event_hdr {
@@ -166,7 +168,7 @@ enum {
 	BCM_E_DEV_LOST,
 #ifdef BT_WIFI_HANDOVER
 	BCM_E_DEV_BT_WIFI_HO_REQ,
-#endif // endif
+#endif
 	BCM_E_MAX
 };
 
@@ -187,10 +189,28 @@ s32 wl_netlink_send_msg(int pid, int type, int seq, const void *data, size_t siz
 #define WL_CH_BANDWIDTH_20MHZ 20
 #define WL_CH_BANDWIDTH_40MHZ 40
 #define WL_CH_BANDWIDTH_80MHZ 80
+#define WL_CH_BANDWIDTH_160MHZ 160
+
 /* max number of mac filter list
  * restrict max number to 10 as maximum cmd string size is 255
  */
 #define MAX_NUM_MAC_FILT        10
+#define	WL_GET_BAND(ch)	(((uint)(ch) <= CH_MAX_2G_CHANNEL) ?	\
+	WLC_BAND_2G : WLC_BAND_5G)
+
+/* SoftAP auto channel feature */
+#define APCS_BAND_2G_LEGACY1	20
+#define APCS_BAND_2G_LEGACY2	0
+#define APCS_BAND_AUTO		"band=auto"
+#define APCS_BAND_2G		"band=2g"
+#define APCS_BAND_5G		"band=5g"
+#define APCS_BAND_6G		"band=6g"
+#define FREQ_STR		"freq="
+#define APCS_MAX_2G_CHANNELS	11
+#define APCS_MAX_RETRY		10
+#define APCS_DEFAULT_2G_CH	1
+#define APCS_DEFAULT_5G_CH	149
+#define APCS_DEFAULT_6G_CH	5
 
 int wl_android_set_ap_mac_list(struct net_device *dev, int macmode, struct maclist *maclist);
 #ifdef WL_BCNRECV
@@ -220,4 +240,9 @@ extern int wl_android_bcnrecv_event(struct net_device *ndev,
 #define TSPEC_DEF_MIN_PHY_RATE 6000000
 #define TSPEC_DEF_DIALOG_TOKEN 7
 #endif /* WL_CAC_TS */
+
+#ifdef WL_SUPPORT_AUTO_CHANNEL
+#define WLC_ACS_BAND_INVALID	0xffffu
+#endif /* WL_SUPPORT_AUTO_CHANNEL */
+#define WL_PRIV_CMD_LEN 64
 #endif /* _wl_android_ */

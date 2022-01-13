@@ -51,6 +51,10 @@
 #define CIF_ISP_INPUT_H_MAX_V13		1080
 #define CIF_ISP_INPUT_W_MAX_V21		4096
 #define CIF_ISP_INPUT_H_MAX_V21		3072
+#define CIF_ISP_INPUT_W_MAX_V30		4672
+#define CIF_ISP_INPUT_H_MAX_V30		3504
+#define CIF_ISP_INPUT_W_MAX_V30_UNITE	8192
+#define CIF_ISP_INPUT_H_MAX_V30_UNITE	6144
 #define CIF_ISP_INPUT_W_MIN		208
 #define CIF_ISP_INPUT_H_MIN		128
 #define CIF_ISP_OUTPUT_W_MAX		CIF_ISP_INPUT_W_MAX
@@ -167,6 +171,10 @@ void rkisp_isp_queue_event_sof(struct rkisp_isp_subdev *isp);
 void rkisp_check_idle(struct rkisp_device *dev, u32 irq);
 
 void rkisp_trigger_read_back(struct rkisp_device *dev, u8 dma2frm, u32 mode, bool is_try);
+
+int rkisp_rdbk_trigger_event(struct rkisp_device *dev, u32 cmd, void *arg);
+
+void rkisp_rx_buf_pool_free(struct rkisp_device *dev);
 
 static inline
 struct ispsd_out_fmt *rkisp_get_ispsd_out_fmt(struct rkisp_isp_subdev *isp_sdev)

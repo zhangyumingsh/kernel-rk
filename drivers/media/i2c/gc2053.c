@@ -95,11 +95,6 @@ static const char * const gc2053_supply_names[] = {
 
 #define to_gc2053(sd) container_of(sd, struct gc2053, subdev)
 
-enum gc2053_max_pad {
-	PAD0,
-	PAD_MAX,
-};
-
 struct regval {
 	u8 addr;
 	u8 val;
@@ -429,7 +424,7 @@ gc2053_find_best_fit(struct gc2053 *gc2053, struct v4l2_subdev_format *fmt)
 	return &supported_modes[cur_best_fit];
 }
 
-static uint8_t gain_reg_table[29][4] = {
+static const uint8_t gain_reg_table[29][4] = {
 	{0x00, 0x00, 0x01, 0x00},
 	{0x00, 0x10, 0x01, 0x0c},
 	{0x00, 0x20, 0x01, 0x1b},
@@ -461,7 +456,7 @@ static uint8_t gain_reg_table[29][4] = {
 	{0x00, 0xce, 0x3f, 0x3f},
 };
 
-static  uint32_t gain_level_table[30] = {
+static const uint32_t gain_level_table[30] = {
 	64,
 	76,
 	91,
@@ -499,13 +494,16 @@ static int gc2053_set_gain(struct gc2053 *gc2053, u32 gain)
 	int ret;
 	uint8_t i = 0;
 	uint8_t total = 0;
-	uint8_t temp = 0;
+	uint32_t temp = 0;
 
 	total = sizeof(gain_level_table) / sizeof(u32) - 1;
-	for (i = 0; i < total; i++) {
+	for (i = 0; i <= total; i++) {
 		if ((gain_level_table[i] <= gain) && (gain < gain_level_table[i+1]))
 			break;
 	}
+
+	if (i > total)
+		i = total;
 
 	ret = gc2053_write_reg(gc2053->client, 0xb4, gain_reg_table[i][0]);
 	ret |= gc2053_write_reg(gc2053->client, 0xb3, gain_reg_table[i][1]);
@@ -1068,7 +1066,7 @@ static int gc2053_g_frame_interval(struct v4l2_subdev *sd,
 	return 0;
 }
 
-static int gc2053_g_mbus_config(struct v4l2_subdev *sd,
+static int gc2053_g_mbus_config(struct v4l2_subdev *sd, unsigned int pad_id,
 				struct v4l2_mbus_config *config)
 {
 	struct gc2053 *gc2053 = to_gc2053(sd);
@@ -1080,7 +1078,7 @@ static int gc2053_g_mbus_config(struct v4l2_subdev *sd,
 		V4L2_MBUS_CSI2_CHANNEL_0 |
 		V4L2_MBUS_CSI2_CONTINUOUS_CLOCK;
 
-	config->type = V4L2_MBUS_CSI2;
+	config->type = V4L2_MBUS_CSI2_DPHY;
 	config->flags = val;
 	return 0;
 }
@@ -1268,7 +1266,6 @@ static const struct v4l2_subdev_core_ops gc2053_core_ops = {
 static const struct v4l2_subdev_video_ops gc2053_video_ops = {
 	.s_stream = gc2053_s_stream,
 	.g_frame_interval = gc2053_g_frame_interval,
-	.g_mbus_config = gc2053_g_mbus_config,
 };
 
 static const struct v4l2_subdev_pad_ops gc2053_pad_ops = {
@@ -1277,6 +1274,7 @@ static const struct v4l2_subdev_pad_ops gc2053_pad_ops = {
 	.enum_frame_interval = gc2053_enum_frame_interval,
 	.get_fmt = gc2053_get_fmt,
 	.set_fmt = gc2053_set_fmt,
+	.get_mbus_config = gc2053_g_mbus_config,
 };
 
 static const struct v4l2_subdev_ops gc2053_subdev_ops = {

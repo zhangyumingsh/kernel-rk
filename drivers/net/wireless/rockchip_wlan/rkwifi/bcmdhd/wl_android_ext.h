@@ -14,7 +14,6 @@ int wl_android_ext_priv_cmd(struct net_device *net, char *command, int total_len
 	int *bytes_written);
 void wl_ext_get_sec(struct net_device *dev, int ifmode, char *sec, int total_len, bool dump);
 bool wl_ext_check_scan(struct net_device *dev, dhd_pub_t *dhdp);
-int wl_ext_add_del_ie(struct net_device *dev, uint pktflag, char *ie_data, const char* add_del_cmd);
 #ifdef WL_EXT_GENL
 int wl_ext_genl_init(struct net_device *net);
 void wl_ext_genl_deinit(struct net_device *net);

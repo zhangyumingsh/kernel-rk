@@ -1,19 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /**
- * dwmac-rk.c - Rockchip RK3288 DWMAC specific glue layer
+ * DOC: dwmac-rk.c - Rockchip RK3288 DWMAC specific glue layer
  *
  * Copyright (C) 2014 Chen-Zhi (Roger Chen)
  *
  * Chen-Zhi (Roger Chen)  <roger.chen@rock-chips.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 
 #include <linux/stmmac.h>
@@ -47,12 +38,14 @@ struct rk_gmac_ops {
 	void (*set_to_qsgmii)(struct rk_priv_data *bsp_priv);
 	void (*set_rgmii_speed)(struct rk_priv_data *bsp_priv, int speed);
 	void (*set_rmii_speed)(struct rk_priv_data *bsp_priv, int speed);
+	void (*set_clock_selection)(struct rk_priv_data *bsp_priv, bool input,
+				    bool enable);
 	void (*integrated_phy_powerup)(struct rk_priv_data *bsp_priv);
 };
 
 struct rk_priv_data {
 	struct platform_device *pdev;
-	int phy_iface;
+	phy_interface_t phy_iface;
 	int bus_id;
 	struct regulator *regulator;
 	bool suspended;
@@ -80,6 +73,7 @@ struct rk_priv_data {
 	int rx_delay;
 
 	struct regmap *grf;
+	struct regmap *php_grf;
 	struct regmap *xpcs;
 };
 
@@ -212,8 +206,16 @@ static int xpcs_setup(struct rk_priv_data *bsp_priv, int mode)
 #define GRF_CLR_BIT(nr)	(BIT(nr+16))
 
 #define DELAY_ENABLE(soc, tx, rx) \
-	(((tx) ? soc##_GMAC_TXCLK_DLY_ENABLE : soc##_GMAC_TXCLK_DLY_DISABLE) | \
-	 ((rx) ? soc##_GMAC_RXCLK_DLY_ENABLE : soc##_GMAC_RXCLK_DLY_DISABLE))
+	((((tx) >= 0) ? soc##_GMAC_TXCLK_DLY_ENABLE : soc##_GMAC_TXCLK_DLY_DISABLE) | \
+	 (((rx) >= 0) ? soc##_GMAC_RXCLK_DLY_ENABLE : soc##_GMAC_RXCLK_DLY_DISABLE))
+
+#define DELAY_ENABLE_BY_ID(soc, tx, rx, id) \
+	((((tx) >= 0) ? soc##_GMAC_TXCLK_DLY_ENABLE(id) : soc##_GMAC_TXCLK_DLY_DISABLE(id)) | \
+	 (((rx) >= 0) ? soc##_GMAC_RXCLK_DLY_ENABLE(id) : soc##_GMAC_RXCLK_DLY_DISABLE(id)))
+
+#define DELAY_VALUE(soc, tx, rx) \
+	((((tx) >= 0) ? soc##_GMAC_CLK_TX_DL_CFG(tx) : 0) | \
+	 (((rx) >= 0) ? soc##_GMAC_CLK_RX_DL_CFG(rx) : 0))
 
 #define PX30_GRF_GMAC_CON1		0x0904
 
@@ -306,12 +308,10 @@ static void rk1808_set_to_rgmii(struct rk_priv_data *bsp_priv,
 
 	regmap_write(bsp_priv->grf, RK1808_GRF_GMAC_CON1,
 		     RK1808_GMAC_PHY_INTF_SEL_RGMII |
-		     RK1808_GMAC_RXCLK_DLY_ENABLE |
-		     RK1808_GMAC_TXCLK_DLY_ENABLE);
+		     DELAY_ENABLE(RK1808, tx_delay, rx_delay));
 
 	regmap_write(bsp_priv->grf, RK1808_GRF_GMAC_CON0,
-		     RK1808_GMAC_CLK_RX_DL_CFG(rx_delay) |
-		     RK1808_GMAC_CLK_TX_DL_CFG(tx_delay));
+		     DELAY_VALUE(RK1808, tx_delay, rx_delay));
 }
 
 static void rk1808_set_to_rmii(struct rk_priv_data *bsp_priv)
@@ -439,8 +439,7 @@ static void rk3128_set_to_rgmii(struct rk_priv_data *bsp_priv,
 		     RK3128_GMAC_RMII_MODE_CLR);
 	regmap_write(bsp_priv->grf, RK3128_GRF_MAC_CON0,
 		     DELAY_ENABLE(RK3128, tx_delay, rx_delay) |
-		     RK3128_GMAC_CLK_RX_DL_CFG(rx_delay) |
-		     RK3128_GMAC_CLK_TX_DL_CFG(tx_delay));
+		     DELAY_VALUE(RK3128, tx_delay, rx_delay));
 }
 
 static void rk3128_set_to_rmii(struct rk_priv_data *bsp_priv)
@@ -556,8 +555,7 @@ static void rk3228_set_to_rgmii(struct rk_priv_data *bsp_priv,
 		     DELAY_ENABLE(RK3228, tx_delay, rx_delay));
 
 	regmap_write(bsp_priv->grf, RK3228_GRF_MAC_CON0,
-		     RK3228_GMAC_CLK_RX_DL_CFG(rx_delay) |
-		     RK3228_GMAC_CLK_TX_DL_CFG(tx_delay));
+		     DELAY_VALUE(RK3128, tx_delay, rx_delay));
 }
 
 static void rk3228_set_to_rmii(struct rk_priv_data *bsp_priv)
@@ -677,8 +675,7 @@ static void rk3288_set_to_rgmii(struct rk_priv_data *bsp_priv,
 		     RK3288_GMAC_RMII_MODE_CLR);
 	regmap_write(bsp_priv->grf, RK3288_GRF_SOC_CON3,
 		     DELAY_ENABLE(RK3288, tx_delay, rx_delay) |
-		     RK3288_GMAC_CLK_RX_DL_CFG(rx_delay) |
-		     RK3288_GMAC_CLK_TX_DL_CFG(tx_delay));
+		     DELAY_VALUE(RK3288, tx_delay, rx_delay));
 }
 
 static void rk3288_set_to_rmii(struct rk_priv_data *bsp_priv)
@@ -849,12 +846,10 @@ static void rk3328_set_to_rgmii(struct rk_priv_data *bsp_priv,
 	regmap_write(bsp_priv->grf, RK3328_GRF_MAC_CON1,
 		     RK3328_GMAC_PHY_INTF_SEL_RGMII |
 		     RK3328_GMAC_RMII_MODE_CLR |
-		     RK3328_GMAC_RXCLK_DLY_ENABLE |
-		     RK3328_GMAC_TXCLK_DLY_ENABLE);
+		     DELAY_ENABLE(RK3328, tx_delay, rx_delay));
 
 	regmap_write(bsp_priv->grf, RK3328_GRF_MAC_CON0,
-		     RK3328_GMAC_CLK_RX_DL_CFG(rx_delay) |
-		     RK3328_GMAC_CLK_TX_DL_CFG(tx_delay));
+		     DELAY_VALUE(RK3328, tx_delay, rx_delay));
 }
 
 static void rk3328_set_to_rmii(struct rk_priv_data *bsp_priv)
@@ -979,8 +974,7 @@ static void rk3366_set_to_rgmii(struct rk_priv_data *bsp_priv,
 		     RK3366_GMAC_RMII_MODE_CLR);
 	regmap_write(bsp_priv->grf, RK3366_GRF_SOC_CON7,
 		     DELAY_ENABLE(RK3366, tx_delay, rx_delay) |
-		     RK3366_GMAC_CLK_RX_DL_CFG(rx_delay) |
-		     RK3366_GMAC_CLK_TX_DL_CFG(tx_delay));
+		     DELAY_VALUE(RK3366, tx_delay, rx_delay));
 }
 
 static void rk3366_set_to_rmii(struct rk_priv_data *bsp_priv)
@@ -1090,8 +1084,7 @@ static void rk3368_set_to_rgmii(struct rk_priv_data *bsp_priv,
 		     RK3368_GMAC_RMII_MODE_CLR);
 	regmap_write(bsp_priv->grf, RK3368_GRF_SOC_CON16,
 		     DELAY_ENABLE(RK3368, tx_delay, rx_delay) |
-		     RK3368_GMAC_CLK_RX_DL_CFG(rx_delay) |
-		     RK3368_GMAC_CLK_TX_DL_CFG(tx_delay));
+		     DELAY_VALUE(RK3368, tx_delay, rx_delay));
 }
 
 static void rk3368_set_to_rmii(struct rk_priv_data *bsp_priv)
@@ -1201,8 +1194,7 @@ static void rk3399_set_to_rgmii(struct rk_priv_data *bsp_priv,
 		     RK3399_GMAC_RMII_MODE_CLR);
 	regmap_write(bsp_priv->grf, RK3399_GRF_SOC_CON6,
 		     DELAY_ENABLE(RK3399, tx_delay, rx_delay) |
-		     RK3399_GMAC_CLK_RX_DL_CFG(rx_delay) |
-		     RK3399_GMAC_CLK_TX_DL_CFG(tx_delay));
+		     DELAY_VALUE(RK3399, tx_delay, rx_delay));
 }
 
 static void rk3399_set_to_rmii(struct rk_priv_data *bsp_priv)
@@ -1349,12 +1341,10 @@ static void rk3568_set_to_rgmii(struct rk_priv_data *bsp_priv,
 
 	regmap_write(bsp_priv->grf, offset_con1,
 		     RK3568_GMAC_PHY_INTF_SEL_RGMII |
-		     RK3568_GMAC_RXCLK_DLY_ENABLE |
-		     RK3568_GMAC_TXCLK_DLY_ENABLE);
+		     DELAY_ENABLE(RK3568, tx_delay, rx_delay));
 
 	regmap_write(bsp_priv->grf, offset_con0,
-		     RK3568_GMAC_CLK_RX_DL_CFG(rx_delay) |
-		     RK3568_GMAC_CLK_TX_DL_CFG(tx_delay));
+		     DELAY_VALUE(RK3568, tx_delay, rx_delay));
 }
 
 static void rk3568_set_to_rmii(struct rk_priv_data *bsp_priv)
@@ -1407,6 +1397,145 @@ static const struct rk_gmac_ops rk3568_ops = {
 	.set_to_qsgmii = rk3568_set_to_qsgmii,
 	.set_rgmii_speed = rk3568_set_gmac_speed,
 	.set_rmii_speed = rk3568_set_gmac_speed,
+};
+
+/* sys_grf */
+#define RK3588_GRF_GMAC_CON7			0X031c
+#define RK3588_GRF_GMAC_CON8			0X0320
+#define RK3588_GRF_GMAC_CON9			0X0324
+
+#define RK3588_GMAC_RXCLK_DLY_ENABLE(id)	GRF_BIT(2 * (id) + 3)
+#define RK3588_GMAC_RXCLK_DLY_DISABLE(id)	GRF_CLR_BIT(2 * (id) + 3)
+#define RK3588_GMAC_TXCLK_DLY_ENABLE(id)	GRF_BIT(2 * (id) + 2)
+#define RK3588_GMAC_TXCLK_DLY_DISABLE(id)	GRF_CLR_BIT(2 * (id) + 2)
+
+#define RK3588_GMAC_CLK_RX_DL_CFG(val)		HIWORD_UPDATE(val, 0xFF, 8)
+#define RK3588_GMAC_CLK_TX_DL_CFG(val)		HIWORD_UPDATE(val, 0xFF, 0)
+
+/* php_grf */
+#define RK3588_GRF_GMAC_CON0			0X0008
+#define RK3588_GRF_CLK_CON1			0X0070
+
+#define RK3588_GMAC_PHY_INTF_SEL_RGMII(id)	\
+	(GRF_BIT(3 + (id) * 6) | GRF_CLR_BIT(4 + (id) * 6) | GRF_CLR_BIT(5 + (id) * 6))
+#define RK3588_GMAC_PHY_INTF_SEL_RMII(id)	\
+	(GRF_CLR_BIT(3 + (id) * 6) | GRF_CLR_BIT(4 + (id) * 6) | GRF_BIT(5 + (id) * 6))
+
+#define RK3588_GMAC_CLK_RMII_MODE(id)		GRF_BIT(5 * (id))
+#define RK3588_GMAC_CLK_RGMII_MODE(id)		GRF_CLR_BIT(5 * (id))
+
+#define RK3588_GMAC_CLK_SELET_CRU(id)		GRF_BIT(5 * (id) + 4)
+#define RK3588_GMAC_CLK_SELET_IO(id)		GRF_CLR_BIT(5 * (id) + 4)
+
+#define RK3588_GMA_CLK_RMII_DIV2(id)		GRF_BIT(5 * (id) + 2)
+#define RK3588_GMA_CLK_RMII_DIV20(id)		GRF_CLR_BIT(5 * (id) + 2)
+
+#define RK3588_GMAC_CLK_RGMII_DIV1(id)		\
+			(GRF_CLR_BIT(5 * (id) + 2) | GRF_CLR_BIT(5 * (id) + 3))
+#define RK3588_GMAC_CLK_RGMII_DIV5(id)		\
+			(GRF_BIT(5 * (id) + 2) | GRF_BIT(5 * (id) + 3))
+#define RK3588_GMAC_CLK_RGMII_DIV50(id)		\
+			(GRF_CLR_BIT(5 * (id) + 2) | GRF_BIT(5 * (id) + 3))
+
+#define RK3588_GMAC_CLK_RMII_GATE(id)		GRF_BIT(5 * (id) + 1)
+#define RK3588_GMAC_CLK_RMII_NOGATE(id)		GRF_CLR_BIT(5 * (id) + 1)
+
+static void rk3588_set_to_rgmii(struct rk_priv_data *bsp_priv,
+				int tx_delay, int rx_delay)
+{
+	struct device *dev = &bsp_priv->pdev->dev;
+	u32 offset_con, id = bsp_priv->bus_id;
+
+	if (IS_ERR(bsp_priv->grf) || IS_ERR(bsp_priv->php_grf)) {
+		dev_err(dev, "Missing rockchip,grf or rockchip,php_grf property\n");
+		return;
+	}
+
+	offset_con = bsp_priv->bus_id == 1 ? RK3588_GRF_GMAC_CON9 :
+					     RK3588_GRF_GMAC_CON8;
+
+	regmap_write(bsp_priv->php_grf, RK3588_GRF_GMAC_CON0,
+		     RK3588_GMAC_PHY_INTF_SEL_RGMII(id));
+
+	regmap_write(bsp_priv->php_grf, RK3588_GRF_CLK_CON1,
+		     RK3588_GMAC_CLK_RGMII_MODE(id));
+
+	regmap_write(bsp_priv->grf, RK3588_GRF_GMAC_CON7,
+		     DELAY_ENABLE_BY_ID(RK3588, tx_delay, rx_delay, id));
+
+	regmap_write(bsp_priv->grf, offset_con,
+		     DELAY_VALUE(RK3588, tx_delay, rx_delay));
+}
+
+static void rk3588_set_to_rmii(struct rk_priv_data *bsp_priv)
+{
+	struct device *dev = &bsp_priv->pdev->dev;
+
+	if (IS_ERR(bsp_priv->php_grf)) {
+		dev_err(dev, "%s: Missing rockchip,php_grf property\n", __func__);
+		return;
+	}
+
+	regmap_write(bsp_priv->php_grf, RK3588_GRF_GMAC_CON0,
+		     RK3588_GMAC_PHY_INTF_SEL_RMII(bsp_priv->bus_id));
+
+	regmap_write(bsp_priv->php_grf, RK3588_GRF_CLK_CON1,
+		     RK3588_GMAC_CLK_RMII_MODE(bsp_priv->bus_id));
+}
+
+static void rk3588_set_gmac_speed(struct rk_priv_data *bsp_priv, int speed)
+{
+	struct device *dev = &bsp_priv->pdev->dev;
+	unsigned int val = 0, id = bsp_priv->bus_id;
+
+	switch (speed) {
+	case 10:
+		if (bsp_priv->phy_iface == PHY_INTERFACE_MODE_RMII)
+			val = RK3588_GMA_CLK_RMII_DIV20(id);
+		else
+			val = RK3588_GMAC_CLK_RGMII_DIV50(id);
+		break;
+	case 100:
+		if (bsp_priv->phy_iface == PHY_INTERFACE_MODE_RMII)
+			val = RK3588_GMA_CLK_RMII_DIV2(id);
+		else
+			val = RK3588_GMAC_CLK_RGMII_DIV5(id);
+		break;
+	case 1000:
+		if (bsp_priv->phy_iface != PHY_INTERFACE_MODE_RMII)
+			val = RK3588_GMAC_CLK_RGMII_DIV1(id);
+		else
+			goto err;
+		break;
+	default:
+		goto err;
+	}
+
+	regmap_write(bsp_priv->php_grf, RK3588_GRF_CLK_CON1, val);
+
+	return;
+err:
+	dev_err(dev, "unknown speed value for GMAC speed=%d", speed);
+}
+
+static void rk3588_set_clock_selection(struct rk_priv_data *bsp_priv, bool input,
+				       bool enable)
+{
+	unsigned int val = input ? RK3588_GMAC_CLK_SELET_IO(bsp_priv->bus_id) :
+				   RK3588_GMAC_CLK_SELET_CRU(bsp_priv->bus_id);
+
+	val |= enable ? RK3588_GMAC_CLK_RMII_NOGATE(bsp_priv->bus_id) :
+			RK3588_GMAC_CLK_RMII_GATE(bsp_priv->bus_id);
+
+	regmap_write(bsp_priv->php_grf, RK3588_GRF_CLK_CON1, val);
+}
+
+static const struct rk_gmac_ops rk3588_ops = {
+	.set_to_rgmii = rk3588_set_to_rgmii,
+	.set_to_rmii = rk3588_set_to_rmii,
+	.set_rgmii_speed = rk3588_set_gmac_speed,
+	.set_rmii_speed = rk3588_set_gmac_speed,
+	.set_clock_selection = rk3588_set_clock_selection,
 };
 
 #define RV1108_GRF_GMAC_CON0		0X0900
@@ -1472,21 +1601,18 @@ static const struct rk_gmac_ops rv1108_ops = {
 		(GRF_CLR_BIT(4) | GRF_CLR_BIT(5) | GRF_BIT(6))
 #define RV1126_GMAC_FLOW_CTRL			GRF_BIT(7)
 #define RV1126_GMAC_FLOW_CTRL_CLR		GRF_CLR_BIT(7)
-#define RV1126_GMAC_M0_RXCLK_DLY_ENABLE		GRF_BIT(1)
-#define RV1126_GMAC_M0_RXCLK_DLY_DISABLE	GRF_CLR_BIT(1)
-#define RV1126_GMAC_M0_TXCLK_DLY_ENABLE		GRF_BIT(0)
-#define RV1126_GMAC_M0_TXCLK_DLY_DISABLE	GRF_CLR_BIT(0)
-#define RV1126_GMAC_M1_RXCLK_DLY_ENABLE		GRF_BIT(3)
-#define RV1126_GMAC_M1_RXCLK_DLY_DISABLE	GRF_CLR_BIT(3)
-#define RV1126_GMAC_M1_TXCLK_DLY_ENABLE		GRF_BIT(2)
-#define RV1126_GMAC_M1_TXCLK_DLY_DISABLE	GRF_CLR_BIT(2)
+#define RV1126_M0_GMAC_RXCLK_DLY_ENABLE		GRF_BIT(1)
+#define RV1126_M0_GMAC_RXCLK_DLY_DISABLE	GRF_CLR_BIT(1)
+#define RV1126_M0_GMAC_TXCLK_DLY_ENABLE		GRF_BIT(0)
+#define RV1126_M0_GMAC_TXCLK_DLY_DISABLE	GRF_CLR_BIT(0)
+#define RV1126_M1_GMAC_RXCLK_DLY_ENABLE		GRF_BIT(3)
+#define RV1126_M1_GMAC_RXCLK_DLY_DISABLE	GRF_CLR_BIT(3)
+#define RV1126_M1_GMAC_TXCLK_DLY_ENABLE		GRF_BIT(2)
+#define RV1126_M1_GMAC_TXCLK_DLY_DISABLE	GRF_CLR_BIT(2)
 
-/* RV1126_GRF_GMAC_CON1 */
-#define RV1126_GMAC_M0_CLK_RX_DL_CFG(val)	HIWORD_UPDATE(val, 0x7F, 8)
-#define RV1126_GMAC_M0_CLK_TX_DL_CFG(val)	HIWORD_UPDATE(val, 0x7F, 0)
-/* RV1126_GRF_GMAC_CON2 */
-#define RV1126_GMAC_M1_CLK_RX_DL_CFG(val)	HIWORD_UPDATE(val, 0x7F, 8)
-#define RV1126_GMAC_M1_CLK_TX_DL_CFG(val)	HIWORD_UPDATE(val, 0x7F, 0)
+/* RV1126_GRF_GMAC_CON1 && RV1126_GRF_GMAC_CON2 */
+#define RV1126_GMAC_CLK_RX_DL_CFG(val)	HIWORD_UPDATE(val, 0x7F, 8)
+#define RV1126_GMAC_CLK_TX_DL_CFG(val)	HIWORD_UPDATE(val, 0x7F, 0)
 
 static void rv1126_set_to_rgmii(struct rk_priv_data *bsp_priv,
 				int tx_delay, int rx_delay)
@@ -1500,18 +1626,14 @@ static void rv1126_set_to_rgmii(struct rk_priv_data *bsp_priv,
 
 	regmap_write(bsp_priv->grf, RV1126_GRF_GMAC_CON0,
 		     RV1126_GMAC_PHY_INTF_SEL_RGMII |
-		     RV1126_GMAC_M0_RXCLK_DLY_ENABLE |
-		     RV1126_GMAC_M0_TXCLK_DLY_ENABLE |
-		     RV1126_GMAC_M1_RXCLK_DLY_ENABLE |
-		     RV1126_GMAC_M1_TXCLK_DLY_ENABLE);
+		     DELAY_ENABLE(RV1126_M0, tx_delay, rx_delay) |
+		     DELAY_ENABLE(RV1126_M1, tx_delay, rx_delay));
 
 	regmap_write(bsp_priv->grf, RV1126_GRF_GMAC_CON1,
-		     RV1126_GMAC_M0_CLK_RX_DL_CFG(rx_delay) |
-		     RV1126_GMAC_M0_CLK_TX_DL_CFG(tx_delay));
+		     DELAY_VALUE(RV1126, tx_delay, rx_delay));
 
 	regmap_write(bsp_priv->grf, RV1126_GRF_GMAC_CON2,
-		     RV1126_GMAC_M1_CLK_RX_DL_CFG(rx_delay) |
-		     RV1126_GMAC_M1_CLK_TX_DL_CFG(tx_delay));
+		     DELAY_VALUE(RV1126, tx_delay, rx_delay));
 }
 
 static void rv1126_set_to_rmii(struct rk_priv_data *bsp_priv)
@@ -1748,11 +1870,15 @@ static int gmac_clk_enable(struct rk_priv_data *bsp_priv, bool enable)
 			if (!IS_ERR(bsp_priv->pclk_xpcs))
 				clk_prepare_enable(bsp_priv->pclk_xpcs);
 
+			if (bsp_priv->ops && bsp_priv->ops->set_clock_selection)
+				bsp_priv->ops->set_clock_selection(bsp_priv,
+					       bsp_priv->clock_input, true);
+
 			/**
 			 * if (!IS_ERR(bsp_priv->clk_mac))
 			 *	clk_prepare_enable(bsp_priv->clk_mac);
 			 */
-			mdelay(5);
+			usleep_range(100, 200);
 			bsp_priv->clk_enabled = true;
 		}
 	} else {
@@ -1777,6 +1903,9 @@ static int gmac_clk_enable(struct rk_priv_data *bsp_priv, bool enable)
 
 			clk_disable_unprepare(bsp_priv->pclk_xpcs);
 
+			if (bsp_priv->ops && bsp_priv->ops->set_clock_selection)
+				bsp_priv->ops->set_clock_selection(bsp_priv,
+					      bsp_priv->clock_input, false);
 			/**
 			 * if (!IS_ERR(bsp_priv->clk_mac))
 			 *	clk_disable_unprepare(bsp_priv->clk_mac);
@@ -1824,7 +1953,7 @@ static struct rk_priv_data *rk_gmac_setup(struct platform_device *pdev,
 	if (!bsp_priv)
 		return ERR_PTR(-ENOMEM);
 
-	bsp_priv->phy_iface = of_get_phy_mode(dev->of_node);
+	of_get_phy_mode(dev->of_node, &bsp_priv->phy_iface);
 	bsp_priv->ops = ops;
 	bsp_priv->bus_id = plat->bus_id;
 
@@ -1853,7 +1982,7 @@ static struct rk_priv_data *rk_gmac_setup(struct platform_device *pdev,
 
 	ret = of_property_read_u32(dev->of_node, "tx_delay", &value);
 	if (ret) {
-		bsp_priv->tx_delay = 0x30;
+		bsp_priv->tx_delay = -1;
 		dev_err(dev, "Can not read property: tx_delay.");
 		dev_err(dev, "set tx_delay to 0x%x\n",
 			bsp_priv->tx_delay);
@@ -1864,7 +1993,7 @@ static struct rk_priv_data *rk_gmac_setup(struct platform_device *pdev,
 
 	ret = of_property_read_u32(dev->of_node, "rx_delay", &value);
 	if (ret) {
-		bsp_priv->rx_delay = 0x10;
+		bsp_priv->rx_delay = -1;
 		dev_err(dev, "Can not read property: rx_delay.");
 		dev_err(dev, "set rx_delay to 0x%x\n",
 			bsp_priv->rx_delay);
@@ -1875,6 +2004,8 @@ static struct rk_priv_data *rk_gmac_setup(struct platform_device *pdev,
 
 	bsp_priv->grf = syscon_regmap_lookup_by_phandle(dev->of_node,
 							"rockchip,grf");
+	bsp_priv->php_grf = syscon_regmap_lookup_by_phandle(dev->of_node,
+							    "rockchip,php_grf");
 	bsp_priv->xpcs = syscon_regmap_lookup_by_phandle(dev->of_node,
 							 "rockchip,xpcs");
 	if (!IS_ERR(bsp_priv->xpcs)) {
@@ -1927,17 +2058,17 @@ static int rk_gmac_powerup(struct rk_priv_data *bsp_priv)
 	case PHY_INTERFACE_MODE_RGMII_ID:
 		dev_info(dev, "init for RGMII_ID\n");
 		if (bsp_priv->ops && bsp_priv->ops->set_to_rgmii)
-			bsp_priv->ops->set_to_rgmii(bsp_priv, 0, 0);
+			bsp_priv->ops->set_to_rgmii(bsp_priv, -1, -1);
 		break;
 	case PHY_INTERFACE_MODE_RGMII_RXID:
 		dev_info(dev, "init for RGMII_RXID\n");
 		if (bsp_priv->ops && bsp_priv->ops->set_to_rgmii)
-			bsp_priv->ops->set_to_rgmii(bsp_priv, bsp_priv->tx_delay, 0);
+			bsp_priv->ops->set_to_rgmii(bsp_priv, bsp_priv->tx_delay, -1);
 		break;
 	case PHY_INTERFACE_MODE_RGMII_TXID:
 		dev_info(dev, "init for RGMII_TXID\n");
 		if (bsp_priv->ops && bsp_priv->ops->set_to_rgmii)
-			bsp_priv->ops->set_to_rgmii(bsp_priv, 0, bsp_priv->rx_delay);
+			bsp_priv->ops->set_to_rgmii(bsp_priv, -1, bsp_priv->rx_delay);
 		break;
 	case PHY_INTERFACE_MODE_RMII:
 		dev_info(dev, "init for RMII\n");
@@ -2046,18 +2177,13 @@ int dwmac_rk_get_phy_interface(struct stmmac_priv *priv)
 }
 EXPORT_SYMBOL(dwmac_rk_get_phy_interface);
 
-void __weak rk_devinfo_get_eth_mac(u8 *mac)
-{
-}
-
-void rk_get_eth_addr(void *priv, unsigned char *addr)
+static void rk_get_eth_addr(void *priv, unsigned char *addr)
 {
 	struct rk_priv_data *bsp_priv = priv;
 	struct device *dev = &bsp_priv->pdev->dev;
 	unsigned char ethaddr[ETH_ALEN * MAX_ETH] = {0};
 	int ret, id = bsp_priv->bus_id;
 
-	rk_devinfo_get_eth_mac(addr);
 	if (is_valid_ether_addr(addr))
 		goto out;
 
@@ -2205,6 +2331,7 @@ static const struct of_device_id rk_gmac_dwmac_match[] = {
 	{ .compatible = "rockchip,rk3368-gmac", .data = &rk3368_ops },
 	{ .compatible = "rockchip,rk3399-gmac", .data = &rk3399_ops },
 	{ .compatible = "rockchip,rk3568-gmac", .data = &rk3568_ops },
+	{ .compatible = "rockchip,rk3588-gmac", .data = &rk3588_ops },
 	{ .compatible = "rockchip,rv1108-gmac", .data = &rv1108_ops },
 	{ .compatible = "rockchip,rv1126-gmac", .data = &rv1126_ops },
 	{ }

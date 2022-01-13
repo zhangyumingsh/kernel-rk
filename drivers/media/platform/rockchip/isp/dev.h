@@ -45,20 +45,10 @@
 #include "isp_stats.h"
 #include "isp_mipi_luma.h"
 #include "procfs.h"
+#include "isp_external.h"
 
 #define DRIVER_NAME "rkisp"
 #define ISP_VDEV_NAME DRIVER_NAME  "_ispdev"
-#define SP_VDEV_NAME DRIVER_NAME   "_selfpath"
-#define MP_VDEV_NAME DRIVER_NAME   "_mainpath"
-#define DMA_VDEV_NAME DRIVER_NAME  "_dmapath"
-#define RAW_VDEV_NAME DRIVER_NAME  "_rawpath"
-#define DMATX0_VDEV_NAME DRIVER_NAME "_rawwr0"
-#define DMATX1_VDEV_NAME DRIVER_NAME "_rawwr1"
-#define DMATX2_VDEV_NAME DRIVER_NAME "_rawwr2"
-#define DMATX3_VDEV_NAME DRIVER_NAME "_rawwr3"
-#define DMARX0_VDEV_NAME DRIVER_NAME "_rawrd0_m"
-#define DMARX1_VDEV_NAME DRIVER_NAME "_rawrd1_l"
-#define DMARX2_VDEV_NAME DRIVER_NAME "_rawrd2_s"
 
 #define GRP_ID_SENSOR			BIT(0)
 #define GRP_ID_MIPIPHY			BIT(1)
@@ -84,6 +74,7 @@ enum rkisp_isp_state {
 	ISP_FRAME_MP = BIT(3),
 	ISP_FRAME_SP = BIT(4),
 	ISP_FRAME_MPFBC = BIT(5),
+	ISP_FRAME_BP = BIT(6),
 
 	ISP_STOP = BIT(8),
 	ISP_START = BIT(9),
@@ -237,5 +228,11 @@ struct rkisp_device {
 	int rdbk_cnt_x3;
 	u32 rd_mode;
 	u8 filt_state[RDBK_F_MAX];
+
+	struct rkisp_rx_buf_pool pv_pool[RKISP_RX_BUF_POOL_MAX];
+
+	spinlock_t cmsk_lock;
+	struct rkisp_cmsk_cfg cmsk_cfg;
+	bool is_cmsk_upd;
 };
 #endif

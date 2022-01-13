@@ -153,6 +153,8 @@
 };
 
 &emmc {
+	no-sdio;
+	no-sd;
 	status = "okay";
 };
 
@@ -659,7 +661,8 @@
 	sd-uhs-sdr25;
 	sd-uhs-sdr50;
 	sd-uhs-sdr104;
-	supports-sdio;
+	no-sd;
+	no-mmc;
 };
 
 &sdmmc {

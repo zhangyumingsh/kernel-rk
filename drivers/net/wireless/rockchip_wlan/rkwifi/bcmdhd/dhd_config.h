@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 
 #ifndef _dhd_config_
 #define _dhd_config_
@@ -336,7 +337,6 @@ typedef struct dhd_conf {
 #ifdef CHECK_DOWNLOAD_FW
 	bool fwchk;
 #endif
-	char *vndr_ie_assocreq;
 } dhd_conf_t;
 
 #ifdef BCMSDIO

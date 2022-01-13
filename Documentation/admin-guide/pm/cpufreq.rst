@@ -1,13 +1,16 @@
-.. |struct cpufreq_policy| replace:: :c:type:`struct cpufreq_policy <cpufreq_policy>`
+.. SPDX-License-Identifier: GPL-2.0
+.. include:: <isonum.txt>
+
 .. |intel_pstate| replace:: :doc:`intel_pstate <intel_pstate>`
 
 =======================
 CPU Performance Scaling
 =======================
 
-::
+:Copyright: |copy| 2017 Intel Corporation
 
- Copyright (c) 2017 Intel Corp., Rafael J. Wysocki <rafael.j.wysocki@intel.com>
+:Author: Rafael J. Wysocki <rafael.j.wysocki@intel.com>
+
 
 The Concept of CPU Performance Scaling
 ======================================
@@ -88,16 +91,16 @@ control the P-state of multiple CPUs at the same time and writing to it affects
 all of those CPUs simultaneously.
 
 Sets of CPUs sharing hardware P-state control interfaces are represented by
-``CPUFreq`` as |struct cpufreq_policy| objects.  For consistency,
-|struct cpufreq_policy| is also used when there is only one CPU in the given
+``CPUFreq`` as struct cpufreq_policy objects.  For consistency,
+struct cpufreq_policy is also used when there is only one CPU in the given
 set.
 
-The ``CPUFreq`` core maintains a pointer to a |struct cpufreq_policy| object for
+The ``CPUFreq`` core maintains a pointer to a struct cpufreq_policy object for
 every CPU in the system, including CPUs that are currently offline.  If multiple
 CPUs share the same hardware P-state control interface, all of the pointers
-corresponding to them point to the same |struct cpufreq_policy| object.
+corresponding to them point to the same struct cpufreq_policy object.
 
-``CPUFreq`` uses |struct cpufreq_policy| as its basic data type and the design
+``CPUFreq`` uses struct cpufreq_policy as its basic data type and the design
 of its user space interface is based on the policy concept.
 
 
@@ -143,14 +146,14 @@ CPUs in it.
 
 The next major initialization step for a new policy object is to attach a
 scaling governor to it (to begin with, that is the default scaling governor
-determined by the kernel configuration, but it may be changed later
-via ``sysfs``).  First, a pointer to the new policy object is passed to the
-governor's ``->init()`` callback which is expected to initialize all of the
+determined by the kernel command line or configuration, but it may be changed
+later via ``sysfs``).  First, a pointer to the new policy object is passed to
+the governor's ``->init()`` callback which is expected to initialize all of the
 data structures necessary to handle the given policy and, possibly, to add
 a governor ``sysfs`` interface to it.  Next, the governor is started by
 invoking its ``->start()`` callback.
 
-That callback it expected to register per-CPU utilization update callbacks for
+That callback is expected to register per-CPU utilization update callbacks for
 all of the online CPUs belonging to the given policy with the CPU scheduler.
 The utilization update callbacks will be invoked by the CPU scheduler on
 important events, like task enqueue and dequeue, on every iteration of the
@@ -396,8 +399,8 @@ RT or deadline scheduling classes, the governor will increase the frequency to
 the allowed maximum (that is, the ``scaling_max_freq`` policy limit).  In turn,
 if it is invoked by the CFS scheduling class, the governor will use the
 Per-Entity Load Tracking (PELT) metric for the root control group of the
-given CPU as the CPU utilization estimate (see the `Per-entity load tracking`_
-LWN.net article for a description of the PELT mechanism).  Then, the new
+given CPU as the CPU utilization estimate (see the *Per-entity load tracking*
+LWN.net article [1]_ for a description of the PELT mechanism).  Then, the new
 CPU frequency to apply is computed in accordance with the formula
 
 	f = 1.25 * ``f_0`` * ``util`` / ``max``
@@ -587,64 +590,6 @@ This governor exposes the following tunables:
 	It effectively causes the frequency to go down ``sampling_down_factor``
 	times slower than it ramps up.
 
-``interactive``
-----------------
-
-The CPUfreq governor `interactive` is designed for latency-sensitive,
-interactive workloads. This governor sets the CPU speed depending on
-usage, similar to `ondemand` and `conservative` governors, but with a
-different set of configurable behaviors.
-
-The tunable values for this governor are:
-
-``above_hispeed_delay``
-        When speed is at or above hispeed_freq, wait for
-        this long before raising speed in response to continued high load.
-        The format is a single delay value, optionally followed by pairs of
-        CPU speeds and the delay to use at or above those speeds.  Colons can
-        be used between the speeds and associated delays for readability.  For
-        example:
-
-           80000 1300000:200000 1500000:40000
-
-        uses delay 80000 uS until CPU speed 1.3 GHz, at which speed delay
-        200000 uS is used until speed 1.5 GHz, at which speed (and above)
-        delay 40000 uS is used.  If speeds are specified these must appear in
-        ascending order.  Default is 20000 uS.
-
-``boost``
-        If non-zero, immediately boost speed of all CPUs to at least
-        hispeed_freq until zero is written to this attribute.  If zero, allow
-        CPU speeds to drop below hispeed_freq according to load as usual.
-        Default is zero.
-
-``boostpulse``
-        On each write, immediately boost speed of all CPUs to
-        hispeed_freq for at least the period of time specified by
-        boostpulse_duration, after which speeds are allowed to drop below
-        hispeed_freq according to load as usual. Its a write-only file.
-
-``boostpulse_duration``
-        Length of time to hold CPU speed at hispeed_freq
-        on a write to boostpulse, before allowing speed to drop according to
-        load as usual.  Default is 80000 uS.
-
-``go_hispeed_load``
-        The CPU load at which to ramp to hispeed_freq.
-        Default is 99%.
-
-``hispeed_freq``
-        An intermediate "high speed" at which to initially ramp
-        when CPU load hits the value specified in go_hispeed_load.  If load
-        stays high for the amount of time specified in above_hispeed_delay,
-        then speed may be bumped higher.  Default is the maximum speed allowed
-        by the policy at governor initialization time.
-
-``io_is_busy``
-        If set, the governor accounts IO time as CPU busy time.
-
-``min_sample_time``
-        The minimum amount of time to spend at the current
 
 Frequency Boost Support
 =======================
@@ -756,4 +701,8 @@ hardware feature (e.g. all Intel ones), even if the
 :c:macro:`CONFIG_X86_ACPI_CPUFREQ_CPB` configuration option is set.
 
 
-.. _Per-entity load tracking: https://lwn.net/Articles/531853/
+References
+==========
+
+.. [1] Jonathan Corbet, *Per-entity load tracking*,
+       https://lwn.net/Articles/531853/

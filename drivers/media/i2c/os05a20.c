@@ -106,14 +106,6 @@ static const char * const os05a20_supply_names[] = {
 #define MIRROR_BIT_MASK			BIT(2)
 #define FLIP_BIT_MASK			BIT(2)
 
-enum os05a20_max_pad {
-	PAD0,
-	PAD1,
-	PAD2,
-	PAD3,
-	PAD_MAX,
-};
-
 struct regval {
 	u16 addr;
 	u8 val;
@@ -935,7 +927,7 @@ static int os05a20_g_frame_interval(struct v4l2_subdev *sd,
 	return 0;
 }
 
-static int os05a20_g_mbus_config(struct v4l2_subdev *sd,
+static int os05a20_g_mbus_config(struct v4l2_subdev *sd, unsigned int pad_id,
 				struct v4l2_mbus_config *config)
 {
 	struct os05a20 *os05a20 = to_os05a20(sd);
@@ -952,7 +944,7 @@ static int os05a20_g_mbus_config(struct v4l2_subdev *sd,
 		V4L2_MBUS_CSI2_CONTINUOUS_CLOCK |
 		V4L2_MBUS_CSI2_CHANNEL_1;
 
-	config->type = V4L2_MBUS_CSI2;
+	config->type = V4L2_MBUS_CSI2_DPHY;
 	config->flags = val;
 
 	return 0;
@@ -1526,7 +1518,6 @@ static const struct v4l2_subdev_core_ops os05a20_core_ops = {
 static const struct v4l2_subdev_video_ops os05a20_video_ops = {
 	.s_stream = os05a20_s_stream,
 	.g_frame_interval = os05a20_g_frame_interval,
-	.g_mbus_config = os05a20_g_mbus_config,
 };
 
 static const struct v4l2_subdev_pad_ops os05a20_pad_ops = {
@@ -1535,6 +1526,7 @@ static const struct v4l2_subdev_pad_ops os05a20_pad_ops = {
 	.enum_frame_interval = os05a20_enum_frame_interval,
 	.get_fmt = os05a20_get_fmt,
 	.set_fmt = os05a20_set_fmt,
+	.get_mbus_config = os05a20_g_mbus_config,
 };
 
 static const struct v4l2_subdev_ops os05a20_subdev_ops = {

@@ -200,6 +200,7 @@ static int report_trace(struct stackframe *frame, void *d)
 	return sts->depth == 0;
 }
 
+#ifndef CONFIG_FIQ_DEBUGGER_MODULE
 struct frame_tail {
 	struct frame_tail *fp;
 	unsigned long sp;
@@ -212,7 +213,7 @@ static struct frame_tail *user_backtrace(struct fiq_debugger_output *output,
 	struct frame_tail buftail[2];
 
 	/* Also check accessibility of one struct frame_tail beyond */
-	if (!access_ok(VERIFY_READ, tail, sizeof(buftail))) {
+	if (!access_ok(tail, sizeof(buftail))) {
 		output->printf(output, "  invalid frame pointer %px\n",
 				tail);
 		return NULL;
@@ -269,3 +270,4 @@ void fiq_debugger_dump_stacktrace(struct fiq_debugger_output *output,
 	while (depth-- && tail && !((unsigned long) tail & 3))
 		tail = user_backtrace(output, tail);
 }
+#endif

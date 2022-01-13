@@ -1,21 +1,16 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) Fuzhou Rockchip Electronics Co.Ltd
  * Author:Mark Yao <mark.yao@rock-chips.com>
- *
- * This software is licensed under the terms of the GNU General Public
- * License version 2, as published by the Free Software Foundation, and
- * may be copied, distributed, and modified under those terms.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 
-#include <drm/drmP.h>
-
-#include <linux/kernel.h>
 #include <linux/component.h>
+#include <linux/kernel.h>
+#include <linux/of.h>
+#include <linux/platform_device.h>
+
+#include <drm/drm_fourcc.h>
+#include <drm/drm_print.h>
 
 #include "rockchip_drm_vop.h"
 #include "rockchip_vop_reg.h"
@@ -67,9 +62,11 @@ static const uint32_t formats_win_full_10bit[] = {
 	DRM_FORMAT_NV12,
 	DRM_FORMAT_NV16,
 	DRM_FORMAT_NV24,
-	DRM_FORMAT_NV12_10,
-	DRM_FORMAT_NV16_10,
-	DRM_FORMAT_NV24_10,
+	DRM_FORMAT_NV15, /* yuv420_10bit linear mode, 2 plane, no padding */
+#ifdef CONFIG_NO_GKI
+	DRM_FORMAT_NV20, /* yuv422_10bit linear mode, 2 plane, no padding */
+	DRM_FORMAT_NV30, /* yuv444_10bit linear mode, 2 plane, no padding */
+#endif
 };
 
 static const uint32_t formats_win_full_10bit_yuyv[] = {
@@ -81,13 +78,18 @@ static const uint32_t formats_win_full_10bit_yuyv[] = {
 	DRM_FORMAT_BGR888,
 	DRM_FORMAT_RGB565,
 	DRM_FORMAT_BGR565,
-	DRM_FORMAT_NV12,
-	DRM_FORMAT_NV16,
-	DRM_FORMAT_NV24,
-	DRM_FORMAT_NV12_10,
-	DRM_FORMAT_NV16_10,
-	DRM_FORMAT_NV24_10,
-	DRM_FORMAT_YUYV,
+	DRM_FORMAT_NV12, /* yuv420_8bit linear mode, 2 plane */
+	DRM_FORMAT_NV16, /* yuv422_8bit linear mode, 2 plane */
+	DRM_FORMAT_NV24, /* yuv444_8bit linear mode, 2 plane */
+	DRM_FORMAT_NV15, /* yuv420_10bit linear mode, 2 plane, no padding */
+#ifdef CONFIG_NO_GKI
+	DRM_FORMAT_NV20, /* yuv422_10bit linear mode, 2 plane, no padding */
+	DRM_FORMAT_NV30, /* yuv444_10bit linear mode, 2 plane, no padding */
+#endif
+	DRM_FORMAT_YVYU, /* yuv422_8bit[YVYU] linear mode or non-Linear mode */
+	DRM_FORMAT_VYUY, /* yuv422_8bit[VYUY] linear mode or non-Linear mode */
+	DRM_FORMAT_YUYV, /* yuv422_8bit[YUYV] linear mode or non-Linear mode */
+	DRM_FORMAT_UYVY, /* yuv422_8bit[UYVY] linear mode or non-Linear mode */
 };
 
 static const uint32_t formats_win_lite[] = {
@@ -99,6 +101,50 @@ static const uint32_t formats_win_lite[] = {
 	DRM_FORMAT_BGR888,
 	DRM_FORMAT_RGB565,
 	DRM_FORMAT_BGR565,
+};
+
+static const uint64_t format_modifiers[] = {
+	DRM_FORMAT_MOD_LINEAR,
+	DRM_FORMAT_MOD_INVALID,
+};
+
+static const uint64_t format_modifiers_afbc[] = {
+	DRM_FORMAT_MOD_ARM_AFBC(AFBC_FORMAT_MOD_BLOCK_SIZE_16x16),
+
+	DRM_FORMAT_MOD_ARM_AFBC(AFBC_FORMAT_MOD_BLOCK_SIZE_16x16 |
+				AFBC_FORMAT_MOD_SPARSE),
+
+	DRM_FORMAT_MOD_ARM_AFBC(AFBC_FORMAT_MOD_BLOCK_SIZE_16x16 |
+				AFBC_FORMAT_MOD_YTR),
+
+	DRM_FORMAT_MOD_ARM_AFBC(AFBC_FORMAT_MOD_BLOCK_SIZE_16x16 |
+				AFBC_FORMAT_MOD_CBR),
+
+	DRM_FORMAT_MOD_ARM_AFBC(AFBC_FORMAT_MOD_BLOCK_SIZE_16x16 |
+				AFBC_FORMAT_MOD_YTR |
+				AFBC_FORMAT_MOD_SPARSE),
+
+	DRM_FORMAT_MOD_ARM_AFBC(AFBC_FORMAT_MOD_BLOCK_SIZE_16x16 |
+				AFBC_FORMAT_MOD_CBR |
+				AFBC_FORMAT_MOD_SPARSE),
+
+	DRM_FORMAT_MOD_ARM_AFBC(AFBC_FORMAT_MOD_BLOCK_SIZE_16x16 |
+				AFBC_FORMAT_MOD_YTR |
+				AFBC_FORMAT_MOD_CBR),
+
+	DRM_FORMAT_MOD_ARM_AFBC(AFBC_FORMAT_MOD_BLOCK_SIZE_16x16 |
+				AFBC_FORMAT_MOD_YTR |
+				AFBC_FORMAT_MOD_CBR |
+				AFBC_FORMAT_MOD_SPARSE),
+
+	/* SPLIT mandates SPARSE, RGB modes mandates YTR */
+	DRM_FORMAT_MOD_ARM_AFBC(AFBC_FORMAT_MOD_BLOCK_SIZE_16x16 |
+				AFBC_FORMAT_MOD_YTR |
+				AFBC_FORMAT_MOD_SPARSE |
+				AFBC_FORMAT_MOD_SPLIT),
+
+	DRM_FORMAT_MOD_LINEAR,
+	DRM_FORMAT_MOD_INVALID,
 };
 
 static const struct vop_scl_extension rk3288_win_full_scl_ext = {
@@ -349,8 +395,10 @@ static const struct vop_grf_ctrl rk3288_vop_lit_grf_ctrl = {
 };
 
 static const struct vop_data rk3288_vop_big = {
+	.soc_id = 0x3288,
+	.vop_id = 0,
 	.version = VOP_VERSION(3, 0),
-	.feature = VOP_FEATURE_OUTPUT_10BIT | VOP_FEATURE_ALPHA_SCALE,
+	.feature = VOP_FEATURE_OUTPUT_10BIT | VOP_FEATURE_ALPHA_SCALE | VOP_FEATURE_OVERSCAN,
 	.max_input = {4096, 8192},
 	.max_output = {3840, 2160},
 	.intr = &rk3288_vop_intr,
@@ -361,8 +409,10 @@ static const struct vop_data rk3288_vop_big = {
 };
 
 static const struct vop_data rk3288_vop_lit = {
+	.soc_id = 0x3288,
+	.vop_id = 1,
 	.version = VOP_VERSION(3, 0),
-	.feature = VOP_FEATURE_OUTPUT_10BIT | VOP_FEATURE_ALPHA_SCALE,
+	.feature = VOP_FEATURE_OUTPUT_10BIT | VOP_FEATURE_ALPHA_SCALE | VOP_FEATURE_OVERSCAN,
 	.max_input = {4096, 8192},
 	.max_output = {2560, 1600},
 	.intr = &rk3288_vop_intr,
@@ -468,8 +518,10 @@ static const struct vop_win_data rk3368_vop_win_data[] = {
 };
 
 static const struct vop_data rk3368_vop = {
+	.soc_id = 0x3368,
+	.vop_id = 0,
 	.version = VOP_VERSION(3, 2),
-	.feature = VOP_FEATURE_ALPHA_SCALE,
+	.feature = VOP_FEATURE_ALPHA_SCALE | VOP_FEATURE_OVERSCAN,
 	.max_input = {4096, 8192},
 	.max_output = {4096, 2160},
 	.intr = &rk3368_vop_intr,
@@ -493,8 +545,10 @@ static const struct vop_grf_ctrl rk3368_vop_grf_ctrl = {
 };
 
 static const struct vop_data rk3366_vop = {
+	.soc_id = 0x3366,
+	.vop_id = 0,
 	.version = VOP_VERSION(3, 4),
-	.feature = VOP_FEATURE_ALPHA_SCALE,
+	.feature = VOP_FEATURE_ALPHA_SCALE | VOP_FEATURE_OVERSCAN,
 	.max_input = {4096, 8192},
 	.max_output = {4096, 2160},
 	.intr = &rk3366_vop_intr,
@@ -629,17 +683,21 @@ static const struct vop_win_phy rk3399_win01_data = {
 
 static const struct vop_win_data rk3399_vop_win_data[] = {
 	{ .base = 0x00, .phy = &rk3399_win01_data, .csc = &rk3399_win0_csc,
+	  .format_modifiers = format_modifiers_afbc,
 	  .type = DRM_PLANE_TYPE_PRIMARY,
 	  .feature = WIN_FEATURE_AFBDC },
 	{ .base = 0x40, .phy = &rk3399_win01_data, .csc = &rk3399_win1_csc,
+	  .format_modifiers = format_modifiers_afbc,
 	  .type = DRM_PLANE_TYPE_OVERLAY,
 	  .feature = WIN_FEATURE_AFBDC },
 	{ .base = 0x00, .phy = &rk3368_win23_data, .csc = &rk3399_win2_csc,
+	  .format_modifiers = format_modifiers_afbc,
 	  .type = DRM_PLANE_TYPE_OVERLAY,
 	  .feature = WIN_FEATURE_AFBDC,
 	  .area = rk3368_area_data,
 	  .area_size = ARRAY_SIZE(rk3368_area_data), },
 	{ .base = 0x50, .phy = &rk3368_win23_data, .csc = &rk3399_win3_csc,
+	  .format_modifiers = format_modifiers_afbc,
 	  .type = DRM_PLANE_TYPE_CURSOR,
 	  .feature = WIN_FEATURE_AFBDC,
 	  .area = rk3368_area_data,
@@ -647,10 +705,11 @@ static const struct vop_win_data rk3399_vop_win_data[] = {
 };
 
 static const struct vop_data rk3399_vop_big = {
+	.soc_id = 0x3399,
+	.vop_id = 0,
 	.version = VOP_VERSION(3, 5),
 	.csc_table = &rk3399_csc_table,
-	.feature = VOP_FEATURE_OUTPUT_10BIT | VOP_FEATURE_AFBDC |
-			VOP_FEATURE_ALPHA_SCALE,
+	.feature = VOP_FEATURE_OUTPUT_10BIT | VOP_FEATURE_ALPHA_SCALE | VOP_FEATURE_OVERSCAN,
 	.max_input = {4096, 8192},
 	.max_output = {4096, 2160},
 	.intr = &rk3366_vop_intr,
@@ -661,10 +720,12 @@ static const struct vop_data rk3399_vop_big = {
 
 static const struct vop_win_data rk3399_vop_lit_win_data[] = {
 	{ .base = 0x00, .phy = &rk3399_win01_data, .csc = &rk3399_win0_csc,
+	  .format_modifiers = format_modifiers,
 	  .type = DRM_PLANE_TYPE_OVERLAY,
 	  .feature = WIN_FEATURE_AFBDC },
 	{ .phy = NULL },
 	{ .base = 0x00, .phy = &rk3368_win23_data, .csc = &rk3399_win2_csc,
+	  .format_modifiers = format_modifiers,
 	  .type = DRM_PLANE_TYPE_PRIMARY,
 	  .feature = WIN_FEATURE_AFBDC,
 	  .area = rk3368_area_data,
@@ -674,8 +735,10 @@ static const struct vop_win_data rk3399_vop_lit_win_data[] = {
 
 
 static const struct vop_data rk3399_vop_lit = {
+	.soc_id = 0x3399,
+	.vop_id = 1,
 	.version = VOP_VERSION(3, 6),
-	.feature = VOP_FEATURE_ALPHA_SCALE,
+	.feature = VOP_FEATURE_ALPHA_SCALE | VOP_FEATURE_OVERSCAN,
 	.csc_table = &rk3399_csc_table,
 	.max_input = {4096, 8192},
 	.max_output = {2560, 1600},
@@ -693,8 +756,10 @@ static const struct vop_win_data rk322x_vop_win_data[] = {
 };
 
 static const struct vop_data rk3228_vop = {
+	.soc_id = 0x3228,
+	.vop_id = 0,
 	.version = VOP_VERSION(3, 7),
-	.feature = VOP_FEATURE_OUTPUT_10BIT | VOP_FEATURE_ALPHA_SCALE,
+	.feature = VOP_FEATURE_OUTPUT_10BIT | VOP_FEATURE_ALPHA_SCALE | VOP_FEATURE_OVERSCAN,
 	.max_input = {4096, 8192},
 	.max_output = {4096, 2160},
 	.intr = &rk3366_vop_intr,
@@ -1084,8 +1149,11 @@ static const struct vop_win_data rk3328_vop_win_data[] = {
 };
 
 static const struct vop_data rk3328_vop = {
+	.soc_id = 0x3328,
+	.vop_id = 0,
 	.version = VOP_VERSION(3, 8),
-	.feature = VOP_FEATURE_OUTPUT_10BIT | VOP_FEATURE_ALPHA_SCALE,
+	.feature = VOP_FEATURE_OUTPUT_10BIT | VOP_FEATURE_HDR10 |
+			VOP_FEATURE_ALPHA_SCALE | VOP_FEATURE_OVERSCAN,
 	.hdr_table = &rk3328_hdr_table,
 	.max_input = {4096, 8192},
 	.max_output = {4096, 2160},
@@ -1193,6 +1261,8 @@ static const struct vop_ctrl rk3036_ctrl_data = {
 };
 
 static const struct vop_data rk3036_vop = {
+	.soc_id = 0x3036,
+	.vop_id = 0,
 	.version = VOP_VERSION(2, 2),
 	.max_input = {1920, 1080},
 	.max_output = {1920, 1080},
@@ -1299,6 +1369,8 @@ static const struct vop_ctrl rk3066_ctrl_data = {
 };
 
 static const struct vop_data rk3066_vop = {
+	.soc_id = 0x3066,
+	.vop_id = 0,
 	.version = VOP_VERSION(2, 1),
 	.max_input = {1920, 4096},
 	.max_output = {1920, 1080},
@@ -1414,6 +1486,8 @@ static const struct vop_win_data rk3126_vop_win_data[] = {
 };
 
 static const struct vop_data rk3126_vop = {
+	.soc_id = 0x3126,
+	.vop_id = 0,
 	.version = VOP_VERSION(2, 4),
 	.max_input = {1920, 8192},
 	.max_output = {1920, 1080},
@@ -1549,6 +1623,8 @@ static const struct vop_grf_ctrl px30_grf_ctrl = {
 };
 
 static const struct vop_data px30_vop_lit = {
+	.soc_id = 0x3326,
+	.vop_id = 1,
 	.version = VOP_VERSION(2, 5),
 	.max_input = {1920, 8192},
 	.max_output = {1920, 1080},
@@ -1560,8 +1636,9 @@ static const struct vop_data px30_vop_lit = {
 };
 
 static const struct vop_data px30_vop_big = {
+	.soc_id = 0x3326,
+	.vop_id = 0,
 	.version = VOP_VERSION(2, 6),
-	.feature = VOP_FEATURE_AFBDC,
 	.max_input = {1920, 8192},
 	.max_output = {1920, 1080},
 	.ctrl = &px30_ctrl_data,
@@ -1657,6 +1734,8 @@ static const struct vop_intr rk3308_vop_intr = {
 };
 
 static const struct vop_data rk3308_vop = {
+	.soc_id = 0x3308,
+	.vop_id = 0,
 	.version = VOP_VERSION(2, 7),
 	.max_input = {1920, 8192},
 	.max_output = {1920, 1080},
@@ -1755,6 +1834,8 @@ static const struct vop_grf_ctrl rv1126_grf_ctrl = {
 };
 
 static const struct vop_data rv1126_vop = {
+	.soc_id = 0x1126,
+	.vop_id = 0,
 	.version = VOP_VERSION(2, 0xb),
 	.max_input = {1920, 1920},
 	.max_output = {1920, 1080},

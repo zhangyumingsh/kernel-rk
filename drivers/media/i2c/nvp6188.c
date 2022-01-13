@@ -84,14 +84,6 @@
 #define NVP_RESO_960P_NSTC_VALUE	0xa0
 #define NVP_RESO_960P_PAL_VALUE	0xa1
 
-enum nvp6188_max_pad {
-	PAD0,
-	PAD1,
-	PAD2,
-	PAD3,
-	PAD_MAX,
-};
-
 enum nvp6188_support_reso {
 	NVP_RESO_UNKOWN = 0,
 	NVP_RESO_960H_PAL,
@@ -697,7 +689,7 @@ static struct nvp6188_mode supported_modes[] = {
 			.denominator = 250000,
 		},
 		.global_reg_list = common_setting_1458M_regs,
-		.mipi_freq_idx = 0,
+		.mipi_freq_idx = 1,
 		.bpp = 8,
 		.vc[PAD0] = V4L2_MBUS_CSI2_CHANNEL_0,
 		.vc[PAD1] = V4L2_MBUS_CSI2_CHANNEL_1,
@@ -1123,16 +1115,16 @@ static void nvp6188_get_vc_fmt_inf(struct nvp6188 *nvp6188,
 				inf->height[ch] = 720;
 				inf->fps[ch] = 30;
 			break;
-			case NVP_RESO_1080P_NSTC_VALUE:
-				inf->width[ch] = 1920;
-				inf->height[ch] = 1080;
-				inf->fps[ch] = 30;
-			break;
 			case NVP_RESO_1080P_PAL_VALUE:
-			default:
 				inf->width[ch] = 1920;
 				inf->height[ch] = 1080;
 				inf->fps[ch] = 25;
+			break;
+			case NVP_RESO_1080P_NSTC_VALUE:
+			default:
+				inf->width[ch] = 1920;
+				inf->height[ch] = 1080;
+				inf->fps[ch] = 30;
 			break;
 		}
 	}

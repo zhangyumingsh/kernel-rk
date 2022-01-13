@@ -1,15 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) Fuzhou Rockchip Electronics Co.Ltd
  * Author: Chris Zhong <zyw@rock-chips.com>
- *
- * This software is licensed under the terms of the GNU General Public
- * License version 2, as published by the Free Software Foundation, and
- * may be copied, distributed, and modified under those terms.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 
 #include <linux/clk.h>
@@ -189,7 +181,7 @@ static int cdn_dp_mailbox_send(struct cdn_dp_device *dp, u8 module_id,
 	return 0;
 }
 
-int cdn_dp_reg_write(struct cdn_dp_device *dp, u16 addr, u32 val)
+static int cdn_dp_reg_write(struct cdn_dp_device *dp, u16 addr, u32 val)
 {
 	u8 msg[6];
 
@@ -221,12 +213,7 @@ static int cdn_dp_reg_write_bit(struct cdn_dp_device *dp, u16 addr,
 				   sizeof(field), field);
 }
 
-/*
- * Returns the number of bytes transferred on success, or a negative
- * error code on failure. -ETIMEDOUT is returned if mailbox message was
- * not send successfully;
- */
-ssize_t cdn_dp_dpcd_read(struct cdn_dp_device *dp, u32 addr, u8 *data, u16 len)
+int cdn_dp_dpcd_read(struct cdn_dp_device *dp, u32 addr, u8 *data, u16 len)
 {
 	u8 msg[5], reg[5];
 	int ret;
@@ -252,41 +239,24 @@ ssize_t cdn_dp_dpcd_read(struct cdn_dp_device *dp, u32 addr, u8 *data, u16 len)
 		goto err_dpcd_read;
 
 	ret = cdn_dp_mailbox_read_receive(dp, data, len);
-	if (!ret)
-		return len;
 
 err_dpcd_read:
-	DRM_DEV_ERROR(dp->dev, "dpcd read failed: %d\n", ret);
 	return ret;
 }
 
-#define CDN_AUX_HEADER_SIZE	5
-#define CDN_AUX_MSG_SIZE	20
-/*
- * Returns the number of bytes transferred on success, or a negative error
- * code on failure. -ETIMEDOUT is returned if mailbox message was not send
- * success; -EINVAL is returned if get the wrong data size after message
- * is sent
- */
-ssize_t cdn_dp_dpcd_write(struct cdn_dp_device *dp, u32 addr, u8 *data, u16 len)
+int cdn_dp_dpcd_write(struct cdn_dp_device *dp, u32 addr, u8 value)
 {
-	u8 msg[CDN_AUX_MSG_SIZE + CDN_AUX_HEADER_SIZE];
-	u8 reg[CDN_AUX_HEADER_SIZE];
+	u8 msg[6], reg[5];
 	int ret;
 
-	if (WARN_ON(len > CDN_AUX_MSG_SIZE) || WARN_ON(len <= 0))
-		return -EINVAL;
-
-	msg[0] = (len >> 8) & 0xff;
-	msg[1] = len & 0xff;
+	msg[0] = 0;
+	msg[1] = 1;
 	msg[2] = (addr >> 16) & 0xff;
 	msg[3] = (addr >> 8) & 0xff;
 	msg[4] = addr & 0xff;
-
-	memcpy(msg + CDN_AUX_HEADER_SIZE, data, len);
-
+	msg[5] = value;
 	ret = cdn_dp_mailbox_send(dp, MB_MODULE_ID_DP_TX, DPTX_WRITE_DPCD,
-				  CDN_AUX_HEADER_SIZE + len, msg);
+				  sizeof(msg), msg);
 	if (ret)
 		goto err_dpcd_write;
 
@@ -299,43 +269,12 @@ ssize_t cdn_dp_dpcd_write(struct cdn_dp_device *dp, u32 addr, u8 *data, u16 len)
 	if (ret)
 		goto err_dpcd_write;
 
-	if ((len != (reg[0] << 8 | reg[1])) ||
-	    (addr != (reg[2] << 16 | reg[3] << 8 | reg[4]))) {
+	if (addr != (reg[2] << 16 | reg[3] << 8 | reg[4]))
 		ret = -EINVAL;
-	} else {
-		return len;
-	}
 
 err_dpcd_write:
 	if (ret)
 		DRM_DEV_ERROR(dp->dev, "dpcd write failed: %d\n", ret);
-	return ret;
-}
-
-int cdn_dp_get_aux_status(struct cdn_dp_device *dp)
-{
-	u8 status;
-	int ret;
-
-	ret = cdn_dp_mailbox_send(dp, MB_MODULE_ID_DP_TX,
-				  DPTX_GET_LAST_AUX_STAUS, 0, NULL);
-	if (ret)
-		goto err_get_hpd;
-
-	ret = cdn_dp_mailbox_validate_receive(dp, MB_MODULE_ID_DP_TX,
-					      DPTX_GET_LAST_AUX_STAUS,
-					      sizeof(status));
-	if (ret)
-		goto err_get_hpd;
-
-	ret = cdn_dp_mailbox_read_receive(dp, &status, sizeof(status));
-	if (ret)
-		goto err_get_hpd;
-
-	return status;
-
-err_get_hpd:
-	DRM_DEV_ERROR(dp->dev, "get aux status failed: %d\n", ret);
 	return ret;
 }
 
@@ -596,8 +535,8 @@ static int cdn_dp_get_training_status(struct cdn_dp_device *dp)
 	if (ret)
 		goto err_get_training_status;
 
-	dp->link.rate = status[0];
-	dp->link.num_lanes = status[1];
+	dp->max_rate = drm_dp_bw_code_to_link_rate(status[0]);
+	dp->max_lanes = status[1];
 
 err_get_training_status:
 	if (ret)
@@ -609,31 +548,6 @@ int cdn_dp_train_link(struct cdn_dp_device *dp)
 {
 	int ret;
 
-	/*
-	 * DP firmware uses fixed phy config values to do training, but some
-	 * boards need to adjust these values to fit for their unique hardware
-	 * design. So if the phy is using custom config values, do software
-	 * link training instead of relying on firmware, if software training
-	 * fail, keep firmware training as a fallback if sw training fails.
-	 */
-	ret = cdn_dp_software_train_link(dp);
-	if (ret) {
-		DRM_DEV_ERROR(dp->dev,
-			"Failed to do software training %d\n", ret);
-		goto do_fw_training;
-	}
-	ret = cdn_dp_reg_write(dp, SOURCE_HDTX_CAR, 0xf);
-	if (ret) {
-		DRM_DEV_ERROR(dp->dev,
-			"Failed to write SOURCE_HDTX_CAR register %d\n", ret);
-		goto do_fw_training;
-	}
-	dp->use_fw_training = false;
-	return 0;
-
-do_fw_training:
-	dp->use_fw_training = true;
-	DRM_DEV_DEBUG_KMS(dp->dev, "use fw training\n");
 	ret = cdn_dp_training_start(dp);
 	if (ret) {
 		DRM_DEV_ERROR(dp->dev, "Failed to start training %d\n", ret);
@@ -646,9 +560,9 @@ do_fw_training:
 		return ret;
 	}
 
-	DRM_DEV_DEBUG_KMS(dp->dev, "rate:0x%x, lanes:%d\n", dp->link.rate,
-			  dp->link.num_lanes);
-	return 0;
+	DRM_DEV_DEBUG_KMS(dp->dev, "rate:0x%x, lanes:%d\n", dp->max_rate,
+			  dp->max_lanes);
+	return ret;
 }
 
 int cdn_dp_set_video_status(struct cdn_dp_device *dp, int active)
@@ -687,7 +601,7 @@ static int cdn_dp_get_msa_misc(struct video_info *video,
 	case YCBCR_4_2_0:
 		val[0] = 5;
 		break;
-	};
+	}
 
 	switch (video->color_depth) {
 	case 6:
@@ -705,7 +619,7 @@ static int cdn_dp_get_msa_misc(struct video_info *video,
 	case 16:
 		val[1] = 4;
 		break;
-	};
+	}
 
 	msa_misc = 2 * val[0] + 32 * val[1] +
 		   ((video->color_fmt == Y_ONLY) ? (1 << 14) : 0);
@@ -725,7 +639,7 @@ int cdn_dp_config_video(struct cdn_dp_device *dp)
 	bit_per_pix = (video->color_fmt == YCBCR_4_2_2) ?
 		      (video->color_depth * 2) : (video->color_depth * 3);
 
-	link_rate = drm_dp_bw_code_to_link_rate(dp->link.rate) / 1000;
+	link_rate = dp->max_rate / 1000;
 
 	ret = cdn_dp_reg_write(dp, BND_HSYNC2VSYNC, VIF_BYPASS_INTERLACE);
 	if (ret)
@@ -744,15 +658,14 @@ int cdn_dp_config_video(struct cdn_dp_device *dp)
 	 */
 	do {
 		tu_size_reg += 2;
-		symbol = tu_size_reg * mode->clock * bit_per_pix;
-		do_div(symbol, dp->link.num_lanes * link_rate * 8);
+		symbol = (u64)tu_size_reg * mode->clock * bit_per_pix;
+		do_div(symbol, dp->max_lanes * link_rate * 8);
 		rem = do_div(symbol, 1000);
 		if (tu_size_reg > 64) {
 			ret = -EINVAL;
 			DRM_DEV_ERROR(dp->dev,
 				      "tu error, clk:%d, lanes:%d, rate:%d\n",
-				      mode->clock, dp->link.num_lanes,
-				      link_rate);
+				      mode->clock, dp->max_lanes, link_rate);
 			goto err_config_video;
 		}
 	} while ((symbol <= 1) || (tu_size_reg - symbol < 4) ||
@@ -766,7 +679,7 @@ int cdn_dp_config_video(struct cdn_dp_device *dp)
 
 	/* set the FIFO Buffer size */
 	val = div_u64(mode->clock * (symbol + 1), 1000) + link_rate;
-	val /= (dp->link.num_lanes * link_rate);
+	val /= (dp->max_lanes * link_rate);
 	val = div_u64(8 * (symbol + 1), bit_per_pix) - val;
 	val += 2;
 	ret = cdn_dp_reg_write(dp, DP_VC_TABLE(15), val);
@@ -787,7 +700,7 @@ int cdn_dp_config_video(struct cdn_dp_device *dp)
 	case 16:
 		val = BCS_16;
 		break;
-	};
+	}
 
 	val += video->color_fmt << 8;
 	ret = cdn_dp_reg_write(dp, DP_FRAMER_PXL_REPR, val);
@@ -919,7 +832,7 @@ static void cdn_dp_audio_config_i2s(struct cdn_dp_device *dp,
 	u32 val;
 
 	if (audio->channels == 2) {
-		if (dp->link.num_lanes == 1)
+		if (dp->max_lanes == 1)
 			sub_pckt_num = 2;
 		else
 			sub_pckt_num = 4;
@@ -998,23 +911,13 @@ static void cdn_dp_audio_config_i2s(struct cdn_dp_device *dp,
 	writel(I2S_DEC_START, dp->regs + AUDIO_SRC_CNTL);
 }
 
-static void cdn_dp_audio_config_spdif(struct cdn_dp_device *dp,
-				      struct audio_info *audio)
+static void cdn_dp_audio_config_spdif(struct cdn_dp_device *dp)
 {
 	u32 val;
-	int sub_pckt_num = 1;
 
-	if (audio->channels == 2) {
-		if (dp->link.num_lanes == 1)
-			sub_pckt_num = 2;
-		else
-			sub_pckt_num = 4;
-	}
 	writel(SYNC_WR_TO_CH_ZERO, dp->regs + FIFO_CNTL);
 
-	val = MAX_NUM_CH(audio->channels);
-	val |= AUDIO_TYPE_LPCM;
-	val |= CFG_SUB_PCKT_NUM(sub_pckt_num);
+	val = MAX_NUM_CH(2) | AUDIO_TYPE_LPCM | CFG_SUB_PCKT_NUM(4);
 	writel(val, dp->regs + SMPL2PKT_CNFG);
 	writel(SMPL2PKT_EN, dp->regs + SMPL2PKT_CNTL);
 
@@ -1023,24 +926,6 @@ static void cdn_dp_audio_config_spdif(struct cdn_dp_device *dp,
 
 	clk_prepare_enable(dp->spdif_clk);
 	clk_set_rate(dp->spdif_clk, CDN_DP_SPDIF_CLK);
-}
-
-void cdn_dp_infoframe_set(struct cdn_dp_device *dp, int entry_id,
-			  u8 *buf, u32 len, int type)
-{
-	unsigned int idx;
-	u32 *packet = (u32 *)buf;
-	u32 length = len / 4;
-
-	for (idx = 0; idx < length; idx++)
-		writel(cpu_to_le32(*packet++), dp->regs + SOURCE_PIF_DATA_WR);
-
-	writel(entry_id, dp->regs + SOURCE_PIF_WR_ADDR);
-	writel(HOST_WR, dp->regs + SOURCE_PIF_WR_REQ);
-	writel(ACTIVE_IDLE_TYPE(1) | TYPE_VALID |
-	       PACKET_TYPE(type) | PKT_ALLOC_ADDRESS(entry_id),
-	       dp->regs + SOURCE_PIF_PKT_ALLOC_REG);
-	writel(PKT_ALLOC_WR_EN, dp->regs + SOURCE_PIF_PKT_ALLOC_WR_EN);
 }
 
 int cdn_dp_audio_config(struct cdn_dp_device *dp, struct audio_info *audio)
@@ -1064,7 +949,7 @@ int cdn_dp_audio_config(struct cdn_dp_device *dp, struct audio_info *audio)
 	if (audio->format == AFMT_I2S)
 		cdn_dp_audio_config_i2s(dp, audio);
 	else if (audio->format == AFMT_SPDIF)
-		cdn_dp_audio_config_spdif(dp, audio);
+		cdn_dp_audio_config_spdif(dp);
 
 	ret = cdn_dp_reg_write(dp, AUDIO_PACK_CONTROL, AUDIO_PACK_EN);
 

@@ -1,17 +1,13 @@
-/*
- * FAN53555 Fairchild Digitally Programmable TinyBuck Regulator Driver.
- *
- * Supported Part Numbers:
- * FAN53555UC00X/01X/03X/04X/05X
- *
- * Copyright (c) 2012 Marvell Technology Ltd.
- * Yunfan Zhang <yfzhang@marvell.com>
- *
- * This package is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- */
+// SPDX-License-Identifier: GPL-2.0
+//
+// FAN53555 Fairchild Digitally Programmable TinyBuck Regulator Driver.
+//
+// Supported Part Numbers:
+// FAN53555UC00X/01X/03X/04X/05X
+//
+// Copyright (c) 2012 Marvell Technology Ltd.
+// Yunfan Zhang <yfzhang@marvell.com>
+
 #include <linux/module.h>
 #include <linux/param.h>
 #include <linux/err.h>
@@ -62,6 +58,8 @@
 #define CTL_SLEW_MASK		(0x7 << 4)
 #define CTL_SLEW_SHIFT		4
 #define CTL_RESET			(1 << 2)
+#define CTL_MODE_VSEL0_MODE	BIT(0)
+#define CTL_MODE_VSEL1_MODE	BIT(1)
 
 #define RK_VSEL_NSEL_MASK	0xff
 
@@ -77,10 +75,19 @@
 #define FAN53555_NVOLTAGES_160	160	/* Numbers of voltages */
 
 enum fan53555_vendor {
-	FAN53555_VENDOR_FAIRCHILD = 0,
+	FAN53526_VENDOR_FAIRCHILD = 0,
+	FAN53555_VENDOR_FAIRCHILD,
 	FAN53555_VENDOR_RK,
 	FAN53555_VENDOR_SILERGY,
 	FAN53555_VENDOR_TCS,
+};
+
+enum {
+	FAN53526_CHIP_ID_01 = 1,
+};
+
+enum {
+	FAN53526_CHIP_REV_08 = 8,
 };
 
 /* IC Type */
@@ -102,6 +109,7 @@ enum {
 
 enum {
 	SILERGY_SYR82X = 8,
+	SILERGY_SYR83X = 9,
 };
 
 struct fan53555_device_info {
@@ -198,20 +206,6 @@ static int fan53555_set_suspend_disable(struct regulator_dev *rdev)
 
 	return regmap_update_bits(di->regmap, di->sleep_en_reg,
 				  VSEL_BUCK_EN, 0);
-}
-
-static int fan53555_resume(struct regulator_dev *rdev)
-{
-	int ret;
-
-	if (!rdev->constraints->state_mem.changeable)
-		return 0;
-
-	ret = fan53555_set_suspend_enable(rdev);
-	if (ret)
-		return ret;
-
-	return regulator_suspend_enable(rdev, PM_SUSPEND_MEM);
 }
 
 static int fan53555_set_enable(struct regulator_dev *rdev)
@@ -366,8 +360,35 @@ static const struct regulator_ops fan53555_regulator_ops = {
 	.set_ramp_delay = fan53555_set_ramp,
 	.set_suspend_enable = fan53555_set_suspend_enable,
 	.set_suspend_disable = fan53555_set_suspend_disable,
-	.resume = fan53555_resume,
 };
+
+static int fan53526_voltages_setup_fairchild(struct fan53555_device_info *di)
+{
+	/* Init voltage range and step */
+	switch (di->chip_id) {
+	case FAN53526_CHIP_ID_01:
+		switch (di->chip_rev) {
+		case FAN53526_CHIP_REV_08:
+			di->vsel_min = 600000;
+			di->vsel_step = 6250;
+			break;
+		default:
+			dev_err(di->dev,
+				"Chip ID %d with rev %d not supported!\n",
+				di->chip_id, di->chip_rev);
+			return -EINVAL;
+		}
+		break;
+	default:
+		dev_err(di->dev,
+			"Chip ID %d not supported!\n", di->chip_id);
+		return -EINVAL;
+	}
+
+	di->n_voltages = FAN53555_NVOLTAGES_64;
+
+	return 0;
+}
 
 static int fan53555_voltages_setup_fairchild(struct fan53555_device_info *di)
 {
@@ -467,6 +488,7 @@ static int fan53555_voltages_setup_silergy(struct fan53555_device_info *di)
 	/* Init voltage range and step */
 	switch (di->chip_id) {
 	case SILERGY_SYR82X:
+	case SILERGY_SYR83X:
 		di->vsel_min = 712500;
 		di->vsel_step = 12500;
 		break;
@@ -544,7 +566,21 @@ static int fan53555_device_setup(struct fan53555_device_info *di,
 	di->en_reg = di->vol_reg;
 	di->sleep_en_reg = di->sleep_reg;
 
+	/* Setup voltage range */
 	switch (di->vendor) {
+	case FAN53526_VENDOR_FAIRCHILD:
+		di->mode_reg = FAN53555_CONTROL;
+
+		switch (pdata->sleep_vsel_id) {
+		case FAN53555_VSEL_ID_0:
+			di->mode_mask = CTL_MODE_VSEL1_MODE;
+			break;
+		case FAN53555_VSEL_ID_1:
+			di->mode_mask = CTL_MODE_VSEL0_MODE;
+			break;
+		}
+		ret = fan53526_voltages_setup_fairchild(di);
+		break;
 	case FAN53555_VENDOR_FAIRCHILD:
 		ret = fan53555_voltages_setup_fairchild(di);
 		break;
@@ -633,17 +669,14 @@ static struct fan53555_platform_data *fan53555_parse_dt(struct device *dev,
 	return pdata;
 }
 
-static const struct of_device_id fan53555_dt_ids[] = {
+static const struct of_device_id __maybe_unused fan53555_dt_ids[] = {
 	{
+		.compatible = "fcs,fan53526",
+		.data = (void *)FAN53526_VENDOR_FAIRCHILD,
+	}, {
 		.compatible = "fcs,fan53555",
 		.data = (void *)FAN53555_VENDOR_FAIRCHILD
 	},  {
-		.compatible = "rockchip,rk8603",
-		.data = (void *)FAN53555_VENDOR_RK,
-	}, {
-		.compatible = "rockchip,rk8604",
-		.data = (void *)FAN53555_VENDOR_RK,
-	}, {
 		.compatible = "silergy,syr827",
 		.data = (void *)FAN53555_VENDOR_SILERGY,
 	}, {
@@ -693,11 +726,13 @@ static int fan53555_regulator_probe(struct i2c_client *client,
 	} else {
 		/* if no ramp constraint set, get the pdata ramp_delay */
 		if (!di->regulator->constraints.ramp_delay) {
-			int slew_idx = (pdata->slew_rate & 0x7)
-						? pdata->slew_rate : 0;
+			if (pdata->slew_rate >= ARRAY_SIZE(slew_rates)) {
+				dev_err(&client->dev, "Invalid slew_rate\n");
+				return -EINVAL;
+			}
 
 			di->regulator->constraints.ramp_delay
-						= slew_rates[slew_idx];
+					= slew_rates[pdata->slew_rate];
 		}
 
 		di->vendor = id->driver_data;
@@ -785,14 +820,11 @@ static void fan53555_regulator_shutdown(struct i2c_client *client)
 
 static const struct i2c_device_id fan53555_id[] = {
 	{
+		.name = "fan53526",
+		.driver_data = FAN53526_VENDOR_FAIRCHILD
+	}, {
 		.name = "fan53555",
 		.driver_data = FAN53555_VENDOR_FAIRCHILD
-	}, {
-		.name = "rk8603",
-		.driver_data = FAN53555_VENDOR_RK
-	}, {
-		.name = "rk8604",
-		.driver_data = FAN53555_VENDOR_RK
 	}, {
 		.name = "syr827",
 		.driver_data = FAN53555_VENDOR_SILERGY

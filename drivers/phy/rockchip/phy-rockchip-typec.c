@@ -1,16 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) Fuzhou Rockchip Electronics Co.Ltd
  * Author: Chris Zhong <zyw@rock-chips.com>
  *         Kever Yang <kever.yang@rock-chips.com>
- *
- * This software is licensed under the terms of the GNU General Public
- * License version 2, as published by the Free Software Foundation, and
- * may be copied, distributed, and modified under those terms.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  *
  * The ROCKCHIP Type-C PHY has two PLL clocks. The first PLL clock
  * is used for USB3, the second PLL clock is used for DP. This Type-C PHY has
@@ -42,7 +34,6 @@
  * This Type-C PHY driver supports normal and flip orientation. The orientation
  * is reported by the EXTCON_PROP_USB_TYPEC_POLARITY property: true is flip
  * orientation, false is normal orientation.
- *
  */
 
 #include <linux/clk.h>
@@ -393,7 +384,7 @@ struct usb3phy_reg {
 };
 
 /**
- * struct rockchip_usb3phy_port_cfg: usb3-phy port configuration.
+ * struct rockchip_usb3phy_port_cfg - usb3-phy port configuration.
  * @reg: the base address for usb3-phy config.
  * @typec_conn_dir: the register of type-c connector direction.
  * @usb3tousb2_en: the register of type-c force usb2 to usb2 enable.
@@ -843,56 +834,65 @@ static void tcphy_rx_usb3_cfg_lane(struct rockchip_typec_phy *tcphy, u32 lane)
 	writel(0xfb, tcphy->base + XCVR_DIAG_BIDI_CTRL(lane));
 }
 
-static void tcphy_dp_cfg_lane(struct rockchip_typec_phy *tcphy, u32 lane)
+static void tcphy_dp_cfg_lane(struct rockchip_typec_phy *tcphy, int link_rate,
+			      u8 swing, u8 pre_emp, u32 lane)
 {
+	u16 val;
+
 	writel(0xbefc, tcphy->base + XCVR_PSM_RCTRL(lane));
 	writel(0x6799, tcphy->base + TX_PSC_A0(lane));
 	writel(0x6798, tcphy->base + TX_PSC_A1(lane));
 	writel(0x98, tcphy->base + TX_PSC_A2(lane));
 	writel(0x98, tcphy->base + TX_PSC_A3(lane));
+
+	writel(tcphy->config[swing][pre_emp].swing,
+	       tcphy->base + TX_TXCC_MGNFS_MULT_000(lane));
+	writel(tcphy->config[swing][pre_emp].pe,
+	       tcphy->base + TX_TXCC_CPOST_MULT_00(lane));
+
+	if (swing == 2 && pre_emp == 0 && link_rate != 540000) {
+		writel(0x700, tcphy->base + TX_DIAG_TX_DRV(lane));
+		writel(0x13c, tcphy->base + TX_TXCC_CAL_SCLR_MULT(lane));
+	} else {
+		writel(0x128, tcphy->base + TX_TXCC_CAL_SCLR_MULT(lane));
+		writel(0x0400, tcphy->base + TX_DIAG_TX_DRV(lane));
+	}
+
+	val = readl(tcphy->base + XCVR_DIAG_PLLDRC_CTRL(lane));
+	val = val & 0x8fff;
+	switch (link_rate) {
+	case 540000:
+		val |= (5 << 12);
+		break;
+	case 162000:
+	case 270000:
+	default:
+		val |= (6 << 12);
+		break;
+	}
+	writel(val, tcphy->base + XCVR_DIAG_PLLDRC_CTRL(lane));
 }
 
 int tcphy_dp_set_phy_config(struct phy *phy, int link_rate,
 			    int lane_count, u8 swing, u8 pre_emp)
 {
 	struct rockchip_typec_phy *tcphy = phy_get_drvdata(phy);
-	u8 i, j, lane;
-	u32 val;
+	u8 i;
 
 	if (!phy->power_count)
 		return -EPERM;
 
-	if (lane_count == 4) {
-		i = 0;
-		j = 3;
+	if (tcphy->mode == MODE_DFP_DP) {
+		for (i = 0; i < 4; i++)
+			tcphy_dp_cfg_lane(tcphy, link_rate, swing, pre_emp, i);
 	} else {
 		if (tcphy->flip) {
-			i = 0;
-			j = 1;
+			tcphy_dp_cfg_lane(tcphy, link_rate, swing, pre_emp, 0);
+			tcphy_dp_cfg_lane(tcphy, link_rate, swing, pre_emp, 1);
 		} else {
-			i = 2;
-			j = 3;
+			tcphy_dp_cfg_lane(tcphy, link_rate, swing, pre_emp, 2);
+			tcphy_dp_cfg_lane(tcphy, link_rate, swing, pre_emp, 3);
 		}
-	}
-
-	for (lane = i; lane <= j; lane++) {
-		writel(tcphy->config[swing][pre_emp].swing,
-		       tcphy->base + TX_TXCC_MGNFS_MULT_000(lane));
-		writel(tcphy->config[swing][pre_emp].pe,
-		       tcphy->base + TX_TXCC_CPOST_MULT_00(lane));
-
-		if (swing == 2 && pre_emp == 0 && link_rate != 540000) {
-			writel(0x700, tcphy->base + TX_DIAG_TX_DRV(lane));
-			writel(0x13c, tcphy->base + TX_TXCC_CAL_SCLR_MULT(lane));
-		} else {
-			writel(0x128, tcphy->base + TX_TXCC_CAL_SCLR_MULT(lane));
-			writel(0x0400, tcphy->base + TX_DIAG_TX_DRV(lane));
-		}
-
-		val = readl(tcphy->base + XCVR_DIAG_PLLDRC_CTRL(lane));
-		val &= ~GENMASK(14, 12);
-		val |= ((link_rate == 540000) ? 0x5 : 0x6) << 12;
-		writel(val, tcphy->base + XCVR_DIAG_PLLDRC_CTRL(lane));
 	}
 
 	return 0;
@@ -1277,20 +1277,20 @@ static int tcphy_phy_init(struct rockchip_typec_phy *tcphy, u8 mode)
 		tcphy_cfg_usb3_to_usb2_only(tcphy, true);
 		tcphy_cfg_dp_pll(tcphy, DP_DEFAULT_RATE);
 		for (i = 0; i < 4; i++)
-			tcphy_dp_cfg_lane(tcphy, i);
+			tcphy_dp_cfg_lane(tcphy, DP_DEFAULT_RATE, 0, 0, i);
 	} else {
 		tcphy_cfg_usb3_pll(tcphy);
 		tcphy_cfg_dp_pll(tcphy, DP_DEFAULT_RATE);
 		if (tcphy->flip) {
 			tcphy_tx_usb3_cfg_lane(tcphy, 3);
 			tcphy_rx_usb3_cfg_lane(tcphy, 2);
-			tcphy_dp_cfg_lane(tcphy, 0);
-			tcphy_dp_cfg_lane(tcphy, 1);
+			tcphy_dp_cfg_lane(tcphy, DP_DEFAULT_RATE, 0, 0, 0);
+			tcphy_dp_cfg_lane(tcphy, DP_DEFAULT_RATE, 0, 0, 1);
 		} else {
 			tcphy_tx_usb3_cfg_lane(tcphy, 0);
 			tcphy_rx_usb3_cfg_lane(tcphy, 1);
-			tcphy_dp_cfg_lane(tcphy, 2);
-			tcphy_dp_cfg_lane(tcphy, 3);
+			tcphy_dp_cfg_lane(tcphy, DP_DEFAULT_RATE, 0, 0, 2);
+			tcphy_dp_cfg_lane(tcphy, DP_DEFAULT_RATE, 0, 0, 3);
 		}
 	}
 
@@ -1683,8 +1683,8 @@ static int rockchip_typec_phy_probe(struct platform_device *pdev)
 	}
 
 	if (!tcphy->port_cfgs) {
-		dev_err(dev, "no phy-config can be matched with %s node\n",
-			np->name);
+		dev_err(dev, "no phy-config can be matched with %pOFn node\n",
+			np);
 		return -EINVAL;
 	}
 
@@ -1714,18 +1714,18 @@ static int rockchip_typec_phy_probe(struct platform_device *pdev)
 	for_each_available_child_of_node(np, child_np) {
 		struct phy *phy;
 
-		if (!of_node_cmp(child_np->name, "dp-port"))
+		if (of_node_name_eq(child_np, "dp-port"))
 			phy = devm_phy_create(dev, child_np,
 					      &rockchip_dp_phy_ops);
-		else if (!of_node_cmp(child_np->name, "usb3-port"))
+		else if (of_node_name_eq(child_np, "usb3-port"))
 			phy = devm_phy_create(dev, child_np,
 					      &rockchip_usb3_phy_ops);
 		else
 			continue;
 
 		if (IS_ERR(phy)) {
-			dev_err(dev, "failed to create phy: %s\n",
-				child_np->name);
+			dev_err(dev, "failed to create phy: %pOFn\n",
+				child_np);
 			pm_runtime_disable(dev);
 			return PTR_ERR(phy);
 		}

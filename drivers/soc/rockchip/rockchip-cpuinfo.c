@@ -81,12 +81,15 @@ static int rockchip_cpuinfo_probe(struct platform_device *pdev)
 
 	kfree(efuse_buf);
 
+	dev_info(dev, "SoC\t\t: %lx\n", rockchip_soc_id);
+
+#ifdef CONFIG_NO_GKI
 	system_serial_low = crc32(0, buf, 8);
 	system_serial_high = crc32(system_serial_low, buf + 8, 8);
 
-	dev_info(dev, "SoC\t\t: %lx\n", rockchip_soc_id);
 	dev_info(dev, "Serial\t\t: %08x%08x\n",
 		 system_serial_high, system_serial_low);
+#endif
 
 	return 0;
 }
@@ -192,8 +195,11 @@ static void rk3568_init(void)
 	rk356x_set_cpu_version();
 }
 
-static int __init rockchip_soc_id_init(void)
+int __init rockchip_soc_id_init(void)
 {
+	if (rockchip_soc_id)
+		return 0;
+
 	if (cpu_is_rk3288()) {
 		rk3288_init();
 	} else if (cpu_is_rk312x()) {

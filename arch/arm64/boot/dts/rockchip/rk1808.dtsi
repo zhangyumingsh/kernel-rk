@@ -21,7 +21,6 @@
 	#size-cells = <2>;
 
 	aliases {
-		ethernet0 = &gmac;
 		i2c0 = &i2c0;
 		i2c1 = &i2c1;
 		i2c2 = &i2c2;
@@ -237,14 +236,6 @@
 			bus-id = <4>;
 			cfg-val = <0x12c0>;
 			enable-msk = <0x4001>;
-			status = "disabled";
-		};
-	};
-
-	firmware {
-		optee: optee {
-			compatible = "linaro,optee-tz";
-			method = "smc";
 			status = "disabled";
 		};
 	};

@@ -38,14 +38,41 @@
 #include "common.h"
 #include "capture_v1x.h"
 #include "capture_v2x.h"
+#include "capture_v3x.h"
 #include "isp_ispp.h"
 
-#define RDBK_MAX		3
-#define RDBK_L			0
-#define RDBK_M			1
-#define RDBK_S			2
+#define SP_VDEV_NAME DRIVER_NAME	"_selfpath"
+#define MP_VDEV_NAME DRIVER_NAME	"_mainpath"
+#define FBC_VDEV_NAME DRIVER_NAME	"_fbcpath"
+#define BP_VDEV_NAME DRIVER_NAME	"_fullpath"
+#define VIR_VDEV_NAME DRIVER_NAME	"_iqtool"
+
+#define DMATX0_VDEV_NAME DRIVER_NAME	"_rawwr0"
+#define DMATX1_VDEV_NAME DRIVER_NAME	"_rawwr1"
+#define DMATX2_VDEV_NAME DRIVER_NAME	"_rawwr2"
+#define DMATX3_VDEV_NAME DRIVER_NAME	"_rawwr3"
 
 struct rkisp_stream;
+
+enum {
+	RDBK_L,
+	RDBK_M,
+	RDBK_S,
+	RDBK_MAX,
+};
+
+enum {
+	RKISP_STREAM_MP,
+	RKISP_STREAM_SP,
+	RKISP_STREAM_DMATX0,
+	RKISP_STREAM_DMATX1,
+	RKISP_STREAM_DMATX2,
+	RKISP_STREAM_DMATX3,
+	RKISP_STREAM_FBC,
+	RKISP_STREAM_BP,
+	RKISP_STREAM_VIR,
+	RKISP_MAX_STREAM,
+};
 
 /*
  * @fourcc: pixel format
@@ -109,11 +136,10 @@ struct rkisp_stream_dmarx {
 struct stream_config {
 	const struct capture_fmt *fmts;
 	int fmt_size;
-	/* constrains */
-	const int max_rsz_width;
-	const int max_rsz_height;
-	const int min_rsz_width;
-	const int min_rsz_height;
+	int max_rsz_width;
+	int max_rsz_height;
+	int min_rsz_width;
+	int min_rsz_height;
 	const int frame_end_id;
 	/* registers */
 	struct {
@@ -175,7 +201,7 @@ struct streams_ops {
 	void (*stop_mi)(struct rkisp_stream *stream);
 	void (*enable_mi)(struct rkisp_stream *stream);
 	void (*disable_mi)(struct rkisp_stream *stream);
-	void (*set_data_path)(void __iomem *base);
+	void (*set_data_path)(struct rkisp_stream *stream);
 	bool (*is_stream_stopped)(void __iomem *base);
 	void (*update_mi)(struct rkisp_stream *stream);
 	int (*frame_end)(struct rkisp_stream *stream);
@@ -225,6 +251,8 @@ struct rkisp_stream {
 	unsigned int burst;
 	atomic_t sequence;
 	struct frame_debug_info dbg;
+	u8 conn_id;
+	u32 memory;
 	union {
 		struct rkisp_stream_sp sp;
 		struct rkisp_stream_mp mp;
@@ -233,11 +261,21 @@ struct rkisp_stream {
 	} u;
 };
 
+struct rkisp_vir_cpy {
+	struct work_struct work;
+	struct completion cmpl;
+	struct list_head queue;
+	struct rkisp_stream *stream;
+};
+
 struct rkisp_capture_device {
 	struct rkisp_device *ispdev;
 	struct rkisp_stream stream[RKISP_MAX_STREAM];
 	struct rkisp_buffer *rdbk_buf[RDBK_MAX];
+	struct rkisp_vir_cpy vir_cpy;
 	atomic_t refcnt;
+	u32 wait_line;
+	bool is_done_early;
 };
 
 extern struct stream_config rkisp_mp_stream_config;

@@ -1,7 +1,7 @@
 /*
  * Packet dump helper functions
  *
- * Copyright (C) 1999-2019, Broadcom.
+ * Copyright (C) 2020, Broadcom.
  *
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -17,14 +17,10 @@
  * derived from this software.  The special exception does not apply to any
  * modifications of the software.
  *
- *      Notwithstanding the above, under no circumstances may you combine this
- * software in any way with any other Broadcom software provided under a license
- * other than the GPL, without Broadcom's express prior written consent.
- *
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: dhd_linux_pktdump.c 820929 2019-05-21 14:09:11Z $
+ * $Id$
  */
 
 #include <typedefs.h>
@@ -275,6 +271,8 @@ static const char tx_pktfate[][30] = {
 		} \
 	} while (0)
 
+#define UDP_PORT_DNS	53	/* UDP DNS port */
+
 /* EAPOL header */
 typedef struct eapol_header {
 	struct ether_header eth;	/* 802.3/Ethernet header */
@@ -316,6 +314,11 @@ typedef struct eapol_key_hdr {
 	uint16 data_len;			/* Key Data Length */
 	uint8 data[WPA_KEY_DATA_LEN];		/* Key data */
 } PACKED_STRUCT eapol_key_hdr_t;
+
+typedef struct hdr_fmt {
+	struct ipv4_hdr iph;
+	struct bcmudp_hdr udph;
+} PACKED_STRUCT hdr_fmt_t;
 
 msg_eapol_t
 dhd_is_4way_msg(uint8 *pktdata)
@@ -410,19 +413,31 @@ dhd_dump_pkt(dhd_pub_t *dhdp, int ifidx, uint8 *pktdata, uint32 pktlen,
 		return;
 	}
 
+#if defined(BCMPCIE) && defined(DHD_PKT_LOGGING)
+	if (tx && !pkthash && !pktfate) {
+		return;
+	}
+#endif /* BCMPCIE && DHD_PKT_LOGGING */
+
 	eh = (struct ether_header *)pktdata;
 	ether_type = ntoh16(eh->ether_type);
 	if (ether_type == ETHER_TYPE_802_1X) {
 		dhd_dump_eapol_message(dhdp, ifidx, pktdata, pktlen,
 			tx, pkthash, pktfate);
 	}
-	if (ntoh16(eh->ether_type) == ETHER_TYPE_IP) {
-		dhd_dhcp_dump(dhdp, ifidx, pktdata, tx, pkthash, pktfate);
-		dhd_icmp_dump(dhdp, ifidx, pktdata, tx, pkthash, pktfate);
-		dhd_dns_dump(dhdp, ifidx, pktdata, tx, pkthash, pktfate);
+	if (ether_type == ETHER_TYPE_IP) {
+		if (dhd_check_dhcp(pktdata)) {
+			dhd_dhcp_dump(dhdp, ifidx, pktdata, tx, pkthash, pktfate);
+		} else if (dhd_check_icmp(pktdata)) {
+			dhd_icmp_dump(dhdp, ifidx, pktdata, tx, pkthash, pktfate);
+		} else if (dhd_check_dns(pktdata)) {
+			dhd_dns_dump(dhdp, ifidx, pktdata, tx, pkthash, pktfate);
+		}
 	}
-	if (ntoh16(eh->ether_type) == ETHER_TYPE_ARP) {
-		dhd_arp_dump(dhdp, ifidx, pktdata, tx, pkthash, pktfate);
+	if (ether_type == ETHER_TYPE_ARP) {
+		if (dhd_check_arp(pktdata, ether_type)) {
+			dhd_arp_dump(dhdp, ifidx, pktdata, tx, pkthash, pktfate);
+		}
 	}
 	dhd_trx_pkt_dump(dhdp, ifidx, pktdata, pktlen, tx);
 }
@@ -985,6 +1000,47 @@ dhd_dump_eapol_message(dhd_pub_t *dhd, int ifidx, uint8 *pktdata,
 }
 #endif /* DHD_8021X_DUMP */
 
+bool
+dhd_check_ip_prot(uint8 *pktdata, uint16 ether_type)
+{
+	hdr_fmt_t *b = (hdr_fmt_t *)&pktdata[ETHER_HDR_LEN];
+	struct ipv4_hdr *iph = &b->iph;
+
+	/* check IP header */
+	if ((ether_type != ETHER_TYPE_IP) ||
+		(IPV4_HLEN(iph) < IPV4_HLEN_MIN) ||
+		(IP_VER(iph) != IP_VER_4)) {
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
+bool
+dhd_check_dhcp(uint8 *pktdata)
+{
+	hdr_fmt_t *b = (hdr_fmt_t *)&pktdata[ETHER_HDR_LEN];
+	struct ipv4_hdr *iph = &b->iph;
+
+	if (IPV4_PROT(iph) != IP_PROT_UDP) {
+		return FALSE;
+	}
+
+	/* check UDP port for bootp (67, 68) */
+	if (b->udph.src_port != htons(DHCP_PORT_SERVER) &&
+	        b->udph.src_port != htons(DHCP_PORT_CLIENT) &&
+	        b->udph.dst_port != htons(DHCP_PORT_SERVER) &&
+	        b->udph.dst_port != htons(DHCP_PORT_CLIENT)) {
+	        return FALSE;
+	}
+
+	/* check header length */
+	if (ntohs(iph->tot_len) < ntohs(b->udph.len) + sizeof(struct bcmudp_hdr)) {
+	        return FALSE;
+	}
+	return TRUE;
+}
+
 #ifdef DHD_DHCP_DUMP
 #define BOOTP_CHADDR_LEN		16
 #define BOOTP_SNAME_LEN			64
@@ -1043,11 +1099,13 @@ static char dhcp_types[][10] = {
 	"NA", "DISCOVER", "OFFER", "REQUEST", "DECLINE", "ACK", "NAK", "RELEASE", "INFORM"
 };
 
+#ifdef DHD_STATUS_LOGGING
 static const int dhcp_types_stat[9] = {
 	ST(INVALID), ST(DHCP_DISCOVER), ST(DHCP_OFFER), ST(DHCP_REQUEST),
 	ST(DHCP_DECLINE), ST(DHCP_ACK), ST(DHCP_NAK), ST(DHCP_RELEASE),
 	ST(DHCP_INFORM)
 };
+#endif /* DHD_STATUS_LOGGING */
 
 void
 dhd_dhcp_dump(dhd_pub_t *dhdp, int ifidx, uint8 *pktdata, bool tx,
@@ -1065,26 +1123,6 @@ dhd_dhcp_dump(dhd_pub_t *dhdp, int ifidx, uint8 *pktdata, bool tx,
 
 	if (!(dump_msg_level & DUMP_DHCP_VAL))
 		return;
-
-	/* check IP header */
-	if ((IPV4_HLEN(iph) < IPV4_HLEN_MIN) ||
-		IP_VER(iph) != IP_VER_4 ||
-		IPV4_PROT(iph) != IP_PROT_UDP) {
-		return;
-	}
-
-	/* check UDP port for bootp (67, 68) */
-	if (b->udph.src_port != htons(DHCP_PORT_SERVER) &&
-		b->udph.src_port != htons(DHCP_PORT_CLIENT) &&
-		b->udph.dst_port != htons(DHCP_PORT_SERVER) &&
-		b->udph.dst_port != htons(DHCP_PORT_CLIENT)) {
-		return;
-	}
-
-	/* check header length */
-	if (ntohs(iph->tot_len) < ntohs(b->udph.len) + sizeof(struct bcmudp_hdr)) {
-		return;
-	}
 	bcm_ip_ntoa((struct ipv4_addr *)iph->src_ip, sabuf);
 	bcm_ip_ntoa((struct ipv4_addr *)iph->dst_ip, dabuf);
 	bcm_ether_ntoa((struct ether_addr *)pktdata, deabuf);
@@ -1124,6 +1162,23 @@ dhd_dhcp_dump(dhd_pub_t *dhdp, int ifidx, uint8 *pktdata, bool tx,
 	}
 }
 #endif /* DHD_DHCP_DUMP */
+
+bool
+dhd_check_icmp(uint8 *pktdata)
+{
+	uint8 *pkt = (uint8 *)&pktdata[ETHER_HDR_LEN];
+	struct ipv4_hdr *iph = (struct ipv4_hdr *)pkt;
+
+	if (IPV4_PROT(iph) != IP_PROT_ICMP) {
+		return FALSE;
+	}
+
+	/* check header length */
+	if (ntohs(iph->tot_len) - IPV4_HLEN(iph) < sizeof(struct bcmicmp_hdr)) {
+		return FALSE;
+	}
+	return TRUE;
+}
 
 #ifdef DHD_ICMP_DUMP
 #define ICMP_TYPE_DEST_UNREACH		3
@@ -1174,18 +1229,6 @@ dhd_icmp_dump(dhd_pub_t *dhdp, int ifidx, uint8 *pktdata, bool tx,
 	if (!(dump_msg_level & DUMP_ICMP_VAL))
 		return;
 
-	/* check IP header */
-	if ((IPV4_HLEN(iph) < IPV4_HLEN_MIN) ||
-		IP_VER(iph) != IP_VER_4 ||
-		IPV4_PROT(iph) != IP_PROT_ICMP) {
-		return;
-	}
-
-	/* check header length */
-	if (ntohs(iph->tot_len) - IPV4_HLEN(iph) < sizeof(struct bcmicmp_hdr)) {
-		return;
-	}
-
 	ifname = dhd_ifname(dhdp, ifidx);
 	cond = (tx && pktfate) ? FALSE : TRUE;
 	icmph = (struct bcmicmp_hdr *)((uint8 *)pkt + sizeof(struct ipv4_hdr));
@@ -1214,7 +1257,32 @@ dhd_icmp_dump(dhd_pub_t *dhdp, int ifidx, uint8 *pktdata, bool tx,
 }
 #endif /* DHD_ICMP_DUMP */
 
+bool
+dhd_check_arp(uint8 *pktdata, uint16 ether_type)
+{
+	uint8 *pkt = (uint8 *)&pktdata[ETHER_HDR_LEN];
+	struct bcmarp *arph = (struct bcmarp *)pkt;
+
+	/* validation check */
+	if ((ether_type != ETHER_TYPE_ARP) ||
+		(arph->htype != hton16(HTYPE_ETHERNET)) ||
+		(arph->hlen != ETHER_ADDR_LEN) ||
+		(arph->plen != 4)) {
+		return FALSE;
+	}
+	return TRUE;
+}
+
 #ifdef DHD_ARP_DUMP
+#ifdef BOARD_HIKEY
+/* On Hikey, due to continuous ARP prints
+ * DPC not scheduled. Hence rate limit the prints.
+ */
+#define DHD_PKTDUMP_ARP DHD_ERROR_RLMT
+#else
+#define DHD_PKTDUMP_ARP DHD_PKTDUMP
+#endif /* BOARD_HIKEY */
+
 #define ARP_PRINT(str) \
 	do { \
 		if (tx) { \
@@ -1273,13 +1341,6 @@ dhd_arp_dump(dhd_pub_t *dhdp, int ifidx, uint8 *pktdata, bool tx,
 	if (!(dump_msg_level & DUMP_ARP_VAL))
 		return;
 
-	/* validation check */
-	if (arph->htype != hton16(HTYPE_ETHERNET) ||
-		arph->hlen != ETHER_ADDR_LEN ||
-		arph->plen != 4) {
-		return;
-	}
-
 	ifname = dhd_ifname(dhdp, ifidx);
 	opcode = ntoh16(arph->oper);
 	cond = (tx && pktfate) ? FALSE : TRUE;
@@ -1304,6 +1365,30 @@ dhd_arp_dump(dhd_pub_t *dhdp, int ifidx, uint8 *pktdata, bool tx,
 }
 #endif /* DHD_ARP_DUMP */
 
+bool
+dhd_check_dns(uint8 *pktdata)
+{
+	hdr_fmt_t *dnsh = (hdr_fmt_t *)&pktdata[ETHER_HDR_LEN];
+	struct ipv4_hdr *iph = &dnsh->iph;
+
+	if (IPV4_PROT(iph) != IP_PROT_UDP) {
+		return FALSE;
+	}
+
+	/* check UDP port for DNS */
+	if (dnsh->udph.src_port != hton16(UDP_PORT_DNS) &&
+		dnsh->udph.dst_port != hton16(UDP_PORT_DNS)) {
+		return FALSE;
+	}
+
+	/* check header length */
+	if (ntoh16(iph->tot_len) < (ntoh16(dnsh->udph.len) +
+		sizeof(struct bcmudp_hdr))) {
+		return FALSE;
+	}
+	return TRUE;
+}
+
 #ifdef DHD_DNS_DUMP
 typedef struct dns_fmt {
 	struct ipv4_hdr iph;
@@ -1316,7 +1401,6 @@ typedef struct dns_fmt {
 	uint16 arcount;
 } PACKED_STRUCT dns_fmt_t;
 
-#define UDP_PORT_DNS		53
 #define DNS_QR_LOC		15
 #define DNS_OPCODE_LOC		11
 #define DNS_RCODE_LOC		0
@@ -1393,25 +1477,6 @@ dhd_dns_dump(dhd_pub_t *dhdp, int ifidx, uint8 *pktdata, bool tx,
 
 	if (!(dump_msg_level & DUMP_DNS_VAL))
 		return;
-
-	/* check IP header */
-	if ((IPV4_HLEN(iph) < IPV4_HLEN_MIN) ||
-		IP_VER(iph) != IP_VER_4 ||
-		IPV4_PROT(iph) != IP_PROT_UDP) {
-		return;
-	}
-
-	/* check UDP port for DNS */
-	if (dnsh->udph.src_port != hton16(UDP_PORT_DNS) &&
-		dnsh->udph.dst_port != hton16(UDP_PORT_DNS)) {
-		return;
-	}
-
-	/* check header length */
-	if (ntoh16(iph->tot_len) < (ntoh16(dnsh->udph.len) +
-		sizeof(struct bcmudp_hdr))) {
-		return;
-	}
 
 	ifname = dhd_ifname(dhdp, ifidx);
 	cond = (tx && pktfate) ? FALSE : TRUE;

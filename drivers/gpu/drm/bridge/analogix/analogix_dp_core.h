@@ -1,19 +1,16 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Header file for Analogix DP (Display Port) core interface driver.
  *
  * Copyright (C) 2012 Samsung Electronics Co., Ltd.
  * Author: Jingoo Han <jg1.han@samsung.com>
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License as published by the
- * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.
  */
 
 #ifndef _ANALOGIX_DP_CORE_H
 #define _ANALOGIX_DP_CORE_H
 
 #include <drm/drm_crtc.h>
+#include <drm/drm_bridge.h>
 #include <drm/drm_dp_helper.h>
 
 #define DP_TIMEOUT_LOOP_COUNT 100
@@ -169,9 +166,10 @@ struct analogix_dp_device {
 	struct device		*dev;
 	struct drm_device	*drm_dev;
 	struct drm_connector	connector;
-	struct drm_bridge	*bridge;
+	struct drm_bridge	bridge;
 	struct drm_dp_aux       aux;
-	struct clk		*clock;
+	struct clk_bulk_data	*clks;
+	int			nr_clks;
 	unsigned int		irq;
 	void __iomem		*reg_base;
 
@@ -182,8 +180,8 @@ struct analogix_dp_device {
 	int			dpms_mode;
 	struct gpio_desc	*hpd_gpiod;
 	bool                    force_hpd;
-	bool			psr_enable;
 	bool			fast_train_enable;
+	bool			psr_supported;
 
 	struct mutex		panel_lock;
 	bool			panel_is_prepared;
@@ -245,7 +243,7 @@ void analogix_dp_enable_scrambling(struct analogix_dp_device *dp);
 void analogix_dp_disable_scrambling(struct analogix_dp_device *dp);
 void analogix_dp_enable_psr_crc(struct analogix_dp_device *dp);
 int analogix_dp_send_psr_spd(struct analogix_dp_device *dp,
-			     struct edp_vsc_psr *vsc, bool blocking);
+			     struct dp_sdp *vsc, bool blocking);
 ssize_t analogix_dp_transfer(struct analogix_dp_device *dp,
 			     struct drm_dp_aux_msg *msg);
 void analogix_dp_set_video_format(struct analogix_dp_device *dp);

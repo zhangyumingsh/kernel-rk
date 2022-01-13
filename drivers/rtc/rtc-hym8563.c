@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Haoyu HYM8563 RTC driver
  *
@@ -6,15 +7,6 @@
  *
  * based on rtc-HYM8563
  * Copyright (C) 2010 ROCKCHIP, Inc.
- *
- * This software is licensed under the terms of the GNU General Public
- * License version 2, as published by the Free Software Foundation, and
- * may be copied, distributed, and modified under those terms.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 
 #include <linux/module.h>
@@ -102,6 +94,8 @@ static int hym8563_rtc_read_time(struct device *dev, struct rtc_time *tm)
 	int ret;
 
 	ret = i2c_smbus_read_i2c_block_data(client, HYM8563_SEC, 7, buf);
+	if (ret < 0)
+		return ret;
 
 	tm->tm_sec = bcd2bin(buf[0] & HYM8563_SEC_MASK);
 	tm->tm_min = bcd2bin(buf[1] & HYM8563_MIN_MASK);
@@ -390,7 +384,7 @@ static struct clk *hym8563_clkout_register_clk(struct hym8563 *hym8563)
 	struct i2c_client *client = hym8563->client;
 	struct device_node *node = client->dev.of_node;
 	struct clk *clk;
-	struct clk_init_data init = {};
+	struct clk_init_data init;
 	int ret;
 
 	ret = i2c_smbus_write_byte_data(client, HYM8563_CLKOUT,
@@ -540,8 +534,6 @@ static int hym8563_probe(struct i2c_client *client,
 	hym8563->client = client;
 	i2c_set_clientdata(client, hym8563);
 
-	device_set_wakeup_capable(&client->dev, true);
-
 	ret = hym8563_init_device(client);
 	if (ret) {
 		dev_err(&client->dev, "could not init device, %d\n", ret);
@@ -558,6 +550,11 @@ static int hym8563_probe(struct i2c_client *client,
 				client->irq, ret);
 			return ret;
 		}
+	}
+
+	if (client->irq > 0 ||
+	    device_property_read_bool(&client->dev, "wakeup-source")) {
+		device_init_wakeup(&client->dev, true);
 	}
 
 	/* check state of calendar information */

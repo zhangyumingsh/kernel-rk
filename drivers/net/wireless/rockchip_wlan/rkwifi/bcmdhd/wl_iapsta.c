@@ -4177,8 +4177,6 @@ wl_ext_iapsta_postinit(struct net_device *net, struct wl_if_info *cur_if)
 		if (dhd->conf->fw_type == FW_TYPE_MESH) {
 			apsta_params->csa |= (CSA_FW_BIT | CSA_DRV_BIT);
 		}
-		if (dhd->conf->vndr_ie_assocreq && strlen(dhd->conf->vndr_ie_assocreq))
-			wl_ext_add_del_ie(net, VNDR_IE_ASSOCREQ_FLAG, dhd->conf->vndr_ie_assocreq, "add");
 	} else {
 		if (cur_if->ifmode == ISTA_MODE) {
 			wl_ext_iovar_setint(cur_if->dev, "roam_off", dhd->conf->roam_off);

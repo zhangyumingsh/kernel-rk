@@ -43,6 +43,9 @@
 #define EHCI_MAX_CLKS 4
 #define hcd_to_ehci_priv(h) ((struct ehci_platform_priv *)hcd_to_ehci(h)->priv)
 
+#define BCM_USB_FIFO_THRESHOLD	0x00800040
+#define bcm_iproc_insnreg01	hostpc[0]
+
 struct ehci_platform_priv {
 	struct clk *clks[EHCI_MAX_CLKS];
 	struct reset_control *rsts;
@@ -66,7 +69,14 @@ static void ehci_rockchip_relinquish_port(struct usb_hcd *hcd, int portnum)
 	ehci_writel(ehci, portsc, status_reg);
 }
 
-static void ehci_rockchip_usic_init(struct usb_hcd *hcd)
+#define USIC_MICROFRAME_OFFSET	0x90
+#define USIC_SCALE_DOWN_OFFSET	0xa0
+#define USIC_ENABLE_OFFSET	0xb0
+#define USIC_ENABLE		BIT(0)
+#define USIC_SCALE_DOWN		BIT(2)
+#define USIC_MICROFRAME_COUNT	0x1d4d
+
+static void ehci_usic_init(struct usb_hcd *hcd)
 {
 	struct ehci_hcd *ehci = hcd_to_ehci(hcd);
 
@@ -100,6 +110,11 @@ static int ehci_platform_reset(struct usb_hcd *hcd)
 
 	if (pdata->no_io_watchdog)
 		ehci->need_io_watchdog = 0;
+
+	if (of_device_is_compatible(pdev->dev.of_node, "brcm,xgs-iproc-ehci"))
+		ehci_writel(ehci, BCM_USB_FIFO_THRESHOLD,
+			    &ehci->regs->bcm_iproc_insnreg01);
+
 	return 0;
 }
 
@@ -280,10 +295,8 @@ static int ehci_platform_probe(struct platform_device *dev)
 	}
 
 	irq = platform_get_irq(dev, 0);
-	if (irq < 0) {
-		dev_err(&dev->dev, "no irq provided");
+	if (irq < 0)
 		return irq;
-	}
 
 	hcd = usb_create_hcd(&ehci_platform_hc_driver, &dev->dev,
 			     dev_name(&dev->dev));
@@ -313,20 +326,20 @@ static int ehci_platform_probe(struct platform_device *dev)
 					  "has-transaction-translator"))
 			hcd->has_tt = 1;
 
+		if (of_device_is_compatible(dev->dev.of_node,
+					    "aspeed,ast2500-ehci") ||
+		    of_device_is_compatible(dev->dev.of_node,
+					    "aspeed,ast2600-ehci"))
+			ehci->is_aspeed = 1;
+
 		if (soc_device_match(quirk_poll_match))
 			priv->quirk_poll = true;
 
 		if (of_machine_is_compatible("rockchip,rk3288") &&
 		    of_property_read_bool(dev->dev.of_node,
-					  "rockchip-relinquish-port")) {
+					  "rockchip-relinquish-port"))
 			ehci_platform_hc_driver.relinquish_port =
 					  ehci_rockchip_relinquish_port;
-			hcd->rk3288_relinquish_port_quirk = 1;
-		}
-
-		if (of_property_read_bool(dev->dev.of_node,
-					  "rockchip-has-usic"))
-			ehci->has_usic = 1;
 
 		for (clk = 0; clk < EHCI_MAX_CLKS; clk++) {
 			priv->clks[clk] = of_clk_get(dev->dev.of_node, clk);
@@ -398,8 +411,8 @@ static int ehci_platform_probe(struct platform_device *dev)
 	if (err)
 		goto err_power;
 
-	if (ehci->has_usic)
-		ehci_rockchip_usic_init(hcd);
+	if (of_usb_get_phy_mode(dev->dev.of_node) == USBPHY_INTERFACE_MODE_HSIC)
+		ehci_usic_init(hcd);
 
 	device_wakeup_enable(hcd->self.controller);
 	device_enable_async_suspend(hcd->self.controller);
@@ -460,8 +473,7 @@ static int ehci_platform_remove(struct platform_device *dev)
 	return 0;
 }
 
-#ifdef CONFIG_PM_SLEEP
-static int ehci_platform_suspend(struct device *dev)
+static int __maybe_unused ehci_platform_suspend(struct device *dev)
 {
 	struct usb_hcd *hcd = dev_get_drvdata(dev);
 	struct usb_ehci_pdata *pdata = dev_get_platdata(dev);
@@ -483,7 +495,7 @@ static int ehci_platform_suspend(struct device *dev)
 	return ret;
 }
 
-static int ehci_platform_resume(struct device *dev)
+static int __maybe_unused ehci_platform_resume(struct device *dev)
 {
 	struct usb_hcd *hcd = dev_get_drvdata(dev);
 	struct usb_ehci_pdata *pdata = dev_get_platdata(dev);
@@ -505,12 +517,15 @@ static int ehci_platform_resume(struct device *dev)
 
 	ehci_resume(hcd, priv->reset_on_resume);
 
+	pm_runtime_disable(dev);
+	pm_runtime_set_active(dev);
+	pm_runtime_enable(dev);
+
 	if (priv->quirk_poll)
 		quirk_poll_init(priv);
 
 	return 0;
 }
-#endif /* CONFIG_PM_SLEEP */
 
 static const struct of_device_id vt8500_ehci_ids[] = {
 	{ .compatible = "via,vt8500-ehci", },
@@ -521,11 +536,13 @@ static const struct of_device_id vt8500_ehci_ids[] = {
 };
 MODULE_DEVICE_TABLE(of, vt8500_ehci_ids);
 
+#ifdef CONFIG_ACPI
 static const struct acpi_device_id ehci_acpi_match[] = {
 	{ "PNP0D20", 0 }, /* EHCI controller without debug */
 	{ }
 };
 MODULE_DEVICE_TABLE(acpi, ehci_acpi_match);
+#endif
 
 static const struct platform_device_id ehci_platform_table[] = {
 	{ "ehci-platform", 0 },
@@ -543,7 +560,7 @@ static struct platform_driver ehci_platform_driver = {
 	.shutdown	= usb_hcd_platform_shutdown,
 	.driver		= {
 		.name	= "ehci-platform",
-		.pm	= &ehci_platform_pm_ops,
+		.pm	= pm_ptr(&ehci_platform_pm_ops),
 		.of_match_table = vt8500_ehci_ids,
 		.acpi_match_table = ACPI_PTR(ehci_acpi_match),
 	}

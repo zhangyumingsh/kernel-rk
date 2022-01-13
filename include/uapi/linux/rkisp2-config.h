@@ -10,13 +10,12 @@
 #include <linux/types.h>
 #include <linux/v4l2-controls.h>
 
-#define RKISP_API_VERSION		KERNEL_VERSION(1, 6, 1)
+#define RKISP_API_VERSION		KERNEL_VERSION(1, 8, 0)
+
+/****************ISP SUBDEV IOCTL*****************************/
 
 #define RKISP_CMD_TRIGGER_READ_BACK \
 	_IOW('V', BASE_VIDIOC_PRIVATE + 0, struct isp2x_csi_trigger)
-
-#define RKISP_CMD_CSI_MEMORY_MODE \
-	_IOW('V', BASE_VIDIOC_PRIVATE + 1, int)
 
 #define RKISP_CMD_GET_SHARED_BUF \
 	_IOR('V', BASE_VIDIOC_PRIVATE + 2, struct rkisp_thunderboot_resmem)
@@ -35,6 +34,28 @@
 
 #define RKISP_CMD_GET_FBCBUF_FD \
 	_IOR('V', BASE_VIDIOC_PRIVATE + 7, struct isp2x_buf_idxfd)
+
+#define RKISP_CMD_GET_MESHBUF_INFO \
+	_IOWR('V', BASE_VIDIOC_PRIVATE + 8, struct rkisp_meshbuf_info)
+
+#define RKISP_CMD_SET_MESHBUF_SIZE \
+	_IOW('V', BASE_VIDIOC_PRIVATE + 9, struct rkisp_meshbuf_size)
+
+/****************ISP VIDEO IOCTL******************************/
+
+#define RKISP_CMD_GET_CSI_MEMORY_MODE \
+	_IOR('V', BASE_VIDIOC_PRIVATE + 100, int)
+
+#define RKISP_CMD_SET_CSI_MEMORY_MODE \
+	_IOW('V', BASE_VIDIOC_PRIVATE + 101, int)
+
+#define RKISP_CMD_GET_CMSK \
+	_IOR('V', BASE_VIDIOC_PRIVATE + 102, struct rkisp_cmsk_cfg)
+
+#define RKISP_CMD_SET_CMSK \
+	_IOW('V', BASE_VIDIOC_PRIVATE + 103, struct rkisp_cmsk_cfg)
+
+/*************************************************************/
 
 #define ISP2X_ID_DPCC			(0)
 #define ISP2X_ID_BLS			(1)
@@ -203,6 +224,77 @@
 
 #define ISP2X_FBCBUF_FD_NUM		64
 
+#define ISP2X_MESH_BUF_NUM		2
+
+enum isp2x_mesh_buf_stat {
+	MESH_BUF_INIT = 0,
+	MESH_BUF_WAIT2CHIP,
+	MESH_BUF_CHIPINUSE,
+};
+
+struct rkisp_meshbuf_info {
+	u64 module_id;
+	u32 unite_isp_id;
+	s32 buf_fd[ISP2X_MESH_BUF_NUM];
+	u32 buf_size[ISP2X_MESH_BUF_NUM];
+} __attribute__ ((packed));
+
+struct rkisp_meshbuf_size {
+	u64 module_id;
+	u32 unite_isp_id;
+	u32 meas_width;
+	u32 meas_height;
+} __attribute__ ((packed));
+
+struct isp2x_mesh_head {
+	enum isp2x_mesh_buf_stat stat;
+	u32 data_oft;
+} __attribute__ ((packed));
+
+#define RKISP_CMSK_WIN_MAX 8
+#define RKISP_CMSK_MOSAIC_MODE 0
+#define RKISP_CMSK_COVER_MODE 1
+
+/* struct rkisp_cmsk_win
+ * Priacy Mask Window configture, support 8 windows, and
+ * support for mainpath and selfpath output stream channel.
+ *
+ * mode: 0:mosaic mode, 1:cover mode
+ * win_index: window index 0~7. windows overlap, priority win7 > win0.
+ * cover_color_y: cover mode effective, share for stream channel when same win_index.
+ * cover_color_u: cover mode effective, share for stream channel when same win_index.
+ * cover_color_v: cover mode effective, share for stream channel when same win_index.
+ *
+ * h_offs: window horizontal offset, share for stream channel when same win_index. 2 align.
+ * v_offs: window vertical offset, share for stream channel when same win_index. 2 align.
+ * h_size: window horizontal size, share for stream channel when same win_index. 8 align.
+ * v_size: window vertical size, share for stream channel when same win_index. 8 align.
+ */
+struct rkisp_cmsk_win {
+	unsigned char mode;
+	unsigned char win_en;
+
+	unsigned char cover_color_y;
+	unsigned char cover_color_u;
+	unsigned char cover_color_v;
+
+	unsigned short h_offs;
+	unsigned short v_offs;
+	unsigned short h_size;
+	unsigned short v_size;
+} __attribute__ ((packed));
+
+/* struct rkisp_cmsk_cfg
+ * win: priacy mask window
+ * width_ro: isp full resolution, h_offs + h_size <= width_ro.
+ * height_ro: isp full resolution, v_offs + v_size <= height_ro.
+ */
+struct rkisp_cmsk_cfg {
+	struct rkisp_cmsk_win win[RKISP_CMSK_WIN_MAX];
+	unsigned int width_ro;
+	unsigned int height_ro;
+} __attribute__ ((packed));
+
 /* trigger event mode
  * T_TRY: trigger maybe with retry
  * T_TRY_YES: trigger to retry
@@ -231,11 +323,25 @@ struct isp2x_csi_trigger {
 	enum isp2x_trigger_mode mode;
 } __attribute__ ((packed));
 
-enum isp2x_csi_memory {
+/* isp csi dmatx/dmarx memory mode
+ * 0: raw12/raw10/raw8 8bit memory compact
+ * 1: raw12/raw10 16bit memory one pixel
+ *    big endian for rv1126/rv1109
+ *    |15|14|13|12|11|10| 9| 8| 7| 6| 5| 4| 3| 2| 1| 0|
+ *    | 3| 2| 1| 0| -| -| -| -|11|10| 9| 8| 7| 6| 5| 4|
+ *    little align for rk356x
+ *    |15|14|13|12|11|10| 9| 8| 7| 6| 5| 4| 3| 2| 1| 0|
+ *    | -| -| -| -|11|10| 9| 8| 7| 6| 5| 4| 3| 2| 1| 0|
+ * 2: raw12/raw10 16bit memory one pixel
+ *    big align for rv1126/rv1109/rk356x
+ *    |15|14|13|12|11|10| 9| 8| 7| 6| 5| 4| 3| 2| 1| 0|
+ *    |11|10| 9| 8| 7| 6| 5| 4| 3| 2| 1| 0| -| -| -| -|
+ */
+enum isp_csi_memory {
 	CSI_MEM_COMPACT = 0,
-	CSI_MEM_BYTE_BE,
-	CSI_MEM_BYTE_LE,
-	CSI_MEM_MAX,
+	CSI_MEM_WORD_BIG_END = 1,
+	CSI_MEM_WORD_LITTLE_ALIGN = 1,
+	CSI_MEM_WORD_BIG_ALIGN = 2,
 };
 
 struct isp2x_ispgain_buf {

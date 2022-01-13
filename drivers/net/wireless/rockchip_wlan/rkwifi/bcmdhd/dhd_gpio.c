@@ -1,4 +1,4 @@
-
+/* SPDX-License-Identifier: GPL-2.0 */
 #include <osl.h>
 #include <dhd_linux.h>
 #include <linux/gpio.h>
@@ -267,7 +267,9 @@ int dhd_wlan_init_gpio(void)
 #ifdef CUSTOMER_OOB
 	int host_oob_irq = -1;
 	uint host_oob_irq_flags = 0;
-	int irq_flags;
+#endif
+#ifdef HW_OOB
+	int irq_flags = -1;
 #endif
 
 	/* Please check your schematic and fill right GPIO number which connected to

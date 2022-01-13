@@ -27,8 +27,20 @@
 #define MPP_CLASS_NAME		"mpp_class"
 #define MPP_SERVICE_NAME	"mpp_service"
 
-#define MPP_REGISTER_DRIVER(srv, X, x) {\
-	if (IS_ENABLED(CONFIG_ROCKCHIP_MPP_##X))\
+#define HAS_RKVDEC	IS_ENABLED(CONFIG_ROCKCHIP_MPP_RKVDEC)
+#define HAS_RKVENC	IS_ENABLED(CONFIG_ROCKCHIP_MPP_RKVENC)
+#define HAS_VDPU1	IS_ENABLED(CONFIG_ROCKCHIP_MPP_VDPU1)
+#define HAS_VEPU1	IS_ENABLED(CONFIG_ROCKCHIP_MPP_VEPU1)
+#define HAS_VDPU2	IS_ENABLED(CONFIG_ROCKCHIP_MPP_VDPU2)
+#define HAS_VEPU2	IS_ENABLED(CONFIG_ROCKCHIP_MPP_VEPU2)
+#define HAS_VEPU22	IS_ENABLED(CONFIG_ROCKCHIP_MPP_VEPU22)
+#define HAS_IEP2	IS_ENABLED(CONFIG_ROCKCHIP_MPP_IEP2)
+#define HAS_JPGDEC	IS_ENABLED(CONFIG_ROCKCHIP_MPP_JPGDEC)
+#define HAS_RKVDEC2	IS_ENABLED(CONFIG_ROCKCHIP_MPP_RKVDEC2)
+#define HAS_RKVENC2	IS_ENABLED(CONFIG_ROCKCHIP_MPP_RKVENC2)
+
+#define MPP_REGISTER_DRIVER(srv, flag, X, x) {\
+	if (flag)\
 		mpp_add_driver(srv, MPP_DRIVER_##X, &rockchip_##x##_driver, "grf_"#x);\
 	}
 
@@ -144,7 +156,7 @@ static int mpp_remove_service(struct mpp_service *srv)
 	return 0;
 }
 
-#ifdef CONFIG_PROC_FS
+#ifdef CONFIG_ROCKCHIP_MPP_PROC_FS
 static int mpp_procfs_remove(struct mpp_service *srv)
 {
 	if (srv->procfs) {
@@ -278,8 +290,9 @@ static inline int mpp_procfs_init(struct mpp_service *srv)
 
 static int mpp_service_probe(struct platform_device *pdev)
 {
-	int ret;
+	int ret, i;
 	struct mpp_service *srv = NULL;
+	struct mpp_taskqueue *queue;
 	struct device *dev = &pdev->dev;
 	struct device_node *np = dev->of_node;
 
@@ -305,17 +318,15 @@ static int mpp_service_probe(struct platform_device *pdev)
 		return -EINVAL;
 	}
 
-	if (srv->taskqueue_cnt) {
-		u32 i = 0;
-		struct mpp_taskqueue *queue;
+	for (i = 0; i < srv->taskqueue_cnt; i++) {
+		queue = mpp_taskqueue_init(dev);
+		if (!queue)
+			continue;
 
-		for (i = 0; i < srv->taskqueue_cnt; i++) {
-			queue = mpp_taskqueue_init(dev);
-			if (!queue)
-				continue;
-
-			srv->task_queues[i] = queue;
-		}
+		kthread_init_worker(&queue->worker);
+		queue->kworker_task = kthread_run(kthread_worker_fn, &queue->worker,
+						  "queue_work%d", i);
+		srv->task_queues[i] = queue;
 	}
 
 	of_property_read_u32(np, "rockchip,resetgroup-count",
@@ -350,16 +361,17 @@ static int mpp_service_probe(struct platform_device *pdev)
 	mpp_procfs_init(srv);
 
 	/* register sub drivers */
-	MPP_REGISTER_DRIVER(srv, RKVDEC, rkvdec);
-	MPP_REGISTER_DRIVER(srv, RKVENC, rkvenc);
-	MPP_REGISTER_DRIVER(srv, VDPU1, vdpu1);
-	MPP_REGISTER_DRIVER(srv, VEPU1, vepu1);
-	MPP_REGISTER_DRIVER(srv, VDPU2, vdpu2);
-	MPP_REGISTER_DRIVER(srv, VEPU2, vepu2);
-	MPP_REGISTER_DRIVER(srv, VEPU22, vepu22);
-	MPP_REGISTER_DRIVER(srv, IEP2, iep2);
-	MPP_REGISTER_DRIVER(srv, JPGDEC, jpgdec);
-	MPP_REGISTER_DRIVER(srv, RKVDEC2, rkvdec2);
+	MPP_REGISTER_DRIVER(srv, HAS_RKVDEC, RKVDEC, rkvdec);
+	MPP_REGISTER_DRIVER(srv, HAS_RKVENC, RKVENC, rkvenc);
+	MPP_REGISTER_DRIVER(srv, HAS_VDPU1, VDPU1, vdpu1);
+	MPP_REGISTER_DRIVER(srv, HAS_VEPU1, VEPU1, vepu1);
+	MPP_REGISTER_DRIVER(srv, HAS_VDPU2, VDPU2, vdpu2);
+	MPP_REGISTER_DRIVER(srv, HAS_VEPU2, VEPU2, vepu2);
+	MPP_REGISTER_DRIVER(srv, HAS_VEPU22, VEPU22, vepu22);
+	MPP_REGISTER_DRIVER(srv, HAS_IEP2, IEP2, iep2);
+	MPP_REGISTER_DRIVER(srv, HAS_JPGDEC, JPGDEC, jpgdec);
+	MPP_REGISTER_DRIVER(srv, HAS_RKVDEC2, RKVDEC2, rkvdec2);
+	MPP_REGISTER_DRIVER(srv, HAS_RKVENC2, RKVENC2, rkvenc2);
 
 	dev_info(dev, "probe success\n");
 
@@ -373,11 +385,21 @@ fail_register:
 
 static int mpp_service_remove(struct platform_device *pdev)
 {
+	struct mpp_taskqueue *queue;
 	struct device *dev = &pdev->dev;
 	struct mpp_service *srv = platform_get_drvdata(pdev);
 	int i;
 
 	dev_info(dev, "remove device\n");
+
+	for (i = 0; i < srv->taskqueue_cnt; i++) {
+		queue = srv->task_queues[i];
+		if (queue && queue->kworker_task) {
+			kthread_flush_worker(&queue->worker);
+			kthread_stop(queue->kworker_task);
+			queue->kworker_task = NULL;
+		}
+	}
 
 	/* remove sub drivers */
 	for (i = 0; i < MPP_DRIVER_BUTT; i++)

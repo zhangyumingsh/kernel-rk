@@ -12,6 +12,7 @@
 #include <media/v4l2-subdev.h>
 #include <media/videobuf2-dma-contig.h>
 #include "dev.h"
+#include "isp_external.h"
 #include "regs.h"
 
 static void get_remote_mipi_sensor(struct rkisp_device *dev,
@@ -103,14 +104,15 @@ out:
 }
 
 static int rkisp_csi_g_mbus_config(struct v4l2_subdev *sd,
-				  struct v4l2_mbus_config *config)
+				   unsigned int pad_id,
+				   struct v4l2_mbus_config *config)
 {
 	struct v4l2_subdev *remote_sd;
 
 	if (!sd)
 		return -ENODEV;
 	remote_sd = get_remote_subdev(sd);
-	return v4l2_subdev_call(remote_sd, video, g_mbus_config, config);
+	return v4l2_subdev_call(remote_sd, pad, get_mbus_config, pad_id, config);
 }
 
 static int rkisp_csi_get_set_fmt(struct v4l2_subdev *sd,
@@ -159,10 +161,10 @@ static const struct media_entity_operations rkisp_csi_media_ops = {
 static const struct v4l2_subdev_pad_ops rkisp_csi_pad_ops = {
 	.set_fmt = rkisp_csi_get_set_fmt,
 	.get_fmt = rkisp_csi_get_set_fmt,
+	.get_mbus_config = rkisp_csi_g_mbus_config,
 };
 
 static const struct v4l2_subdev_video_ops rkisp_csi_video_ops = {
-	.g_mbus_config = rkisp_csi_g_mbus_config,
 	.s_stream = rkisp_csi_s_stream,
 };
 
@@ -275,7 +277,7 @@ static int csi_config(struct rkisp_csi_device *csi)
 		bool is_feature_on = dev->hw_dev->is_feature_on;
 		u64 iq_feature = dev->hw_dev->iq_feature;
 		struct rkmodule_hdr_cfg hdr_cfg;
-		u32 val;
+		u32 val, mask;
 
 		dev->hdr.op_mode = HDR_NORMAL;
 		dev->hdr.esp_mode = HDR_NORMAL_VC;
@@ -309,15 +311,16 @@ static int csi_config(struct rkisp_csi_device *csi)
 		val = SW_CSI_ID1(csi->mipi_di[1]) |
 		      SW_CSI_ID2(csi->mipi_di[2]) |
 		      SW_CSI_ID3(csi->mipi_di[3]);
+		mask = SW_CSI_ID1(0xff) | SW_CSI_ID2(0xff) | SW_CSI_ID3(0xff);
 		/* CSI_ID0 is for dmarx when read back mode */
 		if (dev->hw_dev->is_single) {
 			val |= SW_CSI_ID0(csi->mipi_di[0]);
 			rkisp_write(dev, CSI2RX_DATA_IDS_1, val, true);
 		} else {
-			rkisp_set_bits(dev, CSI2RX_DATA_IDS_1, 0, val, true);
+			rkisp_set_bits(dev, CSI2RX_DATA_IDS_1, mask, val, true);
 			for (i = 0; i < dev->hw_dev->dev_num; i++)
 				rkisp_set_bits(dev->hw_dev->isp[i],
-					CSI2RX_DATA_IDS_1, 0, val, false);
+					CSI2RX_DATA_IDS_1, mask, val, false);
 		}
 		val = SW_CSI_ID4(csi->mipi_di[4]);
 		rkisp_write(dev, CSI2RX_DATA_IDS_2, val, true);
@@ -338,8 +341,7 @@ static int csi_config(struct rkisp_csi_device *csi)
 		rkisp_write(dev, CSI2RX_MASK_OVERFLOW, val, true);
 		val = RAW0_WR_FRAME | RAW1_WR_FRAME | RAW2_WR_FRAME |
 			MIPI_DROP_FRM | RAW_WR_SIZE_ERR | MIPI_LINECNT |
-			RAW_RD_SIZE_ERR | MIPI_FRAME_ST_VC(0xf) |
-			MIPI_FRAME_END_VC(0xf) | RAW0_Y_STATE |
+			RAW_RD_SIZE_ERR | RAW0_Y_STATE |
 			RAW1_Y_STATE | RAW2_Y_STATE;
 		rkisp_write(dev, CSI2RX_MASK_STAT, val, true);
 
@@ -436,6 +438,10 @@ int rkisp_csi_config_patch(struct rkisp_device *dev)
 	} else {
 		if (dev->isp_inp & INP_CIF) {
 			struct rkmodule_hdr_cfg hdr_cfg;
+			struct rkisp_vicap_mode mode = {
+				.name = dev->name,
+				.is_rdbk = true,
+			};
 
 			get_remote_mipi_sensor(dev, &mipi_sensor, MEDIA_ENT_F_PROC_VIDEO_COMPOSER);
 			dev->hdr.op_mode = HDR_NORMAL;
@@ -451,9 +457,33 @@ int rkisp_csi_config_patch(struct rkisp_device *dev)
 				}
 			}
 
-			/* normal read back mode */
+			/* normal read back mode for V2X */
 			if (dev->hdr.op_mode == HDR_NORMAL)
 				dev->hdr.op_mode = HDR_RDBK_FRAME1;
+
+			if (dev->isp_inp == INP_CIF && dev->hw_dev->is_single)
+				mode.is_rdbk = false;
+			v4l2_subdev_call(mipi_sensor, core, ioctl,
+					 RKISP_VICAP_CMD_MODE, &mode);
+			/* vicap direct to isp */
+			if (dev->isp_ver == ISP_V30 && !mode.is_rdbk) {
+				switch (dev->hdr.op_mode) {
+				case HDR_RDBK_FRAME3:
+					dev->hdr.op_mode = HDR_LINEX3_DDR;
+					break;
+				case HDR_RDBK_FRAME2:
+					dev->hdr.op_mode = HDR_LINEX2_DDR;
+					break;
+				default:
+					dev->hdr.op_mode = HDR_NORMAL;
+				}
+				if (dev->hdr.op_mode != HDR_NORMAL && mipi_sensor) {
+					int cnt = RKISP_VICAP_BUF_CNT;
+
+					v4l2_subdev_call(mipi_sensor, core, ioctl,
+							 RKISP_VICAP_CMD_INIT_BUF, &cnt);
+				}
+			}
 		} else {
 			switch (dev->isp_inp & 0x7) {
 			case INP_RAWRD2 | INP_RAWRD0:
@@ -467,28 +497,46 @@ int rkisp_csi_config_patch(struct rkisp_device *dev)
 			}
 		}
 
-		if (dev->hdr.op_mode == HDR_RDBK_FRAME2)
-			val = SW_HDRMGE_EN | SW_HDRMGE_MODE_FRAMEX2;
-		else if (dev->hdr.op_mode == HDR_RDBK_FRAME3)
-			val = SW_HDRMGE_EN | SW_HDRMGE_MODE_FRAMEX3;
-
 		if (!dev->hw_dev->is_mi_update)
-			rkisp_write(dev, CSI2RX_CTRL0,
-				    SW_IBUF_OP_MODE(dev->hdr.op_mode), true);
+			rkisp_unite_write(dev, CSI2RX_CTRL0,
+					  SW_IBUF_OP_MODE(dev->hdr.op_mode),
+					  true, dev->hw_dev->is_unite);
 
+		/* hdr merge */
+		switch (dev->hdr.op_mode) {
+		case HDR_RDBK_FRAME2:
+		case HDR_FRAMEX2_DDR:
+		case HDR_LINEX2_DDR:
+		case HDR_LINEX2_NO_DDR:
+			val = SW_HDRMGE_EN | SW_HDRMGE_MODE_FRAMEX2;
+			break;
+		case HDR_RDBK_FRAME3:
+		case HDR_FRAMEX3_DDR:
+		case HDR_LINEX3_DDR:
+			val = SW_HDRMGE_EN | SW_HDRMGE_MODE_FRAMEX3;
+			break;
+		default:
+			val = 0;
+		}
 		if (is_feature_on) {
 			if ((ISP2X_MODULE_HDRMGE & ~iq_feature) && (val & SW_HDRMGE_EN)) {
 				v4l2_err(&dev->v4l2_dev, "hdrmge is not supported\n");
 				return -EINVAL;
 			}
 		}
-		rkisp_write(dev, ISP_HDRMGE_BASE, val, false);
+		rkisp_unite_write(dev, ISP_HDRMGE_BASE, val, false, dev->hw_dev->is_unite);
 
-		rkisp_set_bits(dev, CSI2RX_MASK_STAT, 0, RAW_RD_SIZE_ERR, true);
+		rkisp_unite_set_bits(dev, CSI2RX_MASK_STAT, 0, RAW_RD_SIZE_ERR,
+				     true, dev->hw_dev->is_unite);
 	}
 
 	if (IS_HDR_RDBK(dev->hdr.op_mode))
-		rkisp_set_bits(dev, CTRL_SWS_CFG, 0, SW_MPIP_DROP_FRM_DIS, true);
+		rkisp_unite_set_bits(dev, CTRL_SWS_CFG, 0, SW_MPIP_DROP_FRM_DIS,
+				     true, dev->hw_dev->is_unite);
+
+	if (dev->isp_ver == ISP_V30)
+		rkisp_unite_set_bits(dev, CTRL_SWS_CFG, 0, ISP3X_SW_ACK_FRM_PRO_DIS,
+				     true, dev->hw_dev->is_unite);
 
 	memset(dev->filt_state, 0, sizeof(dev->filt_state));
 	dev->rdbk_cnt = -1;
@@ -556,6 +604,8 @@ int rkisp_register_csi_subdev(struct rkisp_device *dev,
 		csi_dev->pads[CSI_SRC_CH2].flags = MEDIA_PAD_FL_SOURCE;
 		csi_dev->pads[CSI_SRC_CH3].flags = MEDIA_PAD_FL_SOURCE;
 		csi_dev->pads[CSI_SRC_CH4].flags = MEDIA_PAD_FL_SOURCE;
+	} else if (dev->isp_ver == ISP_V30) {
+		return 0;
 	}
 
 	ret = media_entity_pads_init(&sd->entity, csi_dev->max_pad,

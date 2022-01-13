@@ -420,7 +420,7 @@
 		sound-dai = <&i2s3_2ch>;
 	};
 	simple-audio-card,codec {
-		sound-dai = <&rk809_codec>;
+		sound-dai = <&rk809_codec 0>;
 	};
 };
 
@@ -439,7 +439,8 @@
 
 &sdmmc1 {
 	max-frequency = <150000000>;
-	supports-sdio;
+	no-sd;
+	no-mmc;
 	bus-width = <4>;
 	disable-wp;
 	cap-sd-highspeed;

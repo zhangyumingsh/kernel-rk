@@ -184,7 +184,7 @@ struct rkvenc_dev {
 	struct mpp_clk_info hclk_info;
 	struct mpp_clk_info core_clk_info;
 	u32 default_max_load;
-#ifdef CONFIG_PROC_FS
+#ifdef CONFIG_ROCKCHIP_MPP_PROC_FS
 	struct proc_dir_entry *procfs;
 #endif
 	struct reset_control *rst_a;
@@ -494,7 +494,6 @@ static int rkvenc_irq(struct mpp_dev *mpp)
 
 	mpp_write(mpp, RKVENC_INT_MSK_BASE, 0x100);
 	mpp_write(mpp, RKVENC_INT_CLR_BASE, 0xffffffff);
-	udelay(5);
 	mpp_write(mpp, RKVENC_INT_STATUS_BASE, 0);
 
 	mpp_debug_leave();
@@ -714,7 +713,7 @@ static int rkvenc_init_session(struct mpp_session *session)
 	return 0;
 }
 
-#ifdef CONFIG_PROC_FS
+#ifdef CONFIG_ROCKCHIP_MPP_PROC_FS
 static int rkvenc_procfs_remove(struct mpp_dev *mpp)
 {
 	struct rkvenc_dev *enc = to_rkvenc_dev(mpp);
@@ -961,8 +960,9 @@ static struct monitor_dev_profile enc_mdevp = {
 	.high_temp_adjust = rockchip_monitor_dev_high_temp_adjust,
 };
 
-static int rv1126_get_soc_info(struct device *dev, struct device_node *np,
-			       int *bin, int *process)
+static int __maybe_unused rv1126_get_soc_info(struct device *dev,
+					      struct device_node *np,
+					      int *bin, int *process)
 {
 	int ret = 0;
 	u8 value = 0;
@@ -984,15 +984,21 @@ static int rv1126_get_soc_info(struct device *dev, struct device_node *np,
 	return ret;
 }
 
+static const struct rockchip_opp_data __maybe_unused rv1126_rkvenc_opp_data = {
+	.get_soc_info = rv1126_get_soc_info,
+};
+
 static const struct of_device_id rockchip_rkvenc_of_match[] = {
+#ifdef CONFIG_CPU_RV1126
 	{
 		.compatible = "rockchip,rv1109",
-		.data = (void *)&rv1126_get_soc_info,
+		.data = (void *)&rv1126_rkvenc_opp_data,
 	},
 	{
 		.compatible = "rockchip,rv1126",
-		.data = (void *)&rv1126_get_soc_info,
+		.data = (void *)&rv1126_rkvenc_opp_data,
 	},
+#endif
 	{},
 };
 
@@ -1001,6 +1007,7 @@ static int rkvenc_devfreq_init(struct mpp_dev *mpp)
 	struct rkvenc_dev *enc = to_rkvenc_dev(mpp);
 	struct clk *clk_core = enc->core_clk_info.clk;
 	struct devfreq_cooling_power *venc_dcp = &venc_cooling_power_data;
+	struct rockchip_opp_info opp_info = {0};
 	int ret = 0;
 
 	if (!clk_core)
@@ -1018,8 +1025,8 @@ static int rkvenc_devfreq_init(struct mpp_dev *mpp)
 		return 0;
 	}
 
-	ret = rockchip_init_opp_table(mpp->dev, rockchip_rkvenc_of_match,
-				      "leakage", "venc");
+	rockchip_get_opp_data(rockchip_rkvenc_of_match, &opp_info);
+	ret = rockchip_init_opp_table(mpp->dev, &opp_info, "leakage", "venc");
 	if (ret) {
 		dev_err(mpp->dev, "failed to init_opp_table\n");
 		return ret;
@@ -1213,7 +1220,7 @@ static int rkvenc_init(struct mpp_dev *mpp)
 
 	mpp->iommu_info->hdl = rkvenc_iommu_fault_handle;
 
-	return ret;
+	return 0;
 }
 
 static int rkvenc_exit(struct mpp_dev *mpp)
@@ -1450,6 +1457,8 @@ static int rkvenc_probe(struct platform_device *pdev)
 
 	mpp->session_max_buffers = RKVENC_SESSION_MAX_BUFFERS;
 	rkvenc_procfs_init(mpp);
+	/* register current device to mpp service */
+	mpp_dev_register_srv(mpp, mpp->srv);
 	dev_info(dev, "probing finish\n");
 
 	return 0;

@@ -1,18 +1,16 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Driver for I2C adapter in Rockchip RK3xxx SoC
  *
  * Max Schwarz <max.schwarz@online.de>
  * based on the patches by Rockchip Inc.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/i2c.h>
 #include <linux/interrupt.h>
+#include <linux/iopoll.h>
 #include <linux/errno.h>
 #include <linux/err.h>
 #include <linux/platform_device.h>
@@ -39,6 +37,7 @@
 #define REG_IEN        0x18 /* interrupt enable */
 #define REG_IPD        0x1c /* interrupt pending */
 #define REG_FCNT       0x20 /* finished count */
+#define REG_CON1       0x228 /* control register1 */
 
 /* Data buffer offsets */
 #define TXBUFFER_BASE 0x100
@@ -66,6 +65,15 @@ enum {
 #define REG_CON_STA_CFG(cfg) ((cfg) << 12)
 #define REG_CON_STO_CFG(cfg) ((cfg) << 14)
 
+enum {
+	RK_I2C_VERSION0 = 0,
+	RK_I2C_VERSION1,
+	RK_I2C_VERSION5 = 5,
+};
+
+#define REG_CON_VERSION GENMASK_ULL(24, 16)
+#define REG_CON_VERSION_SHIFT 16
+
 /* REG_MRXADDR bits */
 #define REG_MRXADDR_VALID(x) BIT(24 + (x)) /* [x*8+7:x*8] of MRX[R]ADDR valid */
 
@@ -81,6 +89,10 @@ enum {
 
 /* Disable i2c all irqs */
 #define IEN_ALL_DISABLE   0
+
+#define REG_CON1_AUTO_STOP BIT(0)
+#define REG_CON1_TRANSFER_AUTO_STOP BIT(1)
+#define REG_CON1_NACK_AUTO_STOP BIT(2)
 
 /* Constants */
 #define WAIT_TIMEOUT      1000 /* ms */
@@ -208,6 +220,7 @@ struct rk3x_i2c {
 	struct clk *clk;
 	struct clk *pclk;
 	struct notifier_block clk_rate_nb;
+	bool autostop_supported;
 
 	/* Settings */
 	struct i2c_timings t;
@@ -233,8 +246,8 @@ struct rk3x_i2c {
 	bool system_restarting;
 };
 
-static int rk3x_i2c_fill_transmit_buf(struct rk3x_i2c *i2c, bool sended);
 static void rk3x_i2c_prepare_read(struct rk3x_i2c *i2c);
+static int rk3x_i2c_fill_transmit_buf(struct rk3x_i2c *i2c, bool sended);
 
 static inline void rk3x_i2c_wake_up(struct rk3x_i2c *i2c)
 {
@@ -271,23 +284,62 @@ static inline void rk3x_i2c_disable(struct rk3x_i2c *i2c)
 	i2c_writel(i2c, val, REG_CON);
 }
 
+static bool rk3x_i2c_auto_stop(struct rk3x_i2c *i2c)
+{
+	unsigned int len, con1 = 0;
+
+	if (!i2c->autostop_supported)
+		return false;
+
+	if (!(i2c->msg->flags & I2C_M_IGNORE_NAK))
+		con1 = REG_CON1_NACK_AUTO_STOP | REG_CON1_AUTO_STOP;
+
+	if (!i2c->is_last_msg)
+		goto out;
+
+	len = i2c->msg->len - i2c->processed;
+
+	if (len > 32)
+		goto out;
+
+	i2c->state = STATE_STOP;
+
+	con1 |= REG_CON1_TRANSFER_AUTO_STOP | REG_CON1_AUTO_STOP;
+	i2c_writel(i2c, con1, REG_CON1);
+	if (con1 & REG_CON1_NACK_AUTO_STOP)
+		i2c_writel(i2c, REG_INT_STOP, REG_IEN);
+	else
+		i2c_writel(i2c, REG_INT_STOP | REG_INT_NAKRCV, REG_IEN);
+
+	return true;
+
+out:
+	i2c_writel(i2c, con1, REG_CON1);
+	return false;
+}
+
 /**
  * Generate a START condition, which triggers a REG_INT_START interrupt.
  */
 static void rk3x_i2c_start(struct rk3x_i2c *i2c)
 {
 	u32 val = i2c_readl(i2c, REG_CON) & REG_CON_TUNING_MASK;
+	bool auto_stop = rk3x_i2c_auto_stop(i2c);
 	int length = 0;
 
 	/* enable appropriate interrupts */
 	if (i2c->mode == REG_CON_MOD_TX) {
-		i2c_writel(i2c, REG_INT_MBTF | REG_INT_NAKRCV, REG_IEN);
-		i2c->state = STATE_WRITE;
+		if (!auto_stop) {
+			i2c_writel(i2c, REG_INT_MBTF | REG_INT_NAKRCV, REG_IEN);
+			i2c->state = STATE_WRITE;
+		}
 		length = rk3x_i2c_fill_transmit_buf(i2c, false);
 	} else {
 		/* in any other case, we are going to be reading. */
-		i2c_writel(i2c, REG_INT_MBRF | REG_INT_NAKRCV, REG_IEN);
-		i2c->state = STATE_READ;
+		if (!auto_stop) {
+			i2c_writel(i2c, REG_INT_MBRF | REG_INT_NAKRCV, REG_IEN);
+			i2c->state = STATE_READ;
+		}
 	}
 
 	/* enable adapter with correct mode, send START condition */
@@ -432,6 +484,7 @@ static void rk3x_i2c_handle_write(struct rk3x_i2c *i2c, unsigned int ipd)
 	/* ack interrupt */
 	i2c_writel(i2c, REG_INT_MBTF, REG_IPD);
 
+	rk3x_i2c_auto_stop(i2c);
 	/* are we finished? */
 	if (i2c->processed == i2c->msg->len)
 		rk3x_i2c_stop(i2c, i2c->error);
@@ -439,19 +492,12 @@ static void rk3x_i2c_handle_write(struct rk3x_i2c *i2c, unsigned int ipd)
 		rk3x_i2c_fill_transmit_buf(i2c, true);
 }
 
-static void rk3x_i2c_handle_read(struct rk3x_i2c *i2c, unsigned int ipd)
+static void rk3x_i2c_read(struct rk3x_i2c *i2c)
 {
 	unsigned int i;
 	unsigned int len = i2c->msg->len - i2c->processed;
-	u32 uninitialized_var(val);
+	u32 val;
 	u8 byte;
-
-	/* we only care for MBRF here. */
-	if (!(ipd & REG_INT_MBRF))
-		return;
-
-	/* ack interrupt */
-	i2c_writel(i2c, REG_INT_MBRF, REG_IPD);
 
 	/* Can only handle a maximum of 32 bytes at a time */
 	if (len > 32)
@@ -465,7 +511,21 @@ static void rk3x_i2c_handle_read(struct rk3x_i2c *i2c, unsigned int ipd)
 		byte = (val >> ((i % 4) * 8)) & 0xff;
 		i2c->msg->buf[i2c->processed++] = byte;
 	}
+}
 
+static void rk3x_i2c_handle_read(struct rk3x_i2c *i2c, unsigned int ipd)
+{
+	/* we only care for MBRF here. */
+	if (!(ipd & REG_INT_MBRF))
+		return;
+
+	/* ack interrupt */
+	i2c_writel(i2c, REG_INT_MBRF, REG_IPD);
+
+	/* read the data from receive buffer */
+	rk3x_i2c_read(i2c);
+
+	rk3x_i2c_auto_stop(i2c);
 	/* are we finished? */
 	if (i2c->processed == i2c->msg->len)
 		rk3x_i2c_stop(i2c, i2c->error);
@@ -484,12 +544,24 @@ static void rk3x_i2c_handle_stop(struct rk3x_i2c *i2c, unsigned int ipd)
 		return;
 	}
 
+	if (i2c->autostop_supported && !i2c->error) {
+		if (i2c->mode != REG_CON_MOD_TX && i2c->msg) {
+			if ((i2c->msg->len - i2c->processed) > 0)
+				rk3x_i2c_read(i2c);
+		}
+
+		i2c->processed = 0;
+		i2c->msg = NULL;
+	}
+
 	/* ack interrupt */
 	i2c_writel(i2c, REG_INT_STOP, REG_IPD);
 
 	/* disable STOP bit */
 	con = i2c_readl(i2c, REG_CON);
 	con &= ~REG_CON_STOP;
+	if (i2c->autostop_supported)
+		con &= ~REG_CON_START;
 	i2c_writel(i2c, con, REG_CON);
 
 	i2c->busy = false;
@@ -531,8 +603,13 @@ static irqreturn_t rk3x_i2c_irq(int irqno, void *dev_id)
 		ipd &= ~REG_INT_NAKRCV;
 
 		if (!(i2c->msg->flags & I2C_M_IGNORE_NAK)) {
-			rk3x_i2c_stop(i2c, -ENXIO);
-			goto out;
+			if (i2c->autostop_supported) {
+				i2c->error = -ENXIO;
+				i2c->state = STATE_STOP;
+			} else {
+				rk3x_i2c_stop(i2c, -ENXIO);
+				goto out;
+			}
 		}
 	}
 
@@ -568,9 +645,9 @@ out:
  */
 static const struct i2c_spec_values *rk3x_i2c_get_spec(unsigned int speed)
 {
-	if (speed <= 100000)
+	if (speed <= I2C_MAX_STANDARD_MODE_FREQ)
 		return &standard_mode_spec;
-	else if (speed <= 400000)
+	else if (speed <= I2C_MAX_FAST_MODE_FREQ)
 		return &fast_mode_spec;
 	else
 		return &fast_mode_plus_spec;
@@ -607,8 +684,8 @@ static int rk3x_i2c_v0_calc_timings(unsigned long clk_rate,
 	int ret = 0;
 
 	/* Only support standard-mode and fast-mode */
-	if (WARN_ON(t->bus_freq_hz > 400000))
-		t->bus_freq_hz = 400000;
+	if (WARN_ON(t->bus_freq_hz > I2C_MAX_FAST_MODE_FREQ))
+		t->bus_freq_hz = I2C_MAX_FAST_MODE_FREQ;
 
 	/* prevent scl_rate_khz from becoming 0 */
 	if (WARN_ON(t->bus_freq_hz < 1000))
@@ -787,8 +864,8 @@ static int rk3x_i2c_v1_calc_timings(unsigned long clk_rate,
 	int ret = 0;
 
 	/* Support standard-mode, fast-mode and fast-mode plus */
-	if (WARN_ON(t->bus_freq_hz > 1000000))
-		t->bus_freq_hz = 1000000;
+	if (WARN_ON(t->bus_freq_hz > I2C_MAX_FAST_MODE_PLUS_FREQ))
+		t->bus_freq_hz = I2C_MAX_FAST_MODE_PLUS_FREQ;
 
 	/* prevent scl_rate_khz from becoming 0 */
 	if (WARN_ON(t->bus_freq_hz < 1000))
@@ -1064,12 +1141,27 @@ static int rk3x_i2c_setup(struct rk3x_i2c *i2c, struct i2c_msg *msgs, int num)
 	i2c->error = 0;
 
 	rk3x_i2c_clean_ipd(i2c);
+	if (i2c->autostop_supported)
+		i2c_writel(i2c, 0, REG_CON1);
 
 	return ret;
 }
 
-static int rk3x_i2c_xfer(struct i2c_adapter *adap,
-			 struct i2c_msg *msgs, int num)
+static int rk3x_i2c_wait_xfer_poll(struct rk3x_i2c *i2c)
+{
+	ktime_t timeout = ktime_add_ms(ktime_get(), WAIT_TIMEOUT);
+
+	while (READ_ONCE(i2c->busy) &&
+	       ktime_compare(ktime_get(), timeout) < 0) {
+		udelay(5);
+		rk3x_i2c_irq(0, i2c);
+	}
+
+	return !i2c->busy;
+}
+
+static int rk3x_i2c_xfer_common(struct i2c_adapter *adap,
+				struct i2c_msg *msgs, int num, bool polling)
 {
 	struct rk3x_i2c *i2c = (struct rk3x_i2c *)adap->algo_data;
 	unsigned long timeout, flags;
@@ -1106,8 +1198,12 @@ static int rk3x_i2c_xfer(struct i2c_adapter *adap,
 
 		spin_unlock_irqrestore(&i2c->lock, flags);
 
-		timeout = wait_event_timeout(i2c->wait, !i2c->busy,
-					     msecs_to_jiffies(WAIT_TIMEOUT));
+		if (!polling) {
+			timeout = wait_event_timeout(i2c->wait, !i2c->busy,
+						     msecs_to_jiffies(WAIT_TIMEOUT));
+		} else {
+			timeout = rk3x_i2c_wait_xfer_poll(i2c);
+		}
 
 		spin_lock_irqsave(&i2c->lock, flags);
 
@@ -1144,6 +1240,18 @@ static int rk3x_i2c_xfer(struct i2c_adapter *adap,
 	return ret < 0 ? ret : num;
 }
 
+static int rk3x_i2c_xfer(struct i2c_adapter *adap,
+			 struct i2c_msg *msgs, int num)
+{
+	return rk3x_i2c_xfer_common(adap, msgs, num, false);
+}
+
+static int rk3x_i2c_xfer_polling(struct i2c_adapter *adap,
+				 struct i2c_msg *msgs, int num)
+{
+	return rk3x_i2c_xfer_common(adap, msgs, num, true);
+}
+
 static int rk3x_i2c_restart_notify(struct notifier_block *this,
 				   unsigned long mode, void *cmd)
 {
@@ -1176,6 +1284,18 @@ static int rk3x_i2c_restart_notify(struct notifier_block *this,
 	}
 
 	return NOTIFY_DONE;
+}
+
+static unsigned int rk3x_i2c_get_version(struct rk3x_i2c *i2c)
+{
+	unsigned int version;
+
+	clk_enable(i2c->pclk);
+	version = i2c_readl(i2c, REG_CON) & REG_CON_VERSION;
+	clk_disable(i2c->pclk);
+	version >>= REG_CON_VERSION_SHIFT;
+
+	return version;
 }
 
 static __maybe_unused int rk3x_i2c_suspend_noirq(struct device *dev)
@@ -1217,6 +1337,7 @@ static u32 rk3x_i2c_func(struct i2c_adapter *adap)
 
 static const struct i2c_algorithm rk3x_i2c_algorithm = {
 	.master_xfer		= rk3x_i2c_xfer,
+	.master_xfer_atomic	= rk3x_i2c_xfer_polling,
 	.functionality		= rk3x_i2c_func,
 };
 
@@ -1293,7 +1414,6 @@ static int rk3x_i2c_probe(struct platform_device *pdev)
 	struct device_node *np = pdev->dev.of_node;
 	const struct of_device_id *match;
 	struct rk3x_i2c *i2c;
-	struct resource *mem;
 	int ret = 0;
 	u32 value;
 	int irq;
@@ -1330,8 +1450,7 @@ static int rk3x_i2c_probe(struct platform_device *pdev)
 		return ret;
 	}
 
-	mem = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	i2c->regs = devm_ioremap_resource(&pdev->dev, mem);
+	i2c->regs = devm_platform_ioremap_resource(pdev, 0);
 	if (IS_ERR(i2c->regs))
 		return PTR_ERR(i2c->regs);
 
@@ -1376,10 +1495,8 @@ static int rk3x_i2c_probe(struct platform_device *pdev)
 
 	/* IRQ setup */
 	irq = platform_get_irq(pdev, 0);
-	if (irq < 0) {
-		dev_err(&pdev->dev, "cannot find rk3x IRQ\n");
+	if (irq < 0)
 		return irq;
-	}
 
 	ret = devm_request_irq(&pdev->dev, irq, rk3x_i2c_irq,
 			       0, dev_name(&pdev->dev), i2c);
@@ -1399,18 +1516,13 @@ static int rk3x_i2c_probe(struct platform_device *pdev)
 		i2c->pclk = devm_clk_get(&pdev->dev, "pclk");
 	}
 
-	if (IS_ERR(i2c->clk)) {
-		ret = PTR_ERR(i2c->clk);
-		if (ret != -EPROBE_DEFER)
-			dev_err(&pdev->dev, "Can't get bus clk: %d\n", ret);
-		return ret;
-	}
-	if (IS_ERR(i2c->pclk)) {
-		ret = PTR_ERR(i2c->pclk);
-		if (ret != -EPROBE_DEFER)
-			dev_err(&pdev->dev, "Can't get periph clk: %d\n", ret);
-		return ret;
-	}
+	if (IS_ERR(i2c->clk))
+		return dev_err_probe(&pdev->dev, PTR_ERR(i2c->clk),
+				     "Can't get bus clk\n");
+
+	if (IS_ERR(i2c->pclk))
+		return dev_err_probe(&pdev->dev, PTR_ERR(i2c->pclk),
+				     "Can't get periph clk\n");
 
 	ret = clk_prepare(i2c->clk);
 	if (ret < 0) {
@@ -1432,6 +1544,9 @@ static int rk3x_i2c_probe(struct platform_device *pdev)
 
 	clk_rate = clk_get_rate(i2c->clk);
 	rk3x_i2c_adapt_div(i2c, clk_rate);
+
+	if (rk3x_i2c_get_version(i2c) >= RK_I2C_VERSION5)
+		i2c->autostop_supported = true;
 
 	ret = i2c_add_adapter(&i2c->adap);
 	if (ret < 0)
@@ -1462,7 +1577,7 @@ static int rk3x_i2c_remove(struct platform_device *pdev)
 	return 0;
 }
 
-const static struct dev_pm_ops rk3x_i2c_pm_ops = {
+static const struct dev_pm_ops rk3x_i2c_pm_ops = {
 	SET_NOIRQ_SYSTEM_SLEEP_PM_OPS(rk3x_i2c_suspend_noirq,
 				      rk3x_i2c_resume_noirq)
 };

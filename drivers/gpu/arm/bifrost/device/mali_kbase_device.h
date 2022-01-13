@@ -1,11 +1,12 @@
+/* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 /*
  *
- * (C) COPYRIGHT 2019-2020 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2019-2021 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
  * Foundation, and any use by you of this program is subject to the terms
- * of such GNU licence.
+ * of such GNU license.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -15,8 +16,6 @@
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, you can access it online at
  * http://www.gnu.org/licenses/gpl-2.0.html.
- *
- * SPDX-License-Identifier: GPL-2.0
  *
  */
 
@@ -46,6 +45,19 @@ void kbase_device_put_list(const struct list_head *dev_list);
  * Used to increment device id on successful initialization of the device.
  */
 void kbase_increment_device_id(void);
+
+/**
+ * kbase_device_firmware_init_once - Initialize firmware and HWC
+ *
+ * @kbdev: An instance of the GPU platform device, allocated from the probe
+ *         method of the driver.
+ *
+ * When a device file is opened for the first time,
+ * load firmware and initialize hardware counter components.
+ *
+ * @return 0 on success. An error code on failure.
+ */
+int kbase_device_firmware_init_once(struct kbase_device *kbdev);
 
 /**
  * kbase_device_init - Device initialisation.
@@ -106,22 +118,42 @@ u32 kbase_reg_read(struct kbase_device *kbdev, u32 offset);
 bool kbase_is_gpu_removed(struct kbase_device *kbdev);
 
 /**
+ * kbase_gpu_cache_flush_and_busy_wait - Start a cache flush and busy wait
+ * @kbdev: Kbase device
+ * @flush_op: Flush command register value to be sent to HW
+ *
+ * Issue a cache flush command to hardware, then busy wait an irq status.
+ * This function will clear CLEAN_CACHES_COMPLETED irq mask bit set by other
+ * threads through kbase_gpu_start_cache_clean(), and wake them up manually
+ * after the busy-wait is done. Any pended cache flush commands raised by
+ * other thread are handled in this function.
+ * hwaccess_lock must be held by the caller.
+ *
+ * Return: 0 if successful or a negative error code on failure.
+ */
+int kbase_gpu_cache_flush_and_busy_wait(struct kbase_device *kbdev,
+					u32 flush_op);
+
+/**
  * kbase_gpu_start_cache_clean - Start a cache clean
  * @kbdev: Kbase device
+ * @flush_op: Flush command register value to be sent to HW
  *
- * Issue a cache clean and invalidate command to hardware. This function will
- * take hwaccess_lock.
+ * Issue a given cache flush command to hardware.
+ * This function will take hwaccess_lock.
  */
-void kbase_gpu_start_cache_clean(struct kbase_device *kbdev);
+void kbase_gpu_start_cache_clean(struct kbase_device *kbdev, u32 flush_op);
 
 /**
  * kbase_gpu_start_cache_clean_nolock - Start a cache clean
  * @kbdev: Kbase device
+ * @flush_op: Flush command register value to be sent to HW
  *
- * Issue a cache clean and invalidate command to hardware. hwaccess_lock
- * must be held by the caller.
+ * Issue a given cache flush command to hardware.
+ * hwaccess_lock must be held by the caller.
  */
-void kbase_gpu_start_cache_clean_nolock(struct kbase_device *kbdev);
+void kbase_gpu_start_cache_clean_nolock(struct kbase_device *kbdev,
+					u32 flush_op);
 
 /**
  * kbase_gpu_wait_cache_clean - Wait for cache cleaning to finish

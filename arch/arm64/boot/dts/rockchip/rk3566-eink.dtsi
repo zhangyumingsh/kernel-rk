@@ -48,12 +48,6 @@
 &dmc {
 	center-supply = <&vdd_logic>;
 	auto-freq-en = <0>;
-	system-status-level = <
-		/*system status         freq level*/
-		SYS_STATUS_NORMAL       DMC_FREQ_LEVEL_HIGH
-		SYS_STATUS_REBOOT       DMC_FREQ_LEVEL_HIGH
-		SYS_STATUS_SUSPEND      DMC_FREQ_LEVEL_LOW
-	>;
 	status = "okay";
 };
 
@@ -85,6 +79,22 @@
 		opp-hz = /bits/ 64 <150000000>;
 		opp-microvolt = <825000>;
 	};
+};
+
+&lpddr4_params {
+	/* freq info, freq_0 is final frequency, unit: MHz */
+	freq_0 = <528>;
+	freq_1 = <324>;
+	freq_2 = <324>;
+	freq_3 = <324>;
+};
+
+&lpddr4x_params {
+	/* freq info, freq_0 is final frequency, unit: MHz */
+	freq_0 = <528>;
+	freq_1 = <324>;
+	freq_2 = <324>;
+	freq_3 = <324>;
 };
 
 &rockchip_suspend {

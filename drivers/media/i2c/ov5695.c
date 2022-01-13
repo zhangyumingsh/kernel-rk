@@ -852,10 +852,10 @@ static void ov5695_get_module_inf(struct ov5695 *ov5695,
 				  struct rkmodule_inf *inf)
 {
 	memset(inf, 0, sizeof(*inf));
-	strlcpy(inf->base.sensor, OV5695_NAME, sizeof(inf->base.sensor));
-	strlcpy(inf->base.module, ov5695->module_name,
+	strscpy(inf->base.sensor, OV5695_NAME, sizeof(inf->base.sensor));
+	strscpy(inf->base.module, ov5695->module_name,
 		sizeof(inf->base.module));
-	strlcpy(inf->base.lens, ov5695->len_name, sizeof(inf->base.lens));
+	strscpy(inf->base.lens, ov5695->len_name, sizeof(inf->base.lens));
 }
 
 static long ov5695_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
@@ -906,8 +906,11 @@ static long ov5695_compat_ioctl32(struct v4l2_subdev *sd,
 		}
 
 		ret = ov5695_ioctl(sd, cmd, inf);
-		if (!ret)
+		if (!ret) {
 			ret = copy_to_user(up, inf, sizeof(*inf));
+			if (ret)
+				ret = -EFAULT;
+		}
 		kfree(inf);
 		break;
 	case RKMODULE_AWB_CFG:
@@ -920,12 +923,16 @@ static long ov5695_compat_ioctl32(struct v4l2_subdev *sd,
 		ret = copy_from_user(cfg, up, sizeof(*cfg));
 		if (!ret)
 			ret = ov5695_ioctl(sd, cmd, cfg);
+		else
+			ret = -EFAULT;
 		kfree(cfg);
 		break;
 	case RKMODULE_SET_QUICK_STREAM:
 		ret = copy_from_user(&stream, up, sizeof(u32));
 		if (!ret)
 			ret = ov5695_ioctl(sd, cmd, &stream);
+		else
+			ret = -EFAULT;
 		break;
 	default:
 		ret = -ENOIOCTLCMD;
@@ -1156,7 +1163,7 @@ static int ov5695_enum_frame_interval(struct v4l2_subdev *sd,
 	return 0;
 }
 
-static int ov5695_g_mbus_config(struct v4l2_subdev *sd,
+static int ov5695_g_mbus_config(struct v4l2_subdev *sd, unsigned int pad_id,
 				struct v4l2_mbus_config *config)
 {
 	u32 val = 0;
@@ -1164,7 +1171,7 @@ static int ov5695_g_mbus_config(struct v4l2_subdev *sd,
 	val = 1 << (OV5695_LANES - 1) |
 	      V4L2_MBUS_CSI2_CHANNEL_0 |
 	      V4L2_MBUS_CSI2_CONTINUOUS_CLOCK;
-	config->type = V4L2_MBUS_CSI2;
+	config->type = V4L2_MBUS_CSI2_DPHY;
 	config->flags = val;
 
 	return 0;
@@ -1192,7 +1199,6 @@ static const struct v4l2_subdev_core_ops ov5695_core_ops = {
 static const struct v4l2_subdev_video_ops ov5695_video_ops = {
 	.s_stream = ov5695_s_stream,
 	.g_frame_interval = ov5695_g_frame_interval,
-	.g_mbus_config = ov5695_g_mbus_config,
 };
 
 static const struct v4l2_subdev_pad_ops ov5695_pad_ops = {
@@ -1201,6 +1207,7 @@ static const struct v4l2_subdev_pad_ops ov5695_pad_ops = {
 	.enum_frame_interval = ov5695_enum_frame_interval,
 	.get_fmt = ov5695_get_fmt,
 	.set_fmt = ov5695_set_fmt,
+	.get_mbus_config = ov5695_g_mbus_config,
 };
 
 static const struct v4l2_subdev_ops ov5695_subdev_ops = {

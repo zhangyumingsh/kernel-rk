@@ -1,11 +1,12 @@
+// SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note
 /*
  *
- * (C) COPYRIGHT 2019-2020 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2019-2021 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
  * Foundation, and any use by you of this program is subject to the terms
- * of such GNU licence.
+ * of such GNU license.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -15,8 +16,6 @@
  * You should have received a copy of the GNU General Public License
  * along with this program; if not, you can access it online at
  * http://www.gnu.org/licenses/gpl-2.0.html.
- *
- * SPDX-License-Identifier: GPL-2.0
  *
  */
 
@@ -282,6 +281,13 @@ int kbase_dummy_job_wa_load(struct kbase_device *kbdev)
 	int err;
 	struct kbase_context *kctx;
 
+	/* Calls to this function are inherently asynchronous, with respect to
+	 * MMU operations.
+	 */
+	const enum kbase_caller_mmu_sync_info mmu_sync_info = CALLER_MMU_ASYNC;
+
+	lockdep_assert_held(&kbdev->fw_load_lock);
+
 	if (!wa_blob_load_needed(kbdev))
 		return 0;
 
@@ -374,8 +380,8 @@ int kbase_dummy_job_wa_load(struct kbase_device *kbdev)
 		nr_pages = PFN_UP(blob->size);
 		flags = blob->map_flags | BASE_MEM_FLAG_MAP_FIXED;
 
-		va_region = kbase_mem_alloc(kctx, nr_pages, nr_pages,
-					    0, &flags, &gpu_va);
+		va_region = kbase_mem_alloc(kctx, nr_pages, nr_pages, 0, &flags,
+					    &gpu_va, mmu_sync_info);
 
 		if (!va_region) {
 			dev_err(kbdev->dev, "Failed to allocate for blob\n");
@@ -426,6 +432,10 @@ no_ctx:
 void kbase_dummy_job_wa_cleanup(struct kbase_device *kbdev)
 {
 	struct kbase_context *wa_ctx;
+
+	/* return if the dummy job has not been loaded */
+	if (kbdev->dummy_job_wa_loaded == false)
+		return;
 
 	/* Can be safely called even if the file wasn't created on probe */
 	sysfs_remove_file(&kbdev->dev->kobj, &dev_attr_dummy_job_wa_info.attr);

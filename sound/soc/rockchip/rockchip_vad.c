@@ -252,13 +252,11 @@ static struct rockchip_vad *substream_get_drvdata(struct snd_pcm_substream *subs
 	struct rockchip_vad *vad = NULL;
 	unsigned int i;
 
-	if (PCM_RUNTIME_CHECK(substream))
-		return NULL;
 	if (!rtd)
 		return NULL;
 
 	for (i = 0; i < rtd->num_codecs; i++) {
-		struct snd_soc_dai *codec_dai = rtd->codec_dais[i];
+		struct snd_soc_dai *codec_dai = asoc_rtd_to_codec(rtd, i);
 
 		if (strstr(codec_dai->name, "vad"))
 			vad = snd_soc_component_get_drvdata(codec_dai->component);
@@ -624,6 +622,12 @@ static const struct audio_src_addr_map rk3568_addr_map[] = {
 	{ /* sentinel */ },
 };
 
+static const struct audio_src_addr_map rk3588_addr_map[] = {
+	{ 0, RK3588_PDM0 },
+	{ 1, RK3588_I2S1_8CH },
+	{ /* sentinel */ },
+};
+
 static const struct vad_soc_data rk1808es_soc_data = {
 	.version = VAD_RK1808ES,
 	.map = rk1808_addr_map,
@@ -644,13 +648,18 @@ static const struct vad_soc_data rk3568_soc_data = {
 	.map = rk3568_addr_map,
 };
 
+static const struct vad_soc_data rk3588_soc_data = {
+	.version = VAD_RK1808,
+	.map = rk3588_addr_map,
+};
+
 static int rockchip_vad_get_audio_src_address(struct rockchip_vad *vad,
 					      u32 addr)
 {
 	const struct audio_src_addr_map *map = vad->soc_data->map;
 
 	for (; map->addr; map++) {
-		if ((addr & map->addr) == addr) {
+		if ((map->addr & 0xffff0000) == addr) {
 			vad->audio_src = map->id;
 			vad->audio_src_addr = map->addr;
 			return 0;
@@ -745,7 +754,7 @@ static void rockchip_vad_params_fixup(struct snd_pcm_substream *substream,
 	unsigned int *channel_maps;
 	int i;
 
-	cpu_dai = rtd->cpu_dai;
+	cpu_dai = asoc_rtd_to_cpu(rtd, 0);
 	vad->cpu_dai = cpu_dai;
 	vad->substream = substream;
 	np = cpu_dai->dev->of_node;
@@ -1130,6 +1139,7 @@ static const struct of_device_id rockchip_vad_match[] = {
 	{ .compatible = "rockchip,rk1808-vad", .data = &rk1808_soc_data },
 	{ .compatible = "rockchip,rk3308-vad", .data = &rk3308_soc_data },
 	{ .compatible = "rockchip,rk3568-vad", .data = &rk3568_soc_data },
+	{ .compatible = "rockchip,rk3588-vad", .data = &rk3588_soc_data },
 	{},
 };
 

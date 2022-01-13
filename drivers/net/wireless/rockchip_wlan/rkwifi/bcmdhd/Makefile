@@ -1,9 +1,10 @@
+# SPDX-License-Identifier: GPL-2.0
 # bcmdhd
 
 MODULE_NAME := bcmdhd
 #CONFIG_BCMDHD := m
 
-CONFIG_BCMDHD_SDIO := y
+#CONFIG_BCMDHD_SDIO := y
 #CONFIG_BCMDHD_PCIE := y
 #CONFIG_BCMDHD_USB := y
 
@@ -16,20 +17,23 @@ CONFIG_BCMDHD_VTS := y
 CONFIG_BCMDHD_AUTO_SELECT := y
 CONFIG_BCMDHD_DEBUG := y
 #CONFIG_BCMDHD_WAPI := y
+#CONFIG_BCMDHD_RANDOM_MAC := y
 
 CONFIG_MACH_PLATFORM := y
 #CONFIG_BCMDHD_DTS := y
 
-DHDCFLAGS = -Wall -Wstrict-prototypes -Wno-date-time -Dlinux -DBCMDRIVER  \
+DHDCFLAGS = -Wall -Wstrict-prototypes -Wno-date-time                      \
+	-Dlinux -DLINUX -DBCMDRIVER -Wno-implicit-fallthrough                 \
 	-DBCMDONGLEHOST -DBCMDMA32 -DBCMFILEIMAGE                             \
-	-DDHDTHREAD -DDHD_DEBUG -DSHOW_EVENTS -DBCMDBG -DGET_OTP_MAC_ENABLE   \
+	-DDHDTHREAD -DDHD_DEBUG -DSHOW_EVENTS -DGET_OTP_MAC_ENABLE            \
 	-DWIFI_ACT_FRAME -DARP_OFFLOAD_SUPPORT -DSUPPORT_PM2_ONLY             \
 	-DKEEP_ALIVE -DPKT_FILTER_SUPPORT -DDHDTCPACK_SUPPRESS                \
-	-DDHD_DONOT_FORWARD_BCMEVENT_AS_NETWORK_PKT                           \
+	-DDHD_DONOT_FORWARD_BCMEVENT_AS_NETWORK_PKT -DOEM_ANDROID             \
 	-DMULTIPLE_SUPPLICANT -DTSQ_MULTIPLIER -DMFP -DDHD_8021X_DUMP         \
 	-DPOWERUP_MAX_RETRY=0 -DIFACE_HANG_FORCE_DEV_CLOSE -DWAIT_DEQUEUE     \
+	-DUSE_NEW_RSPEC_DEFS -Wno-declaration-after-statement                 \
 	-DWL_EXT_IAPSTA -DWL_ESCAN -DCCODE_LIST                               \
-	-DENABLE_INSMOD_NO_FW_LOAD
+	-DENABLE_INSMOD_NO_FW_LOAD -DBCM_USE_PLATFORM_STRLCPY
 
 DHDOFILES = aiutils.o siutils.o sbutils.o bcmutils.o bcmwifi_channels.o   \
 	dhd_linux.o dhd_linux_platdev.o dhd_linux_sched.o dhd_pno.o           \
@@ -37,13 +41,9 @@ DHDOFILES = aiutils.o siutils.o sbutils.o bcmutils.o bcmwifi_channels.o   \
 	bcmevent.o hndpmu.o linux_osl.o wldev_common.o wl_android.o           \
 	dhd_debug_linux.o dhd_debug.o dhd_mschdbg.o dhd_dbg_ring.o            \
 	hnd_pktq.o hnd_pktpool.o bcmxtlv.o linux_pkt.o bcmstdlib_s.o frag.o   \
-	dhd_linux_exportfs.o dhd_linux_pktdump.o                              \
+	dhd_linux_exportfs.o dhd_linux_pktdump.o dhd_mschdbg.o                \
 	dhd_config.o dhd_ccode.o wl_event.o wl_android_ext.o                  \
 	wl_iapsta.o wl_escan.o
-
-ifeq ($(BCMDHD_STATIC_IF),y)
-	DHDCFLAGS += -DWL_STATIC_IF
-endif
 
 ifneq ($(CONFIG_WIRELESS_EXT),)
 	DHDOFILES += wl_iw.o
@@ -52,7 +52,7 @@ endif
 ifneq ($(CONFIG_CFG80211),)
 	DHDOFILES += wl_cfg80211.o wl_cfgscan.o wl_cfgp2p.o
 	DHDOFILES += wl_linux_mon.o wl_cfg_btcoex.o wl_cfgvendor.o
-	DHDOFILES += dhd_cfg80211.o
+	DHDOFILES += dhd_cfg80211.o wl_cfgvif.o
 	DHDCFLAGS += -DWL_CFG80211 -DWLP2P -DWL_CFG80211_STA_EVENT
 #	DHDCFLAGS += -DWL_IFACE_COMB_NUM_CHANNELS
 	DHDCFLAGS += -DCUSTOM_PNO_EVENT_LOCK_xTIME=10
@@ -67,6 +67,7 @@ ifneq ($(CONFIG_CFG80211),)
 	DHDCFLAGS += -DSPECIFIC_MAC_GEN_SCHEME
 	DHDCFLAGS += -DWL_IFACE_MGMT
 	DHDCFLAGS += -DWLFBT
+	DHDCFLAGS += -DDHD_LOSSLESS_ROAMING
 #	DHDCFLAGS += -DWL_STATIC_IF
 #	DHDCFLAGS += -DWL_CLIENT_SAE
 endif
@@ -98,6 +99,7 @@ DHDCFLAGS += -DPCIE_FULL_DONGLE -DBCMPCIE -DCUSTOM_DPC_PRIO_SETTING=-1    \
 DHDCFLAGS += -DDHD_LB -DDHD_LB_RXP -DDHD_LB_STATS -DDHD_LB_TXP
 DHDCFLAGS += -DDHD_PKTID_AUDIT_ENABLED
 DHDCFLAGS += -DINSMOD_FW_LOAD
+DHDCFLAGS += -DCHIP_INTR_CONTROL
 ifeq ($(CONFIG_BCMDHD_OOB),y)
 	DHDCFLAGS += -DCUSTOMER_OOB -DBCMPCIE_OOB_HOST_WAKE
 endif
@@ -146,7 +148,8 @@ ifneq ($(CONFIG_CFG80211),)
 	DHDCFLAGS += -DGSCAN_SUPPORT -DRTT_SUPPORT -DLINKSTAT_SUPPORT
 	DHDCFLAGS += -DCUSTOM_COUNTRY_CODE -DDHD_GET_VALID_CHANNELS
 	DHDCFLAGS += -DDEBUGABILITY -DDBG_PKT_MON
-	DHDCFLAGS += -DDHD_LOG_DUMP -DDHD_FW_COREDUMP
+#	DHDCFLAGS += -DDHD_LOG_DUMP
+	DHDCFLAGS += -DDHD_FW_COREDUMP
 	DHDCFLAGS += -DAPF -DNDO_CONFIG_SUPPORT -DRSSI_MONITOR_SUPPORT
 	DHDCFLAGS += -DDHD_WAKE_STATUS
 	DHDOFILES += dhd_rtt.o bcm_app_utils.o
@@ -225,6 +228,19 @@ ifeq ($(CONFIG_BCMDHD_WAPI),y)
 	DHDCFLAGS += -DBCMWAPI_WPI -DBCMWAPI_WAI
 endif
 
+# For scan random mac
+ifneq ($(CONFIG_BCMDHD_RANDOM_MAC),)
+ifneq ($(CONFIG_CFG80211),)
+	DHDCFLAGS += -DSUPPORT_RANDOM_MAC_SCAN -DWL_USE_RANDOMIZED_SCAN
+endif
+endif
+
+# For NAN
+ifneq ($(CONFIG_BCMDHD_NAN),)
+	DHDCFLAGS += -DWL_NAN -DWL_NAN_DISC_CACHE
+	DHDOFILES += wl_cfgnan.o bcmbloom.o
+endif
+
 # For Module auto-selection
 ifeq ($(CONFIG_BCMDHD_AUTO_SELECT),y)
 	DHDCFLAGS += -DUPDATE_MODULE_NAME
@@ -268,10 +284,6 @@ EXTRA_CFLAGS += -I$(BCMDHD_ROOT)/include/ -I$(BCMDHD_ROOT)/
 ifeq ($(CONFIG_BCMDHD),m)
 EXTRA_LDFLAGS += --strip-debug
 endif
-
-EXTRA_CFLAGS += -Wno-parentheses-equality
-EXTRA_CFLAGS += -Wno-unused-const-variable
-EXTRA_CFLAGS += -Wno-non-literal-null-conversion
 
 obj-$(CONFIG_AP6XXX) += $(MODULE_NAME).o
 $(MODULE_NAME)-objs += $(DHDOFILES)

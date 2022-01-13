@@ -15,155 +15,15 @@
 #include <linux/of_graph.h>
 #include <linux/platform_device.h>
 #include <linux/reset.h>
-#include <media/v4l2-device.h>
-#include <media/v4l2-fwnode.h>
-#include <media/v4l2-subdev.h>
-#include <media/v4l2-event.h>
-
 #include "mipi-csi2.h"
 
 static int csi2_debug;
 module_param_named(debug_csi2, csi2_debug, int, 0644);
 MODULE_PARM_DESC(debug_csi2, "Debug level (0-1)");
 
-/*
- * there must be 5 pads: 1 input pad from sensor, and
- * the 4 virtual channel output pads
- */
-#define CSI2_SINK_PAD			0
-#define CSI2_NUM_SINK_PADS		1
-#define CSI2_NUM_SRC_PADS		4
-#define CSI2_NUM_PADS			5
-#define CSI2_NUM_PADS_SINGLE_LINK	2
-#define MAX_CSI2_SENSORS		2
-
-#define RKCIF_DEFAULT_WIDTH	640
-#define RKCIF_DEFAULT_HEIGHT	480
-
-/*
- * The default maximum bit-rate per lane in Mbps, if the
- * source subdev does not provide V4L2_CID_LINK_FREQ.
- */
-#define CSI2_DEFAULT_MAX_MBPS 849
-
-#define IMX_MEDIA_GRP_ID_CSI2      BIT(8)
-#define CSIHOST_MAX_ERRINT_COUNT	10
-
-/*
- * add new chip id in tail in time order
- * by increasing to distinguish csi2 host version
- */
-enum rkcsi2_chip_id {
-	CHIP_PX30_CSI2,
-	CHIP_RK1808_CSI2,
-	CHIP_RK3128_CSI2,
-	CHIP_RK3288_CSI2,
-	CHIP_RV1126_CSI2,
-	CHIP_RK3568_CSI2,
-};
-
-enum csi2_pads {
-	RK_CSI2_PAD_SINK = 0,
-	RK_CSI2X_PAD_SOURCE0,
-	RK_CSI2X_PAD_SOURCE1,
-	RK_CSI2X_PAD_SOURCE2,
-	RK_CSI2X_PAD_SOURCE3
-};
-
-enum csi2_err {
-	RK_CSI2_ERR_SOTSYN = 0x0,
-	RK_CSI2_ERR_FS_FE_MIS,
-	RK_CSI2_ERR_FRM_SEQ_ERR,
-	RK_CSI2_ERR_CRC_ONCE,
-	RK_CSI2_ERR_CRC,
-	RK_CSI2_ERR_ALL,
-	RK_CSI2_ERR_MAX
-};
-
-enum host_type_t {
-	RK_CSI_RXHOST,
-	RK_DSI_RXHOST
-};
-
-struct csi2_match_data {
-	int chip_id;
-	int num_pads;
-};
-
-struct csi2_sensor {
-	struct v4l2_subdev *sd;
-	struct v4l2_mbus_config mbus;
-	int lanes;
-};
-
-struct csi2_err_stats {
-	unsigned int cnt;
-};
-
-struct csi2_dev {
-	struct device		*dev;
-	struct v4l2_subdev	sd;
-	struct media_pad	pad[CSI2_NUM_PADS];
-	struct clk_bulk_data	*clks_bulk;
-	int			clks_num;
-	struct reset_control	*rsts_bulk;
-
-	void __iomem		*base;
-	struct v4l2_async_notifier	notifier;
-	struct v4l2_fwnode_bus_mipi_csi2	bus;
-
-	/* lock to protect all members below */
-	struct mutex lock;
-
-	struct v4l2_mbus_framefmt	format_mbus;
-	struct v4l2_rect	crop;
-	int			stream_count;
-	struct v4l2_subdev	*src_sd;
-	bool			sink_linked[CSI2_NUM_SRC_PADS];
-	struct csi2_sensor	sensors[MAX_CSI2_SENSORS];
-	const struct csi2_match_data	*match_data;
-	int			num_sensors;
-	atomic_t		frm_sync_seq;
-	struct csi2_err_stats err_list[RK_CSI2_ERR_MAX];
-};
-
-#define DEVICE_NAME "rockchip-mipi-csi2"
-
-/* CSI Host Registers Define */
-#define CSIHOST_N_LANES		0x04
-#define CSIHOST_DPHY_SHUTDOWNZ	0x08
-#define CSIHOST_PHY_RSTZ	0x0c
-#define CSIHOST_RESETN		0x10
-#define CSIHOST_PHY_STATE	0x14
-#define CSIHOST_ERR1		0x20
-#define CSIHOST_ERR2		0x24
-#define CSIHOST_MSK1		0x28
-#define CSIHOST_MSK2		0x2c
-#define CSIHOST_CONTROL		0x40
-
-#define CSIHOST_ERR1_PHYERR_SPTSYNCHS	0x0000000f
-#define CSIHOST_ERR1_ERR_BNDRY_MATCH	0x000000f0
-#define CSIHOST_ERR1_ERR_SEQ		0x00000f00
-#define CSIHOST_ERR1_ERR_FRM_DATA	0x0000f000
-#define CSIHOST_ERR1_ERR_CRC		0x1f000000
-
-#define CSIHOST_ERR2_PHYERR_ESC		0x0000000f
-#define CSIHOST_ERR2_PHYERR_SOTHS	0x000000f0
-#define CSIHOST_ERR2_ECC_CORRECTED	0x00000f00
-#define CSIHOST_ERR2_ERR_ID		0x0000f000
-#define CSIHOST_ERR2_PHYERR_CODEHS	0x01000000
-
-#define SW_CPHY_EN(x)		((x) << 0)
-#define SW_DSI_EN(x)		((x) << 4)
-#define SW_DATATYPE_FS(x)	((x) << 8)
-#define SW_DATATYPE_FE(x)	((x) << 14)
-#define SW_DATATYPE_LS(x)	((x) << 20)
-#define SW_DATATYPE_LE(x)	((x) << 26)
-
 #define write_csihost_reg(base, addr, val)  writel(val, (addr) + (base))
 #define read_csihost_reg(base, addr) readl((addr) + (base))
 
-static struct csi2_dev *g_csi2_dev;
 static ATOMIC_NOTIFIER_HEAD(g_csi_host_chain);
 
 int rkcif_csi2_register_notifier(struct notifier_block *nb)
@@ -215,7 +75,7 @@ static void csi2_update_sensor_info(struct csi2_dev *csi2)
 	struct v4l2_mbus_config mbus;
 	int ret = 0;
 
-	ret = v4l2_subdev_call(sensor->sd, video, g_mbus_config, &mbus);
+	ret = v4l2_subdev_call(sensor->sd, pad, get_mbus_config, 0, &mbus);
 	if (ret) {
 		v4l2_err(&csi2->sd, "update sensor info failed!\n");
 		return;
@@ -277,27 +137,40 @@ static void csi2_disable(struct csi2_dev *csi2)
 	write_csihost_reg(base, CSIHOST_MSK2, 0xffffffff);
 }
 
+static int csi2_g_mbus_config(struct v4l2_subdev *sd, unsigned int pad_id,
+			      struct v4l2_mbus_config *mbus);
+
 static void csi2_enable(struct csi2_dev *csi2,
 			enum host_type_t host_type)
 {
 	void __iomem *base = csi2->base;
 	int lanes = csi2->bus.num_data_lanes;
+	struct v4l2_mbus_config mbus;
+	u32 val = 0;
+
+	csi2_g_mbus_config(&csi2->sd, 0, &mbus);
+	if (mbus.type == V4L2_MBUS_CSI2_DPHY)
+		val = SW_CPHY_EN(0);
+	else if (mbus.type == V4L2_MBUS_CSI2_CPHY)
+		val = SW_CPHY_EN(1);
 
 	write_csihost_reg(base, CSIHOST_N_LANES, lanes - 1);
 
 	if (host_type == RK_DSI_RXHOST) {
-		write_csihost_reg(base, CSIHOST_CONTROL,
-				  SW_CPHY_EN(0) | SW_DSI_EN(1) |
-				  SW_DATATYPE_FS(0x01) | SW_DATATYPE_FE(0x11) |
-				  SW_DATATYPE_LS(0x21) | SW_DATATYPE_LE(0x31));
+		val |= SW_DSI_EN(1) | SW_DATATYPE_FS(0x01) |
+		       SW_DATATYPE_FE(0x11) | SW_DATATYPE_LS(0x21) |
+		       SW_DATATYPE_LE(0x31);
+		write_csihost_reg(base, CSIHOST_CONTROL, val);
 		/* Disable some error interrupt when HOST work on DSI RX mode */
 		write_csihost_reg(base, CSIHOST_MSK1, 0xe00000f0);
 		write_csihost_reg(base, CSIHOST_MSK2, 0xff00);
 	} else {
-		write_csihost_reg(base, CSIHOST_CONTROL,
-				  SW_CPHY_EN(0) | SW_DSI_EN(0));
+		val |= SW_DSI_EN(0) | SW_DATATYPE_FS(0x0) |
+		       SW_DATATYPE_FE(0x01) | SW_DATATYPE_LS(0x02) |
+		       SW_DATATYPE_LE(0x03);
+		write_csihost_reg(base, CSIHOST_CONTROL, val);
 		write_csihost_reg(base, CSIHOST_MSK1, 0);
-		write_csihost_reg(base, CSIHOST_MSK2, 0);
+		write_csihost_reg(base, CSIHOST_MSK2, 0xf000);
 	}
 
 	write_csihost_reg(base, CSIHOST_RESETN, 1);
@@ -350,6 +223,7 @@ static void csi2_stop(struct csi2_dev *csi2)
 	v4l2_subdev_call(csi2->src_sd, video, s_stream, 0);
 
 	csi2_disable(csi2);
+	csi2_hw_do_reset(csi2);
 	csi2_disable_clks(csi2);
 }
 
@@ -516,10 +390,12 @@ static int csi2_get_selection(struct v4l2_subdev *sd,
 	switch (sel->target) {
 	case V4L2_SEL_TGT_CROP_BOUNDS:
 		if (sel->which == V4L2_SUBDEV_FORMAT_ACTIVE) {
+			sel->pad = 0;
 			ret = v4l2_subdev_call(sensor, pad, get_selection,
 					       cfg, sel);
 			if (ret) {
 				fmt.which = V4L2_SUBDEV_FORMAT_ACTIVE;
+				fmt.pad = 0;
 				ret = v4l2_subdev_call(sensor, pad, get_fmt, NULL, &fmt);
 				if (!ret) {
 					csi2->format_mbus = fmt.format;
@@ -568,16 +444,16 @@ static int csi2_set_selection(struct v4l2_subdev *sd,
 	return ret;
 }
 
-static int csi2_g_mbus_config(struct v4l2_subdev *sd,
+static int csi2_g_mbus_config(struct v4l2_subdev *sd, unsigned int pad_id,
 			      struct v4l2_mbus_config *mbus)
 {
 	struct csi2_dev *csi2 = sd_to_dev(sd);
 	struct v4l2_subdev *sensor_sd = get_remote_sensor(sd);
 	int ret;
 
-	ret = v4l2_subdev_call(sensor_sd, video, g_mbus_config, mbus);
+	ret = v4l2_subdev_call(sensor_sd, pad, get_mbus_config, 0, mbus);
 	if (ret) {
-		mbus->type = V4L2_MBUS_CSI2;
+		mbus->type = V4L2_MBUS_CSI2_DPHY;
 		mbus->flags = csi2->bus.flags;
 		mbus->flags |= BIT(csi2->bus.num_data_lanes - 1);
 	}
@@ -590,32 +466,30 @@ static const struct media_entity_operations csi2_entity_ops = {
 	.link_validate = v4l2_subdev_link_validate,
 };
 
-void rkcif_csi2_event_inc_sof(void)
+void rkcif_csi2_event_inc_sof(struct csi2_dev *csi2_dev)
 {
-	if (g_csi2_dev) {
+	if (csi2_dev) {
 		struct v4l2_event event = {
 			.type = V4L2_EVENT_FRAME_SYNC,
 			.u.frame_sync.frame_sequence =
-				atomic_inc_return(&g_csi2_dev->frm_sync_seq) - 1,
+				atomic_inc_return(&csi2_dev->frm_sync_seq) - 1,
 		};
-		v4l2_event_queue(g_csi2_dev->sd.devnode, &event);
+		v4l2_event_queue(csi2_dev->sd.devnode, &event);
 	}
 }
 
-u32 rkcif_csi2_get_sof(void)
+u32 rkcif_csi2_get_sof(struct csi2_dev *csi2_dev)
 {
-	if (g_csi2_dev) {
-		return atomic_read(&g_csi2_dev->frm_sync_seq) - 1;
-	}
+	if (csi2_dev)
+		return atomic_read(&csi2_dev->frm_sync_seq) - 1;
 
 	return 0;
 }
 
-void rkcif_csi2_set_sof(u32 seq)
+void rkcif_csi2_set_sof(struct csi2_dev *csi2_dev, u32 seq)
 {
-	if (g_csi2_dev) {
-		atomic_set(&g_csi2_dev->frm_sync_seq, seq);
-	}
+	if (csi2_dev)
+		atomic_set(&csi2_dev->frm_sync_seq, seq);
 }
 
 static int rkcif_csi2_subscribe_event(struct v4l2_subdev *sd, struct v4l2_fh *fh,
@@ -627,13 +501,18 @@ static int rkcif_csi2_subscribe_event(struct v4l2_subdev *sd, struct v4l2_fh *fh
 	return v4l2_event_subscribe(fh, sub, 0, NULL);
 }
 
+static int rkcif_csi2_s_power(struct v4l2_subdev *sd, int on)
+{
+	return 0;
+}
+
 static const struct v4l2_subdev_core_ops csi2_core_ops = {
 	.subscribe_event = rkcif_csi2_subscribe_event,
 	.unsubscribe_event = v4l2_event_subdev_unsubscribe,
+	.s_power = rkcif_csi2_s_power,
 };
 
 static const struct v4l2_subdev_video_ops csi2_video_ops = {
-	.g_mbus_config = csi2_g_mbus_config,
 	.s_stream = csi2_s_stream,
 };
 
@@ -642,6 +521,7 @@ static const struct v4l2_subdev_pad_ops csi2_pad_ops = {
 	.set_fmt = csi2_get_set_fmt,
 	.get_selection = csi2_get_selection,
 	.set_selection = csi2_set_selection,
+	.get_mbus_config = csi2_g_mbus_config,
 };
 
 static const struct v4l2_subdev_ops csi2_subdev_ops = {
@@ -843,15 +723,14 @@ static int csi2_notifier(struct csi2_dev *csi2)
 	struct v4l2_async_notifier *ntf = &csi2->notifier;
 	int ret;
 
+	v4l2_async_notifier_init(ntf);
+
 	ret = v4l2_async_notifier_parse_fwnode_endpoints_by_port(csi2->dev,
 								 &csi2->notifier,
 								 sizeof(struct v4l2_async_subdev), 0,
 								 csi2_parse_endpoint);
 	if (ret < 0)
 		return ret;
-
-	if (!ntf->num_subdevs)
-		return -ENODEV;	/* no endpoint */
 
 	csi2->sd.subdev_notifier = &csi2->notifier;
 	csi2->notifier.ops = &csi2_async_ops;
@@ -889,6 +768,11 @@ static const struct csi2_match_data rk3568_csi2_match_data = {
 	.num_pads = CSI2_NUM_PADS,
 };
 
+static const struct csi2_match_data rk3588_csi2_match_data = {
+	.chip_id = CHIP_RK3588_CSI2,
+	.num_pads = CSI2_NUM_PADS_MAX,
+};
+
 static const struct of_device_id csi2_dt_ids[] = {
 	{
 		.compatible = "rockchip,rk1808-mipi-csi2",
@@ -905,6 +789,10 @@ static const struct of_device_id csi2_dt_ids[] = {
 	{
 		.compatible = "rockchip,rv1126-mipi-csi2",
 		.data = &rv1126_csi2_match_data,
+	},
+	{
+		.compatible = "rockchip,rk3588-mipi-csi2",
+		.data = &rk3588_csi2_match_data,
 	},
 	{ /* sentinel */ }
 };
@@ -1007,8 +895,6 @@ static int csi2_probe(struct platform_device *pdev)
 
 	csi2_hw_do_reset(csi2);
 
-	g_csi2_dev = csi2;
-
 	v4l2_info(&csi2->sd, "probe success, v4l2_dev:%s!\n", csi2->sd.v4l2_dev->name);
 
 	return 0;
@@ -1039,14 +925,15 @@ static struct platform_driver csi2_driver = {
 	.remove = csi2_remove,
 };
 
-#ifdef MODULE
 int __init rkcif_csi2_plat_drv_init(void)
 {
 	return platform_driver_register(&csi2_driver);
 }
-#else
-module_platform_driver(csi2_driver);
-#endif
+
+void __exit rkcif_csi2_plat_drv_exit(void)
+{
+	platform_driver_unregister(&csi2_driver);
+}
 
 MODULE_DESCRIPTION("Rockchip MIPI CSI2 driver");
 MODULE_AUTHOR("Macrofly.xu <xuhf@rock-chips.com>");

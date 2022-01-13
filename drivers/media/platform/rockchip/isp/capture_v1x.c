@@ -380,9 +380,10 @@ static struct streams_ops rkisp_mp_streams_ops = {
 	.enable_mi = mp_enable_mi,
 	.disable_mi = mp_disable_mi,
 	.stop_mi = mp_stop_mi,
-	.set_data_path = mp_set_data_path,
+	.set_data_path = stream_data_path,
 	.is_stream_stopped = mp_is_stream_stopped,
 	.update_mi = update_mi,
+	.frame_end = mi_frame_end,
 };
 
 static struct streams_ops rkisp_sp_streams_ops = {
@@ -390,9 +391,10 @@ static struct streams_ops rkisp_sp_streams_ops = {
 	.enable_mi = sp_enable_mi,
 	.disable_mi = sp_disable_mi,
 	.stop_mi = sp_stop_mi,
-	.set_data_path = sp_set_data_path,
+	.set_data_path = stream_data_path,
 	.is_stream_stopped = sp_is_stream_stopped,
 	.update_mi = update_mi,
+	.frame_end = mi_frame_end,
 };
 
 /*
@@ -515,38 +517,15 @@ static void rkisp_stream_stop(struct rkisp_stream *stream)
  */
 static int rkisp_start(struct rkisp_stream *stream)
 {
-	void __iomem *base = stream->ispdev->base_addr;
-	struct rkisp_device *dev = stream->ispdev;
-	bool is_update = false;
 	int ret;
 
-	if (stream->id == RKISP_STREAM_MP ||
-	    stream->id == RKISP_STREAM_SP) {
-		is_update = (stream->id == RKISP_STREAM_MP) ?
-			!dev->cap_dev.stream[RKISP_STREAM_SP].streaming :
-			!dev->cap_dev.stream[RKISP_STREAM_MP].streaming;
-	}
-
 	if (stream->ops->set_data_path)
-		stream->ops->set_data_path(base);
+		stream->ops->set_data_path(stream);
 	ret = stream->ops->config_mi(stream);
 	if (ret)
 		return ret;
 
 	stream->ops->enable_mi(stream);
-	/* It's safe to config ACTIVE and SHADOW regs for the
-	 * first stream. While when the second is starting, do NOT
-	 * force_cfg_update() because it also update the first one.
-	 *
-	 * The latter case would drop one more buf(that is 2) since
-	 * there's not buf in shadow when the second FE received. This's
-	 * also required because the second FE maybe corrupt especially
-	 * when run at 120fps.
-	 */
-	if (is_update) {
-		force_cfg_update(dev);
-		mi_frame_end(stream);
-	}
 	stream->streaming = true;
 
 	return 0;
@@ -874,7 +853,7 @@ static int rkisp_stream_init(struct rkisp_device *dev, u32 id)
 	init_waitqueue_head(&stream->done);
 	spin_lock_init(&stream->vbq_lock);
 
-	stream->linked = MEDIA_LNK_FL_ENABLED;
+	stream->linked = true;
 	switch (id) {
 	case RKISP_STREAM_SP:
 		strlcpy(vdev->name, SP_VDEV_NAME,

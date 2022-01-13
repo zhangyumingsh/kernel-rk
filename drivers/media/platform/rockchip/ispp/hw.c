@@ -16,6 +16,7 @@
 #include <linux/reset.h>
 #include <media/videobuf2-dma-contig.h>
 #include <media/videobuf2-dma-sg.h>
+#include <soc/rockchip/rockchip_iommu.h>
 
 #include "common.h"
 #include "dev.h"
@@ -40,53 +41,78 @@ struct irqs_data {
 
 void rkispp_soft_reset(struct rkispp_hw_dev *hw)
 {
-	struct iommu_domain *domain = iommu_get_domain_for_dev(hw->dev);
-
-	if (domain)
-		iommu_detach_device(domain, hw->dev);
 	writel(GLB_SOFT_RST_ALL, hw->base_addr + RKISPP_CTRL_RESET);
 	udelay(10);
+	writel(~GLB_SOFT_RST_ALL, hw->base_addr + RKISPP_CTRL_RESET);
 	if (hw->reset) {
 		reset_control_assert(hw->reset);
 		udelay(20);
 		reset_control_deassert(hw->reset);
 		udelay(20);
 	}
-	if (domain)
-		iommu_attach_device(domain, hw->dev);
 
-	writel(SW_SCL_BYPASS, hw->base_addr + RKISPP_SCL0_CTRL);
-	writel(SW_SCL_BYPASS, hw->base_addr + RKISPP_SCL1_CTRL);
-	writel(SW_SCL_BYPASS, hw->base_addr + RKISPP_SCL2_CTRL);
-	writel(OTHER_FORCE_UPD, hw->base_addr + RKISPP_CTRL_UPDATE);
-	writel(GATE_DIS_ALL, hw->base_addr + RKISPP_CTRL_CLKGATE);
-	writel(SW_FEC2DDR_DIS, hw->base_addr + RKISPP_FEC_CORE_CTRL);
-	writel(0x6ffffff, hw->base_addr + RKISPP_CTRL_INT_MSK);
-	writel(GATE_DIS_NR, hw->base_addr + RKISPP_CTRL_CLKGATE);
+	/* refresh iommu after reset */
+	if (hw->is_mmu) {
+		rockchip_iommu_disable(hw->dev);
+		rockchip_iommu_enable(hw->dev);
+	}
+	if (hw->ispp_ver == ISPP_V10) {
+		writel(SW_SCL_BYPASS, hw->base_addr + RKISPP_SCL0_CTRL);
+		writel(SW_SCL_BYPASS, hw->base_addr + RKISPP_SCL1_CTRL);
+		writel(SW_SCL_BYPASS, hw->base_addr + RKISPP_SCL2_CTRL);
+		writel(OTHER_FORCE_UPD, hw->base_addr + RKISPP_CTRL_UPDATE);
+		writel(GATE_DIS_ALL, hw->base_addr + RKISPP_CTRL_CLKGATE);
+		writel(SW_FEC2DDR_DIS, hw->base_addr + RKISPP_FEC_CORE_CTRL);
+		writel(NR_LOST_ERR | TNR_LOST_ERR | FBCH_EMPTY_NR |
+		FBCH_EMPTY_TNR | FBCD_DEC_ERR_NR | FBCD_DEC_ERR_TNR |
+		BUS_ERR_NR | BUS_ERR_TNR | SCL2_INT | SCL1_INT |
+		SCL0_INT | FEC_INT | ORB_INT | SHP_INT | NR_INT | TNR_INT,
+		hw->base_addr + RKISPP_CTRL_INT_MSK);
+		writel(GATE_DIS_NR, hw->base_addr + RKISPP_CTRL_CLKGATE);
+	} else if (hw->ispp_ver == ISPP_V20) {
+		writel(GATE_DIS_ALL, hw->base_addr + RKISPP_CTRL_CLKGATE);
+		writel(SW_FEC2DDR_DIS, hw->base_addr + RKISPP_FEC_CORE_CTRL);
+		writel(FEC_INT, hw->base_addr + RKISPP_CTRL_INT_MSK);
+		writel(GATE_DIS_FEC, hw->base_addr + RKISPP_CTRL_CLKGATE);
+	}
+
 }
 
 /* using default value if reg no write for multi device */
 static void default_sw_reg_flag(struct rkispp_device *dev)
 {
-	u32 reg[] = {
-		RKISPP_TNR_CTRL,
-		RKISPP_TNR_CORE_CTRL,
-		RKISPP_NR_CTRL,
-		RKISPP_NR_UVNR_CTRL_PARA,
-		RKISPP_SHARP_CTRL,
-		RKISPP_SHARP_CORE_CTRL,
-		RKISPP_SCL0_CTRL,
-		RKISPP_SCL1_CTRL,
-		RKISPP_SCL2_CTRL,
-		RKISPP_ORB_CORE_CTRL,
-		RKISPP_FEC_CTRL,
-		RKISPP_FEC_CORE_CTRL
-	};
-	u32 i, *flag;
+	if (dev->hw_dev->ispp_ver == ISPP_V10) {
+		u32 reg[] = {
+			RKISPP_TNR_CTRL,
+			RKISPP_TNR_CORE_CTRL,
+			RKISPP_NR_CTRL,
+			RKISPP_NR_UVNR_CTRL_PARA,
+			RKISPP_SHARP_CTRL,
+			RKISPP_SHARP_CORE_CTRL,
+			RKISPP_SCL0_CTRL,
+			RKISPP_SCL1_CTRL,
+			RKISPP_SCL2_CTRL,
+			RKISPP_ORB_CORE_CTRL,
+			RKISPP_FEC_CTRL,
+			RKISPP_FEC_CORE_CTRL
+		};
+		u32 i, *flag;
 
-	for (i = 0; i < ARRAY_SIZE(reg); i++) {
-		flag = dev->sw_base_addr + reg[i] + RKISP_ISPP_SW_REG_SIZE;
-		*flag = 0xffffffff;
+		for (i = 0; i < ARRAY_SIZE(reg); i++) {
+			flag = dev->sw_base_addr + reg[i] + RKISP_ISPP_SW_REG_SIZE;
+			*flag = 0xffffffff;
+		}
+	} else if (dev->hw_dev->ispp_ver == ISPP_V20) {
+		u32 reg[] = {
+			RKISPP_FEC_CTRL,
+			RKISPP_FEC_CORE_CTRL
+		};
+		u32 i, *flag;
+
+		for (i = 0; i < ARRAY_SIZE(reg); i++) {
+			flag = dev->sw_base_addr + reg[i] + RKISP_ISPP_SW_REG_SIZE;
+			*flag = 0xffffffff;
+		}
 	}
 }
 
@@ -176,6 +202,12 @@ static const char * const rv1126_ispp_clks[] = {
 	"hclk_ispp",
 };
 
+static const char * const rk3588_ispp_clks[] = {
+	"clk_ispp",
+	"aclk_ispp",
+	"hclk_ispp",
+};
+
 static const struct ispp_clk_info rv1126_ispp_clk_rate[] = {
 	{
 		.clk_rate = 150,
@@ -195,8 +227,31 @@ static const struct ispp_clk_info rv1126_ispp_clk_rate[] = {
 	}
 };
 
+static const struct ispp_clk_info rk3588_ispp_clk_rate[] = {
+	{
+		.clk_rate = 300,
+		.refer_data = 1920, //width
+	}, {
+		.clk_rate = 400,
+		.refer_data = 2688,
+	}, {
+		.clk_rate = 500,
+		.refer_data = 3072,
+	}, {
+		.clk_rate = 600,
+		.refer_data = 3840,
+	}, {
+		.clk_rate = 702,
+		.refer_data = 4672,
+	}
+};
+
 static struct irqs_data rv1126_ispp_irqs[] = {
 	{"ispp_irq", irq_hdl},
+	{"fec_irq", irq_hdl},
+};
+
+static struct irqs_data rk3588_ispp_irqs[] = {
 	{"fec_irq", irq_hdl},
 };
 
@@ -210,10 +265,23 @@ static const struct ispp_match_data rv1126_ispp_match_data = {
 	.ispp_ver = ISPP_V10,
 };
 
+static const struct ispp_match_data rk3588_ispp_match_data = {
+	.clks = rk3588_ispp_clks,
+	.clks_num = ARRAY_SIZE(rk3588_ispp_clks),
+	.clk_rate_tbl = rk3588_ispp_clk_rate,
+	.clk_rate_tbl_num = ARRAY_SIZE(rk3588_ispp_clk_rate),
+	.irqs = rk3588_ispp_irqs,
+	.num_irqs = ARRAY_SIZE(rk3588_ispp_irqs),
+	.ispp_ver = ISPP_V20,
+};
+
 static const struct of_device_id rkispp_hw_of_match[] = {
 	{
 		.compatible = "rockchip,rv1126-rkispp",
 		.data = &rv1126_ispp_match_data,
+	}, {
+		.compatible = "rockchip,rk3588-rkispp",
+		.data = &rk3588_ispp_match_data,
 	},
 	{},
 };
@@ -329,7 +397,6 @@ static int rkispp_hw_probe(struct platform_device *pdev)
 	hw_dev->is_dma_sg_ops = false;
 	hw_dev->is_shutdown = false;
 	hw_dev->is_first = true;
-	hw_dev->first_frame_dma = -1;
 	hw_dev->is_mmu = is_iommu_enable(dev);
 	ret = of_reserved_mem_device_init(dev);
 	if (ret) {
@@ -376,6 +443,7 @@ static void rkispp_hw_shutdown(struct platform_device *pdev)
 	if (pm_runtime_active(&pdev->dev)) {
 		writel(0, hw_dev->base_addr + RKISPP_CTRL_INT_MSK);
 		writel(GLB_SOFT_RST_ALL, hw_dev->base_addr + RKISPP_CTRL_RESET);
+		writel(~GLB_SOFT_RST_ALL, hw_dev->base_addr + RKISPP_CTRL_RESET);
 	}
 	dev_info(&pdev->dev, "%s\n", __func__);
 }

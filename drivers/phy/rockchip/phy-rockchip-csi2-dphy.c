@@ -29,7 +29,6 @@ struct sensor_async_subdev {
 	int lanes;
 };
 
-static DEFINE_MUTEX(csi2dphy_dev_mutex);
 static LIST_HEAD(csi2dphy_device_list);
 
 static inline struct csi2_dphy *to_csi2_dphy(struct v4l2_subdev *subdev)
@@ -105,7 +104,7 @@ static int csi2_dphy_update_sensor_mbus(struct v4l2_subdev *sd)
 	struct v4l2_mbus_config mbus;
 	int ret;
 
-	ret = v4l2_subdev_call(sensor_sd, video, g_mbus_config, &mbus);
+	ret = v4l2_subdev_call(sensor_sd, pad, get_mbus_config, 0, &mbus);
 	if (ret)
 		return ret;
 
@@ -202,7 +201,8 @@ static int csi2_dphy_g_frame_interval(struct v4l2_subdev *sd,
 }
 
 static int csi2_dphy_g_mbus_config(struct v4l2_subdev *sd,
-				  struct v4l2_mbus_config *config)
+				   unsigned int pad_id,
+				   struct v4l2_mbus_config *config)
 {
 	struct csi2_dphy *dphy = to_csi2_dphy(sd);
 	struct v4l2_subdev *sensor_sd = get_remote_sensor(sd);
@@ -235,7 +235,7 @@ static __maybe_unused int csi2_dphy_runtime_suspend(struct device *dev)
 	struct csi2_dphy_hw *hw = dphy->dphy_hw;
 
 	if (hw)
-		clk_bulk_disable_unprepare(hw->num_clks, hw->clks);
+		clk_bulk_disable_unprepare(hw->num_clks, hw->clks_bulk);
 
 	return 0;
 }
@@ -249,7 +249,7 @@ static __maybe_unused int csi2_dphy_runtime_resume(struct device *dev)
 	int ret;
 
 	if (hw) {
-		ret = clk_bulk_prepare_enable(hw->num_clks, hw->clks);
+		ret = clk_bulk_prepare_enable(hw->num_clks, hw->clks_bulk);
 		if (ret) {
 			dev_err(hw->dev, "failed to enable clks\n");
 			return ret;
@@ -295,7 +295,6 @@ static const struct v4l2_subdev_core_ops csi2_dphy_core_ops = {
 
 static const struct v4l2_subdev_video_ops csi2_dphy_video_ops = {
 	.g_frame_interval = csi2_dphy_g_frame_interval,
-	.g_mbus_config = csi2_dphy_g_mbus_config,
 	.s_stream = csi2_dphy_s_stream,
 };
 
@@ -303,6 +302,7 @@ static const struct v4l2_subdev_pad_ops csi2_dphy_subdev_pad_ops = {
 	.set_fmt = csi2_dphy_get_set_fmt,
 	.get_fmt = csi2_dphy_get_set_fmt,
 	.get_selection = csi2_dphy_get_selection,
+	.get_mbus_config = csi2_dphy_g_mbus_config,
 };
 
 static const struct v4l2_subdev_ops csi2_dphy_subdev_ops = {
@@ -395,8 +395,8 @@ static int rockchip_csi2_dphy_fwnode_parse(struct device *dev,
 		return -EINVAL;
 	}
 
-	if (vep->bus_type == V4L2_MBUS_CSI2) {
-		config->type = V4L2_MBUS_CSI2;
+	if (vep->bus_type == V4L2_MBUS_CSI2_DPHY) {
+		config->type = V4L2_MBUS_CSI2_DPHY;
 		config->flags = vep->bus.mipi_csi2.flags;
 		s_asd->lanes = vep->bus.mipi_csi2.num_data_lanes;
 	} else {
@@ -438,15 +438,14 @@ static int rockchip_csi2dphy_media_init(struct csi2_dphy *dphy)
 	if (ret < 0)
 		return ret;
 
+	v4l2_async_notifier_init(&dphy->notifier);
+
 	ret = v4l2_async_notifier_parse_fwnode_endpoints_by_port(
 		dphy->dev, &dphy->notifier,
 		sizeof(struct sensor_async_subdev), 0,
 		rockchip_csi2_dphy_fwnode_parse);
 	if (ret < 0)
 		return ret;
-
-	if (!dphy->notifier.num_subdevs)
-		return -ENODEV;	/* no endpoint */
 
 	dphy->sd.subdev_notifier = &dphy->notifier;
 	dphy->notifier.ops = &rockchip_csi2_dphy_async_ops;
@@ -470,7 +469,7 @@ static int rockchip_csi2_dphy_attach_hw(struct csi2_dphy *dphy)
 	enum csi2_dphy_lane_mode target_mode;
 	int i;
 
-	if (dphy->phy_index == 0)
+	if (dphy->phy_index % 3 == 0)
 		target_mode = LANE_MODE_FULL;
 	else
 		target_mode = LANE_MODE_SPLIT;
@@ -547,9 +546,22 @@ static int rockchip_csi2_dphy_detach_hw(struct csi2_dphy *dphy)
 	return 0;
 }
 
+static struct dphy_drv_data r3568_dphy_drv_data = {
+	.dev_name = "csi2dphy",
+};
+
+static struct dphy_drv_data r3588_dcphy_drv_data = {
+	.dev_name = "csi2dcphy",
+};
+
 static const struct of_device_id rockchip_csi2_dphy_match_id[] = {
 	{
 		.compatible = "rockchip,rk3568-csi2-dphy",
+		.data = &r3568_dphy_drv_data,
+	},
+	{
+		.compatible = "rockchip,rk3588-csi2-dcphy",
+		.data = &r3588_dcphy_drv_data,
 	},
 	{}
 };
@@ -561,6 +573,7 @@ static int rockchip_csi2_dphy_probe(struct platform_device *pdev)
 	const struct of_device_id *of_id;
 	struct csi2_dphy *csi2dphy;
 	struct v4l2_subdev *sd;
+	const struct dphy_drv_data *drv_data;
 	int ret;
 
 	csi2dphy = devm_kzalloc(dev, sizeof(*csi2dphy), GFP_KERNEL);
@@ -571,11 +584,11 @@ static int rockchip_csi2_dphy_probe(struct platform_device *pdev)
 	of_id = of_match_device(rockchip_csi2_dphy_match_id, dev);
 	if (!of_id)
 		return -EINVAL;
-
-	csi2dphy->phy_index = of_alias_get_id(dev->of_node, "csi2dphy");
-	if (csi2dphy->phy_index < 0 || csi2dphy->phy_index > 2)
+	drv_data = of_id->data;
+	csi2dphy->drv_data = drv_data;
+	csi2dphy->phy_index = of_alias_get_id(dev->of_node, drv_data->dev_name);
+	if (csi2dphy->phy_index < 0 || csi2dphy->phy_index >= PHY_MAX)
 		csi2dphy->phy_index = 0;
-
 	ret = rockchip_csi2_dphy_attach_hw(csi2dphy);
 	if (ret) {
 		dev_err(dev,
@@ -623,42 +636,6 @@ static int rockchip_csi2_dphy_remove(struct platform_device *pdev)
 	mutex_destroy(&dphy->mutex);
 	return 0;
 }
-static int __maybe_unused __rockchip_csi2dphy_clr_unready_dev(void)
-{
-	struct csi2_dphy *csi2dphy;
-
-	mutex_lock(&csi2dphy_dev_mutex);
-	list_for_each_entry(csi2dphy, &csi2dphy_device_list, list)
-		v4l2_async_notifier_clr_unready_dev(&csi2dphy->notifier);
-	mutex_unlock(&csi2dphy_dev_mutex);
-
-	return 0;
-}
-
-static int rockchip_csi2dphy_clr_unready_dev_param_set(const char *val,
-						       const struct kernel_param *kp)
-{
-#ifdef MODULE
-	__rockchip_csi2dphy_clr_unready_dev();
-#endif
-
-	return 0;
-}
-
-module_param_call(clr_unready_dev,
-		  rockchip_csi2dphy_clr_unready_dev_param_set,
-		  NULL, NULL, 0200);
-MODULE_PARM_DESC(clr_unready_dev, "clear unready devices");
-
-#ifndef MODULE
-static int __init rockchip_csi2_dphy_clr_unready_dev(void)
-{
-	__rockchip_csi2dphy_clr_unready_dev();
-
-	return 0;
-}
-late_initcall_sync(rockchip_csi2_dphy_clr_unready_dev);
-#endif
 
 static const struct dev_pm_ops rockchip_csi2_dphy_pm_ops = {
 	SET_RUNTIME_PM_OPS(csi2_dphy_runtime_suspend,
@@ -674,7 +651,7 @@ struct platform_driver rockchip_csi2_dphy_driver = {
 		.of_match_table = rockchip_csi2_dphy_match_id,
 	},
 };
-EXPORT_SYMBOL(rockchip_csi2_dphy_driver);
+module_platform_driver(rockchip_csi2_dphy_driver);
 
 MODULE_AUTHOR("Rockchip Camera/ISP team");
 MODULE_DESCRIPTION("Rockchip MIPI CSI2 DPHY driver");

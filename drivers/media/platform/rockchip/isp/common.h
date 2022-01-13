@@ -38,6 +38,7 @@
 #include <linux/clk.h>
 #include <linux/mutex.h>
 #include <linux/media.h>
+#include <linux/rk-video-format.h>
 #include <media/media-device.h>
 #include <media/media-entity.h>
 #include <media/v4l2-ctrls.h>
@@ -48,14 +49,6 @@
 
 #define RKISP_DEFAULT_WIDTH		800
 #define RKISP_DEFAULT_HEIGHT		600
-
-#define RKISP_MAX_STREAM		6
-#define RKISP_STREAM_MP			0
-#define RKISP_STREAM_SP			1
-#define RKISP_STREAM_DMATX0		2
-#define RKISP_STREAM_DMATX1		3
-#define RKISP_STREAM_DMATX2		4
-#define RKISP_STREAM_DMATX3		5
 
 #define RKISP_PLANE_Y			0
 #define RKISP_PLANE_CB			1
@@ -77,6 +70,7 @@ enum rkisp_isp_ver {
 	ISP_V13 = 0x30,
 	ISP_V20 = 0x40,
 	ISP_V21 = 0x50,
+	ISP_V30 = 0x60,
 };
 
 enum rkisp_sd_type {
@@ -102,6 +96,7 @@ enum rkisp_fmt_pix_type {
 	FMT_FBCGAIN,
 	FMT_EBD,
 	FMT_SPD,
+	FMT_FBC,
 	FMT_MAX
 };
 
@@ -169,6 +164,39 @@ u32 rkisp_read(struct rkisp_device *dev, u32 reg, bool is_direct);
 u32 rkisp_read_reg_cache(struct rkisp_device *dev, u32 reg);
 void rkisp_set_bits(struct rkisp_device *dev, u32 reg, u32 mask, u32 val, bool is_direct);
 void rkisp_clear_bits(struct rkisp_device *dev, u32 reg, u32 mask, bool is_direct);
+/* for dual isp, config for next isp reg */
+void rkisp_next_write(struct rkisp_device *dev, u32 reg, u32 val, bool is_direct);
+u32 rkisp_next_read(struct rkisp_device *dev, u32 reg, bool is_direct);
+u32 rkisp_next_read_reg_cache(struct rkisp_device *dev, u32 reg);
+void rkisp_next_set_bits(struct rkisp_device *dev, u32 reg, u32 mask, u32 val, bool is_direct);
+void rkisp_next_clear_bits(struct rkisp_device *dev, u32 reg, u32 mask, bool is_direct);
+
+static inline void
+rkisp_unite_write(struct rkisp_device *dev, u32 reg, u32 val, bool is_direct, bool is_unite)
+{
+	rkisp_write(dev, reg, val, is_direct);
+	if (is_unite)
+		rkisp_next_write(dev, reg, val, is_direct);
+}
+
+static inline void
+rkisp_unite_set_bits(struct rkisp_device *dev, u32 reg, u32 mask,
+		     u32 val, bool is_direct, bool is_unite)
+{
+	rkisp_set_bits(dev, reg, mask, val, is_direct);
+	if (is_unite)
+		rkisp_next_set_bits(dev, reg, mask, val, is_direct);
+}
+
+static inline void
+rkisp_unite_clear_bits(struct rkisp_device *dev, u32 reg, u32 mask,
+		       bool is_direct, bool is_unite)
+{
+	rkisp_clear_bits(dev, reg, mask, is_direct);
+	if (is_unite)
+		rkisp_next_clear_bits(dev, reg, mask, is_direct);
+}
+
 void rkisp_update_regs(struct rkisp_device *dev, u32 start, u32 end);
 
 int rkisp_alloc_buffer(struct rkisp_device *dev, struct rkisp_dummy_buffer *buf);

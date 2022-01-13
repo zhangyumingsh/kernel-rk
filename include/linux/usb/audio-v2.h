@@ -153,22 +153,20 @@ struct uac2_feature_unit_descriptor {
 	__u8 bSourceID;
 	/* bmaControls is actually u32,
 	 * but u8 is needed for the hybrid parser */
-	__u8 bmaControls[0]; /* variable length */
+	__u8 bmaControls[]; /* variable length */
 } __attribute__((packed));
 
-#define UAC2_DT_FEATURE_UNIT_SIZE(ch)		(6 + ((ch) + 1) * 4)
+/* 4.7.2.10 Effect Unit Descriptor */
 
-/* As above, but more useful for defining your own descriptors: */
-#define DECLARE_UAC2_FEATURE_UNIT_DESCRIPTOR(ch)		\
-struct uac2_feature_unit_descriptor_##ch {			\
-	__u8  bLength;						\
-	__u8  bDescriptorType;					\
-	__u8  bDescriptorSubtype;				\
-	__u8  bUnitID;						\
-	__u8  bSourceID;					\
-	__le32 bmaControls[ch + 1];				\
-	__u8  iFeature;						\
-} __attribute__((packed))
+struct uac2_effect_unit_descriptor {
+	__u8 bLength;
+	__u8 bDescriptorType;
+	__u8 bDescriptorSubtype;
+	__u8 bUnitID;
+	__le16 wEffectType;
+	__u8 bSourceID;
+	__u8 bmaControls[]; /* variable length */
+} __attribute__((packed));
 
 /* 4.9.2 Class-Specific AS Interface Descriptor */
 
@@ -332,9 +330,6 @@ struct uac2_interrupt_data_msg {
 #define UAC2_FU_UNDERFLOW		0x0e
 #define UAC2_FU_OVERFLOW		0x0f
 #define UAC2_FU_LATENCY			0x10
-
-#define UAC2_CONTROL_BIT_RO(CS)		(0x01 << (((CS) - 1) << 1))
-#define UAC2_CONTROL_BIT_RW(CS)		(0x03 << (((CS) - 1) << 1))
 
 /* A.17.8.1 Parametric Equalizer Section Effect Unit Control Selectors */
 #define UAC2_PE_UNDEFINED		0x00

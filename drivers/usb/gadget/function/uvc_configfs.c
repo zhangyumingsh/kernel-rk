@@ -7,7 +7,7 @@
  * Copyright (c) 2014 Samsung Electronics Co., Ltd.
  *		http://www.samsung.com
  *
- * Author: Andrzej Pietrasiewicz <andrzej.p@samsung.com>
+ * Author: Andrzej Pietrasiewicz <andrzejtp2010@gmail.com>
  */
 
 #include <linux/sort.h>
@@ -1607,10 +1607,6 @@ uvcg_uncompressed_##cname##_store(struct config_item *item,		\
 	if (ret)							\
 		goto end;						\
 									\
-	if (num > 255) {						\
-		ret = -EINVAL;						\
-		goto end;						\
-	}								\
 	u->desc.aname = num;						\
 	ret = len;							\
 end:									\
@@ -1804,10 +1800,6 @@ uvcg_mjpeg_##cname##_store(struct config_item *item,			\
 	if (ret)							\
 		goto end;						\
 									\
-	if (num > 255) {						\
-		ret = -EINVAL;						\
-		goto end;						\
-	}								\
 	u->desc.aname = num;						\
 	ret = len;							\
 end:									\
@@ -2779,60 +2771,6 @@ UVCG_OPTS_ATTR(pm_qos_latency, pm_qos_latency, PM_QOS_LATENCY_ANY);
 
 #undef UVCG_OPTS_ATTR
 
-static ssize_t f_uvc_opts_device_name_show(struct config_item *item,
-					   char *page)
-{
-	struct f_uvc_opts *opts = to_f_uvc_opts(item);
-	int ret;
-
-	mutex_lock(&opts->lock);
-	ret = sprintf(page, "%s\n", opts->device_name ?: "");
-	mutex_unlock(&opts->lock);
-
-	return ret;
-}
-
-static ssize_t f_uvc_opts_device_name_store(struct config_item *item,
-					    const char *page, size_t len)
-{
-	struct f_uvc_opts *opts = to_f_uvc_opts(item);
-	const char *old_name;
-	char *name;
-	int ret;
-
-	if (strlen(page) < len)
-		return -EOVERFLOW;
-
-	mutex_lock(&opts->lock);
-	if (opts->refcnt) {
-		ret = -EBUSY;
-		goto unlock;
-	}
-
-	name = kstrdup(page, GFP_KERNEL);
-	if (!name) {
-		ret = -ENOMEM;
-		goto unlock;
-	}
-
-	if (name[len - 1] == '\n')
-		name[len - 1] = '\0';
-
-	old_name = opts->device_name;
-	opts->device_name = name;
-
-	if (opts->device_name_allocated)
-		kfree(old_name);
-
-	opts->device_name_allocated = true;
-	ret = len;
-unlock:
-	mutex_unlock(&opts->lock);
-
-	return ret;
-}
-UVC_ATTR(f_uvc_opts_, device_name, device_name);
-
 static struct configfs_attribute *uvc_attrs[] = {
 	&f_uvc_opts_attr_streaming_bulk,
 	&f_uvc_opts_attr_streaming_interval,
@@ -2840,7 +2778,6 @@ static struct configfs_attribute *uvc_attrs[] = {
 	&f_uvc_opts_attr_streaming_maxburst,
 	&f_uvc_opts_attr_uvc_num_request,
 	&f_uvc_opts_attr_pm_qos_latency,
-	&f_uvc_opts_attr_device_name,
 	NULL,
 };
 
