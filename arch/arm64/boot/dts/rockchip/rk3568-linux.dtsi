@@ -5,9 +5,9 @@
  */
 
 / {
-//	chosen: chosen {
-//		bootargs = "earlycon=uart8250,mmio32,0xfe660000 console=ttyFIQ0 root=PARTUUID=614e0000-0000 rw rootwait";
-//	};
+	chosen: chosen {
+		stdout-path = "serial2:1500000n8";
+	};
 
 	fiq-debugger {
 		compatible = "rockchip,fiq-debugger";
