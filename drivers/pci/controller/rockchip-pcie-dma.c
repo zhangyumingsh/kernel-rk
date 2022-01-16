@@ -112,15 +112,16 @@
 #define NODE_SIZE		(sizeof(unsigned int))
 #define PCIE_DMA_ACK_BLOCK_SIZE		(NODE_SIZE * 8)
 
-#define PCIE_DMA_BUF_SIZE	SZ_1M
+#define PCIE_DMA_BUF_SIZE	SZ_128K
 #define PCIE_DMA_BUF_CNT	8
 #define PCIE_DMA_RD_BUF_SIZE	(PCIE_DMA_BUF_SIZE * PCIE_DMA_BUF_CNT)
 #define PCIE_DMA_WR_BUF_SIZE	(PCIE_DMA_BUF_SIZE * PCIE_DMA_BUF_CNT)
 #define PCIE_DMA_ACK_BASE	(PCIE_DMA_RD_BUF_SIZE + PCIE_DMA_WR_BUF_SIZE)
 
-#define PCIE_DMA_SET_DATA_CHECK_POS	(SZ_1M - 0x4)
-#define PCIE_DMA_SET_LOCAL_IDX_POS	(SZ_1M - 0x8)
-#define PCIE_DMA_SET_BUF_SIZE_POS	(SZ_1M - 0xc)
+#define PCIE_DMA_SET_DATA_CHECK_POS	(PCIE_DMA_BUF_SIZE - 0x4)
+#define PCIE_DMA_SET_LOCAL_IDX_POS	(PCIE_DMA_BUF_SIZE - 0x8)
+#define PCIE_DMA_SET_BUF_SIZE_POS	(PCIE_DMA_BUF_SIZE - 0xc)
+#define PCIE_DMA_SET_CHK_SUM_POS	(PCIE_DMA_BUF_SIZE - 0x10)
 
 #define PCIE_DMA_DATA_CHECK		0x12345678
 #define PCIE_DMA_DATA_ACK_CHECK		0xdeadbeef
@@ -128,6 +129,8 @@
 
 #define PCIE_DMA_PARAM_SIZE		64
 #define PCIE_DMA_CHN0			0x0
+
+static int enable_check_sum;
 
 struct pcie_misc_dev {
 	struct miscdevice dev;
@@ -137,6 +140,18 @@ struct pcie_misc_dev {
 static inline bool is_rc(struct dma_trx_obj *obj)
 {
 	return (obj->busno == 0);
+}
+
+static unsigned int rk_pcie_check_sum(unsigned int *src, int size)
+{
+	unsigned int result = 0;
+
+	size /= sizeof(*src);
+
+	while (size-- > 0)
+		result ^= *src++;
+
+	return result;
 }
 
 static void rk_pcie_prepare_dma(struct dma_trx_obj *obj,
@@ -149,6 +164,7 @@ static void rk_pcie_prepare_dma(struct dma_trx_obj *obj,
 	void *virt;
 	unsigned long flags;
 	struct dma_table *table = NULL;
+	unsigned int checksum;
 
 	switch (type) {
 	case PCIE_DMA_DATA_SND:
@@ -170,7 +186,12 @@ static void rk_pcie_prepare_dma(struct dma_trx_obj *obj,
 		writel(local_idx, virt + PCIE_DMA_SET_LOCAL_IDX_POS);
 		writel(buf_size, virt + PCIE_DMA_SET_BUF_SIZE_POS);
 
-		buf_size = SZ_1M;
+		if (enable_check_sum) {
+			checksum = rk_pcie_check_sum(virt, SZ_1M - 0x10);
+			writel(checksum, virt + PCIE_DMA_SET_CHK_SUM_POS);
+		}
+
+		buf_size = PCIE_DMA_BUF_SIZE;
 		break;
 	case PCIE_DMA_DATA_RCV_ACK:
 		table = obj->table[PCIE_DMA_DATA_RCV_ACK_TABLE_OFFSET + idx];
@@ -274,6 +295,7 @@ static enum hrtimer_restart rk_pcie_scan_timer(struct hrtimer *timer)
 	bool need_ack = false;
 	struct dma_trx_obj *obj = container_of(timer,
 					struct dma_trx_obj, scan_timer);
+	unsigned int check_sum, check_sum_tmp;
 
 	for (i = 0; i < PCIE_DMA_BUF_CNT; i++) {
 		sda_base = obj->mem_base + PCIE_DMA_BUF_SIZE * i;
@@ -289,7 +311,19 @@ static enum hrtimer_restart rk_pcie_scan_timer(struct hrtimer *timer)
 		if (sdv == PCIE_DMA_DATA_CHECK) {
 			if (!need_ack)
 				need_ack = true;
+			if (enable_check_sum) {
+				check_sum = readl(scan_data_addr + PCIE_DMA_SET_CHK_SUM_POS);
+				check_sum_tmp = rk_pcie_check_sum(scan_data_addr, SZ_1M - 0x10);
+				if (check_sum != check_sum_tmp) {
+					pr_err("checksum[%d] failed, 0x%x, should be 0x%x\n",
+					       idx, check_sum_tmp, check_sum);
+					print_hex_dump(KERN_WARNING, "", DUMP_PREFIX_OFFSET,
+						       32, 4, scan_data_addr, SZ_1M, false);
+				}
+				writel(0x0, scan_data_addr + PCIE_DMA_SET_CHK_SUM_POS);
+			}
 			writel(0x0, scan_data_addr + PCIE_DMA_SET_DATA_CHECK_POS);
+
 			set_bit(i, &obj->local_read_available);
 			rk_pcie_prepare_dma(obj, idx, 0, 0, 0x4,
 					PCIE_DMA_DATA_RCV_ACK);
@@ -331,7 +365,7 @@ static enum hrtimer_restart rk_pcie_scan_timer(struct hrtimer *timer)
 		wake_up(&obj->event_queue);
 	}
 
-	hrtimer_add_expires(&obj->scan_timer, ktime_set(0, 1 * 1000 * 1000));
+	hrtimer_add_expires(&obj->scan_timer, ktime_set(0, 100 * 1000));
 
 	return HRTIMER_RESTART;
 }
@@ -402,6 +436,7 @@ static long rk_pcie_misc_ioctl(struct file *filp, unsigned int cmd,
 	phys_addr_t addr;
 	void __user *uarg = (void __user *)arg;
 	int ret;
+	int i;
 
 	if (copy_from_user(&msg, uarg, sizeof(msg)) != 0) {
 		dev_err(dev, "failed to copy argument into kernel space\n");
@@ -420,8 +455,11 @@ static long rk_pcie_misc_ioctl(struct file *filp, unsigned int cmd,
 		if (is_rc(obj))
 			addr += PCIE_DMA_WR_BUF_SIZE;
 		/* by kernel auto or by user to invalidate cache */
-		dma_sync_single_for_cpu(dev, addr, PCIE_DMA_RD_BUF_SIZE,
-					DMA_FROM_DEVICE);
+		for (i = 0; i < PCIE_DMA_BUF_CNT; i++) {
+			if (test_bit(i, &obj->local_read_available))
+				dma_sync_single_for_cpu(dev, addr + i * PCIE_DMA_BUF_SIZE, PCIE_DMA_BUF_SIZE, DMA_FROM_DEVICE);
+		}
+
 		ret = copy_to_user(uarg, &msg_to_user, sizeof(msg));
 		if (ret) {
 			dev_err(dev, "failed to get read buffer index\n");
@@ -646,12 +684,25 @@ static int rk_pcie_debugfs_open(struct inode *inode, struct file *file)
 	return single_open(file, rk_pcie_debugfs_trx_show, inode->i_private);
 }
 
+static ssize_t rk_pcie_debugfs_write(struct file *file, const char __user *user_buf,
+				 size_t count, loff_t *ppos)
+{
+	int ret;
+
+	ret = kstrtoint_from_user(user_buf, count, 0, &enable_check_sum);
+	if (ret)
+		return ret;
+
+	return count;
+}
+
 static const struct file_operations rk_pcie_debugfs_fops = {
 	.owner = THIS_MODULE,
 	.open = rk_pcie_debugfs_open,
 	.read = seq_read,
 	.llseek = seq_lseek,
 	.release = single_release,
+	.write = rk_pcie_debugfs_write,
 };
 #endif
 

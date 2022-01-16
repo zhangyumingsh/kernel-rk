@@ -297,7 +297,7 @@ static void csi2_enable(struct csi2_dev *csi2,
 		write_csihost_reg(base, CSIHOST_CONTROL,
 				  SW_CPHY_EN(0) | SW_DSI_EN(0));
 		write_csihost_reg(base, CSIHOST_MSK1, 0);
-		write_csihost_reg(base, CSIHOST_MSK2, 0);
+		write_csihost_reg(base, CSIHOST_MSK2, 0xf000);
 	}
 
 	write_csihost_reg(base, CSIHOST_RESETN, 1);
@@ -350,6 +350,7 @@ static void csi2_stop(struct csi2_dev *csi2)
 	v4l2_subdev_call(csi2->src_sd, video, s_stream, 0);
 
 	csi2_disable(csi2);
+	csi2_hw_do_reset(csi2);
 	csi2_disable_clks(csi2);
 }
 
@@ -1039,14 +1040,15 @@ static struct platform_driver csi2_driver = {
 	.remove = csi2_remove,
 };
 
-#ifdef MODULE
 int __init rkcif_csi2_plat_drv_init(void)
 {
 	return platform_driver_register(&csi2_driver);
 }
-#else
-module_platform_driver(csi2_driver);
-#endif
+
+void __exit rkcif_csi2_plat_drv_exit(void)
+{
+	platform_driver_unregister(&csi2_driver);
+}
 
 MODULE_DESCRIPTION("Rockchip MIPI CSI2 driver");
 MODULE_AUTHOR("Macrofly.xu <xuhf@rock-chips.com>");

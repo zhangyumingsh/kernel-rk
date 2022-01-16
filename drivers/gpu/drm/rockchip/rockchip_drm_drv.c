@@ -21,7 +21,7 @@
 #include <drm/drm_gem_cma_helper.h>
 #include <drm/drm_of.h>
 #include <linux/devfreq.h>
-#include <linux/dma-buf.h>
+#include <linux/dma-buf-cache.h>
 #include <linux/dma-mapping.h>
 #include <linux/dma-iommu.h>
 #include <linux/genalloc.h>
@@ -91,6 +91,7 @@ struct rockchip_drm_mode_set {
 	unsigned int hue;
 
 	bool mode_changed;
+	bool force_output;
 	int ratio;
 };
 
@@ -212,7 +213,7 @@ int rockchip_drm_add_modes_noedid(struct drm_connector *connector)
 }
 EXPORT_SYMBOL(rockchip_drm_add_modes_noedid);
 
-#ifdef CONFIG_ARCH_ROCKCHIP
+#if !defined(CONFIG_DMABUF_CACHE)
 struct drm_prime_callback_data {
 	struct drm_gem_object *obj;
 	struct sg_table *sgt;
@@ -562,6 +563,8 @@ of_parse_display_resource(struct drm_device *drm_dev, struct device_node *route)
 	else
 		set->hue = 50;
 
+	set->force_output = of_property_read_bool(route, "force-output");
+
 	if (!of_property_read_u32(route, "cubic_lut,offset", &val)) {
 		private->cubic_lut[crtc->index].enable = true;
 		private->cubic_lut[crtc->index].offset = val;
@@ -580,7 +583,8 @@ of_parse_display_resource(struct drm_device *drm_dev, struct device_node *route)
 }
 
 static int rockchip_drm_fill_connector_modes(struct drm_connector *connector,
-					     uint32_t maxX, uint32_t maxY)
+					     uint32_t maxX, uint32_t maxY,
+					     bool force_output)
 {
 	struct drm_device *dev = connector->dev;
 	struct drm_display_mode *mode;
@@ -598,6 +602,8 @@ static int rockchip_drm_fill_connector_modes(struct drm_connector *connector,
 	list_for_each_entry(mode, &connector->modes, head)
 		mode->status = MODE_STALE;
 
+	if (force_output)
+		connector->force = DRM_FORCE_ON;
 	if (connector->force) {
 		if (connector->force == DRM_FORCE_ON ||
 		    connector->force == DRM_FORCE_ON_DIGITAL)
@@ -656,6 +662,8 @@ static int rockchip_drm_fill_connector_modes(struct drm_connector *connector,
 
 	if (count == 0 && connector->status == connector_status_connected)
 		count = drm_add_modes_noedid(connector, 1024, 768);
+	if (force_output)
+		count += rockchip_drm_add_modes_noedid(connector);
 	if (count == 0)
 		goto prune;
 
@@ -744,7 +752,7 @@ static int setup_initial_state(struct drm_device *drm_dev,
 	if (encoder_funcs->loader_protect)
 		encoder_funcs->loader_protect(conn_state->best_encoder, true);
 	conn_state->best_encoder->loader_protect = true;
-	num_modes = rockchip_drm_fill_connector_modes(connector, 4096, 4096);
+	num_modes = rockchip_drm_fill_connector_modes(connector, 4096, 4096, set->force_output);
 	if (!num_modes) {
 		dev_err(drm_dev->dev, "connector[%s] can't found any modes\n",
 			connector->name);
@@ -1086,6 +1094,8 @@ static void show_loader_logo(struct drm_device *drm_dev)
 	 */
 
 	list_for_each_entry_safe(set, tmp, &mode_set_list, head) {
+		if (set->force_output)
+			set->connector->force = DRM_FORCE_UNSPECIFIED;
 		list_del(&set->head);
 		kfree(set);
 	}
@@ -1611,6 +1621,7 @@ static int rockchip_drm_bind(struct device *dev)
 	}
 
 	mutex_init(&private->commit_lock);
+	mutex_init(&private->ovl_lock);
 	INIT_WORK(&private->commit_work, rockchip_drm_atomic_work);
 	drm_dev->dev_private = private;
 
@@ -1924,7 +1935,7 @@ static const struct dma_buf_ops rockchip_drm_gem_prime_dmabuf_ops = {
 	.end_cpu_access_partial = rockchip_drm_gem_end_cpu_access_partial,
 };
 
-#ifdef CONFIG_ARCH_ROCKCHIP
+#if !defined(CONFIG_DMABUF_CACHE)
 static void drm_gem_prime_dmabuf_release_callback(void *data)
 {
 	struct drm_prime_callback_data *cb_data = data;
@@ -1950,7 +1961,7 @@ static struct drm_gem_object *rockchip_drm_gem_prime_import_dev(struct drm_devic
 	struct dma_buf_attachment *attach;
 	struct sg_table *sgt;
 	struct drm_gem_object *obj;
-#ifdef CONFIG_ARCH_ROCKCHIP
+#if !defined(CONFIG_DMABUF_CACHE)
 	struct drm_prime_callback_data *cb_data = NULL;
 #endif
 	int ret;
@@ -1967,7 +1978,7 @@ static struct drm_gem_object *rockchip_drm_gem_prime_import_dev(struct drm_devic
 		}
 	}
 
-#ifdef CONFIG_ARCH_ROCKCHIP
+#if !defined(CONFIG_DMABUF_CACHE)
 	cb_data = dma_buf_get_release_callback_data(dma_buf,
 					drm_gem_prime_dmabuf_release_callback);
 	if (cb_data && cb_data->obj && cb_data->obj->dev == dev) {
@@ -1985,7 +1996,7 @@ static struct drm_gem_object *rockchip_drm_gem_prime_import_dev(struct drm_devic
 
 	get_dma_buf(dma_buf);
 
-#ifdef CONFIG_ARCH_ROCKCHIP
+#if !defined(CONFIG_DMABUF_CACHE)
 	cb_data = kmalloc(sizeof(*cb_data), GFP_KERNEL);
 	if (!cb_data) {
 		ret = -ENOMEM;
@@ -2007,7 +2018,7 @@ static struct drm_gem_object *rockchip_drm_gem_prime_import_dev(struct drm_devic
 
 	obj->import_attach = attach;
 
-#ifdef CONFIG_ARCH_ROCKCHIP
+#if !defined(CONFIG_DMABUF_CACHE)
 	cb_data->obj = obj;
 	cb_data->sgt = sgt;
 	dma_buf_set_release_callback(dma_buf,
@@ -2021,7 +2032,7 @@ static struct drm_gem_object *rockchip_drm_gem_prime_import_dev(struct drm_devic
 fail_unmap:
 	dma_buf_unmap_attachment(attach, sgt, DMA_BIDIRECTIONAL);
 fail_detach:
-#ifdef CONFIG_ARCH_ROCKCHIP
+#if !defined(CONFIG_DMABUF_CACHE)
 	kfree(cb_data);
 #endif
 	dma_buf_detach(dma_buf, attach);
@@ -2334,8 +2345,8 @@ static int __init rockchip_drm_init(void)
 #if IS_ENABLED(CONFIG_DRM_ROCKCHIP_VVOP)
 	ADD_ROCKCHIP_SUB_DRIVER(vvop_platform_driver, CONFIG_DRM_ROCKCHIP_VVOP);
 #else
-	ADD_ROCKCHIP_SUB_DRIVER(vop_platform_driver, CONFIG_DRM_ROCKCHIP);
-	ADD_ROCKCHIP_SUB_DRIVER(vop2_platform_driver, CONFIG_DRM_ROCKCHIP);
+	ADD_ROCKCHIP_SUB_DRIVER(vop_platform_driver, CONFIG_ROCKCHIP_VOP);
+	ADD_ROCKCHIP_SUB_DRIVER(vop2_platform_driver, CONFIG_ROCKCHIP_VOP2);
 	ADD_ROCKCHIP_SUB_DRIVER(rockchip_lvds_driver,
 				CONFIG_ROCKCHIP_LVDS);
 	ADD_ROCKCHIP_SUB_DRIVER(rockchip_dp_driver,

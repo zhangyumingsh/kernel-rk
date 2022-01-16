@@ -265,6 +265,18 @@ destdir=$kernel_headers_dir/usr/src/linux-headers-$version
 mkdir -p "$destdir"
 mkdir -p "$destdir"/net/wireguard; 
 		touch "$destdir"/net/wireguard/{Kconfig,Makefile} # workaround for Wireguard
+mkdir -p "$destdir"/net/wireguard; 
+mkdir -p "$destdir"/net/wireguard; 
+		touch "$destdir"/net/wireguard/{Kconfig,Makefile} # workaround for Wireguard
+		touch "$destdir"/net/wireguard/{Kconfig,Makefile} # workaround for Wireguard
+mkdir -p "$destdir"/net/wireguard; 
+mkdir -p "$destdir"/net/wireguard; 
+		touch "$destdir"/net/wireguard/{Kconfig,Makefile} # workaround for Wireguard
+mkdir -p "$destdir"/net/wireguard; 
+mkdir -p "$destdir"/net/wireguard; 
+		touch "$destdir"/net/wireguard/{Kconfig,Makefile} # workaround for Wireguard
+		touch "$destdir"/net/wireguard/{Kconfig,Makefile} # workaround for Wireguard
+		touch "$destdir"/net/wireguard/{Kconfig,Makefile} # workaround for Wireguard
 (cd $destdir; patch -p1 < /tmp/headers-debian-byteshift.patch)
 (cd $srctree; tar -c -f - -T -) < "$objtree/debian/hdrsrcfiles" | (cd $destdir; tar -xf -)
 (cd $objtree; tar -c -f - -T -) < "$objtree/debian/hdrobjfiles" | (cd $destdir; tar -xf -)

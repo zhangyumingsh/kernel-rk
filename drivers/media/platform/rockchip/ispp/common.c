@@ -4,6 +4,7 @@
 #include <media/videobuf2-dma-contig.h>
 #include <linux/delay.h>
 #include <linux/of_platform.h>
+#include <linux/slab.h>
 #include "dev.h"
 #include "regs.h"
 
@@ -89,6 +90,7 @@ int rkispp_allow_buffer(struct rkispp_device *dev,
 	if (dev->hw_dev->is_dma_sg_ops) {
 		sg_tbl = (struct sg_table *)g_ops->cookie(mem_priv);
 		buf->dma_addr = sg_dma_address(sg_tbl->sgl);
+		g_ops->prepare(mem_priv);
 	} else {
 		buf->dma_addr = *((dma_addr_t *)g_ops->cookie(mem_priv));
 	}
