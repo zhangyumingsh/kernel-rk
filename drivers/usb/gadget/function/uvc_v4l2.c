@@ -1,19 +1,16 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  *	uvc_v4l2.c  --  USB Video Class Gadget driver
  *
  *	Copyright (C) 2009-2010
  *	    Laurent Pinchart (laurent.pinchart@ideasonboard.com)
- *
- *	This program is free software; you can redistribute it and/or modify
- *	it under the terms of the GNU General Public License as published by
- *	the Free Software Foundation; either version 2 of the License, or
- *	(at your option) any later version.
  */
 
-#include <linux/kernel.h>
 #include <linux/device.h>
 #include <linux/errno.h>
+#include <linux/kernel.h>
 #include <linux/list.h>
+#include <linux/usb/g_uvc.h>
 #include <linux/videodev2.h>
 #include <linux/vmalloc.h>
 #include <linux/wait.h>
@@ -44,6 +41,7 @@ uvc_send_response(struct uvc_device *uvc, struct uvc_request_data *data)
 	req->length = min_t(unsigned int, uvc->event_length, data->length);
 	req->zero = data->length < uvc->event_length;
 
+	uvc_trace(UVC_TRACE_CONTROL, "%s: req len %d\n", __func__, req->length);
 	memcpy(req->buf, data->data, req->length);
 
 	return usb_ep_queue(cdev->gadget->ep0, req, GFP_KERNEL);
@@ -53,15 +51,17 @@ uvc_send_response(struct uvc_device *uvc, struct uvc_request_data *data)
  * V4L2 ioctls
  */
 
-struct uvc_format
-{
+struct uvc_format {
 	u8 bpp;
 	u32 fcc;
 };
 
 static struct uvc_format uvc_formats[] = {
 	{ 16, V4L2_PIX_FMT_YUYV  },
+	{ 12, V4L2_PIX_FMT_NV12  },
 	{ 0,  V4L2_PIX_FMT_MJPEG },
+	{ 0,  V4L2_PIX_FMT_H264  },
+	{ 0,  V4L2_PIX_FMT_H265  },
 };
 
 static int
@@ -177,7 +177,9 @@ uvc_v4l2_qbuf(struct file *file, void *fh, struct v4l2_buffer *b)
 	if (ret < 0)
 		return ret;
 
-	return uvcg_video_pump(video);
+	queue_work(video->async_wq, &video->pump);
+
+	return ret;
 }
 
 static int
@@ -200,6 +202,9 @@ uvc_v4l2_streamon(struct file *file, void *fh, enum v4l2_buf_type type)
 
 	if (type != video->queue.queue.type)
 		return -EINVAL;
+
+	if (uvc->state != UVC_STATE_CONNECTED)
+		return -ENODEV;
 
 	/* Enable UVC video. */
 	ret = uvcg_video_enable(video, 1);
@@ -344,7 +349,7 @@ uvc_v4l2_mmap(struct file *file, struct vm_area_struct *vma)
 	return uvcg_queue_mmap(&uvc->video.queue, vma);
 }
 
-static unsigned int
+static __poll_t
 uvc_v4l2_poll(struct file *file, poll_table *wait)
 {
 	struct video_device *vdev = video_devdata(file);
@@ -365,7 +370,7 @@ static unsigned long uvcg_v4l2_get_unmapped_area(struct file *file,
 }
 #endif
 
-struct v4l2_file_operations uvc_v4l2_fops = {
+const struct v4l2_file_operations uvc_v4l2_fops = {
 	.owner		= THIS_MODULE,
 	.open		= uvc_v4l2_open,
 	.release	= uvc_v4l2_release,

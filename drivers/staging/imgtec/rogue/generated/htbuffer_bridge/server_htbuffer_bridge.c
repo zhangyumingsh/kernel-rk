@@ -42,8 +42,9 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */ /**************************************************************************/
 
 #include <stddef.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 
+#include "osfunc.h"
 #include "img_defs.h"
 
 #include "htbserver.h"

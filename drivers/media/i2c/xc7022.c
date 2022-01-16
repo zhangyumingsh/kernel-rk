@@ -3,6 +3,7 @@
  * xc7022 driver
  */
 
+
 #include <linux/delay.h>
 #include <linux/clk.h>
 #include <linux/device.h>
@@ -13,12 +14,25 @@
 #include <linux/pm_runtime.h>
 #include <linux/regulator/consumer.h>
 #include <linux/sysfs.h>
+#include <linux/slab.h>
+#include <linux/uaccess.h>
+#include <linux/videodev2.h>
+#include <linux/version.h>
+#include <linux/rk-camera-module.h>
 #include <media/media-entity.h>
 #include <media/v4l2-async.h>
 #include <media/v4l2-ctrls.h>
+#include <media/v4l2-device.h>
+#include <media/v4l2-event.h>
+#include <media/v4l2-fwnode.h>
+#include <media/v4l2-image-sizes.h>
+#include <media/v4l2-mediabus.h>
 #include <media/v4l2-subdev.h>
 #include <linux/pinctrl/consumer.h>
+#include <linux/of_gpio.h>
 
+
+#define DRIVER_VERSION			KERNEL_VERSION(0, 0x01, 0x01)
 
 #define XC7022_LINK_FREQ_300MHZ	300000000
 /* pixel rate = link frequency * 2 * lanes / BITS_PER_SAMPLE */
@@ -32,8 +46,9 @@
 #define XC7022_CHIP_ID_REG2		0xfffc
 #define XC7022_CHIP_ID1			0x71
 #define XC7022_CHIP_ID2			0x60
+
 #define XC6130_CHIP_ID_REG1		0x0002
-#define XC6130_CHIP_ID_REG2	0x0003
+#define XC6130_CHIP_ID_REG2    		0x0003
 #define XC6130_CHIP_ID1			0x43
 #define XC6130_CHIP_ID2			0x58
 
@@ -53,8 +68,15 @@
 
 
 static DEFINE_MUTEX(xc7022_power_mutex);
-static int xc7022_power_count;
 
+
+#define OF_CAMERA_PINCTRL_STATE_DEFAULT	"rockchip,camera_default"
+#define OF_CAMERA_PINCTRL_STATE_SLEEP	"rockchip,camera_sleep"
+
+#define XC7022_NAME			"xc7022"
+
+static const struct regval *xc7022_global_regs;
+static u32 clkout_enabled_index;
 
 static const char * const xc7022_supply_names[] = {
 	"avdd",		/* Analog power */
@@ -76,17 +98,21 @@ struct xc7022_mode {
 	u32 hts_def;
 	u32 vts_def;
 	u32 exp_def;
+	u32 colorspace;
 	const struct regval *reg_list;
 };
 
 struct xc7022 {
 	struct i2c_client	*client;
+	struct clk		*xvclk;
+	struct gpio_desc	*mipi_pwr_gpio;
 	struct gpio_desc	*reset_gpio;
 	struct gpio_desc	*pwdn_gpio;
 	struct regulator_bulk_data supplies[XC7022_NUM_SUPPLIES];
 
 	struct pinctrl		*pinctrl;
 	struct pinctrl_state	*pins_default;
+	struct pinctrl_state	*pins_sleep;
 
 	struct v4l2_subdev	subdev;
 	struct media_pad	pad;
@@ -99,10 +125,14 @@ struct xc7022 {
 	struct v4l2_ctrl	*test_pattern;
 	struct mutex		mutex;
 	bool			streaming;
+	bool			power_on;
 	const struct xc7022_mode *cur_mode;
+	u32			module_index;
+	const char		*module_facing;
+	const char		*module_name;
+	const char		*len_name;
 };
 
-static struct xc7022 *xc7022_master;
 
 #define to_xc7022(sd) container_of(sd, struct xc7022, subdev)
 
@@ -111,121 +141,16 @@ static struct xc7022 *xc7022_master;
  * max_framerate 30fps
  * mipi_datarate per lane 600Mbps
  */
-static const struct regval xc7022_1080p_regs[] = {
-	{0xfffd, 0x80}, // AE_avg
-	{0xfffe, 0x30}, // AE_avg
-	{0xfffe, 0x30},   // AE_avg
-	{0x1f04, 0x07},   // WIN width
-	{0x1f05, 0x80},
-	{0x1f06, 0x03},   // WIN height
-	{0x1f07, 0x60},
-	{0x1f08, 0x03},
-	{0xfffe, 0x2d},
-	{0x0003, 0x39},
-	{0xfffe, 0x26},
-	{0x8010, 0x05},
-	{0x8012, 0x80},
-	{0x8013, 0x07},
-	{0x8016, 0x00},
-	{0xfffe, 0x2c},
-	{0x0001, 0x07},
-	{0x0002, 0x80},
-	{0x0004, 0x04},
-	{0x0005, 0x38},
-	{0x0048, 0x0E},
-	{0x0049, 0xF0},
-	{0xfffe, 0x26},
-	{0x2019, 0x07},
-	{0x201a, 0x80},
-	{0x201b, 0x04},
-	{0x201c, 0x38},
-	{0xfffe, 0x30},
-	{0x0001, 0x92},
-	{0x005e, 0x7f},
-	{0x005f, 0x07},
-	{0x0060, 0x37},
-	{0x0061, 0x04},
-	{0x0064, 0x80},
-	{0x0065, 0x07},
-	{0x0066, 0x38},
-	{0x0067, 0x04},
-	{0x0006, 0x07},
-	{0x0007, 0x80},
-	{0x0008, 0x04},
-	{0x0009, 0x38},
-	{0x000a, 0x07},
-	{0x000b, 0x80},
-	{0x000c, 0x04},
-	{0x000d, 0x38},
-	{0xfffd, 0x80},
-	{0xfffe, 0x50},
-	{0x001a, 0x08},
-	{0x001a, 0x00},
-	{REG_NULL, 0x00},
-};
-
-static const struct regval xc7022_720p_regs[] = {
-	{0xfffd, 0x80}, // AE_avg
-	{0xfffe, 0x30},   // AE_avg
-	{0x1f04, 0x07},   // WIN width
-	{0x1f05, 0x80},
-	{0x1f06, 0x03},   // WIN height
-	{0x1f07, 0x60},
-	{0x1f08, 0x03},
-	{0xfffe, 0x2d},
-	{0x0003, 0x39},
-	{0xfffe, 0x26},
-	{0x8010, 0x05},
-	{0x8012, 0x80},
-	{0x8013, 0x07},
-	{0x8016, 0x00},
-	{0xfffe, 0x2c},
-	{0x0001, 0x05},
-	{0x0002, 0x00},
-	{0x0004, 0x02},
-	{0x0005, 0xD0},
-	{0x0048, 0x09},
-	{0x0049, 0xF0},
-	{0xfffe, 0x26},
-	{0x2019, 0x05},
-	{0x201a, 0x00},
-	{0x201b, 0x02},
-	{0x201c, 0xD0},
-	{0xfffe, 0x30},
-	{0x0001, 0x92},
-	{0x005e, 0x7f},
-	{0x005f, 0x07},
-	{0x0060, 0x37},
-	{0x0061, 0x04},
-	{0x0064, 0x00},
-	{0x0065, 0x05},
-	{0x0066, 0xD0},
-	{0x0067, 0x02},
-	{0x0006, 0x07},
-	{0x0007, 0x80},
-	{0x0008, 0x04},
-	{0x0009, 0x38},
-	{0x000a, 0x05},
-	{0x000b, 0x00},
-	{0x000c, 0x02},
-	{0x000d, 0xD0},
-	{0xfffd, 0x80},
-	{0xfffe, 0x50},
-	{0x001a, 0x08},
-	{0x001a, 0x00},
-	{REG_NULL, 0x00},
-};
-
 static const struct regval xc7022_480p_regs[] = {
-	{0xfffd, 0x80}, // AE_avg
-	{0xfffe, 0x30}, // AE_avg
-	{0x1f04, 0x05}, // WIN width
-	{0x1f05, 0xa0},
-	{0x1f06, 0x03}, // WIN height
-	{0x1f07, 0x60},
-	{0x1f08, 0x03},
-	{0xfffe, 0x2d},
-	{0x0003, 0x38},
+	{0xfffd, 0x80}, // AE_avg                                     
+	{0xfffe, 0x30}, // AE_avg                                     
+	{0x1f04, 0x05}, // WIN width              
+	{0x1f05, 0xa0},                           
+	{0x1f06, 0x03}, // WIN height             
+	{0x1f07, 0x60},                           
+	{0x1f08, 0x03},                                      
+	{0xfffe, 0x2d}, 
+	{0x0003, 0x38}, 
 	{0xfffe, 0x26},
 	{0x8010, 0x05},
 	{0x8012, 0xA0},
@@ -265,6 +190,61 @@ static const struct regval xc7022_480p_regs[] = {
 	{0xfffe, 0x50},
 	{0x001a, 0x08},
 	{0x001a, 0x00},
+	{0xfffe, 0x14}, //expose
+	{0x00fa, 0x00}, //0x00
+
+	{REG_NULL, 0x00},
+};
+static const struct regval xc7022_720p_regs[] = {
+	{0xfffd, 0x80}, // AE_avg                                     
+        {0xfffe, 0x30},   // AE_avg                                     
+        {0x1f04, 0x07},   // WIN width              
+        {0x1f05, 0x80},
+        {0x1f06, 0x03},   // WIN height             
+        {0x1f07, 0x60},
+        {0x1f08, 0x03},
+        {0xfffe, 0x2d},
+        {0x0003, 0x39},
+        {0xfffe, 0x26},
+        {0x8010, 0x05},
+        {0x8012, 0x80},
+        {0x8013, 0x07},
+        {0x8016, 0x00},
+        {0xfffe, 0x2c},
+        {0x0001, 0x05},
+        {0x0002, 0x00},
+        {0x0004, 0x02},
+        {0x0005, 0xD0},
+        {0x0048, 0x09},
+        {0x0049, 0xF0},
+        {0xfffe, 0x26},
+        {0x2019, 0x05},
+        {0x201a, 0x00},
+        {0x201b, 0x02},
+        {0x201c, 0xD0},
+        {0xfffe, 0x30},
+        {0x0001, 0x92},
+        {0x005e, 0x7f},
+        {0x005f, 0x07},
+        {0x0060, 0x37},
+        {0x0061, 0x04},
+        {0x0064, 0x00},
+        {0x0065, 0x05},
+        {0x0066, 0xD0},
+        {0x0067, 0x02},
+        {0x0006, 0x07},
+        {0x0007, 0x80},   
+        {0x0008, 0x04},   
+        {0x0009, 0x38},
+        {0x000a, 0x05},   
+        {0x000b, 0x00},
+        {0x000c, 0x02},
+        {0x000d, 0xD0},
+        {0xfffd, 0x80},
+        {0xfffe, 0x50},
+        {0x001a, 0x08},
+        {0x001a, 0x00},
+
 	{REG_NULL, 0x00},
 };
 
@@ -282,24 +262,112 @@ static const struct regval xc7022_stream_off_regs[] = {
 	{REG_NULL, 0x00},
 };
 
+static const struct regval xc6130_480p_regs[] = {
+{0xfffd, 0x80},
+{0xfffe, 0x21},
+{0x0684, 0x05},
+{0x0685, 0xa0},
+{0x0686, 0x04},
+{0x0687, 0x38},
+{0xfffe, 0x26},
+{0x6006, 0x5,},
+{0x6007, 0x78},
+{0x6008, 0x4,},
+{0x6009, 0xFC},
+{0x2019, 0x2,},
+{0x201a, 0x80},
+{0x201b, 0x1,},
+{0x201c, 0xE0},
+{0x8010, 0x5,},
+{0x8012, 0xA0},
+{0x8013, 0x5,},
+{0x8014, 0x38},
+{0x8015, 0x4,},
+{0x8016, 0xf0},
+{0x8017, 0x0,},
+{0xfffe, 0x21},
+{0x0001, 0x92},
+{0x0004, 0x18},
+{0x0708, 0x0,},
+{0x0072, 0xc0},
+{0x0074, 0x0a},
+{0x0006, 0x5,},
+{0x0007, 0xa0},
+{0x0008, 0x4,},
+{0x0009, 0x38},
+{0x000a, 0x2,},
+{0x000b, 0x80},
+{0x000c, 0x1,},
+{0x000d, 0xE0},
+{0x001e, 0x5,},
+{0x001f, 0xA0},
+{0x0020, 0x4,},
+{0x0021, 0x38},
+{0x005e, 0x9F},
+{0x005f, 0x5,},
+{0x0060, 0x37},
+{0x0061, 0x4,},
+{0x0064, 0xA0},
+{0x0065, 0x5,},
+{0x0066, 0x38},
+{0x0067, 0x4,},
+{REG_NULL, 0x00},
+
+};
+static const struct regval xc6130_720p_regs[] = {
+{0xfffd, 0x80},
+{0xfffe, 0x21},
+{0x0684, 0x07},
+{0x0685, 0x80},
+{0x0686, 0x04},
+{0x0687, 0x38},
+{0xfffe, 0x26},
+{0x6006, 0xA },
+{0x6007, 0x8C},
+{0x6008, 0x9 },
+{0x6009, 0xFC},
+{0x2019, 0x5 },
+{0x201a, 0x0 },
+{0x201b, 0x2 },
+{0x201c, 0xD0},
+{0x8010, 0x5 },
+{0x8012, 0x80},
+{0x8013, 0x7 },
+{0x8014, 0x38},
+{0x8015, 0x4 },
+{0x8016, 0x00},
+{0x8017, 0x0 },
+{0xfffe, 0x21},
+{0x0001, 0x92},
+{0x0004, 0x18},
+{0x0708, 0x0 },
+{0x0072, 0xc0},
+{0x0074, 0x0a},
+{0x0006, 0x7 },
+{0x0007, 0x80},
+{0x0008, 0x4 },
+{0x0009, 0x38},
+{0x000a, 0x5 },
+{0x000b, 0x0 },
+{0x000c, 0x2 },
+{0x000d, 0xD0},
+{0x001e, 0x7 },
+{0x001f, 0x80},
+{0x0020, 0x4 },
+{0x0021, 0x38},
+{0x005e, 0x7F},
+{0x005f, 0x7 },
+{0x0060, 0x37},
+{0x0061, 0x4 },
+{0x0064, 0x80},
+{0x0065, 0x7 },
+{0x0066, 0x38},
+{0x0067, 0x4 },
+
+{REG_NULL, 0x00},
+};
 
 static const struct xc7022_mode supported_modes[] = {
-	{
-		.width = 1280,
-		.height = 720,
-		.max_fps = {
-			.numerator = 10000,
-			.denominator = 600000,
-		},
-		.exp_def = 0x0600,
-		.hts_def = 0x12c0,
-		.vts_def = 0x0680,
-
-		//.exp_def = 0x0450,
-		//.hts_def = 0x0780,
-		//.vts_def = 0x0680,
-		.reg_list = xc7022_720p_regs,
-	},
 	{
 		.width = 640,
 		.height = 480,
@@ -307,23 +375,54 @@ static const struct xc7022_mode supported_modes[] = {
 			.numerator = 10000,
 			.denominator = 300000,
 		},
+		.colorspace = V4L2_COLORSPACE_SRGB,
 		.exp_def = 0x0600,
 		.hts_def = 0x12c0,
 		.vts_def = 0x0680,
 		.reg_list = xc7022_480p_regs,
 	},
+
+        {
+                .width = 1280,
+                .height = 720,
+                .max_fps = {
+                        .numerator = 10000,
+                        .denominator = 300000,
+                },
+                .colorspace = V4L2_COLORSPACE_SRGB,
+                .exp_def = 0x0600,
+                .hts_def = 0x12c0,
+                .vts_def = 0x0680,
+                .reg_list = xc7022_720p_regs,
+        },
+
 	{
-		.width = 1920,
-		.height = 1080,
+		.width = 640,
+		.height = 480,
 		.max_fps = {
 			.numerator = 10000,
 			.denominator = 300000,
 		},
+		.colorspace = V4L2_COLORSPACE_SRGB,
 		.exp_def = 0x0600,
 		.hts_def = 0x12c0,
 		.vts_def = 0x0680,
-		.reg_list = xc7022_1080p_regs,
+		.reg_list = xc6130_480p_regs,
 	},
+	        {
+                .width = 1280,
+                .height = 720,
+                .max_fps = {
+                        .numerator = 10000,
+                        .denominator = 300000,
+                },
+                .colorspace = V4L2_COLORSPACE_SRGB,
+                .exp_def = 0x0600,
+                .hts_def = 0x12c0,
+                .vts_def = 0x0680,
+                .reg_list = xc6130_720p_regs,
+        },
+
 
 };
 
@@ -441,7 +540,6 @@ xc7022_find_best_fit(struct v4l2_subdev_format *fmt)
 		}
 	}
 
-	pr_info("========= set %d cur_best_fit\n", cur_best_fit);
 	return &supported_modes[cur_best_fit];
 }
 
@@ -456,7 +554,7 @@ static int xc7022_set_fmt(struct v4l2_subdev *sd,
 	mutex_lock(&xc7022->mutex);
 
 	mode = xc7022_find_best_fit(fmt);
-	fmt->format.code = MEDIA_BUS_FMT_YUYV10_2X10;
+	fmt->format.code = MEDIA_BUS_FMT_YUYV8_2X8;//MEDIA_BUS_FMT_SBGGR10_1X10;//MEDIA_BUS_FMT_YUYV10_2X10;
 	fmt->format.width = mode->width;
 	fmt->format.height = mode->height;
 	fmt->format.field = V4L2_FIELD_NONE;
@@ -501,7 +599,7 @@ static int xc7022_get_fmt(struct v4l2_subdev *sd,
 	} else {
 		fmt->format.width = mode->width;
 		fmt->format.height = mode->height;
-		fmt->format.code = MEDIA_BUS_FMT_YUYV10_2X10;
+		fmt->format.code = MEDIA_BUS_FMT_YUYV8_2X8;//MEDIA_BUS_FMT_YUYV10_2X10;
 		fmt->format.field = V4L2_FIELD_NONE;
 	}
 	mutex_unlock(&xc7022->mutex);
@@ -509,6 +607,39 @@ static int xc7022_get_fmt(struct v4l2_subdev *sd,
 	return 0;
 }
 
+static int xc7022_enum_mbus_code(struct v4l2_subdev *sd,
+				  struct v4l2_subdev_pad_config *cfg,
+				  struct v4l2_subdev_mbus_code_enum *code)
+{
+	if (code->index != 0)
+		return -EINVAL;
+	code->code = MEDIA_BUS_FMT_YUYV8_2X8;//MEDIA_BUS_FMT_YUYV10_2X10;
+
+	return 0;
+}
+
+static int xc7022_enum_frame_sizes(struct v4l2_subdev *sd,
+				    struct v4l2_subdev_pad_config *cfg,
+				   struct v4l2_subdev_frame_size_enum *fse)
+{
+	if (fse->index >= ARRAY_SIZE(supported_modes))
+		return -EINVAL;
+
+	if (fse->code != MEDIA_BUS_FMT_YUYV8_2X8/*MEDIA_BUS_FMT_SBGGR10_1X10*/)
+		return -EINVAL;
+
+	fse->min_width  = supported_modes[fse->index].width;
+	fse->max_width  = supported_modes[fse->index].width;
+	fse->max_height = supported_modes[fse->index].height;
+	fse->min_height = supported_modes[fse->index].height;
+
+	return 0;
+}
+
+//static int xc7022_enable_test_pattern(struct xc7022 *xc7022, u32 pattern)
+//{
+//	return 0;
+//}
 
 static int xc7022_g_frame_interval(struct v4l2_subdev *sd,
 				    struct v4l2_subdev_frame_interval *fi)
@@ -523,12 +654,95 @@ static int xc7022_g_frame_interval(struct v4l2_subdev *sd,
 	return 0;
 }
 
+#define XC7022_LANES 2
+static int xc7022_g_mbus_config(struct v4l2_subdev *sd,
+                                 struct v4l2_mbus_config *config)
+{
+        u32 val = 0;
+        val = 1 << (XC7022_LANES - 1) |
+        V4L2_MBUS_CSI2_CHANNEL_0 |
+        V4L2_MBUS_CSI2_CONTINUOUS_CLOCK;
+
+        config->type = V4L2_MBUS_CSI2;
+        config->flags = val;
+
+        return 0;
+}
+
+static void xc7022_get_module_inf(struct xc7022 *xc7022,
+				   struct rkmodule_inf *inf)
+{
+	memset(inf, 0, sizeof(*inf));
+	strlcpy(inf->base.sensor, XC7022_NAME, sizeof(inf->base.sensor));
+	strlcpy(inf->base.module, xc7022->module_name,
+		sizeof(inf->base.module));
+	strlcpy(inf->base.lens, xc7022->len_name, sizeof(inf->base.lens));
+}
+
+static long xc7022_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
+{
+	struct xc7022 *xc7022 = to_xc7022(sd);
+	long ret = 0;
+
+	switch (cmd) {
+	case RKMODULE_GET_MODULE_INFO:
+		xc7022_get_module_inf(xc7022, (struct rkmodule_inf *)arg);
+		break;
+	default:
+		ret = -ENOIOCTLCMD;
+		break;
+	}
+
+	return ret;
+}
+
+#ifdef CONFIG_COMPAT
+static long xc7022_compat_ioctl32(struct v4l2_subdev *sd,
+				   unsigned int cmd, unsigned long arg)
+{
+	void __user *up = compat_ptr(arg);
+	struct rkmodule_inf *inf;
+	struct rkmodule_awb_cfg *cfg;
+	long ret;
+
+	switch (cmd) {
+	case RKMODULE_GET_MODULE_INFO:
+		inf = kzalloc(sizeof(*inf), GFP_KERNEL);
+		if (!inf) {
+			ret = -ENOMEM;
+			return ret;
+		}
+
+		ret = xc7022_ioctl(sd, cmd, inf);
+		if (!ret)
+			ret = copy_to_user(up, inf, sizeof(*inf));
+		kfree(inf);
+		break;
+	case RKMODULE_AWB_CFG:
+		cfg = kzalloc(sizeof(*cfg), GFP_KERNEL);
+		if (!cfg) {
+			ret = -ENOMEM;
+			return ret;
+		}
+
+		ret = copy_from_user(cfg, up, sizeof(*cfg));
+		if (!ret)
+			ret = xc7022_ioctl(sd, cmd, cfg);
+		kfree(cfg);
+		break;
+	default:
+		ret = -ENOIOCTLCMD;
+		break;
+	}
+
+	return ret;
+}
+#endif
+
 static int __xc7022_start_stream(struct xc7022 *xc7022)
 {
 	int ret;
-
-	xc7022_write_array(xc7022->client, xc7022->cur_mode->reg_list);
-
+	
 	ret = xc7022_write_array(xc7022->client, xc7022_stream_on_regs);
 	if(ret)
 		printk("write stream on failed\n");
@@ -544,13 +758,13 @@ static int __xc7022_start_stream(struct xc7022 *xc7022)
 }
 
 static int __xc7022_stop_stream(struct xc7022 *xc7022)
-{
+{	
 	int ret;
 
 	ret = xc7022_write_array(xc7022->client, xc7022_stream_off_regs);
 	if(ret)
 		printk("write stream off failed\n");
-
+		
 	return ret;
 }
 
@@ -591,99 +805,186 @@ unlock_and_return:
 	return ret;
 }
 
+static int __xc7022_power_on(struct xc7022 *xc7022);
+static void __xc7022_power_off(struct xc7022 *xc7022);
+static int xc7022_s_power(struct v4l2_subdev *sd, int on)
+{
+	struct xc7022 *xc7022 = to_xc7022(sd);
+	struct i2c_client *client = xc7022->client;
+	struct device *dev = &xc7022->client->dev;
+	int ret = 0;
+	u32 id = 0;
+
+	mutex_lock(&xc7022->mutex);
+
+	/* If the power state is not modified - no work to do. */
+	if (xc7022->power_on == !!on)
+		goto unlock_and_return;
+
+	if (on) {
+		ret = pm_runtime_get_sync(&client->dev);
+		if (ret < 0) {
+			pm_runtime_put_noidle(&client->dev);
+			goto unlock_and_return;
+		}
+
+		__xc7022_power_on(xc7022);
+
+        ret = xc7022_write_reg(client, CHECK_CHIP_ID_REG1,
+                                                        XC7022_REG_VALUE_08BIT,
+                                                        CHECK_CHIP_ID_VAL);
+        if (ret){
+                dev_err(dev, "write CHECK_CHIP_ID_REG1 failed\n");
+                return ret;
+        }
+
+        ret = xc7022_write_reg(client, CHECK_CHIP_ID_REG2,
+                                                        XC7022_REG_VALUE_08BIT,
+                                                        CHECK_CHIP_ID_VAL);
+        if (ret){
+                dev_err(dev, "write CHECK_CHIP_ID_REG2 failed\n");
+                return ret;
+        }
+
+	ret = xc7022_read_reg(client, XC7022_CHIP_ID_REG1,
+			       XC7022_REG_VALUE_08BIT, &id);
+	if (id == XC7022_CHIP_ID1) {
+		dev_info(dev, "chip is xc7022\n");
+		ret = xc7022_read_reg(client, XC7022_CHIP_ID_REG2,
+		       XC7022_REG_VALUE_08BIT, &id);
+		if (id != XC7022_CHIP_ID2) {
+			dev_err(dev, "Unexpected sensor of XC7022_CHIP_ID_REG2, id(%06x), ret(%d)\n", id, ret);
+			//return ret;
+		}
+	xc7022_global_regs = xc7022_720p_regs;
+	} else {
+		ret = xc7022_read_reg(client, XC6130_CHIP_ID_REG1,
+			       XC7022_REG_VALUE_08BIT, &id);
+		if (id == XC6130_CHIP_ID1)	{
+			dev_info(dev, "chip is xc6130\n");
+			ret = xc7022_read_reg(client, XC6130_CHIP_ID_REG2,
+			       XC7022_REG_VALUE_08BIT, &id);
+			if (id != XC6130_CHIP_ID2) {
+				dev_err(dev, "Unexpected sensor of XC6130_CHIP_ID_REG2, id(%06x), ret(%d)\n", id, ret);
+				return ret;
+			}
+		xc7022_global_regs = xc6130_720p_regs;
+		} else {
+			xc7022_global_regs = xc6130_720p_regs;
+			dev_err(dev, "Unexpected sensor of xc6130, open it directly ...id(%06x),ret(%d)\n",id,ret);
+		}
+	}
+
+		ret = xc7022_write_array(xc7022->client, xc7022_global_regs);
+		if (ret) {
+			v4l2_err(sd, "could not set init registers\n");
+			pm_runtime_put_noidle(&client->dev);
+			goto unlock_and_return;
+		}
+
+		xc7022->power_on = true;
+		/* export gpio */
+		if (!IS_ERR(xc7022->reset_gpio))
+			gpiod_export(xc7022->reset_gpio, false);
+		if (!IS_ERR(xc7022->pwdn_gpio))
+			gpiod_export(xc7022->pwdn_gpio, false);
+	} else {
+		pm_runtime_put(&client->dev);
+		__xc7022_power_off(xc7022);
+		xc7022->power_on = false;
+		/* unexport gpio */
+		if (!IS_ERR(xc7022->reset_gpio))
+			gpiod_unexport(xc7022->reset_gpio);
+		if (!IS_ERR(xc7022->pwdn_gpio))
+			gpiod_unexport(xc7022->pwdn_gpio);
+	}
+
+unlock_and_return:
+	mutex_unlock(&xc7022->mutex);
+
+	return ret;
+}
+
 /* Calculate the delay in us by clock rate and clock cycles */
 static inline u32 xc7022_cal_delay(u32 cycles)
 {
 	return DIV_ROUND_UP(cycles, XC7022_XVCLK_FREQ / 1000 / 1000);
 }
 
-static int __xc7022_master_power_on(struct device *dev) {
-	struct xc7022 *xc7022 = xc7022_master;
+static int __xc7022_power_on(struct xc7022 *xc7022)
+{
 	int ret;
-
-	if (!xc7022) {
-		dev_err(dev, "no xc7022 master set\n");
-		return -EINVAL;
-	}
-
-	xc7022_power_count++;
-	if (xc7022_power_count > 1) {
-		ret = 0;
-		goto err_shortcut;
-	}
+	u32 delay_us;
+	struct device *dev = &xc7022->client->dev;
 
 	if (!IS_ERR_OR_NULL(xc7022->pins_default)) {
 		ret = pinctrl_select_state(xc7022->pinctrl,
 					   xc7022->pins_default);
-		if (ret < 0) {
+		if (ret < 0)
 			dev_err(dev, "could not set pins\n");
-			goto err_pins;
+	}
+
+	if (clkout_enabled_index){
+		ret = clk_prepare_enable(xc7022->xvclk);
+		if (ret < 0) {
+			dev_err(dev, "Failed to enable xvclk\n");
+			return ret;
 		}
 	}
 
-	if (!IS_ERR(xc7022->reset_gpio)){
+	if (!IS_ERR(xc7022->reset_gpio))
+		gpiod_set_value_cansleep(xc7022->reset_gpio, 0);
+
+	ret = regulator_bulk_enable(XC7022_NUM_SUPPLIES, xc7022->supplies);
+	if (ret < 0) {
+		dev_err(dev, "Failed to enable regulators\n");
+		goto disable_clk;
+	}
+
+	if (!IS_ERR(xc7022->mipi_pwr_gpio))
+		gpiod_set_value_cansleep(xc7022->mipi_pwr_gpio, 1);
+
+	if (!IS_ERR(xc7022->reset_gpio))
 		gpiod_set_value_cansleep(xc7022->reset_gpio, 1);
-	} else{
-		dev_err(dev, "could not get reset gpio\n");
-		return -EINVAL;
-	}
+
+	usleep_range(500, 1000);
+	if (!IS_ERR(xc7022->pwdn_gpio))
+		gpiod_set_value_cansleep(xc7022->pwdn_gpio, 1);
+
+	/* 8192 cycles prior to first SCCB transaction */
+	delay_us = xc7022_cal_delay(8192);
+	usleep_range(delay_us, delay_us * 2);
 
 	return 0;
 
-err_pins:
-	xc7022_power_count--;
-err_shortcut:
-	return ret;
-}
+disable_clk:
+	if (clkout_enabled_index)
+		clk_disable_unprepare(xc7022->xvclk);
 
-static void __xc7022_master_power_off(struct device *dev)
-{
-	struct xc7022 *xc7022 = xc7022_master;
-
-	if (!xc7022) {
-		dev_err(dev, "no xc7022 master set\n");
-		return;
-	}
-
-	xc7022_power_count--;
-	if (xc7022_power_count > 0) {
-		return;
-	}
-
-	regulator_bulk_disable(XC7022_NUM_SUPPLIES, xc7022->supplies);
-
-	return;
-}
-
-static int __xc7022_power_on(struct xc7022 *xc7022)
-{
-	int ret;
-	struct device *dev = &xc7022->client->dev;
-
-	mutex_lock(&xc7022_power_mutex);
-	ret = __xc7022_master_power_on(dev);
-	if (ret) {
-		dev_err(dev, "could not power on, error %d\n", ret);
-		goto err_power;
-	}
-
-	mutex_unlock(&xc7022_power_mutex);
-	return 0;
-
-err_power:
-	mutex_unlock(&xc7022_power_mutex);
 	return ret;
 }
 
 static void __xc7022_power_off(struct xc7022 *xc7022)
 {
+	int ret;
 	struct device *dev = &xc7022->client->dev;
 
-	mutex_lock(&xc7022_power_mutex);
-	__xc7022_master_power_off(dev);
-	mutex_unlock(&xc7022_power_mutex);
+	if (!IS_ERR(xc7022->pwdn_gpio))
+		gpiod_set_value_cansleep(xc7022->pwdn_gpio, 0);
+	if (clkout_enabled_index)
+		clk_disable_unprepare(xc7022->xvclk);
+	if (!IS_ERR(xc7022->mipi_pwr_gpio))
+		gpiod_set_value_cansleep(xc7022->mipi_pwr_gpio, 0);
+	if (!IS_ERR(xc7022->reset_gpio))
+		gpiod_set_value_cansleep(xc7022->reset_gpio, 0);
+	if (!IS_ERR_OR_NULL(xc7022->pins_sleep)) {
+		ret = pinctrl_select_state(xc7022->pinctrl,
+					   xc7022->pins_sleep);
+		if (ret < 0)
+			dev_dbg(dev, "could not set pins\n");
+	}
+	regulator_bulk_disable(XC7022_NUM_SUPPLIES, xc7022->supplies);
 }
-
 static int xc7022_runtime_resume(struct device *dev)
 {
 	struct i2c_client *client = to_i2c_client(dev);
@@ -704,6 +1005,24 @@ static int xc7022_runtime_suspend(struct device *dev)
 	return 0;
 }
 
+
+
+static int xc7022_enum_frame_interval(struct v4l2_subdev *sd,
+				       struct v4l2_subdev_pad_config *cfg,
+				       struct v4l2_subdev_frame_interval_enum *fie)
+{
+	if (fie->index >= ARRAY_SIZE(supported_modes))
+		return -EINVAL;
+
+	if (fie->code != MEDIA_BUS_FMT_YUYV8_2X8)
+		return -EINVAL;
+
+	fie->width = supported_modes[fie->index].width;
+	fie->height = supported_modes[fie->index].height;
+	fie->interval = supported_modes[fie->index].max_fps;
+	return 0;
+}
+
 #ifdef CONFIG_VIDEO_V4L2_SUBDEV_API
 static int xc7022_open(struct v4l2_subdev *sd, struct v4l2_subdev_fh *fh)
 {
@@ -716,7 +1035,7 @@ static int xc7022_open(struct v4l2_subdev *sd, struct v4l2_subdev_fh *fh)
 	/* Initialize try_fmt */
 	try_fmt->width = def_mode->width;
 	try_fmt->height = def_mode->height;
-	try_fmt->code = MEDIA_BUS_FMT_YUYV10_2X10;
+	try_fmt->code = MEDIA_BUS_FMT_YUYV8_2X8;//MEDIA_BUS_FMT_YUYV10_2X10;
 	try_fmt->field = V4L2_FIELD_NONE;
 
 	mutex_unlock(&xc7022->mutex);
@@ -737,17 +1056,33 @@ static const struct v4l2_subdev_internal_ops xc7022_internal_ops = {
 };
 #endif
 
+static const struct v4l2_subdev_core_ops xc7022_core_ops = {
+        .log_status = v4l2_ctrl_subdev_log_status,
+        .subscribe_event = v4l2_ctrl_subdev_subscribe_event,
+        .unsubscribe_event = v4l2_event_subdev_unsubscribe,
+	.s_power = xc7022_s_power,
+	.ioctl = xc7022_ioctl,
+#ifdef CONFIG_COMPAT
+	.compat_ioctl32 = xc7022_compat_ioctl32,
+#endif
+};
+
 static const struct v4l2_subdev_video_ops xc7022_video_ops = {
 	.s_stream = xc7022_s_stream,
 	.g_frame_interval = xc7022_g_frame_interval,
+	.g_mbus_config = xc7022_g_mbus_config,
 };
 
 static const struct v4l2_subdev_pad_ops xc7022_pad_ops = {
+	.enum_mbus_code = xc7022_enum_mbus_code,
+	.enum_frame_size = xc7022_enum_frame_sizes,
+	.enum_frame_interval = xc7022_enum_frame_interval,
 	.get_fmt = xc7022_get_fmt,
 	.set_fmt = xc7022_set_fmt,
 };
 
 static const struct v4l2_subdev_ops xc7022_subdev_ops = {
+	.core	= &xc7022_core_ops,
 	.video	= &xc7022_video_ops,
 	.pad	= &xc7022_pad_ops,
 };
@@ -756,6 +1091,7 @@ static int xc7022_set_ctrl(struct v4l2_ctrl *ctrl)
 {
 	struct xc7022 *xc7022 = container_of(ctrl->handler,
 					     struct xc7022, ctrl_handler);
+	struct i2c_client *client = xc7022->client;
 	s64 max;
 
 	/* Propagate change of current control to all related controls */
@@ -769,7 +1105,10 @@ static int xc7022_set_ctrl(struct v4l2_ctrl *ctrl)
 					 xc7022->exposure->default_value);
 		break;
 	}
+	if (pm_runtime_get(&client->dev) <= 0)
+		return 0;
 
+	pm_runtime_put(&client->dev);
 	return 0;
 }
 
@@ -853,21 +1192,23 @@ static int xc7022_check_sensor_id(struct xc7022 *xc7022,
 	u32 id = 0;
 	int ret;
 
+#if 1
 	ret = xc7022_write_reg(client, CHECK_CHIP_ID_REG1,
-							XC7022_REG_VALUE_08BIT,
+							XC7022_REG_VALUE_08BIT, 
 							CHECK_CHIP_ID_VAL);
 	if (ret){
 		dev_err(dev, "write CHECK_CHIP_ID_REG1 failed\n");
 		return ret;
-	}
+	}	
 
 	ret = xc7022_write_reg(client, CHECK_CHIP_ID_REG2,
-							XC7022_REG_VALUE_08BIT,
+							XC7022_REG_VALUE_08BIT, 
 							CHECK_CHIP_ID_VAL);
 	if (ret){
 		dev_err(dev, "write CHECK_CHIP_ID_REG2 failed\n");
 		return ret;
 	}
+#endif
 
 	ret = xc7022_read_reg(client, XC7022_CHIP_ID_REG1,
 			       XC7022_REG_VALUE_08BIT, &id);
@@ -879,6 +1220,7 @@ static int xc7022_check_sensor_id(struct xc7022 *xc7022,
 			dev_err(dev, "Unexpected sensor of XC7022_CHIP_ID_REG2, id(%06x), ret(%d)\n", id, ret);
 			return ret;
 		}
+	xc7022_global_regs = xc7022_720p_regs;
 	} else {
 		ret = xc7022_read_reg(client, XC6130_CHIP_ID_REG1,
 			       XC7022_REG_VALUE_08BIT, &id);
@@ -890,83 +1232,127 @@ static int xc7022_check_sensor_id(struct xc7022 *xc7022,
 				dev_err(dev, "Unexpected sensor of XC6130_CHIP_ID_REG2, id(%06x), ret(%d)\n", id, ret);
 				return ret;
 			}
+		xc7022_global_regs = xc6130_720p_regs;
 		} else {
 			dev_err(dev, "Check chip ID failed\n");
+			//xc7022_global_regs = xc7022_480p_regs; // for default, if not, it cannot init sensor
 			return ret;
 		}
 	}
-
+	
 	return 0;
-
+	
 }
 
-static int xc7022_configure_regulators(struct device *dev)
+static int xc7022_configure_regulators(struct xc7022 *xc7022)
 {
-	struct xc7022 *xc7022 = xc7022_master;
 	unsigned int i;
 
-	if (!xc7022) {
-		dev_err(dev, "no xc7022 master set\n");
-		return -EINVAL;
-	}
 	for (i = 0; i < XC7022_NUM_SUPPLIES; i++)
 		xc7022->supplies[i].supply = xc7022_supply_names[i];
 
-	return devm_regulator_bulk_get(dev,
+	return devm_regulator_bulk_get(&xc7022->client->dev,
 				       XC7022_NUM_SUPPLIES,
 				       xc7022->supplies);
 }
 
-static void xc7022_detach_master(void *data)
+static void free_gpio(struct xc7022 *xc7022)
 {
-	if (xc7022_master == data)
-		xc7022_master = NULL;
+	if (!IS_ERR(xc7022->pwdn_gpio))
+		gpio_free(desc_to_gpio(xc7022->pwdn_gpio));
+        if (!IS_ERR(xc7022->reset_gpio))
+                gpio_free(desc_to_gpio(xc7022->reset_gpio));
+        if (!IS_ERR(xc7022->mipi_pwr_gpio))
+		gpio_free(desc_to_gpio(xc7022->mipi_pwr_gpio));
 }
 
 static int xc7022_probe(struct i2c_client *client,
 			 const struct i2c_device_id *id)
 {
 	struct device *dev = &client->dev;
+	struct device_node *node = dev->of_node;
 	struct xc7022 *xc7022;
 	struct v4l2_subdev *sd;
+	char facing[2];
 	int ret;
+
+
+	dev_info(dev, "driver version: %02x.%02x.%02x",
+		DRIVER_VERSION >> 16,
+		(DRIVER_VERSION & 0xff00) >> 8,
+		DRIVER_VERSION & 0x00ff);
 
 	xc7022 = devm_kzalloc(dev, sizeof(*xc7022), GFP_KERNEL);
 	if (!xc7022)
 		return -ENOMEM;
 
+	ret = of_property_read_u32(node, RKMODULE_CAMERA_MODULE_INDEX,
+				   &xc7022->module_index);
+	ret |= of_property_read_string(node, RKMODULE_CAMERA_MODULE_FACING,
+				       &xc7022->module_facing);
+	ret |= of_property_read_string(node, RKMODULE_CAMERA_MODULE_NAME,
+				       &xc7022->module_name);
+	ret |= of_property_read_string(node, RKMODULE_CAMERA_LENS_NAME,
+				       &xc7022->len_name);
+	if (ret) {
+		dev_err(dev, "could not get module information!\n");
+		return -EINVAL;
+	}
+
 	xc7022->client = client;
 	xc7022->cur_mode = &supported_modes[0];
 
-	if (!xc7022_master) {
-		xc7022_master = xc7022;
-		devm_add_action(dev, xc7022_detach_master, xc7022);
-	}
-	if (xc7022_master == xc7022) {
+	
 
-		xc7022->reset_gpio = devm_gpiod_get(dev, "reset", GPIOD_OUT_LOW);
-		if (IS_ERR(xc7022->reset_gpio)){
-			dev_warn(dev, "Failed to get reset-gpios\n");
-			return -1;
-		} else{
-			gpiod_set_value_cansleep(xc7022->reset_gpio, 1);
-			msleep(4500);
+	if (clkout_enabled_index){
+		xc7022->xvclk = devm_clk_get(dev, "xvclk");
+		if (IS_ERR(xc7022->xvclk)) {
+			dev_err(dev, "Failed to get xvclk\n");
+			return -EINVAL;
 		}
-
-		ret = xc7022_configure_regulators(dev);
-		if (ret) {
-			dev_err(dev, "Failed to get power regulators\n");
+		ret = clk_set_rate(xc7022->xvclk, XC7022_XVCLK_FREQ);
+		if (ret < 0) {
+			dev_err(dev, "Failed to set xvclk rate (24MHz)\n");
 			return ret;
 		}
+		if (clk_get_rate(xc7022->xvclk) != XC7022_XVCLK_FREQ)
+			dev_warn(dev, "xvclk mismatched, modes are based on 24MHz\n");
+	}
 
-		xc7022->pinctrl = devm_pinctrl_get(dev);
-		if (!IS_ERR(xc7022->pinctrl)) {
-			xc7022->pins_default =
-				pinctrl_lookup_state(xc7022->pinctrl, "default");
-			if (IS_ERR(xc7022->pins_default))
-				dev_err(dev, "could not get default pinstate\n");
 
-		}
+	xc7022->mipi_pwr_gpio = devm_gpiod_get(dev, "mipi-pwr", GPIOD_OUT_LOW);
+	if (IS_ERR(xc7022->mipi_pwr_gpio))
+		dev_warn(dev, "Failed to get power-gpios, maybe no use\n");
+
+	xc7022->reset_gpio = devm_gpiod_get(dev, "reset", GPIOD_OUT_LOW);
+	if (IS_ERR(xc7022->reset_gpio)) {
+	   dev_info(dev, "Failed to get reset-gpios, maybe no use\n");
+	}
+
+	xc7022->pwdn_gpio = devm_gpiod_get(dev, "pwdn", GPIOD_OUT_LOW);
+	if (IS_ERR(xc7022->pwdn_gpio)) {
+	  dev_info(dev, "Failed to get pwdn-gpios, maybe no use\n");
+	}
+
+	ret = xc7022_configure_regulators(xc7022);
+	if (ret) {
+		dev_err(dev, "Failed to get power regulators\n");
+		return ret;
+	}
+
+	xc7022->pinctrl = devm_pinctrl_get(dev);
+	if (!IS_ERR(xc7022->pinctrl)) {
+		xc7022->pins_default =
+			pinctrl_lookup_state(xc7022->pinctrl,
+					     OF_CAMERA_PINCTRL_STATE_DEFAULT);
+		if (IS_ERR(xc7022->pins_default))
+			dev_err(dev, "could not get default pinstate\n");
+
+		xc7022->pins_sleep =
+			pinctrl_lookup_state(xc7022->pinctrl,
+					     OF_CAMERA_PINCTRL_STATE_SLEEP);
+		if (IS_ERR(xc7022->pins_sleep))
+			dev_err(dev, "could not get sleep pinstate\n");
 	}
 
 	mutex_init(&xc7022->mutex);
@@ -974,13 +1360,8 @@ static int xc7022_probe(struct i2c_client *client,
 	sd = &xc7022->subdev;
 	v4l2_i2c_subdev_init(sd, client, &xc7022_subdev_ops);
 	ret = xc7022_initialize_controls(xc7022);
-
 	if (ret)
 		goto err_destroy_mutex;
-
-	ret = __xc7022_power_on(xc7022);
-	if (ret)
-		goto err_free_handler;
 
 	ret = xc7022_check_sensor_id(xc7022, client);
 	if (ret)
@@ -992,19 +1373,28 @@ static int xc7022_probe(struct i2c_client *client,
 #endif
 #if defined(CONFIG_MEDIA_CONTROLLER)
 	xc7022->pad.flags = MEDIA_PAD_FL_SOURCE;
-	sd->entity.type = MEDIA_ENT_T_V4L2_SUBDEV_SENSOR;
-	ret = media_entity_init(&sd->entity, 1, &xc7022->pad, 0);
+	sd->entity.function = MEDIA_ENT_F_CAM_SENSOR;
+	ret = media_entity_pads_init(&sd->entity, 1, &xc7022->pad);
 	if (ret < 0)
 		goto err_power_off;
+	
 #endif
 
+	memset(facing, 0, sizeof(facing));
+	if (strcmp(xc7022->module_facing, "back") == 0)
+		facing[0] = 'b';
+	else
+		facing[0] = 'f';
+
+	snprintf(sd->name, sizeof(sd->name), "m%02d_%s_%s %s",
+		 xc7022->module_index, facing,
+		 XC7022_NAME, dev_name(sd->dev));
 	ret = v4l2_async_register_subdev_sensor_common(sd);
 	if (ret) {
 		dev_err(dev, "v4l2 async register subdev failed\n");
 		goto err_clean_entity;
 	}
 
-	__xc7022_stop_stream(xc7022);
 	pm_runtime_set_active(dev);
 	pm_runtime_enable(dev);
 	pm_runtime_idle(dev);
@@ -1017,7 +1407,8 @@ err_clean_entity:
 #endif
 err_power_off:
 	__xc7022_power_off(xc7022);
-err_free_handler:
+	free_gpio(xc7022);
+//err_free_handler:
 	v4l2_ctrl_handler_free(&xc7022->ctrl_handler);
 err_destroy_mutex:
 	mutex_destroy(&xc7022->mutex);

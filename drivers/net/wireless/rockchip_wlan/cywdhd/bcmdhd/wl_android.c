@@ -2,7 +2,7 @@
 /*
  * Linux cfg80211 driver - Android related functions
  *
- * Copyright (C) 1999-2018, Broadcom Corporation
+ * Copyright (C) 1999-2019, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -2672,24 +2672,6 @@ wl_handle_private_cmd(struct net_device *net, char *command, u32 cmd_len)
 
 	return bytes_written;
 }
-
-#if 0
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 10, 0))
-static int
-wl_genl_register_family_with_ops_groups(struct genl_family *family,
-       const struct genl_ops *ops, size_t n_ops,
-       const struct genl_multicast_group *mcgrps,
-       size_t n_mcgrps)
-{
-       family->module = THIS_MODULE;
-       family->ops = ops;
-       family->n_ops = n_ops;
-       family->mcgrps = mcgrps;
-       family->n_mcgrps = n_mcgrps;
-       return genl_register_family(family);
-}
-#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(4, 10, 0) */
-#endif
 
 int wl_android_init(void)
 {

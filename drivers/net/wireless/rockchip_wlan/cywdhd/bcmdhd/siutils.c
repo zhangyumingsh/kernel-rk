@@ -3,7 +3,7 @@
  * Misc utility routines for accessing chip-specific features
  * of the SiliconBackplane-based Broadcom chips.
  *
- * Copyright (C) 1999-2018, Broadcom Corporation
+ * Copyright (C) 1999-2019, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -26,7 +26,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: siutils.c 708487 2018-10-31 05:33:14Z $
+ * $Id: siutils.c 722050 2019-08-21 02:24:57Z $
  */
 
 #include <bcm_cfg.h>
@@ -295,6 +295,10 @@ si_buscore_setup(si_info_t *sii, chipcregs_t *cc, uint bustype, uint32 savewin,
 					memcpy(&sii->pub, &sii_pub_43436, sizeof(sii->pub));
 				else
 					memcpy(&sii->pub, &sii_pub_43430, sizeof(sii->pub));
+				break;
+
+			case BCM43012_CHIP_ID:
+				memcpy(&sii->pub, &sii_pub_43012, sizeof(sii->pub));
 				break;
 		}
 		return true;
@@ -1613,7 +1617,14 @@ si_chip_hostif(si_t *sih)
 		else if (CST4349_CHIPMODE_PCIE(sih->chipst))
 			hosti = CHIP_HOSTIF_PCIEMODE;
 		break;
-
+	case BCM4373_CHIP_ID:
+		if (CST4373_CHIPMODE_USB20D(sih->chipst))
+			hosti = CHIP_HOSTIF_USBMODE;
+		else if (CST4373_CHIPMODE_SDIOD(sih->chipst))
+			hosti = CHIP_HOSTIF_SDIOMODE;
+		else if (CST4373_CHIPMODE_PCIE(sih->chipst))
+			hosti = CHIP_HOSTIF_PCIEMODE;
+		break;
 	case BCM4350_CHIP_ID:
 	case BCM4354_CHIP_ID:
 	case BCM4356_CHIP_ID:

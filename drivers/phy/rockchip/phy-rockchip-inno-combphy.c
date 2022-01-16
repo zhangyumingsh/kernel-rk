@@ -70,7 +70,6 @@ struct rockchip_combphy_grfcfg {
 
 struct rockchip_combphy_cfg {
 	const struct rockchip_combphy_grfcfg grfcfg;
-	int (*combphy_u3_cp_test)(struct rockchip_combphy_priv *priv);
 	int (*combphy_cfg)(struct rockchip_combphy_priv *priv);
 	int (*combphy_low_power_ctrl)(struct rockchip_combphy_priv *priv,
 				      bool en);
@@ -136,31 +135,13 @@ static inline int param_write(struct regmap *base,
 	return regmap_write(base, reg->offset, val);
 }
 
-static inline bool param_exped(void __iomem *base,
-			       const struct combphy_reg *reg,
-			       unsigned int value)
-{
-	int ret;
-	unsigned int tmp, orig;
-	unsigned int mask = GENMASK(reg->bitend, reg->bitstart);
-
-	ret = regmap_read(base, reg->offset, &orig);
-	if (ret)
-		return false;
-
-	tmp = (orig & mask) >> reg->bitstart;
-
-	return tmp == value;
-}
-
 static ssize_t u3phy_mode_show(struct device *device,
 			       struct device_attribute *attr,
 			       char *buf)
 {
 	struct rockchip_combphy_priv *priv = dev_get_drvdata(device);
 
-	if (param_exped(priv->usb_pcie_grf,
-			&priv->cfg->grfcfg.u3_port_num, 0))
+	if (param_read(priv->usb_pcie_grf, &priv->cfg->grfcfg.u3_port_num, 0))
 		return sprintf(buf, "u2\n");
 	else
 		return sprintf(buf, "u3\n");
@@ -173,8 +154,7 @@ static ssize_t u3phy_mode_store(struct device *device,
 	struct rockchip_combphy_priv *priv = dev_get_drvdata(device);
 
 	if (!strncmp(buf, "u3", 2) &&
-	    param_exped(priv->usb_pcie_grf,
-			&priv->cfg->grfcfg.u3_port_num, 0)) {
+	    param_read(priv->usb_pcie_grf, &priv->cfg->grfcfg.u3_port_num, 0)) {
 		/*
 		 * Enable USB 3.0 rx termination, need to select
 		 * pipe_l0_rxtermination from USB 3.0 controller.
@@ -189,8 +169,8 @@ static ssize_t u3phy_mode_store(struct device *device,
 			    &priv->cfg->grfcfg.u3_port_disable, false);
 		dev_info(priv->dev, "Set usb3.0 and usb2.0 mode successfully\n");
 	} else if (!strncmp(buf, "u2", 2) &&
-		   param_exped(priv->usb_pcie_grf,
-			       &priv->cfg->grfcfg.u3_port_num, 1)) {
+		   param_read(priv->usb_pcie_grf,
+			      &priv->cfg->grfcfg.u3_port_num, 1)) {
 		/*
 		 * Disable USB 3.0 rx termination, need to select
 		 * pipe_l0_rxtermination from grf and remove rx
@@ -565,28 +545,6 @@ done:
 	return 0;
 }
 
-static int rockchip_combphy_u3_cp_test(struct phy *phy)
-{
-	struct rockchip_combphy_priv *priv = phy_get_drvdata(phy);
-	int ret = 0;
-
-	/*
-	 * When do USB3 compliance test, we may connect the oscilloscope
-	 * front panel Aux Out to the DUT SSRX+, the Aux Out of the
-	 * oscilloscope outputs a negative pulse whose width is between
-	 * 300- 400 ns which may trigger some DUTs to change the CP test
-	 * pattern.
-	 *
-	 * The Inno USB3 PHY disable the function to detect the negative
-	 * pulse in SSRX+ by default, so we need to enable the function
-	 * to toggle the CP test pattern before do USB3 compliance test.
-	 */
-	if (priv->cfg->combphy_u3_cp_test)
-		ret = priv->cfg->combphy_u3_cp_test(priv);
-
-	return ret;
-}
-
 static int rockchip_combphy_set_mode(struct phy *phy, enum phy_mode mode)
 {
 	struct rockchip_combphy_priv *priv = phy_get_drvdata(phy);
@@ -614,7 +572,6 @@ static const struct phy_ops rockchip_combphy_ops = {
 	.power_on	= rockchip_combphy_power_on,
 	.power_off	= rockchip_combphy_power_off,
 	.set_mode       = rockchip_combphy_set_mode,
-	.cp_test	= rockchip_combphy_u3_cp_test,
 	.owner		= THIS_MODULE,
 };
 
@@ -741,19 +698,6 @@ static int rockchip_combphy_remove(struct platform_device *pdev)
 	if (priv->phy_type == PHY_TYPE_USB3 && priv->phy_initialized)
 		sysfs_remove_group(&priv->dev->kobj,
 				   &rockchip_combphy_u3phy_mode_attr_group);
-
-	return 0;
-}
-
-static int rk1808_combphy_u3_cp_test(struct rockchip_combphy_priv *priv)
-{
-	if (priv->phy_type != PHY_TYPE_USB3) {
-		dev_err(priv->dev, "failed to set cp test for phy type %d\n",
-			priv->phy_type);
-		return -EINVAL;
-	}
-
-	writel(0x0c, priv->mmio + 0x4008);
 
 	return 0;
 }
@@ -1050,7 +994,6 @@ static const struct rockchip_combphy_cfg rk1808_combphy_cfgs = {
 		.u3_port_disable = { 0x0434, 0, 0, 0, 1},
 		.u3_port_num	= { 0x0434, 15, 12, 0, 1},
 	},
-	.combphy_u3_cp_test	= rk1808_combphy_u3_cp_test,
 	.combphy_cfg		= rk1808_combphy_cfg,
 	.combphy_low_power_ctrl	= rk1808_combphy_low_power_control,
 };

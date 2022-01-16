@@ -13,6 +13,10 @@
 
 #define ai_core_43430 6
 #define oob_router_43430 0x18107000
+
+#define ai_core_43012 8
+#define oob_router_43012 0x1810c000
+
 #define FW_ALIVE_MAGIC 0x151515
 
 extern int alive;
@@ -38,6 +42,14 @@ extern uint32	bcm43436_cib[];
 extern int	sii_pub_43341[];
 extern int	sii_pub_43430[];
 extern int	sii_pub_43436[];
+
+extern uint32 bcm43012_coreid[];
+extern uint32 bcm43012_coresba[];
+extern uint32 bcm43012_coresba_size[];
+extern uint32 bcm43012_wrapba[];
+extern uint32 bcm43012_cia[];
+extern uint32 bcm43012_cib[];
+extern int sii_pub_43012[];
 
 #endif	//LOAD_DHD_WITH_FW_ALIVE
 

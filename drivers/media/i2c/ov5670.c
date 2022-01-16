@@ -7,7 +7,9 @@
  * V0.0X01.0X01 add poweron function.
  * V0.0X01.0X02 fix mclk issue when probe multiple camera.
  * V0.0X01.0X03 add otp function.
- * V0.0X01.0X03 add enum_frame_interval function.
+ * V0.0X01.0X04 add enum_frame_interval function.
+ * V0.0X01.0X05 add quick stream on/off
+ * V0.0X01.0X06 add function g_mmbus_config
  */
 
 #include <linux/clk.h>
@@ -39,7 +41,7 @@
 /* verify default register values */
 //#define CHECK_REG_VALUE
 
-#define DRIVER_VERSION			KERNEL_VERSION(0, 0x01, 0x04)
+#define DRIVER_VERSION			KERNEL_VERSION(0, 0x01, 0x06)
 
 #ifndef V4L2_CID_DIGITAL_GAIN
 #define V4L2_CID_DIGITAL_GAIN		V4L2_CID_GAIN
@@ -997,6 +999,7 @@ static long ov5670_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
 {
 	struct ov5670 *ov5670 = to_ov5670(sd);
 	long ret = 0;
+	u32 stream = 0;
 
 	switch (cmd) {
 	case RKMODULE_GET_MODULE_INFO:
@@ -1004,6 +1007,17 @@ static long ov5670_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
 		break;
 	case RKMODULE_AWB_CFG:
 		ov5670_set_awb_cfg(ov5670, (struct rkmodule_awb_cfg *)arg);
+		break;
+	case RKMODULE_SET_QUICK_STREAM:
+
+		stream = *((u32 *)arg);
+
+		if (stream)
+			ret = ov5670_write_reg(ov5670->client, OV5670_REG_CTRL_MODE,
+				OV5670_REG_VALUE_08BIT, OV5670_MODE_STREAMING);
+		else
+			ret = ov5670_write_reg(ov5670->client, OV5670_REG_CTRL_MODE,
+				OV5670_REG_VALUE_08BIT, OV5670_MODE_SW_STANDBY);
 		break;
 	default:
 		ret = -ENOIOCTLCMD;
@@ -1021,6 +1035,7 @@ static long ov5670_compat_ioctl32(struct v4l2_subdev *sd,
 	struct rkmodule_inf *inf;
 	struct rkmodule_awb_cfg *awb_cfg;
 	long ret;
+	u32 stream = 0;
 
 	switch (cmd) {
 	case RKMODULE_GET_MODULE_INFO:
@@ -1046,6 +1061,11 @@ static long ov5670_compat_ioctl32(struct v4l2_subdev *sd,
 		if (!ret)
 			ret = ov5670_ioctl(sd, cmd, awb_cfg);
 		kfree(awb_cfg);
+		break;
+	case RKMODULE_SET_QUICK_STREAM:
+		ret = copy_from_user(&stream, up, sizeof(u32));
+		if (!ret)
+			ret = ov5670_ioctl(sd, cmd, &stream);
 		break;
 	default:
 		ret = -ENOIOCTLCMD;
@@ -1175,8 +1195,8 @@ static int ov5670_s_stream(struct v4l2_subdev *sd, int on)
 	int ret = 0;
 
 	dev_info(&client->dev, "%s: on: %d, %dx%d@%d\n", __func__, on,
-		ov5670->cur_mode->width,
-		ov5670->cur_mode->height,
+				ov5670->cur_mode->width,
+				ov5670->cur_mode->height,
 		DIV_ROUND_CLOSEST(ov5670->cur_mode->max_fps.denominator,
 		ov5670->cur_mode->max_fps.numerator));
 
@@ -1403,6 +1423,20 @@ static int ov5670_enum_frame_interval(struct v4l2_subdev *sd,
 	return 0;
 }
 
+static int ov5670_g_mbus_config(struct v4l2_subdev *sd,
+				struct v4l2_mbus_config *config)
+{
+	u32 val = 0;
+
+	val = 1 << (OV5670_LANES - 1) |
+	      V4L2_MBUS_CSI2_CHANNEL_0 |
+	      V4L2_MBUS_CSI2_CONTINUOUS_CLOCK;
+	config->type = V4L2_MBUS_CSI2;
+	config->flags = val;
+
+	return 0;
+}
+
 static const struct dev_pm_ops ov5670_pm_ops = {
 	SET_RUNTIME_PM_OPS(ov5670_runtime_suspend,
 			   ov5670_runtime_resume, NULL)
@@ -1425,6 +1459,7 @@ static const struct v4l2_subdev_core_ops ov5670_core_ops = {
 static const struct v4l2_subdev_video_ops ov5670_video_ops = {
 	.s_stream = ov5670_s_stream,
 	.g_frame_interval = ov5670_g_frame_interval,
+	.g_mbus_config = ov5670_g_mbus_config,
 };
 
 static const struct v4l2_subdev_pad_ops ov5670_pad_ops = {
@@ -1461,7 +1496,7 @@ static int ov5670_set_ctrl(struct v4l2_ctrl *ctrl)
 		break;
 	}
 
-	if (pm_runtime_get(&client->dev) <= 0)
+	if (!pm_runtime_get_if_in_use(&client->dev))
 		return 0;
 
 	switch (ctrl->id) {
@@ -1890,12 +1925,13 @@ static int ov5670_probe(struct i2c_client *client,
 
 #ifdef CONFIG_VIDEO_V4L2_SUBDEV_API
 	sd->internal_ops = &ov5670_internal_ops;
-	sd->flags |= V4L2_SUBDEV_FL_HAS_DEVNODE;
+	sd->flags |= V4L2_SUBDEV_FL_HAS_DEVNODE |
+		     V4L2_SUBDEV_FL_HAS_EVENTS;
 #endif
 #if defined(CONFIG_MEDIA_CONTROLLER)
 	ov5670->pad.flags = MEDIA_PAD_FL_SOURCE;
-	sd->entity.type = MEDIA_ENT_T_V4L2_SUBDEV_SENSOR;
-	ret = media_entity_init(&sd->entity, 1, &ov5670->pad, 0);
+	sd->entity.function = MEDIA_ENT_F_CAM_SENSOR;
+	ret = media_entity_pads_init(&sd->entity, 1, &ov5670->pad);
 	if (ret < 0)
 		goto err_power_off;
 #endif

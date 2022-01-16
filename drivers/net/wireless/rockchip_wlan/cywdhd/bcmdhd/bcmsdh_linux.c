@@ -2,7 +2,7 @@
 /*
  * SDIO access interface for drivers - linux specific (pci only)
  *
- * Copyright (C) 1999-2018, Broadcom Corporation
+ * Copyright (C) 1999-2019, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -85,7 +85,7 @@ typedef struct bcmsdh_os_info {
 } bcmsdh_os_info_t;
 
 /* debugging macros */
-#define SDLX_MSG(x)
+#define SDLX_MSG(x)		do { printf x; } while (0)
 
 /**
  * Checks to see if vendor and device IDs match a supported SDIO Host Controller.
@@ -392,7 +392,7 @@ void bcmsdh_oob_intr_unregister(bcmsdh_info_t *bcmsdh)
 /* Module parameters specific to each host-controller driver */
 
 extern uint sd_msglevel;	/* Debug message level */
-module_param(sd_msglevel, uint, 0);
+module_param(sd_msglevel, uint, 0664);
 
 extern uint sd_power;	/* 0 = SD Power OFF, 1 = SD Power ON. */
 module_param(sd_power, uint, 0);

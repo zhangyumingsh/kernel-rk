@@ -8,7 +8,7 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  */
 #include <linux/fs.h>       /* file system operations */
-#include <asm/uaccess.h>    /* user space access */
+#include <linux/uaccess.h>  /* user space access */
 
 #include "mali_ukk.h"
 #include "mali_osk.h"
@@ -202,8 +202,8 @@ int mem_write_safe_wrapper(struct mali_session_data *session_data, _mali_uk_mem_
 	kargs.ctx = (uintptr_t)session_data;
 
 	/* Check if we can access the buffers */
-	if (!access_ok(VERIFY_WRITE, kargs.dest, kargs.size)
-	    || !access_ok(VERIFY_READ, kargs.src, kargs.size)) {
+	if (!access_ok(VERIFY_WRITE, (const void *)(uintptr_t)kargs.dest, kargs.size) ||
+	    !access_ok(VERIFY_READ, (const void *)(uintptr_t)kargs.src, kargs.size)) {
 		return -EINVAL;
 	}
 

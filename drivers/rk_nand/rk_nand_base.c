@@ -23,13 +23,14 @@
 #include <linux/platform_device.h>
 #include <linux/pm_runtime.h>
 #include <linux/slab.h>
+#include <linux/timer.h>
 #include <linux/uaccess.h>
 
 #include "rk_nand_blk.h"
 #include "rk_ftl_api.h"
 #include "rk_nand_base.h"
 
-#define RKNAND_VERSION_AND_DATE  "rknandbase v1.2 2018-05-08"
+#define RKNAND_VERSION_AND_DATE  "rknandbase v1.2 2021-01-07"
 
 static struct rk_nandc_info g_nandc_info[2];
 struct device *g_nand_device;
@@ -40,8 +41,8 @@ static int rk_nand_shutdown_state;
 /*1:flash 2:emmc 4:sdcard0 8:sdcard1*/
 static int rknand_boot_media = 2;
 static DECLARE_WAIT_QUEUE_HEAD(rk29_nandc_wait);
-static void rk_nand_iqr_timeout_hack(unsigned long data);
-static DEFINE_TIMER(rk_nand_iqr_timeout, rk_nand_iqr_timeout_hack, 0, 0);
+static void rk_nand_iqr_timeout_hack(struct timer_list *unused);
+static DEFINE_TIMER(rk_nand_iqr_timeout, rk_nand_iqr_timeout_hack);
 static int nandc0_xfer_completed_flag;
 static int nandc0_ready_completed_flag;
 static int nandc1_xfer_completed_flag;
@@ -50,7 +51,7 @@ static int rk_timer_add;
 
 void *ftl_malloc(int size)
 {
-	return kmalloc(size, GFP_KERNEL | GFP_DMA);
+	return kmalloc(size, GFP_KERNEL | GFP_DMA32);
 }
 
 void ftl_free(void *buf)
@@ -95,24 +96,15 @@ EXPORT_SYMBOL(rknand_dma_flush_dcache);
 
 unsigned long rknand_dma_map_single(unsigned long ptr, int size, int dir)
 {
-#ifdef CONFIG_ARM64
-	__dma_map_area((void *)ptr, size, dir);
-	return ((unsigned long)virt_to_phys((void *)ptr));
-#else
-	return dma_map_single(NULL, (void *)ptr, size
+	return dma_map_single(g_nand_device, (void *)ptr, size
 		, dir ? DMA_TO_DEVICE : DMA_FROM_DEVICE);
-#endif
 }
 EXPORT_SYMBOL(rknand_dma_map_single);
 
 void rknand_dma_unmap_single(unsigned long ptr, int size, int dir)
 {
-#ifdef CONFIG_ARM64
-	__dma_unmap_area(phys_to_virt(ptr), size, dir);
-#else
-	dma_unmap_single(NULL, (dma_addr_t)ptr, size
+	dma_unmap_single(g_nand_device, (dma_addr_t)ptr, size
 		, dir ? DMA_TO_DEVICE : DMA_FROM_DEVICE);
-#endif
 }
 EXPORT_SYMBOL(rknand_dma_unmap_single);
 
@@ -188,7 +180,7 @@ int rk_nand_schedule_enable_config(int en)
 	return tmp;
 }
 
-static void rk_nand_iqr_timeout_hack(unsigned long data)
+static void rk_nand_iqr_timeout_hack(struct timer_list *unused)
 {
 	del_timer(&rk_nand_iqr_timeout);
 	rk_timer_add = 0;
@@ -391,7 +383,7 @@ static int rknand_probe(struct platform_device *pdev)
 	pm_runtime_enable(&pdev->dev);
 	pm_runtime_get_sync(&pdev->dev);
 
-	return 0;
+	return dma_set_mask(g_nand_device, DMA_BIT_MASK(32));
 }
 
 static int rknand_suspend(struct platform_device *pdev, pm_message_t state)
@@ -452,6 +444,7 @@ static const struct dev_pm_ops rknand_dev_pm_ops = {
 #ifdef CONFIG_OF
 static const struct of_device_id of_rk_nandc_match[] = {
 	{.compatible = "rockchip,rk-nandc"},
+	{.compatible = "rockchip,rk-nandc-v9"},
 	{}
 };
 #endif

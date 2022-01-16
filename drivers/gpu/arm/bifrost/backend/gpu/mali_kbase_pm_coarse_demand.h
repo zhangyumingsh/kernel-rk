@@ -1,11 +1,12 @@
+/* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 /*
  *
- * (C) COPYRIGHT 2012-2015 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2012-2015, 2018, 2020-2021 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
  * Foundation, and any use by you of this program is subject to the terms
- * of such GNU licence.
+ * of such GNU license.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -16,11 +17,7 @@
  * along with this program; if not, you can access it online at
  * http://www.gnu.org/licenses/gpl-2.0.html.
  *
- * SPDX-License-Identifier: GPL-2.0
- *
  */
-
-
 
 /*
  * "Coarse Demand" power management policy
@@ -35,11 +32,11 @@
  * characteristics:
  * - When KBase indicates that the GPU will be powered up, but we don't yet
  *   know which Job Chains are to be run:
- *  - All Shader Cores are powered up, regardless of whether or not they will
- *    be needed later.
- * - When KBase indicates that a set of Shader Cores are needed to submit the
- *   currently queued Job Chains:
- *  - All Shader Cores are kept powered, regardless of whether or not they will
+ *  - Shader Cores are powered up, regardless of whether or not they will be
+ *    needed later.
+ * - When KBase indicates that Shader Cores are needed to submit the currently
+ *   queued Job Chains:
+ *  - Shader Cores are kept powered, regardless of whether or not they will
  *    be needed
  * - When KBase indicates that the GPU need not be powered:
  *  - The Shader Cores are powered off, and the GPU itself is powered off too.

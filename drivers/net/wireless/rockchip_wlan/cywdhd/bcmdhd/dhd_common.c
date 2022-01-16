@@ -2,7 +2,7 @@
 /*
  * Broadcom Dongle Host Driver (DHD), common DHD core.
  *
- * Copyright (C) 1999-2018, Broadcom Corporation
+ * Copyright (C) 1999-2019, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -25,7 +25,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: dhd_common.c 692262 2018-07-04 09:30:26Z $
+ * $Id: dhd_common.c 715966 2019-05-30 02:36:59Z $
  */
 #include <typedefs.h>
 #include <osl.h>
@@ -94,7 +94,7 @@
 extern void htsf_update(struct dhd_info *dhd, void *data);
 #endif
 
-int dhd_msg_level = DHD_ERROR_VAL | DHD_MSGTRACE_VAL | DHD_FWLOG_VAL;
+int dhd_msg_level = DHD_ERROR_VAL | DHD_MSGTRACE_VAL | DHD_EVENT_VAL;
 
 
 #if defined(WL_WLC_SHIM)
@@ -566,12 +566,12 @@ dhd_wl_ioctl(dhd_pub_t *dhd_pub, int ifidx, wl_ioctl_t *ioc, void *buf, int len)
 #ifdef HOST_FLAG
 		/*save hostsleep val first, if ioctl success, set hostsleep to val*/
 		if (ioc->cmd == WLC_SET_VAR) {
-			psleep = strstr(ioc->buf, "hostsleep");
+			psleep = strstr(buf, "hostsleep");
 			if (psleep) {
 				hostsleep_set = 1;
 				memcpy(&hostsleep_val, psleep + strlen("hostsleep") + 1, sizeof(hostsleep_val));
 				printf("###hostsleep: cmd = %d, hostsleep_val = %d, buf = %s\n",
-					ioc->cmd, hostsleep_val, (char *)ioc->buf);
+					ioc->cmd, hostsleep_val, (char *)buf);
 			}
 		}
 		/* block all cmd, expect hostsleep remove */
@@ -1900,8 +1900,8 @@ wl_show_host_event(dhd_pub_t *dhd_pub, wl_event_msg_t *event, void *event_data,
 		break;
 	case WLC_E_ESCAN_RESULT:
 	{
-		DHD_EVENT(("MACEVENT: %s %d, MAC %s, status %d \n",
-		       event_name, event_type, eabuf, (int)status));
+		//DHD_EVENT(("MACEVENT: %s %d, MAC %s, status %d \n",
+		//       event_name, event_type, eabuf, (int)status));
 	}
 		break;
 	default:
@@ -1934,16 +1934,19 @@ wl_event_process_default(wl_event_msg_t *event, struct wl_evt_pport *evt_pport)
 }
 
 int
-wl_event_process(dhd_pub_t *dhd_pub, int *ifidx, void *pktdata, void **data_ptr, void *raw_event)
+wl_event_process(dhd_pub_t *dhd_pub, int *ifidx, void *pktdata, uint pktlen, void **data_ptr,
+	void *raw_event)
 {
 	wl_evt_pport_t evt_pport;
 	wl_event_msg_t event;
+	bcm_event_msg_u_t evu;
 
 	/* make sure it is a BRCM event pkt and record event data */
-	int ret = wl_host_event_get_data(pktdata, &event, data_ptr);
+	int ret = wl_host_event_get_data(pktdata, pktlen, &evu);
 	if (ret != BCME_OK) {
 		return ret;
 	}
+	memcpy(&event, &evu.event, sizeof(wl_event_msg_t));
 
 	/* convert event from network order to host order */
 	wl_event_to_host_order(&event);
@@ -1954,6 +1957,7 @@ wl_event_process(dhd_pub_t *dhd_pub, int *ifidx, void *pktdata, void **data_ptr,
 	evt_pport.pktdata = pktdata;
 	evt_pport.data_ptr = data_ptr;
 	evt_pport.raw_event = raw_event;
+	evt_pport.data_len = pktlen;
 
 #if defined(WL_WLC_SHIM) && defined(WL_WLC_SHIM_EVENTS)
 	{
@@ -1970,46 +1974,57 @@ wl_event_process(dhd_pub_t *dhd_pub, int *ifidx, void *pktdata, void **data_ptr,
 
 /* Check whether packet is a BRCM event pkt. If it is, record event data. */
 int
-wl_host_event_get_data(void *pktdata, wl_event_msg_t *event, void **data_ptr)
+wl_host_event_get_data(void *pktdata, uint pktlen, bcm_event_msg_u_t *evu)
 {
-	bcm_event_t *pvt_data = (bcm_event_t *)pktdata;
+	int ret;
 
-	if (bcmp(BRCM_OUI, &pvt_data->bcm_hdr.oui[0], DOT11_OUI_LEN)) {
-		DHD_ERROR(("%s: mismatched OUI, bailing\n", __FUNCTION__));
-		return BCME_ERROR;
+	ret = is_wlc_event_frame(pktdata, pktlen, 0, evu);
+	if (ret != BCME_OK) {
+		DHD_ERROR(("%s: Invalid event frame, err = %d\n",
+			__FUNCTION__, ret));
 	}
-
-	/* BRCM event pkt may be unaligned - use xxx_ua to load user_subtype. */
-	if (ntoh16_ua((void *)&pvt_data->bcm_hdr.usr_subtype) != BCMILCP_BCM_SUBTYPE_EVENT) {
-		DHD_ERROR(("%s: mismatched subtype, bailing\n", __FUNCTION__));
-		return BCME_ERROR;
-	}
-
-	*data_ptr = &pvt_data[1];
-
-	/* memcpy since BRCM event pkt may be unaligned. */
-	memcpy(event, &pvt_data->event, sizeof(wl_event_msg_t));
-
-	return BCME_OK;
+	return ret;
 }
 
 int
-wl_host_event(dhd_pub_t *dhd_pub, int *ifidx, void *pktdata,
+wl_process_host_event(dhd_pub_t *dhd_pub, int *ifidx, void *pktdata, uint pktlen,
 	wl_event_msg_t *event, void **data_ptr, void *raw_event)
 {
-	bcm_event_t *pvt_data;
+	bcm_event_t *pvt_data = (bcm_event_t *)pktdata;
+	bcm_event_msg_u_t evu;
 	uint8 *event_data;
 	uint32 type, status, datalen, reason;
 	uint16 flags;
-	int evlen;
-
-	/* make sure it is a BRCM event pkt and record event data */
-	int ret = wl_host_event_get_data(pktdata, event, data_ptr);
+	uint evlen;
+	int ret;
+	uint16 usr_subtype;
+	ret = wl_host_event_get_data(pktdata, pktlen, &evu);
 	if (ret != BCME_OK) {
 		return ret;
 	}
+	usr_subtype = ntoh16_ua((void *)&pvt_data->bcm_hdr.usr_subtype);
+	switch (usr_subtype) {
+	case BCMILCP_BCM_SUBTYPE_EVENT:
+		memcpy(event, &evu.event, sizeof(wl_event_msg_t));
+		*data_ptr = &pvt_data[1];
+		break;
+	case BCMILCP_BCM_SUBTYPE_DNGLEVENT:
+#ifdef HEALTH_CHECK
+	/* If it is a DNGL event process it first */
+	if (dngl_host_event(dhd_pub, pktdata, &evu.dngl_event, pktlen) == BCME_OK) {
+			/*
+			* Return error purposely to prevent DNGL event being processed
+			* as BRCM event
+			*/
+			return BCME_ERROR;
+	}
+#endif /* HEALTH_CHECK */
+		return BCME_NOTFOUND;
+	default:
+		return BCME_NOTFOUND;
+	}
 
-	pvt_data = (bcm_event_t *)pktdata;
+	/* start wl_event_msg process */
 	event_data = *data_ptr;
 
 	type = ntoh32_ua((void *)&event->event_type);
@@ -2017,8 +2032,8 @@ wl_host_event(dhd_pub_t *dhd_pub, int *ifidx, void *pktdata,
 	status = ntoh32_ua((void *)&event->status);
 	reason = ntoh32_ua((void *)&event->reason);
 	datalen = ntoh32_ua((void *)&event->datalen);
-	evlen = datalen + sizeof(bcm_event_t);
 
+	evlen = datalen + sizeof(bcm_event_t);
 	switch (type) {
 #ifdef PROP_TXSTATUS
 	case WLC_E_FIFO_CREDIT_MAP:
@@ -2241,6 +2256,14 @@ wl_host_event(dhd_pub_t *dhd_pub, int *ifidx, void *pktdata,
 #endif /* SHOW_EVENTS */
 
 	return (BCME_OK);
+}
+
+int
+wl_host_event(dhd_pub_t *dhd_pub, int *ifidx, void *pktdata, uint pktlen,
+	wl_event_msg_t *event, void **data_ptr, void *raw_event)
+{
+	return wl_process_host_event(dhd_pub, ifidx, pktdata, pktlen, event, data_ptr,
+		raw_event);
 }
 
 void

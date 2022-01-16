@@ -2,7 +2,7 @@
 /*
  * Linux platform device for DHD WLAN adapter
  *
- * Copyright (C) 1999-2018, Broadcom Corporation
+ * Copyright (C) 1999-2019, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -67,9 +67,9 @@ static bool is_power_on = FALSE;
 #if !defined(CONFIG_DTS)
 #if defined(DHD_OF_SUPPORT)
 static bool dts_enabled = TRUE;
+extern int dhd_wlan_init_plat_data(void);
 extern struct resource dhd_wlan_resources;
 extern struct wifi_platform_data dhd_wlan_control;
-extern int dhd_wlan_init_plat_data(void);
 #else
 static bool dts_enabled = FALSE;
 struct resource dhd_wlan_resources = {0};
@@ -416,7 +416,11 @@ static struct platform_driver wifi_platform_dev_driver_legacy = {
 	}
 };
 
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 3, 0))
+static int wifi_platdev_match(struct device *dev, const void *data)
+#else
 static int wifi_platdev_match(struct device *dev, void *data)
+#endif
 {
 	char *name = (char*)data;
 	struct platform_device *pdev = to_platform_device(dev);
@@ -488,9 +492,8 @@ static int wifi_ctrlfunc_register_drv(void)
 		struct resource *resource;
 
 		wifi_plat_dev_probe_ret = dhd_wlan_init_plat_data();
-
 		if (wifi_plat_dev_probe_ret)
-		    return wifi_plat_dev_probe_ret;
+			return wifi_plat_dev_probe_ret;
 
 		adapter->wifi_plat_data = (void *)&dhd_wlan_control;
 		resource = &dhd_wlan_resources;

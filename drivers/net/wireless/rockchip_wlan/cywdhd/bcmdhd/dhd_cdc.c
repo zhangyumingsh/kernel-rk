@@ -2,7 +2,7 @@
 /*
  * DHD Protocol Module for CDC and BDC.
  *
- * Copyright (C) 1999-2018, Broadcom Corporation
+ * Copyright (C) 1999-2019, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -663,37 +663,28 @@ dhd_sync_with_dongle(dhd_pub_t *dhd)
 	wlc_rev_info_t revinfo;
 	DHD_TRACE(("%s: Enter\n", __FUNCTION__));
 
-
-	/* Get the device rev info */
-	memset(&revinfo, 0, sizeof(revinfo));
-	ret = dhd_wl_ioctl_cmd(dhd, WLC_GET_REVINFO, &revinfo, sizeof(revinfo), FALSE, 0);
-	if (ret < 0)
-		goto done;
-
-#if defined(BCMDBUS) && defined(BCMDHDUSB)
-	/* dbus_set_revinfo(dhd->dbus, revinfo.chipnum, revinfo.chiprev); */
-#endif /* BCMDBUS && BCMDHDUSB */
-
-	dhd_process_cid_mac(dhd, TRUE);
-
 #ifdef LOAD_DHD_WITH_FW_ALIVE
 	if(alive == FW_ALIVE_MAGIC) {
-		char buf[WLC_IOCTL_SMLEN];
-
-		memset(buf, 0, sizeof(buf));
-		bcm_mkiovar("cur_etheraddr", 0, 0, buf, sizeof(buf));
-		if ((ret = dhd_wl_ioctl_cmd(dhd, WLC_GET_VAR, buf, sizeof(buf), FALSE, 0)) < 0) {
-		DHD_ERROR(("%s: can't get MAC address , error=%d\n", __FUNCTION__, ret));
-		}
-	/* Update public MAC address after reading from Firmware */
-		memcpy(dhd->mac.octet, buf, ETHER_ADDR_LEN);
-
+		ret = dhd_preinit_ioctls_alive(dhd);
 	} else
-#endif
-		ret = dhd_preinit_ioctls(dhd);
+#endif /* LOAD_DHD_WITH_FW_ALIVE */
+	{
+		/* Get the device rev info */
+		memset(&revinfo, 0, sizeof(revinfo));
+		ret = dhd_wl_ioctl_cmd(dhd, WLC_GET_REVINFO, &revinfo, sizeof(revinfo), FALSE, 0);
+		if (ret < 0)
+			goto done;
 
-	if (!ret)
-		dhd_process_cid_mac(dhd, FALSE);
+#if defined(BCMDBUS) && defined(BCMDHDUSB)
+		/* dbus_set_revinfo(dhd->dbus, revinfo.chipnum, revinfo.chiprev); */
+#endif /* BCMDBUS && BCMDHDUSB */
+
+		dhd_process_cid_mac(dhd, TRUE);
+
+		ret = dhd_preinit_ioctls(dhd);
+		if (!ret)
+			dhd_process_cid_mac(dhd, FALSE);
+	}
 
 	/* Always assumes wl for now */
 	dhd->iswl = TRUE;

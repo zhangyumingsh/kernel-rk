@@ -404,7 +404,7 @@ extern uint64 osl_sysuptime_us(void);
 
 /* map/unmap physical to virtual I/O */
 #if !defined(CONFIG_MMC_MSM7X00A)
-#define	REG_MAP(pa, size)	ioremap_nocache((unsigned long)(pa), (unsigned long)(size))
+#define	REG_MAP(pa, size)	ioremap((unsigned long)(pa), (unsigned long)(size))
 #else
 #define REG_MAP(pa, size)       (void *)(0)
 #endif /* !defined(CONFIG_MMC_MSM7X00A */
@@ -1158,5 +1158,13 @@ extern void osl_timer_add(osl_t *osh, osl_timer_t *t, uint32 ms, bool periodic);
 extern void osl_timer_update(osl_t *osh, osl_timer_t *t, uint32 ms, bool periodic);
 extern bool osl_timer_del(osl_t *osh, osl_timer_t *t);
 #endif
+
+typedef struct osl_timespec {
+	__kernel_time_t	tv_sec;			/* seconds */
+	__kernel_suseconds_t	tv_usec;	/* microseconds */
+	long		tv_nsec;		/* nanoseconds */
+} osl_timespec_t;
+extern void osl_do_gettimeofday(struct osl_timespec *ts);
+extern void osl_get_monotonic_boottime(struct osl_timespec *ts);
 
 #endif	/* _linux_osl_h_ */

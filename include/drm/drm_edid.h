@@ -25,6 +25,10 @@
 
 #include <linux/types.h>
 #include <linux/hdmi.h>
+#include <drm/drm_mode.h>
+
+struct drm_device;
+struct i2c_adapter;
 
 #define EDID_LENGTH 128
 #define DDC_ADDR 0x50
@@ -218,6 +222,46 @@ struct detailed_timing {
 				    DRM_EDID_YCBCR420_DC_36 | \
 				    DRM_EDID_YCBCR420_DC_30)
 
+#define DRM_EDID_CLRMETRY_xvYCC_601   (1 << 0)
+#define DRM_EDID_CLRMETRY_xvYCC_709   (1 << 1)
+#define DRM_EDID_CLRMETRY_sYCC_601    (1 << 2)
+#define DRM_EDID_CLRMETRY_ADBYCC_601  (1 << 3)
+#define DRM_EDID_CLRMETRY_ADB_RGB     (1 << 4)
+#define DRM_EDID_CLRMETRY_BT2020_CYCC (1 << 5)
+#define DRM_EDID_CLRMETRY_BT2020_YCC  (1 << 6)
+#define DRM_EDID_CLRMETRY_BT2020_RGB  (1 << 7)
+#define DRM_EDID_CLRMETRY_DCI_P3      (1 << 15)
+
+/* HDMI 2.1 additional fields */
+#define DRM_EDID_MAX_FRL_RATE_MASK		0xf0
+#define DRM_EDID_FAPA_START_LOCATION		(1 << 0)
+#define DRM_EDID_ALLM				(1 << 1)
+#define DRM_EDID_FVA				(1 << 2)
+
+/* Deep Color specific */
+#define DRM_EDID_DC_30BIT_420			(1 << 0)
+#define DRM_EDID_DC_36BIT_420			(1 << 1)
+#define DRM_EDID_DC_48BIT_420			(1 << 2)
+
+/* VRR specific */
+#define DRM_EDID_CNMVRR				(1 << 3)
+#define DRM_EDID_CINEMA_VRR			(1 << 4)
+#define DRM_EDID_MDELTA				(1 << 5)
+#define DRM_EDID_VRR_MAX_UPPER_MASK		0xc0
+#define DRM_EDID_VRR_MAX_LOWER_MASK		0xff
+#define DRM_EDID_VRR_MIN_MASK			0x3f
+
+/* DSC specific */
+#define DRM_EDID_DSC_10BPC			(1 << 0)
+#define DRM_EDID_DSC_12BPC			(1 << 1)
+#define DRM_EDID_DSC_16BPC			(1 << 2)
+#define DRM_EDID_DSC_ALL_BPP			(1 << 3)
+#define DRM_EDID_DSC_NATIVE_420			(1 << 6)
+#define DRM_EDID_DSC_1P2			(1 << 7)
+#define DRM_EDID_DSC_MAX_FRL_RATE_MASK		0xf0
+#define DRM_EDID_DSC_MAX_SLICES			0xf
+#define DRM_EDID_DSC_TOTAL_CHUNK_KBYTES		0x3f
+
 /* ELD Header Block */
 #define DRM_ELD_HEADER_BLOCK_SIZE	4
 
@@ -254,6 +298,7 @@ struct detailed_timing {
 # define DRM_ELD_AUD_SYNCH_DELAY_MAX	0xfa	/* 500 ms */
 
 #define DRM_ELD_SPEAKER			7
+# define DRM_ELD_SPEAKER_MASK		0x7f
 # define DRM_ELD_SPEAKER_RLRC		(1 << 6)
 # define DRM_ELD_SPEAKER_FLRC		(1 << 5)
 # define DRM_ELD_SPEAKER_RC		(1 << 4)
@@ -274,6 +319,11 @@ struct detailed_timing {
 #define DRM_ELD_MONITOR_NAME_STRING	20	/* offsets 20..(20+mnl-1) inclusive */
 
 #define DRM_ELD_CEA_SAD(mnl, sad)	(20 + (mnl) + 3 * (sad))
+
+/* HDMI 2.0 */
+#define DRM_EDID_3D_INDEPENDENT_VIEW	(1 << 2)
+#define DRM_EDID_3D_DUAL_VIEW		(1 << 1)
+#define DRM_EDID_3D_OSD_DISPARITY	(1 << 0)
 
 struct edid {
 	u8 header[8];
@@ -327,17 +377,25 @@ struct cea_sad {
 
 struct drm_encoder;
 struct drm_connector;
+struct drm_connector_state;
 struct drm_display_mode;
-struct hdmi_avi_infoframe;
-struct hdmi_vendor_infoframe;
 
-void drm_edid_to_eld(struct drm_connector *connector, struct edid *edid);
 int drm_edid_to_sad(struct edid *edid, struct cea_sad **sads);
 int drm_edid_to_speaker_allocation(struct edid *edid, u8 **sadb);
 int drm_av_sync_delay(struct drm_connector *connector,
 		      const struct drm_display_mode *mode);
-struct drm_connector *drm_select_eld(struct drm_encoder *encoder);
-int drm_load_edid_firmware(struct drm_connector *connector);
+
+#ifdef CONFIG_DRM_LOAD_EDID_FIRMWARE
+struct edid *drm_load_edid_firmware(struct drm_connector *connector);
+int __drm_set_edid_firmware_path(const char *path);
+int __drm_get_edid_firmware_path(char *buf, size_t bufsize);
+#else
+static inline struct edid *
+drm_load_edid_firmware(struct drm_connector *connector)
+{
+	return ERR_PTR(-ENOENT);
+}
+#endif
 
 int
 drm_hdmi_avi_infoframe_from_display_mode(struct hdmi_avi_infoframe *frame,
@@ -345,12 +403,18 @@ drm_hdmi_avi_infoframe_from_display_mode(struct hdmi_avi_infoframe *frame,
 					 bool is_hdmi2_sink);
 int
 drm_hdmi_vendor_infoframe_from_display_mode(struct hdmi_vendor_infoframe *frame,
+					    struct drm_connector *connector,
 					    const struct drm_display_mode *mode);
 void
 drm_hdmi_avi_infoframe_quant_range(struct hdmi_avi_infoframe *frame,
 				   const struct drm_display_mode *mode,
 				   enum hdmi_quantization_range rgb_quant_range,
-				   bool rgb_quant_range_selectable);
+				   bool rgb_quant_range_selectable,
+				   bool is_hdmi2_sink);
+
+int
+drm_hdmi_infoframe_set_hdr_metadata(struct hdmi_drm_infoframe *frame,
+				    const struct drm_connector_state *conn_state);
 
 /**
  * drm_eld_mnl - Get ELD monitor name length in bytes.
@@ -360,10 +424,6 @@ static inline int drm_eld_mnl(const uint8_t *eld)
 {
 	return (eld[DRM_ELD_CEA_EDID_VER_MNL] & DRM_ELD_MNL_MASK) >> DRM_ELD_MNL_SHIFT;
 }
-
-int
-drm_hdmi_infoframe_set_hdr_metadata(struct hdmi_drm_infoframe *frame,
-				    void *hdr_source_metadata);
 
 /**
  * drm_eld_sad - Get ELD SAD structures.
@@ -422,11 +482,108 @@ static inline int drm_eld_size(const uint8_t *eld)
 	return DRM_ELD_HEADER_BLOCK_SIZE + eld[DRM_ELD_BASELINE_ELD_LEN] * 4;
 }
 
+/**
+ * drm_eld_get_spk_alloc - Get speaker allocation
+ * @eld: pointer to an ELD memory structure
+ *
+ * The returned value is the speakers mask. User has to use %DRM_ELD_SPEAKER
+ * field definitions to identify speakers.
+ */
+static inline u8 drm_eld_get_spk_alloc(const uint8_t *eld)
+{
+	return eld[DRM_ELD_SPEAKER] & DRM_ELD_SPEAKER_MASK;
+}
+
+/**
+ * drm_eld_get_conn_type - Get device type hdmi/dp connected
+ * @eld: pointer to an ELD memory structure
+ *
+ * The caller need to use %DRM_ELD_CONN_TYPE_HDMI or %DRM_ELD_CONN_TYPE_DP to
+ * identify the display type connected.
+ */
+static inline u8 drm_eld_get_conn_type(const uint8_t *eld)
+{
+	return eld[DRM_ELD_SAD_COUNT_CONN_TYPE] & DRM_ELD_CONN_TYPE_MASK;
+}
+
+bool drm_probe_ddc(struct i2c_adapter *adapter);
 struct edid *drm_do_get_edid(struct drm_connector *connector,
 	int (*get_edid_block)(void *data, u8 *buf, unsigned int block,
 			      size_t len),
 	void *data);
+struct edid *drm_get_edid_switcheroo(struct drm_connector *connector,
+				     struct i2c_adapter *adapter);
+
+enum hdmi_picture_aspect drm_get_cea_aspect_ratio(const u8 video_code);
+bool drm_detect_hdmi_monitor(struct edid *edid);
+bool drm_rgb_quant_range_selectable(struct edid *edid);
 enum hdmi_quantization_range
 drm_default_rgb_quant_range(const struct drm_display_mode *mode);
+void drm_set_preferred_mode(struct drm_connector *connector,
+			    int hpref, int vpref);
+
+int drm_edid_header_is_valid(const u8 *raw_edid);
+bool drm_edid_block_valid(u8 *raw_edid, int block, bool print_bad_edid,
+			  bool *edid_corrupt);
+bool drm_edid_is_valid(struct edid *edid);
+struct drm_display_mode *drm_mode_find_dmt(struct drm_device *dev,
+					   int hsize, int vsize, int fresh,
+					   bool rb);
+#ifdef CONFIG_DRM_EDID
+struct edid *drm_get_edid(struct drm_connector *connector,
+			  struct i2c_adapter *adapter);
+struct edid *drm_edid_duplicate(const struct edid *edid);
+int drm_add_edid_modes(struct drm_connector *connector, struct edid *edid);
+int drm_add_override_edid_modes(struct drm_connector *connector);
+u8 drm_match_cea_mode(const struct drm_display_mode *to_match);
+int drm_add_modes_noedid(struct drm_connector *connector,
+			 int hdisplay, int vdisplay);
+bool drm_detect_monitor_audio(struct edid *edid);
+void drm_edid_get_monitor_name(struct edid *edid, char *name,
+			       int buflen);
+#else
+static inline struct edid *drm_get_edid(struct drm_connector *connector,
+					struct i2c_adapter *adapter)
+{
+	return NULL;
+}
+
+static inline struct edid *drm_edid_duplicate(const struct edid *edid)
+{
+	return NULL;
+}
+
+static inline int drm_add_edid_modes(struct drm_connector *connector,
+				     struct edid *edid)
+{
+	return 0;
+}
+
+static inline int drm_add_override_edid_modes(struct drm_connector *connector)
+{
+	return 0;
+}
+
+static inline u8 drm_match_cea_mode(const struct drm_display_mode *to_match)
+{
+	return 0;
+}
+
+static inline int drm_add_modes_noedid(struct drm_connector *connector,
+				       int hdisplay, int vdisplay)
+{
+	return 0;
+}
+
+static inline bool drm_detect_monitor_audio(struct edid *edid)
+{
+	return false;
+}
+
+static inline void drm_edid_get_monitor_name(struct edid *edid, char *name,
+					     int buflen)
+{
+}
+#endif
 
 #endif /* __DRM_EDID_H__ */

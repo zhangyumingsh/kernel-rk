@@ -52,7 +52,8 @@
 	.equ	swapper_pg_dir, KERNEL_RAM_VADDR - PG_DIR_SIZE
 
 	.macro	pgtbl, rd, phys
-	add	\rd, \phys, #TEXT_OFFSET
+	add	\rd, \phys, #(TEXT_OFFSET & 0xffff0000)
+	add	\rd, \rd,   #(TEXT_OFFSET & 0x0000ffff)
 	sub	\rd, \rd, #PG_DIR_SIZE
 	.endm
 
@@ -556,6 +557,7 @@ ENDPROC(__fixup_smp)
 	.word	__smpalt_end
 
 	.pushsection .data
+	.align	2
 	.globl	smp_on_up
 smp_on_up:
 	ALT_SMP(.long	1)
@@ -674,11 +676,7 @@ ARM_BE8(rev16	ip, ip)
 	bcc	1b
 	bx	lr
 #else
-#ifdef CONFIG_CPU_ENDIAN_BE8
-	moveq	r0, #0x00004000	@ set bit 22, mov to mvn instruction
-#else
 	moveq	r0, #0x400000	@ set bit 22, mov to mvn instruction
-#endif
 	b	2f
 1:	ldr	ip, [r7, r3]
 #ifdef CONFIG_CPU_ENDIAN_BE8
@@ -687,7 +685,7 @@ ARM_BE8(rev16	ip, ip)
 	tst	ip, #0x000f0000	@ check the rotation field
 	orrne	ip, ip, r6, lsl #24 @ mask in offset bits 31-24
 	biceq	ip, ip, #0x00004000 @ clear bit 22
-	orreq	ip, ip, r0      @ mask in offset bits 7-0
+	orreq	ip, ip, r0, ror #8  @ mask in offset bits 7-0
 #else
 	bic	ip, ip, #0x000000ff
 	tst	ip, #0xf00	@ check the rotation field
@@ -716,6 +714,7 @@ ENTRY(fixup_pv_table)
 ENDPROC(fixup_pv_table)
 
 	.data
+	.align	2
 	.globl	__pv_phys_pfn_offset
 	.type	__pv_phys_pfn_offset, %object
 __pv_phys_pfn_offset:

@@ -33,6 +33,7 @@
 #include <linux/slab.h>
 #include <linux/of_gpio.h>
 #include "tp_suspend.h"
+#include <linux/uaccess.h>
 
 #include <linux/wakelock.h>
 #include "gslx680_firefly.h"
@@ -865,7 +866,7 @@ static void report_data(struct gsl_ts *ts, u16 x, u16 y, u8 pressure, u8 id)
 #else
 	input_report_abs(ts->input, ABS_MT_TRACKING_ID, id);
 	input_report_abs(ts->input, ABS_MT_TOUCH_MAJOR, pressure);
-	input_report_abs(ts->input, ABS_MT_POSITION_X,x);
+	input_report_abs(ts->input, ABS_MT_POSITION_X, x);
 	input_report_abs(ts->input, ABS_MT_POSITION_Y, y);
 	input_report_abs(ts->input, ABS_MT_WIDTH_MAJOR, 1);
 	input_mt_sync(ts->input);

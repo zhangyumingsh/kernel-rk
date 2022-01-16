@@ -17,7 +17,7 @@
 	compatible = "rockchip,rk3326-evb-lp3-v10-linux", "rockchip,rk3326";
 
 	chosen {
-                bootargs = "earlycon=uart8250,mmio32,0xff160000 swiotlb=1 console=ttyFIQ0 rw root=PARTUUID=614e0000-0000 rootfstype=ext4 rootwait";
+                bootargs = "earlycon=uart8250,mmio32,0xff160000 console=ttyFIQ0 rw root=PARTUUID=614e0000-0000 rootfstype=ext4 rootwait";
         };
 
 	adc-keys {
@@ -296,11 +296,39 @@
 				pixelclk-active = <0>;
 			};
 		};
+
+		ports {
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			port@0 {
+				reg = <0>;
+				panel_in_dsi: endpoint {
+					remote-endpoint = <&dsi_out_panel>;
+				};
+			};
+		};
+	};
+
+	ports {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		port@1 {
+			reg = <1>;
+			dsi_out_panel: endpoint {
+				remote-endpoint = <&panel_in_dsi>;
+			};
+		};
 	};
 };
 
 &dsi_in_vopb {
 	status = "okay";
+};
+
+&dsi_in_vopl {
+	status = "disabled";
 };
 
 &route_dsi {
@@ -594,7 +622,6 @@
 			};
 
 			otg_switch: OTG_SWITCH {
-				regulator-boot-on;
 				regulator-name = "otg_switch";
 			};
 		};
@@ -709,10 +736,6 @@
 
 		/* hw changed the pwdn to gpio2_b5 */
 		pwdn-gpios = <&gpio2 13 GPIO_ACTIVE_HIGH>;
-		rockchip,camera-module-index = <1>;
-		rockchip,camera-module-facing = "front";
-		rockchip,camera-module-name = "CMK-CW2392";
-		rockchip,camera-module-lens-name = "CMK-CW2392";
 
 		port {
 			gc2155_out: endpoint {
@@ -734,11 +757,6 @@
 
 		/*reset-gpios = <&gpio2 14 GPIO_ACTIVE_HIGH>;*/
 		pwdn-gpios = <&gpio2 14 GPIO_ACTIVE_HIGH>;
-
-		rockchip,camera-module-index = <0>;
-		rockchip,camera-module-facing = "back";
-		rockchip,camera-module-name = "TongJu";
-		rockchip,camera-module-lens-name = "CHT842-MD";
 
 		port {
 			ucam_out: endpoint {
@@ -913,7 +931,35 @@
 	status = "okay";
 };
 
-&vpu_combo {
+&vopl {
+	status = "okay";
+};
+
+&vopl_mmu {
+	status = "okay";
+};
+
+&mpp_srv {
+	status = "okay";
+};
+
+&vdpu {
+	status = "okay";
+};
+
+&vepu {
+	status = "okay";
+};
+
+&vpu_mmu {
+	status = "okay";
+};
+
+&hevc {
+	status = "okay";
+};
+
+&hevc_mmu {
 	status = "okay";
 };
 
@@ -921,17 +967,17 @@
 	cif-pin-m0 {
 		cif_pin_m0: cif-pin-m0 {
 			rockchip,pins =
-				<2 RK_PA0 RK_FUNC_1 &pcfg_pull_none>,/* cif_data2 */
-				<2 RK_PA1 RK_FUNC_1 &pcfg_pull_none>,/* cif_data3 */
-				<2 RK_PA2 RK_FUNC_1 &pcfg_pull_none>,/* cif_data4 */
-				<2 RK_PA3 RK_FUNC_1 &pcfg_pull_none>,/* cif_data5 */
-				<2 RK_PA4 RK_FUNC_1 &pcfg_pull_none>,/* cif_data6 */
-				<2 RK_PA5 RK_FUNC_1 &pcfg_pull_none>,/* cif_data7 */
-				<2 RK_PA6 RK_FUNC_1 &pcfg_pull_none>,/* cif_data8 */
-				<2 RK_PA7 RK_FUNC_1 &pcfg_pull_none>,/* cif_data9 */
-				<2 RK_PB0 RK_FUNC_1 &pcfg_pull_none>,/* cif_sync */
-				<2 RK_PB1 RK_FUNC_1 &pcfg_pull_none>,/* cif_href */
-				<2 RK_PB2 RK_FUNC_1 &pcfg_pull_none>;/* cif_clkin */
+				<2 RK_PA0 1 &pcfg_pull_none>,/* cif_data2 */
+				<2 RK_PA1 1 &pcfg_pull_none>,/* cif_data3 */
+				<2 RK_PA2 1 &pcfg_pull_none>,/* cif_data4 */
+				<2 RK_PA3 1 &pcfg_pull_none>,/* cif_data5 */
+				<2 RK_PA4 1 &pcfg_pull_none>,/* cif_data6 */
+				<2 RK_PA5 1 &pcfg_pull_none>,/* cif_data7 */
+				<2 RK_PA6 1 &pcfg_pull_none>,/* cif_data8 */
+				<2 RK_PA7 1 &pcfg_pull_none>,/* cif_data9 */
+				<2 RK_PB0 1 &pcfg_pull_none>,/* cif_sync */
+				<2 RK_PB1 1 &pcfg_pull_none>,/* cif_href */
+				<2 RK_PB2 1 &pcfg_pull_none>;/* cif_clkin */
 		};
 	};
 
@@ -954,12 +1000,12 @@
 
 		soc_slppin_slp: soc_slppin_slp {
 			rockchip,pins =
-				<0 RK_PA4 RK_FUNC_1 &pcfg_pull_none>;
+				<0 RK_PA4 1 &pcfg_pull_none>;
 		};
 
 		soc_slppin_rst: soc_slppin_rst {
 			rockchip,pins =
-				<0 RK_PA4 RK_FUNC_2 &pcfg_pull_none>;
+				<0 RK_PA4 2 &pcfg_pull_none>;
 		};
 	};
 

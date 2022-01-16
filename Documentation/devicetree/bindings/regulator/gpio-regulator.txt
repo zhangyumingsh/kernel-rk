@@ -2,6 +2,8 @@ GPIO controlled regulators
 
 Required properties:
 - compatible		: Must be "regulator-gpio".
+- regulator-name	: Defined in regulator.txt as optional, but required
+			  here.
 - states		: Selection of available voltages and GPIO configs.
                           if there are no states, then use a fixed regulator
 
@@ -13,7 +15,8 @@ Optional properties:
 - startup-delay-us	: Startup time in microseconds.
 - enable-active-high	: Polarity of GPIO is active high (default is low).
 - regulator-type	: Specifies what is being regulated, must be either
-			  "voltage" or "current", defaults to current.
+			  "voltage" or "current", defaults to voltage.
+- vin-supply		: Input supply name.
 
 Any property defined as part of the core regulator binding defined in
 regulator.txt can also be used.
@@ -38,4 +41,5 @@ Example:
 
 		startup-delay-us = <100000>;
 		enable-active-high;
+		vin-supply = <&parent_reg>;
 	};

@@ -3,7 +3,7 @@
  * Dongle BUS interface
  * USB Linux Implementation
  *
- * Copyright (C) 1999-2018, Broadcom Corporation
+ * Copyright (C) 1999-2019, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -75,7 +75,7 @@
 #include <linux/random.h>
 #include <linux/spinlock.h>
 #include <linux/list.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 #include <asm/unaligned.h>
 #include <dbus.h>
 #include <bcmutils.h>
@@ -221,6 +221,7 @@ static inline int usb_submit_urb_linux(struct urb *urb)
 #define DAEMONIZE(a)		daemonize(a); allow_signal(SIGKILL); allow_signal(SIGTERM);
 #define SET_NICE(n)		set_user_nice(current, n)
 #endif
+
 #else /* KERNEL26 */
 
 #define USB_ALLOC_URB()				usb_alloc_urb(0)

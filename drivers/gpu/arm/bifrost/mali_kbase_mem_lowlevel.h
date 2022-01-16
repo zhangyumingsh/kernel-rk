@@ -1,11 +1,12 @@
+/* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 /*
  *
- * (C) COPYRIGHT 2012-2014,2018 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2012-2014, 2016-2018, 2020-2021 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
  * Foundation, and any use by you of this program is subject to the terms
- * of such GNU licence.
+ * of such GNU license.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -16,11 +17,7 @@
  * along with this program; if not, you can access it online at
  * http://www.gnu.org/licenses/gpl-2.0.html.
  *
- * SPDX-License-Identifier: GPL-2.0
- *
  */
-
-
 
 #ifndef _KBASE_MEM_LOWLEVEL_H
 #define _KBASE_MEM_LOWLEVEL_H
@@ -31,9 +28,7 @@
 
 #include <linux/dma-mapping.h>
 
-/**
- * @brief Flags for kbase_phy_allocator_pages_alloc
- */
+/* Flags for kbase_phy_allocator_pages_alloc */
 #define KBASE_PHY_PAGES_FLAG_DEFAULT (0)	/** Default allocation flag */
 #define KBASE_PHY_PAGES_FLAG_CLEAR   (1 << 0)	/** Clear the pages after allocation */
 #define KBASE_PHY_PAGES_FLAG_POISON  (1 << 1)	/** Fill the memory with a poison value */
@@ -72,6 +67,17 @@ struct tagged_addr { phys_addr_t tagged_addr; };
 static inline phys_addr_t as_phys_addr_t(struct tagged_addr t)
 {
 	return t.tagged_addr & PAGE_MASK;
+}
+
+/**
+ * as_page - Retrieve the struct page from a tagged address
+ * @t: tagged address to be translated.
+ *
+ * Return: pointer to struct page corresponding to tagged address.
+ */
+static inline struct page *as_page(struct tagged_addr t)
+{
+	return phys_to_page(as_phys_addr_t(t));
 }
 
 /**

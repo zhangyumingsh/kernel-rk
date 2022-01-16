@@ -1,6 +1,6 @@
 /******************************************************************************
  *
- * Copyright(c) 2007 - 2011 Realtek Corporation. All rights reserved.
+ * Copyright(c) 2007 - 2017 Realtek Corporation.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of version 2 of the GNU General Public License as
@@ -11,12 +11,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
  * more details.
  *
- * You should have received a copy of the GNU General Public License along with
- * this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110, USA
- *
- *
- ******************************************************************************/
+ *****************************************************************************/
 #ifndef __XMIT_OSDEP_H_
 #define __XMIT_OSDEP_H_
 
@@ -49,9 +44,9 @@ struct pkt_file {
 #define ETH_ALEN	6
 
 extern NDIS_STATUS rtw_xmit_entry(
-	IN _nic_hdl		cnxt,
-	IN NDIS_PACKET		*pkt,
-	IN UINT				flags
+	_nic_hdl		cnxt,
+	NDIS_PACKET		*pkt,
+	u32				flags
 );
 
 #endif /* PLATFORM_WINDOWS */
@@ -92,6 +87,8 @@ extern sint rtw_endofpktfile(struct pkt_file *pfile);
 extern void rtw_os_pkt_complete(_adapter *padapter, _pkt *pkt);
 extern void rtw_os_xmit_complete(_adapter *padapter, struct xmit_frame *pxframe);
 
+void rtw_os_check_wakup_queue(_adapter *adapter, u16 os_qid);
+bool rtw_os_check_stop_queue(_adapter *adapter, u16 os_qid);
 void rtw_os_wake_queue_at_free_stainfo(_adapter *padapter, int *qcnt_freed);
 
 void dump_os_queue(void *sel, _adapter *padapter);

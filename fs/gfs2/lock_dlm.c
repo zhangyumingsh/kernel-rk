@@ -15,14 +15,13 @@
 #include <linux/types.h>
 #include <linux/delay.h>
 #include <linux/gfs2_ondisk.h>
+#include <linux/sched/signal.h>
 
 #include "incore.h"
 #include "glock.h"
 #include "util.h"
 #include "sys.h"
 #include "trace_gfs2.h"
-
-extern struct workqueue_struct *gfs2_control_wq;
 
 /**
  * gfs2_update_stats - Update time based stats
@@ -284,7 +283,6 @@ static void gdlm_put_lock(struct gfs2_glock *gl)
 {
 	struct gfs2_sbd *sdp = gl->gl_name.ln_sbd;
 	struct lm_lockstruct *ls = &sdp->sd_lockstruct;
-	int lvb_needs_unlock = 0;
 	int error;
 
 	if (gl->gl_lksb.sb_lkid == 0) {
@@ -297,13 +295,10 @@ static void gdlm_put_lock(struct gfs2_glock *gl)
 	gfs2_sbstats_inc(gl, GFS2_LKS_DCOUNT);
 	gfs2_update_request_times(gl);
 
-	/* don't want to skip dlm_unlock writing the lvb when lock is ex */
-
-	if (gl->gl_lksb.sb_lvbptr && (gl->gl_state == LM_ST_EXCLUSIVE))
-		lvb_needs_unlock = 1;
+	/* don't want to skip dlm_unlock writing the lvb when lock has one */
 
 	if (test_bit(SDF_SKIP_DLM_UNLOCK, &sdp->sd_flags) &&
-	    !lvb_needs_unlock) {
+	    !gl->gl_lksb.sb_lvbptr) {
 		gfs2_glock_free(gl);
 		return;
 	}
@@ -823,6 +818,13 @@ restart:
 		goto fail;
 	}
 
+	/**
+	 * If we're a spectator, we don't want to take the lock in EX because
+	 * we cannot do the first-mount responsibility it implies: recovery.
+	 */
+	if (sdp->sd_args.ar_spectator)
+		goto locks_done;
+
 	error = mounted_lock(sdp, DLM_LOCK_EX, DLM_LKF_CONVERT|DLM_LKF_NOQUEUE);
 	if (!error) {
 		mounted_mode = DLM_LOCK_EX;
@@ -898,9 +900,16 @@ locks_done:
 	if (lvb_gen < mount_gen) {
 		/* wait for mounted nodes to update control_lock lvb to our
 		   generation, which might include new recovery bits set */
-		fs_info(sdp, "control_mount wait1 block %u start %u mount %u "
-			"lvb %u flags %lx\n", block_gen, start_gen, mount_gen,
-			lvb_gen, ls->ls_recover_flags);
+		if (sdp->sd_args.ar_spectator) {
+			fs_info(sdp, "Recovery is required. Waiting for a "
+				"non-spectator to mount.\n");
+			msleep_interruptible(1000);
+		} else {
+			fs_info(sdp, "control_mount wait1 block %u start %u "
+				"mount %u lvb %u flags %lx\n", block_gen,
+				start_gen, mount_gen, lvb_gen,
+				ls->ls_recover_flags);
+		}
 		spin_unlock(&ls->ls_recover_spin);
 		goto restart;
 	}
@@ -1059,6 +1068,7 @@ static void free_recover_size(struct lm_lockstruct *ls)
 	ls->ls_recover_submit = NULL;
 	ls->ls_recover_result = NULL;
 	ls->ls_recover_size = 0;
+	ls->ls_lvb_bits = NULL;
 }
 
 /* dlm calls before it does lock recovery */
@@ -1092,7 +1102,7 @@ static void gdlm_recover_slot(void *arg, struct dlm_slot *slot)
 
 	spin_lock(&ls->ls_recover_spin);
 	if (ls->ls_recover_size < jid + 1) {
-		fs_err(sdp, "recover_slot jid %d gen %u short size %d",
+		fs_err(sdp, "recover_slot jid %d gen %u short size %d\n",
 		       jid, ls->ls_recover_block, ls->ls_recover_size);
 		spin_unlock(&ls->ls_recover_spin);
 		return;
@@ -1154,7 +1164,7 @@ static void gdlm_recovery_result(struct gfs2_sbd *sdp, unsigned int jid,
 		return;
 	}
 	if (ls->ls_recover_size < jid + 1) {
-		fs_err(sdp, "recovery_result jid %d short size %d",
+		fs_err(sdp, "recovery_result jid %d short size %d\n",
 		       jid, ls->ls_recover_size);
 		spin_unlock(&ls->ls_recover_spin);
 		return;
@@ -1175,7 +1185,7 @@ static void gdlm_recovery_result(struct gfs2_sbd *sdp, unsigned int jid,
 	spin_unlock(&ls->ls_recover_spin);
 }
 
-const struct dlm_lockspace_ops gdlm_lockspace_ops = {
+static const struct dlm_lockspace_ops gdlm_lockspace_ops = {
 	.recover_prep = gdlm_recover_prep,
 	.recover_slot = gdlm_recover_slot,
 	.recover_done = gdlm_recover_done,

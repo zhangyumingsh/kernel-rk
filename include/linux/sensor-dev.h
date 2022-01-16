@@ -20,6 +20,7 @@
 #endif
 
 #include <dt-bindings/sensor-dev.h>
+#include <linux/module.h>
 
 #define SENSOR_ON		1
 #define SENSOR_OFF		0
@@ -50,8 +51,12 @@ enum sensor_id {
 	ACCEL_ID_MMA8450,
 	ACCEL_ID_MMA845X,
 	ACCEL_ID_MMA7660,
+	ACCEL_ID_SC7660,
+	ACCEL_ID_SC7A20,
+	ACCEL_ID_SC7A30,
 	ACCEL_ID_MPU6050,
 	ACCEL_ID_MXC6225,
+	ACCEL_ID_MXC6655XA,
 	ACCEL_ID_DMARD10,
 	ACCEL_ID_LSM303D,
 	ACCEL_ID_MC3230,
@@ -60,6 +65,10 @@ enum sensor_id {
 	ACCEL_ID_LSM330,
 	ACCEL_ID_BMA2XX,
 	ACCEL_ID_STK8BAXX,
+	ACCEL_ID_MIR3DA,
+	ACCEL_ID_ICM2060X,
+	ACCEL_ID_DA215S,
+	ACCEL_ID_DA228E,
 	COMPASS_ID_ALL,
 	COMPASS_ID_AK8975,
 	COMPASS_ID_AK8963,
@@ -75,6 +84,7 @@ enum sensor_id {
 	COMPASS_ID_MMC314X,
 	COMPASS_ID_HSCDTD002B,
 	COMPASS_ID_HSCDTD004A,
+	COMPASS_ID_AK09918,
 
 	GYRO_ID_ALL,
 	GYRO_ID_L3G4200D,
@@ -84,6 +94,7 @@ enum sensor_id {
 	GYRO_ID_MPU6500,
 	GYRO_ID_MPU6880,
 	GYRO_ID_LSM330,
+	GYRO_ID_ICM2060X,
 	LIGHT_ID_ALL,
 	LIGHT_ID_CM3217,
 	LIGHT_ID_CM3218,
@@ -95,12 +106,14 @@ enum sensor_id {
 	LIGHT_ID_PHOTORESISTOR,
 	LIGHT_ID_US5152,
 	LIGHT_ID_STK3410,
+	LIGHT_ID_EM3071X,
 
 	PROXIMITY_ID_ALL,
 	PROXIMITY_ID_AL3006,
 	PROXIMITY_ID_STK3171,
 	PROXIMITY_ID_AP321XX,
 	PROXIMITY_ID_STK3410,
+	PROXIMITY_ID_EM3071X,
 
 	TEMPERATURE_ID_ALL,
 	TEMPERATURE_ID_MS5607,
@@ -234,14 +247,18 @@ struct akm_platform_data {
 	int gpio_RST;
 };
 
-extern int sensor_register_slave(int type, struct i2c_client *client,
+extern int sensor_register_device(struct i2c_client *client,
 			struct sensor_platform_data *slave_pdata,
-			struct sensor_operate *(*get_sensor_ops)(void));
+			const struct i2c_device_id *devid,
+			struct sensor_operate *ops);
 
 
-extern int sensor_unregister_slave(int type, struct i2c_client *client,
+extern int sensor_unregister_device(struct i2c_client *client,
 			struct sensor_platform_data *slave_pdata,
-			struct sensor_operate *(*get_sensor_ops)(void));
+			struct sensor_operate *ops);
+
+extern void sensor_shutdown(struct i2c_client *client);
+extern const struct dev_pm_ops sensor_pm_ops;
 
 #define DBG(x...)
 

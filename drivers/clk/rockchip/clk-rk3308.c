@@ -124,14 +124,14 @@ static struct rockchip_cpuclk_rate_table rk3308_cpuclk_rates[] __initdata = {
 };
 
 static const struct rockchip_cpuclk_reg_data rk3308_cpuclk_data = {
-	.core_reg = RK3308_CLKSEL_CON(0),
-	.div_core_shift = 0,
-	.div_core_mask = 0xf,
+	.core_reg[0] = RK3308_CLKSEL_CON(0),
+	.div_core_shift[0] = 0,
+	.div_core_mask[0] = 0xf,
+	.num_cores = 1,
 	.mux_core_alt = 1,
 	.mux_core_main = 0,
 	.mux_core_shift = 6,
 	.mux_core_mask = 0x3,
-	.pll_name = "pll_apll",
 };
 
 PNAME(mux_pll_p)		= { "xin24m" };
@@ -1011,6 +1011,7 @@ static void __init rk3308_clk_init(struct device_node *np)
 				   RK3308_GRF_SOC_STATUS0);
 	rockchip_clk_register_branches(ctx, rk3308_clk_branches,
 				       ARRAY_SIZE(rk3308_clk_branches));
+	rockchip_soc_id_init();
 	if (soc_is_rk3308b())
 		rockchip_clk_register_branches(ctx, rk3308b_dclk_vop_frac,
 					       ARRAY_SIZE(rk3308b_dclk_vop_frac));

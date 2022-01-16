@@ -2,7 +2,7 @@
 /*
  * Linux cfg80211 Vendor Extension Code
  *
- * Copyright (C) 1999-2018, Broadcom Corporation
+ * Copyright (C) 1999-2019, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -368,7 +368,8 @@ enum andr_wifi_attr {
 	ANDR_WIFI_ATTRIBUTE_NUM_FEATURE_SET,
 	ANDR_WIFI_ATTRIBUTE_FEATURE_SET,
 	ANDR_WIFI_ATTRIBUTE_RANDOM_MAC_OUI,
-	ANDR_WIFI_ATTRIBUTE_NODFS_SET
+	ANDR_WIFI_ATTRIBUTE_NODFS_SET,
+	ANDR_WIFI_ATTRIBUTE_COUNTRY
 };
 
 typedef enum wl_vendor_gscan_attribute {

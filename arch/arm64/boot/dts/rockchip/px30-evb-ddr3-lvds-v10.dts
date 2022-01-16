@@ -527,7 +527,7 @@
 	pmic {
 		pmic_int: pmic_int {
 			rockchip,pins =
-				<0 7 RK_FUNC_GPIO &pcfg_pull_up>;
+				<0 RK_PA7 RK_FUNC_GPIO &pcfg_pull_up>;
 		};
 	};
 
@@ -640,7 +640,27 @@
 	status = "okay";
 };
 
-&vpu_combo {
+&mpp_srv {
+	status = "okay";
+};
+
+&vdpu {
+	status = "okay";
+};
+
+&vepu {
+	status = "okay";
+};
+
+&vpu_mmu {
+	status = "okay";
+};
+
+&hevc {
+	status = "okay";
+};
+
+&hevc_mmu {
 	status = "okay";
 };
 

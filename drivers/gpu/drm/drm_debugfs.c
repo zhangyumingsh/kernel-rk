@@ -1,10 +1,3 @@
-/**
- * \file drm_debugfs.c
- * debugfs support for DRM
- *
- * \author Ben Gamari <bgamari@gmail.com>
- */
-
 /*
  * Created: Sun Dec 21 13:08:50 2008 by bgamari@gmail.com
  *
@@ -34,13 +27,20 @@
 #include <linux/seq_file.h>
 #include <linux/slab.h>
 #include <linux/export.h>
-#include <drm/drmP.h>
-#include <drm/drm_edid.h>
-#include "drm_internal.h"
 #include <linux/ctype.h>
 #include <linux/syscalls.h>
 
+#include <drm/drm_client.h>
+#include <drm/drm_debugfs.h>
+#include <drm/drm_edid.h>
+#include <drm/drm_atomic.h>
+#include <drm/drmP.h>
+
+#include "drm_internal.h"
+#include "drm_crtc_internal.h"
+
 #if defined(CONFIG_DEBUG_FS)
+
 #define DUMP_BUF_PATH		"/data/vop_buf"
 
 /***************************************************
@@ -49,11 +49,8 @@
 
 static const struct drm_info_list drm_debugfs_list[] = {
 	{"name", drm_name_info, 0},
-	{"vm", drm_vm_info, 0},
 	{"clients", drm_clients_info, 0},
-	{"bufs", drm_bufs_info, 0},
 	{"gem_names", drm_gem_name_info, DRIVER_GEM},
-	{"vma", drm_vma_info, 0},
 };
 #define DRM_DEBUGFS_ENTRIES ARRAY_SIZE(drm_debugfs_list)
 
@@ -98,51 +95,87 @@ static char *get_format_str(uint32_t format)
 	case DRM_FORMAT_NV24:
 	case DRM_FORMAT_NV24_10:
 		return "YUV444NV24";
+	case DRM_FORMAT_YUYV:
+		return "YUYV";
 	default:
-		DRM_ERROR("unsupport format[%08x]\n", format);
+		DRM_ERROR("unsupported format[%08x]\n", format);
 		return "UNF";
 	}
 }
 
-int vop_plane_dump(struct vop_dump_info *dump_info, int frame_count)
+static int get_bpp(uint32_t format)
 {
-	int flags;
-	int bits = 32;
-	int fd;
-	const char *ptr;
-	char file_name[100];
-	int width;
-	void *kvaddr;
-	mm_segment_t old_fs;
-	u32 format = dump_info->pixel_format;
+	uint32_t bpp;
 
 	switch (format) {
 	case DRM_FORMAT_XRGB8888:
 	case DRM_FORMAT_ARGB8888:
 	case DRM_FORMAT_XBGR8888:
 	case DRM_FORMAT_ABGR8888:
-		bits = 32;
+		bpp = 32;
 		break;
 	case DRM_FORMAT_RGB888:
 	case DRM_FORMAT_BGR888:
 	case DRM_FORMAT_NV24:
 	case DRM_FORMAT_NV24_10:
-		bits = 24;
+		bpp = 24;
 		break;
 	case DRM_FORMAT_RGB565:
 	case DRM_FORMAT_BGR565:
 	case DRM_FORMAT_NV16:
 	case DRM_FORMAT_NV16_10:
-		bits = 16;
+		bpp = 16;
 		break;
 	case DRM_FORMAT_NV12:
 	case DRM_FORMAT_NV12_10:
-		bits = 12;
+		bpp = 12;
+		break;
+	case DRM_FORMAT_YUYV:
+		bpp = 16;
 		break;
 	default:
-		DRM_ERROR("unsupport format[%08x]\n", format);
-		return -1;
+		DRM_ERROR("unsupported format[%08x]\n", format);
+		bpp = 0;
 	}
+
+	return bpp;
+}
+
+#define AFBC_HEADER_SIZE                16
+#define AFBC_HDR_ALIGN                  64
+#define AFBC_SUPERBLK_PIXELS		256
+#define AFBC_SUPERBLK_ALIGNMENT         128
+
+static int get_afbc_size(uint32_t width, uint32_t height, uint32_t bpp)
+{
+	uint32_t h_alignment = 16;
+	uint32_t n_blocks;
+	uint32_t hdr_size;
+	uint32_t size;
+
+	height = ALIGN(height, h_alignment);
+	n_blocks = width * height / AFBC_SUPERBLK_PIXELS;
+	hdr_size = ALIGN(n_blocks * AFBC_HEADER_SIZE, AFBC_HDR_ALIGN);
+
+	size = hdr_size + n_blocks * ALIGN(bpp * AFBC_SUPERBLK_PIXELS / 8, AFBC_SUPERBLK_ALIGNMENT);
+
+	return size;
+}
+
+int vop_plane_dump(struct vop_dump_info *dump_info, int frame_count)
+{
+	int flags;
+	int bpp;
+	int fd;
+	const char *ptr;
+	char file_name[100];
+	int width;
+	size_t size;
+	void *kvaddr;
+	mm_segment_t old_fs;
+	u32 format = dump_info->pixel_format;
+
+	bpp = get_bpp(format);
 
 	if (dump_info->yuv_format) {
 		width = dump_info->pitches;
@@ -151,7 +184,7 @@ int vop_plane_dump(struct vop_dump_info *dump_info, int frame_count)
 			 width, dump_info->height, get_format_str(format),
 			 "bin");
 	} else {
-		width = dump_info->pitches >> 2;
+		width = dump_info->pitches * 8 / bpp;
 		flags = O_RDWR | O_CREAT;
 		snprintf(file_name, 100, "%s/win%d_area%d_%dx%d_%s%s%d.%s",
 			 DUMP_BUF_PATH, dump_info->win_id,
@@ -161,24 +194,30 @@ int vop_plane_dump(struct vop_dump_info *dump_info, int frame_count)
 	}
 	kvaddr = vmap(dump_info->pages, dump_info->num_pages, VM_MAP,
 		      pgprot_writecombine(PAGE_KERNEL));
-	if (!kvaddr)
-		DRM_ERROR("failed to vmap() buffer\n");
-	else
-		kvaddr += dump_info->offset;
+	if (!kvaddr) {
+		DRM_ERROR("failed to vmap() buffer for %s\n", file_name);
+		return -ENOMEM;
+	}
+	kvaddr += dump_info->offset;
 	old_fs = get_fs();
 	set_fs(KERNEL_DS);
-	sys_mkdir(DUMP_BUF_PATH, 0700);
+	ksys_mkdir(DUMP_BUF_PATH, 0700);
 	ptr = file_name;
-	fd = sys_open(ptr, flags, 0644);
+	if (dump_info->AFBC_flag)
+		size = get_afbc_size(width, dump_info->height, bpp);
+	else
+		size = width * dump_info->height * bpp >> 3;
+	fd = ksys_open(ptr, flags, 0644);
 	if (fd >= 0) {
-		sys_write(fd, kvaddr, width * dump_info->height * bits >> 3);
+		ksys_write(fd, kvaddr, size);
 		DRM_INFO("dump file name is:%s\n", file_name);
-		sys_close(fd);
+		ksys_close(fd);
 	} else {
-		DRM_INFO("writ fail fd err fd is %d\n", fd);
+		DRM_INFO("write %s failed errno: %d\n", ptr, fd);
 	}
 	set_fs(old_fs);
 	vunmap(kvaddr);
+
 	return 0;
 }
 
@@ -191,6 +230,7 @@ static int vop_dump_show(struct seq_file *m, void *data)
 	seq_puts(m, "  dump path is /data/vop_buf\n");
 	seq_puts(m, "  if fd err = -3 try rm -r /data/vopbuf echo dump1 > dump can fix it\n");
 	seq_puts(m, "  if fd err = -28 save needed data try rm -r /data/vopbuf\n");
+
 	return 0;
 }
 
@@ -218,11 +258,13 @@ static ssize_t vop_dump_write(struct file *file, const char __user *ubuf,
 {
 	struct seq_file *m = file->private_data;
 	struct drm_crtc *crtc = m->private;
-	char buf[14];
+	char buf[14] = {};
 	int dump_times = 0;
 	struct vop_dump_list *pos, *n;
 	int i = 0;
 
+	if (!crtc->vop_dump_list_init_flag)
+		return -EPERM;
 	if (len > sizeof(buf) - 1)
 		return -EINVAL;
 	if (copy_from_user(buf, ubuf, len))
@@ -243,23 +285,22 @@ static ssize_t vop_dump_write(struct file *file, const char __user *ubuf,
 		}
 			crtc->vop_dump_times = dump_times;
 		} else {
-			drm_modeset_lock_all(crtc->dev);
 			list_for_each_entry_safe(pos, n,
 						 &crtc->vop_dump_list_head,
 						 entry) {
 				vop_plane_dump(&pos->dump_info,
 					       crtc->frame_count);
 		}
-			drm_modeset_unlock_all(crtc->dev);
 			crtc->frame_count++;
 		}
 	} else {
 		return -EINVAL;
 	}
+
 	return len;
 }
 
-static const struct file_operations drm_vopdump_fops = {
+static const struct file_operations drm_vop_dump_fops = {
 	.owner = THIS_MODULE,
 	.open = vop_dump_open,
 	.read = seq_read,
@@ -279,25 +320,27 @@ int drm_debugfs_vop_add(struct drm_crtc *crtc, struct dentry *root)
 	crtc->vop_dump_times = 0;
 	crtc->frame_count = 0;
 	ent = debugfs_create_file("dump", 0644, vop_dump_root,
-				  crtc, &drm_vopdump_fops);
+				  crtc, &drm_vop_dump_fops);
 	if (!ent) {
 		DRM_ERROR("create vop_plane_dump err\n");
 		debugfs_remove_recursive(vop_dump_root);
 	}
+
 	return 0;
 }
 #endif
+
 /**
- * Initialize a given set of debugfs files for a device
- *
- * \param files The array of files to create
- * \param count The number of files given
- * \param root DRI debugfs dir entry.
- * \param minor device minor number
- * \return Zero on success, non-zero on failure
+ * drm_debugfs_create_files - Initialize a given set of debugfs files for DRM
+ * 			minor
+ * @files: The array of files to create
+ * @count: The number of files given
+ * @root: DRI debugfs dir entry.
+ * @minor: device minor number
  *
  * Create a given set of debugfs files represented by an array of
- * gdm_debugfs_lists in the given root directory.
+ * &struct drm_info_list in the given root directory. These files will be removed
+ * automatically on drm_debugfs_cleanup().
  */
 int drm_debugfs_create_files(const struct drm_info_list *files, int count,
 			     struct dentry *root, struct drm_minor *minor)
@@ -322,8 +365,8 @@ int drm_debugfs_create_files(const struct drm_info_list *files, int count,
 		ent = debugfs_create_file(files[i].name, S_IFREG | S_IRUGO,
 					  root, tmp, &drm_debugfs_fops);
 		if (!ent) {
-			DRM_ERROR("Cannot create /sys/kernel/debug/dri/%s/%s\n",
-				  root->d_name.name, files[i].name);
+			DRM_ERROR("Cannot create /sys/kernel/debug/dri/%pd/%s\n",
+				  root, files[i].name);
 			kfree(tmp);
 			ret = -1;
 			goto fail;
@@ -345,17 +388,6 @@ fail:
 }
 EXPORT_SYMBOL(drm_debugfs_create_files);
 
-/**
- * Initialize the DRI debugfs filesystem for a device
- *
- * \param dev DRM device
- * \param minor device minor number
- * \param root DRI debugfs dir entry.
- *
- * Create the DRI debugfs root entry "/sys/kernel/debug/dri", the device debugfs root entry
- * "/sys/kernel/debug/dri/%minor%/", and each entry in debugfs_list as
- * "/sys/kernel/debug/dri/%minor%/%name%".
- */
 int drm_debugfs_init(struct drm_minor *minor, int minor_id,
 		     struct dentry *root)
 {
@@ -381,6 +413,28 @@ int drm_debugfs_init(struct drm_minor *minor, int minor_id,
 		return ret;
 	}
 
+	if (drm_drv_uses_atomic_modeset(dev)) {
+		ret = drm_atomic_debugfs_init(minor);
+		if (ret) {
+			DRM_ERROR("Failed to create atomic debugfs files\n");
+			return ret;
+		}
+	}
+
+	if (drm_core_check_feature(dev, DRIVER_MODESET)) {
+		ret = drm_framebuffer_debugfs_init(minor);
+		if (ret) {
+			DRM_ERROR("Failed to create framebuffer debugfs file\n");
+			return ret;
+		}
+
+		ret = drm_client_debugfs_init(minor);
+		if (ret) {
+			DRM_ERROR("Failed to create client debugfs file\n");
+			return ret;
+		}
+	}
+
 	if (dev->driver->debugfs_init) {
 		ret = dev->driver->debugfs_init(minor);
 		if (ret) {
@@ -393,16 +447,6 @@ int drm_debugfs_init(struct drm_minor *minor, int minor_id,
 }
 
 
-/**
- * Remove a list of debugfs files
- *
- * \param files The list of files
- * \param count The number of files
- * \param minor The minor of which we should remove the files
- * \return always zero.
- *
- * Remove all debugfs entries created by debugfs_init().
- */
 int drm_debugfs_remove_files(const struct drm_info_list *files, int count,
 			     struct drm_minor *minor)
 {
@@ -426,27 +470,27 @@ int drm_debugfs_remove_files(const struct drm_info_list *files, int count,
 }
 EXPORT_SYMBOL(drm_debugfs_remove_files);
 
-/**
- * Cleanup the debugfs filesystem resources.
- *
- * \param minor device minor number.
- * \return always zero.
- *
- * Remove all debugfs entries created by debugfs_init().
- */
+static void drm_debugfs_remove_all_files(struct drm_minor *minor)
+{
+	struct drm_info_node *node, *tmp;
+
+	mutex_lock(&minor->debugfs_lock);
+	list_for_each_entry_safe(node, tmp, &minor->debugfs_list, list) {
+		debugfs_remove(node->dent);
+		list_del(&node->list);
+		kfree(node);
+	}
+	mutex_unlock(&minor->debugfs_lock);
+}
+
 int drm_debugfs_cleanup(struct drm_minor *minor)
 {
-	struct drm_device *dev = minor->dev;
-
 	if (!minor->debugfs_root)
 		return 0;
 
-	if (dev->driver->debugfs_cleanup)
-		dev->driver->debugfs_cleanup(minor);
+	drm_debugfs_remove_all_files(minor);
 
-	drm_debugfs_remove_files(drm_debugfs_list, DRM_DEBUGFS_ENTRIES, minor);
-
-	debugfs_remove(minor->debugfs_root);
+	debugfs_remove_recursive(minor->debugfs_root);
 	minor->debugfs_root = NULL;
 
 	return 0;
@@ -455,30 +499,8 @@ int drm_debugfs_cleanup(struct drm_minor *minor)
 static int connector_show(struct seq_file *m, void *data)
 {
 	struct drm_connector *connector = m->private;
-	const char *status;
 
-	switch (connector->force) {
-	case DRM_FORCE_ON:
-		status = "on\n";
-		break;
-
-	case DRM_FORCE_ON_DIGITAL:
-		status = "digital\n";
-		break;
-
-	case DRM_FORCE_OFF:
-		status = "off\n";
-		break;
-
-	case DRM_FORCE_UNSPECIFIED:
-		status = "unspecified\n";
-		break;
-
-	default:
-		return 0;
-	}
-
-	seq_puts(m, status);
+	seq_printf(m, "%s\n", drm_get_connector_force_name(connector->force));
 
 	return 0;
 }
@@ -505,13 +527,13 @@ static ssize_t connector_write(struct file *file, const char __user *ubuf,
 
 	buf[len] = '\0';
 
-	if (!strcmp(buf, "on"))
+	if (sysfs_streq(buf, "on"))
 		connector->force = DRM_FORCE_ON;
-	else if (!strcmp(buf, "digital"))
+	else if (sysfs_streq(buf, "digital"))
 		connector->force = DRM_FORCE_ON_DIGITAL;
-	else if (!strcmp(buf, "off"))
+	else if (sysfs_streq(buf, "off"))
 		connector->force = DRM_FORCE_OFF;
-	else if (!strcmp(buf, "unspecified"))
+	else if (sysfs_streq(buf, "unspecified"))
 		connector->force = DRM_FORCE_UNSPECIFIED;
 	else
 		return -EINVAL;
@@ -554,13 +576,13 @@ static ssize_t edid_write(struct file *file, const char __user *ubuf,
 
 	if (len == 5 && !strncmp(buf, "reset", 5)) {
 		connector->override_edid = false;
-		ret = drm_mode_connector_update_edid_property(connector, NULL);
+		ret = drm_connector_update_edid_property(connector, NULL);
 	} else if (len < EDID_LENGTH ||
 		   EDID_LENGTH * (1 + edid->extensions) > len)
 		ret = -EINVAL;
 	else {
 		connector->override_edid = false;
-		ret = drm_mode_connector_update_edid_property(connector, edid);
+		ret = drm_connector_update_edid_property(connector, edid);
 		if (!ret)
 			connector->override_edid = true;
 	}
@@ -633,5 +655,37 @@ void drm_debugfs_connector_remove(struct drm_connector *connector)
 	connector->debugfs_entry = NULL;
 }
 
-#endif /* CONFIG_DEBUG_FS */
+int drm_debugfs_crtc_add(struct drm_crtc *crtc)
+{
+	struct drm_minor *minor = crtc->dev->primary;
+	struct dentry *root;
+	char *name;
 
+	name = kasprintf(GFP_KERNEL, "crtc-%d", crtc->index);
+	if (!name)
+		return -ENOMEM;
+
+	root = debugfs_create_dir(name, minor->debugfs_root);
+	kfree(name);
+	if (!root)
+		return -ENOMEM;
+
+	crtc->debugfs_entry = root;
+
+	if (drm_debugfs_crtc_crc_add(crtc))
+		goto error;
+
+	return 0;
+
+error:
+	drm_debugfs_crtc_remove(crtc);
+	return -ENOMEM;
+}
+
+void drm_debugfs_crtc_remove(struct drm_crtc *crtc)
+{
+	debugfs_remove_recursive(crtc->debugfs_entry);
+	crtc->debugfs_entry = NULL;
+}
+
+#endif /* CONFIG_DEBUG_FS */

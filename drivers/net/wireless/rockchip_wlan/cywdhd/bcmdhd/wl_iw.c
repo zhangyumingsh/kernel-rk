@@ -2,7 +2,7 @@
 /*
  * Linux Wireless Extensions support
  *
- * Copyright (C) 1999-2018, Broadcom Corporation
+ * Copyright (C) 1999-2019, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -25,7 +25,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: wl_iw.c 666543 2017-08-25 07:42:40Z $
+ * $Id: wl_iw.c 709309 2019-01-17 09:04:00Z $
  */
 
 #if defined(USE_IW)
@@ -39,8 +39,12 @@
 #include <bcmendian.h>
 #include <proto/ethernet.h>
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 11, 0)
+#include <linux/sched/signal.h>
+#endif
+
 #include <linux/if_arp.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 
 #include <wlioctl.h>
 #include <wlioctl_utils.h>
@@ -226,7 +230,7 @@ dev_wlc_ioctl(
 	ifr.ifr_data = (caddr_t) &ioc;
 
 	fs = get_fs();
-	set_fs(get_ds());
+	set_fs(KERNEL_DS);
 #if defined(WL_USE_NETDEV_OPS)
 	ret = dev->netdev_ops->ndo_do_ioctl(dev, &ifr, SIOCDEVPRIVATE);
 #else
