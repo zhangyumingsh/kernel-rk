@@ -17,7 +17,7 @@
  * Set Firmware Path
  */
  
-#define VENDOR_ETC_FIRMWARE "/vendor/etc/firmware/"
+#define VENDOR_ETC_FIRMWARE "/lib/firmware/"
 
 int rkwifi_set_firmware(char *fw, char *nvram)
 {
