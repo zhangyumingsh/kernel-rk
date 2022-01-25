@@ -17,7 +17,7 @@
 #include <drm/drm_gem.h>
 #include <drm/drm_vma_manager.h>
 
-#include <linux/dma-buf-cache.h>
+#include <linux/dma-buf.h>
 #include <linux/genalloc.h>
 #include <linux/iommu.h>
 #include <linux/pagemap.h>
@@ -258,7 +258,7 @@ static int rockchip_gem_alloc_dma(struct rockchip_gem_object *rk_obj,
 		rk_obj->dma_attrs |= DMA_ATTR_NO_KERNEL_MAPPING;
 
 	rk_obj->kvaddr = dma_alloc_attrs(drm->dev, obj->size,
-					 &rk_obj->dma_handle, GFP_KERNEL,
+					 &rk_obj->dma_addr, GFP_KERNEL,
 					 rk_obj->dma_attrs);
 	if (!rk_obj->kvaddr) {
 		DRM_ERROR("failed to allocate %zu byte dma buffer", obj->size);
@@ -272,7 +272,7 @@ static int rockchip_gem_alloc_dma(struct rockchip_gem_object *rk_obj,
 	}
 
 	ret = dma_get_sgtable_attrs(drm->dev, sgt, rk_obj->kvaddr,
-				    rk_obj->dma_handle, obj->size,
+				    rk_obj->dma_addr, obj->size,
 				    rk_obj->dma_attrs);
 	if (ret) {
 		DRM_ERROR("failed to allocate sgt, %d\n", ret);
@@ -310,7 +310,7 @@ err_sgt_free:
 	kfree(sgt);
 err_dma_free:
 	dma_free_attrs(drm->dev, obj->size, rk_obj->kvaddr,
-		       rk_obj->dma_handle, rk_obj->dma_attrs);
+		       rk_obj->dma_addr, rk_obj->dma_attrs);
 
 	return ret;
 }
@@ -352,7 +352,7 @@ static int rockchip_gem_alloc_secure(struct rockchip_gem_object *rk_obj)
 		return -ENOMEM;
 	}
 
-	rk_obj->dma_handle = paddr;
+	rk_obj->dma_addr = paddr;
 	rk_obj->num_pages = rk_obj->base.size >> PAGE_SHIFT;
 
 	rk_obj->pages = drm_calloc_large(rk_obj->num_pages,
@@ -396,7 +396,7 @@ static void rockchip_gem_free_secure(struct rockchip_gem_object *rk_obj)
 	drm_free_large(rk_obj->pages);
 	sg_free_table(rk_obj->sgt);
 	kfree(rk_obj->sgt);
-	gen_pool_free(private->secure_buffer_pool, rk_obj->dma_handle,
+	gen_pool_free(private->secure_buffer_pool, rk_obj->dma_addr,
 		      rk_obj->base.size);
 }
 
@@ -449,8 +449,7 @@ static int rockchip_gem_alloc_buf(struct rockchip_gem_object *rk_obj,
 		if (ret < 0)
 			goto err_free;
 	} else {
-		WARN_ON(!rk_obj->dma_handle);
-		rk_obj->dma_addr = rk_obj->dma_handle;
+		WARN_ON(!rk_obj->dma_addr);
 	}
 
 	return 0;
@@ -477,7 +476,7 @@ static void rockchip_gem_free_dma(struct rockchip_gem_object *rk_obj)
 	sg_free_table(rk_obj->sgt);
 	kfree(rk_obj->sgt);
 	dma_free_attrs(drm->dev, obj->size, rk_obj->kvaddr,
-		       rk_obj->dma_handle, rk_obj->dma_attrs);
+		       rk_obj->dma_addr, rk_obj->dma_attrs);
 }
 
 static void rockchip_gem_free_buf(struct rockchip_gem_object *rk_obj)
@@ -678,20 +677,6 @@ err_free_rk_obj:
 	return ERR_PTR(ret);
 }
 
-static void rockchip_gem_destroy(struct drm_gem_object *obj, struct sg_table *sg)
-{
-	struct dma_buf_attachment *attach;
-	struct dma_buf *dma_buf;
-
-	attach = obj->import_attach;
-	if (sg)
-		dma_buf_unmap_attachment(attach, sg, DMA_BIDIRECTIONAL);
-	dma_buf = attach->dmabuf;
-	dma_buf_detach(attach->dmabuf, attach);
-	/* remove the reference */
-	dma_buf_put(dma_buf);
-}
-
 /*
  * rockchip_gem_free_object - (struct drm_driver)->gem_free_object_unlocked
  * callback function
@@ -710,13 +695,7 @@ void rockchip_gem_free_object(struct drm_gem_object *obj)
 				     rk_obj->sgt->nents, DMA_BIDIRECTIONAL);
 		}
 		drm_free_large(rk_obj->pages);
-#if defined(CONFIG_DMABUF_CACHE)
-		/*
-		 * The dma_buf_unmap_attachment and dma_buf_detach will be re-defined if
-		 * CONFIG_DMABUF_CACHE is enabled.
-		 */
-		rockchip_gem_destroy(obj, rk_obj->sgt);
-#elif !defined(CONFIG_ARCH_ROCKCHIP)
+#ifndef CONFIG_ARCH_ROCKCHIP
 		drm_prime_gem_destroy(obj, rk_obj->sgt);
 #endif
 	} else {
@@ -925,13 +904,9 @@ void *rockchip_gem_prime_vmap(struct drm_gem_object *obj)
 {
 	struct rockchip_gem_object *rk_obj = to_rockchip_obj(obj);
 
-	if (rk_obj->pages) {
-		pgprot_t prot;
-
-		prot = rk_obj->flags & ROCKCHIP_BO_CACHABLE ? PAGE_KERNEL : pgprot_writecombine(PAGE_KERNEL);
-
-		return vmap(rk_obj->pages, rk_obj->num_pages, VM_MAP, prot);
-	}
+	if (rk_obj->pages)
+		return vmap(rk_obj->pages, rk_obj->num_pages, VM_MAP,
+			    pgprot_writecombine(PAGE_KERNEL));
 
 	if (rk_obj->dma_attrs & DMA_ATTR_NO_KERNEL_MAPPING)
 		return NULL;
@@ -1066,11 +1041,15 @@ static int rockchip_gem_prime_sgl_sync_range(struct device *dev,
 	for_each_sg(sgl, sg, nents, i) {
 		unsigned int sg_offset, sg_left, size = 0;
 
-		len += sg->length;
-		if (len <= offset)
-			continue;
+		if (i == 0)
+			sg_dma_addr = sg_dma_address(sg);
 
-		sg_dma_addr = sg_dma_address(sg);
+		len += sg->length;
+		if (len <= offset) {
+			sg_dma_addr += sg->length;
+			continue;
+		}
+
 		sg_left = len - offset;
 		sg_offset = sg->length - sg_left;
 
@@ -1084,6 +1063,7 @@ static int rockchip_gem_prime_sgl_sync_range(struct device *dev,
 
 		offset += size;
 		length -= size;
+		sg_dma_addr += sg->length;
 
 		if (length == 0)
 			break;
