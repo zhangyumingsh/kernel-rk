@@ -86,9 +86,9 @@
 	status = "okay";
 };
 
-//&rk_headset {
-//	status = "disabled";
-//};
+&rk_headset {
+	status = "disabled";
+};
 
 &rng {
 	status = "okay";
