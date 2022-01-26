@@ -197,7 +197,6 @@ enum vop2_layer_phy_id {
 };
 
 struct vop2_zpos {
-	struct drm_plane *plane;
 	int win_phys_id;
 	int zpos;
 };
@@ -261,7 +260,7 @@ struct vop2_plane_state {
 	int color_space;
 	int global_alpha;
 	int blend_mode;
-	uint64_t color_key;
+	int color_key;
 	void *yrgb_kvaddr;
 	unsigned long offset;
 	int pdaf_data_type;
@@ -555,9 +554,6 @@ struct vop2 {
 	bool support_multi_area;
 	bool disable_afbc_win;
 
-	/* no move win from one vp to another */
-	bool disable_win_move;
-
 	bool loader_protect;
 
 	const struct vop2_data *data;
@@ -796,20 +792,6 @@ static struct vop2_win *vop2_find_win_by_phys_id(struct vop2 *vop2, uint8_t phys
 	return NULL;
 }
 
-static struct drm_crtc *vop2_find_crtc_by_plane_mask(struct vop2 *vop2, uint8_t phys_id)
-{
-	struct vop2_video_port *vp;
-	int i;
-
-	for (i = 0; i < vop2->data->nr_vps; i++) {
-		vp = &vop2->vps[i];
-		if (vp->plane_mask & BIT(phys_id))
-			return &vp->crtc;
-	}
-
-	return NULL;
-}
-
 static void vop2_load_hdr2sdr_table(struct vop2_video_port *vp)
 {
 	struct vop2 *vop2 = vp->vop2;
@@ -1037,22 +1019,20 @@ static int32_t vop2_pending_done_bits(struct vop2_video_port *vp)
 		if (first_vp_left_time > first_vp_safe_time &&
 		    second_vp_left_time > second_vp_safe_time)
 			return done_bits_bak;
-
-		if (first_vp_left_time > second_vp_left_time) {
-			if ((first_vp_left_time - second_vp_left_time) > first_vp_safe_time)
-				wait_vp = second_done_vp;
-			else
-				wait_vp = first_done_vp;
-		} else {
-			if ((second_vp_left_time - first_vp_left_time) > second_vp_safe_time)
-				wait_vp = first_done_vp;
-			else
-				wait_vp = second_done_vp;
-		}
+		if (first_vp_left_time > second_vp_left_time)
+			wait_vp = first_done_vp;
+		else
+			wait_vp = second_done_vp;
 
 		vop2_wait_for_fs_by_done_bit_status(wait_vp);
 
 		done_bits = vop2_readl(vop2, RK3568_REG_CFG_DONE) & 0x7;
+		if (done_bits) {
+			vp_id = ffs(done_bits) - 1;
+			done_vp = &vop2->vps[vp_id];
+			vop2_wait_for_fs_by_done_bit_status(done_vp);
+		}
+		done_bits = 0;
 	}
 	return done_bits;
 }
@@ -1228,7 +1208,6 @@ static enum vop2_afbc_format vop2_convert_afbc_format(uint32_t format)
 	case DRM_FORMAT_NV12_10:
 		return VOP2_AFBC_FMT_YUV420_10BIT;
 	case DRM_FORMAT_NV16:
-	case DRM_FORMAT_YUYV:
 		return VOP2_AFBC_FMT_YUV422;
 	case DRM_FORMAT_NV16_10:
 		return VOP2_AFBC_FMT_YUV422_10BIT;
@@ -1296,7 +1275,6 @@ static bool vop2_afbc_uv_swap(uint32_t format)
 	switch (format) {
 	case DRM_FORMAT_NV12:
 	case DRM_FORMAT_NV16:
-	case DRM_FORMAT_YUYV:
 	case DRM_FORMAT_NV12_10:
 	case DRM_FORMAT_NV16_10:
 		return true;
@@ -1314,17 +1292,6 @@ static bool vop2_win_uv_swap(uint32_t format)
 	case DRM_FORMAT_NV12_10:
 	case DRM_FORMAT_NV16_10:
 	case DRM_FORMAT_NV24_10:
-		return true;
-	default:
-		return false;
-	}
-}
-
-static bool vop2_win_dither_up(uint32_t format)
-{
-	switch (format) {
-	case DRM_FORMAT_BGR565:
-	case DRM_FORMAT_RGB565:
 		return true;
 	default:
 		return false;
@@ -2538,39 +2505,51 @@ err:
  */
 static void vop2_layer_map_initial(struct vop2 *vop2, uint32_t current_vp_id)
 {
-	struct vop2_layer *layer;
-	struct vop2_video_port *vp;
+	const struct vop2_data *vop2_data = vop2->data;
+	struct vop2_layer *layer = &vop2->layers[0];
+	struct vop2_video_port *vp = &vop2->vps[0];
 	struct vop2_win *win;
-	unsigned long win_mask;
+	const struct vop2_win_data *win_data = NULL;
 	uint32_t used_layers = 0;
+	uint32_t layer_map, sel;
+	uint32_t win_map, vp_id;
 	uint16_t port_mux_cfg = 0;
 	uint16_t port_mux;
-	uint16_t vp_id;
-	uint8_t nr_layers;
-	int phys_id;
+	uint32_t active_vp_mask = 0;
+	uint32_t standby;
+	uint32_t shift;
 	int i, j;
 
+	layer_map = vop2_readl(vop2, layer->regs->layer_sel.offset);
+	win_map = vop2_readl(vop2, vp->regs->port_mux.offset);
+
+	active_vp_mask |= BIT(current_vp_id);
+	/*
+	 * lookup if there are some vps activated
+	 * by bootloader(et: show boot logo)
+	 */
 	for (i = 0; i < vop2->data->nr_vps; i++) {
-		vp_id = i;
-		j = 0;
-		vp = &vop2->vps[vp_id];
-		vp->win_mask = vp->plane_mask;
-		nr_layers = hweight32(vp->win_mask);
-		win_mask = vp->win_mask;
-		for_each_set_bit(phys_id, &win_mask, ROCKCHIP_MAX_LAYER) {
-			layer = &vop2->layers[used_layers + j];
-			win = vop2_find_win_by_phys_id(vop2, phys_id);
-			VOP_CTRL_SET(vop2, win_vp_id[phys_id], vp_id);
-			VOP_MODULE_SET(vop2, layer, layer_sel, win->layer_sel_id);
-			win->vp_mask = BIT(i);
-			win->old_vp_mask = win->vp_mask;
-			layer->win_phys_id = win->phys_id;
-			win->layer_id = layer->id;
-			j++;
-			DRM_DEV_DEBUG(vop2->dev, "layer%d select %s for vp%d phys_id: %d\n",
-				      layer->id, win->name, vp_id, phys_id);
+		vp = &vop2->vps[i];
+		standby = vop2_readl(vop2, vp->regs->standby.offset);
+		shift = vp->regs->standby.shift;
+		standby = (standby >> shift) & 0x1;
+		if (!standby)
+			active_vp_mask |= BIT(i);
+	}
+
+	for (i = 0; i < vop2->data->nr_vps; i++) {
+		vp = &vop2->vps[i];
+		vp->win_mask = 0;
+		for (j = 0; j < vop2_data->nr_layers; j++) {
+			win = vop2_find_win_by_phys_id(vop2, j);
+			shift = vop2->data->ctrl->win_vp_id[j].shift;
+			vp_id = (win_map >> shift) & 0x3;
+			if (vp_id == i) {
+				vp->win_mask |=  BIT(j);
+				win->vp_mask = BIT(vp_id);
+				win->old_vp_mask = win->vp_mask;
+			}
 		}
-		used_layers += nr_layers;
 	}
 
 	/*
@@ -2578,7 +2557,6 @@ static void vop2_layer_map_initial(struct vop2 *vop2, uint32_t current_vp_id)
 	 * at the last level of the all the mixers by hardware design,
 	 * so we just need to handle (nr_vps - 1) vps here.
 	 */
-	used_layers = 0;
 	for (i = 0; i < vop2->data->nr_vps - 1; i++) {
 		vp = &vop2->vps[i];
 		used_layers += hweight32(vp->win_mask);
@@ -2595,6 +2573,25 @@ static void vop2_layer_map_initial(struct vop2 *vop2, uint32_t current_vp_id)
 	vop2->port_mux_cfg = port_mux_cfg;
 	VOP_CTRL_SET(vop2, ovl_port_mux_cfg, port_mux_cfg);
 
+	for (i = 0; i < vop2->data->nr_layers; i++) {
+		sel = (layer_map >> (4 * i)) & 0xf;
+		layer = &vop2->layers[i];
+		for (j = 0; j < vop2_data->win_size; j++) {
+			win_data = &vop2_data->win[j];
+			if (sel == win_data->layer_sel_id)
+				break;
+			win_data = NULL;
+		}
+
+		if (!win_data) {
+			DRM_DEV_ERROR(vop2->dev, "invalid layer map :0x%x\n", layer_map);
+			return;
+		}
+		win = vop2_find_win_by_phys_id(vop2, win_data->phys_id);
+		layer->win_phys_id = win->phys_id;
+		win->layer_id = layer->id;
+		DRM_DEV_DEBUG(vop2->dev, "layer%d select %s\n", layer->id, win->name);
+	}
 }
 
 static void vop2_initial(struct drm_crtc *crtc)
@@ -2738,6 +2735,22 @@ static void vop2_crtc_atomic_disable(struct drm_crtc *crtc,
 	}
 }
 
+static int vop2_plane_prepare_fb(struct drm_plane *plane,
+				 struct drm_plane_state *new_state)
+{
+	if (plane->state->fb)
+		drm_framebuffer_get(plane->state->fb);
+
+	return 0;
+}
+
+static void vop2_plane_cleanup_fb(struct drm_plane *plane,
+				  struct drm_plane_state *old_state)
+{
+	if (old_state->fb)
+		drm_framebuffer_put(old_state->fb);
+}
+
 static int vop2_plane_atomic_check(struct drm_plane *plane, struct drm_plane_state *state)
 {
 	struct vop2_plane_state *vpstate = to_vop2_plane_state(state);
@@ -2779,6 +2792,15 @@ static int vop2_plane_atomic_check(struct drm_plane *plane, struct drm_plane_sta
 		return -EINVAL;
 	}
 
+	src->x1 = state->src_x;
+	src->y1 = state->src_y;
+	src->x2 = state->src_x + state->src_w;
+	src->y2 = state->src_y + state->src_h;
+	dest->x1 = state->crtc_x;
+	dest->y1 = state->crtc_y;
+
+	dest->x2 = state->crtc_x + state->crtc_w;
+	dest->y2 = state->crtc_y + state->crtc_h;
 
 	ret = drm_atomic_helper_check_plane_state(state, cstate,
 						  min_scale, max_scale,
@@ -2786,22 +2808,8 @@ static int vop2_plane_atomic_check(struct drm_plane *plane, struct drm_plane_sta
 	if (ret)
 		return ret;
 
-	if (!state->visible) {
-		DRM_ERROR("%s is invisible(src: pos[%d, %d] rect[%d x %d] dst: pos[%d, %d] rect[%d x %d]\n",
-			  plane->name, state->src_x >> 16, state->src_y >> 16, state->src_w >> 16,
-			  state->src_h >> 16, state->crtc_x, state->crtc_y, state->crtc_w,
-			  state->crtc_h);
+	if (!state->visible)
 		return 0;
-	}
-
-	src->x1 = state->src.x1;
-	src->y1 = state->src.y1;
-	src->x2 = state->src.x2;
-	src->y2 = state->src.y2;
-	dest->x1 = state->dst.x1;
-	dest->y1 = state->dst.y1;
-	dest->x2 = state->dst.x2;
-	dest->y2 = state->dst.y2;
 
 	vpstate->zpos = state->zpos;
 	vpstate->global_alpha = state->alpha >> 8;
@@ -2810,13 +2818,12 @@ static int vop2_plane_atomic_check(struct drm_plane *plane, struct drm_plane_sta
 	if (vpstate->format < 0)
 		return vpstate->format;
 
-	if (drm_rect_width(src) >> 16 < 4 || drm_rect_height(src) >> 16 < 4 ||
-	    drm_rect_width(dest) < 4 || drm_rect_width(dest) < 4) {
+	if (state->src_w >> 16 < 4 || state->src_h >> 16 < 4 ||
+	    state->crtc_w < 4 || state->crtc_h < 4) {
 		DRM_ERROR("Invalid size: %dx%d->%dx%d, min size is 4x4\n",
-			  drm_rect_width(src) >> 16, drm_rect_height(src) >> 16,
-			  drm_rect_width(dest), drm_rect_height(dest));
-		state->visible = false;
-		return 0;
+			  state->src_w >> 16, state->src_h >> 16,
+			  state->crtc_w, state->crtc_h);
+		return -EINVAL;
 	}
 
 	if (drm_rect_width(src) >> 16 > vop2_data->max_input.width ||
@@ -2833,17 +2840,6 @@ static int vop2_plane_atomic_check(struct drm_plane *plane, struct drm_plane_sta
 		vpstate->afbc_en = true;
 	else
 		vpstate->afbc_en = false;
-
-	/*
-	 * This is special feature at rk356x, the cluster layer only can support
-	 * afbc format and can't support linear format;
-	 */
-	if (VOP_MAJOR(vop2_data->version) == 0x40 && VOP_MINOR(vop2_data->version) == 0x15) {
-		if (vop2_cluster_window(win) && !vpstate->afbc_en) {
-			DRM_ERROR("Unsupported linear format at %s\n", win->name);
-			return -EINVAL;
-		}
-	}
 
 	/*
 	 * Src.x1 can be odd when do clip, but yuv plane start point
@@ -2995,7 +2991,6 @@ static void vop2_plane_atomic_update(struct drm_plane *plane, struct drm_plane_s
 	uint32_t stride;
 	uint32_t transform_offset;
 	struct drm_format_name_buf format_name;
-	bool dither_up;
 
 #if defined(CONFIG_ROCKCHIP_DRM_DEBUG)
 	bool AFBC_flag = false;
@@ -3191,9 +3186,6 @@ static void vop2_plane_atomic_update(struct drm_plane *plane, struct drm_plane_s
 	VOP_WIN_SET(vop2, win, r2y_en, vpstate->r2y_en);
 	VOP_WIN_SET(vop2, win, csc_mode, vpstate->csc_mode);
 
-	dither_up = vop2_win_dither_up(fb->format->format);
-	VOP_WIN_SET(vop2, win, dither_up, dither_up);
-
 	VOP_WIN_SET(vop2, win, enable, 1);
 	if (vop2_cluster_window(win)) {
 		lb_mode = vop2_get_cluster_lb_mode(win, vpstate);
@@ -3237,6 +3229,8 @@ static void vop2_plane_atomic_update(struct drm_plane *plane, struct drm_plane_s
 }
 
 static const struct drm_plane_helper_funcs vop2_plane_helper_funcs = {
+	.prepare_fb = vop2_plane_prepare_fb,
+	.cleanup_fb = vop2_plane_cleanup_fb,
 	.atomic_check = vop2_plane_atomic_check,
 	.atomic_update = vop2_plane_atomic_update,
 	.atomic_disable = vop2_plane_atomic_disable,
@@ -3381,7 +3375,6 @@ static void vop2_atomic_plane_reset(struct drm_plane *plane)
 	plane->state->plane = plane;
 	plane->state->zpos = win->zpos;
 	plane->state->alpha = DRM_BLEND_ALPHA_OPAQUE;
-	plane->state->rotation = DRM_MODE_ROTATE_0;
 }
 
 static struct drm_plane_state *vop2_atomic_plane_duplicate_state(struct drm_plane *plane)
@@ -3995,7 +3988,6 @@ static u64 vop2_calc_max_bandwidth(struct vop2_bandwidth *bw, int start,
 
 static size_t vop2_crtc_bandwidth(struct drm_crtc *crtc,
 				  struct drm_crtc_state *crtc_state,
-				  size_t *frame_bw_mbyte,
 				  unsigned int *plane_num_total)
 {
 	struct drm_display_mode *adjusted_mode = &crtc_state->adjusted_mode;
@@ -4007,7 +3999,7 @@ static size_t vop2_crtc_bandwidth(struct drm_crtc *crtc,
 	struct drm_plane_state *pstate;
 	struct vop2_bandwidth *pbandwidth;
 	struct drm_plane *plane;
-	uint64_t line_bandwidth;
+	uint64_t bandwidth;
 	int8_t cnt = 0, plane_num = 0;
 #if defined(CONFIG_ROCKCHIP_DRM_DEBUG)
 	struct vop_dump_list *pos, *n;
@@ -4040,39 +4032,29 @@ static size_t vop2_crtc_bandwidth(struct drm_crtc *crtc,
 	if (!pbandwidth)
 		return -ENOMEM;
 	drm_atomic_crtc_state_for_each_plane(plane, crtc_state) {
-		int act_w, act_h, bpp, afbc_fac;
-
 		pstate = drm_atomic_get_new_plane_state(state, plane);
 		if (!pstate || pstate->crtc != crtc || !pstate->fb)
 			continue;
-		/* This is an empirical value, if it's afbc format, the frame buffer size div 2 */
-		afbc_fac = rockchip_afbc(plane, pstate->fb->modifier) ? 2 : 1;
 
 		vpstate = to_vop2_plane_state(pstate);
 		pbandwidth[cnt].y1 = vpstate->dest.y1;
 		pbandwidth[cnt].y2 = vpstate->dest.y2;
-		pbandwidth[cnt++].bandwidth = vop2_plane_line_bandwidth(pstate) / afbc_fac;
-
-		act_w = drm_rect_width(&pstate->src) >> 16;
-		act_h = drm_rect_height(&pstate->src) >> 16;
-		bpp = pstate->fb->format->bpp[0];
-
-		*frame_bw_mbyte += act_w * act_h / 1000 * bpp / 8 * adjusted_mode->vrefresh / afbc_fac / 1000;
+		pbandwidth[cnt++].bandwidth = vop2_plane_line_bandwidth(pstate);
 	}
 
 	sort(pbandwidth, cnt, sizeof(pbandwidth[0]), vop2_bandwidth_cmp, NULL);
 
-	line_bandwidth = vop2_calc_max_bandwidth(pbandwidth, 0, cnt, vdisplay);
+	bandwidth = vop2_calc_max_bandwidth(pbandwidth, 0, cnt, vdisplay);
 	kfree(pbandwidth);
 	/*
-	 * line_bandwidth(MB/s)
-	 *    = line_bandwidth(Byte) / line_time(s)
+	 * bandwidth(MB/s)
+	 *    = line_bandwidth / line_time
 	 *    = line_bandwidth(Byte) * clock(KHZ) / 1000 / htotal
 	 */
-	line_bandwidth *= clock;
-	do_div(line_bandwidth, htotal * 1000);
+	bandwidth *= clock;
+	do_div(bandwidth, htotal * 1000);
 
-	return line_bandwidth;
+	return bandwidth;
 }
 
 static void vop2_crtc_close(struct drm_crtc *crtc)
@@ -4501,10 +4483,7 @@ static int vop2_zpos_cmp(const void *a, const void *b)
 	struct vop2_zpos *pa = (struct vop2_zpos *)a;
 	struct vop2_zpos *pb = (struct vop2_zpos *)b;
 
-	if (pa->zpos != pb->zpos)
-		return pa->zpos - pb->zpos;
-	else
-		return pa->plane->base.id - pb->plane->base.id;
+	return pa->zpos - pb->zpos;
 }
 
 static int vop2_crtc_atomic_check(struct drm_crtc *crtc,
@@ -5127,7 +5106,6 @@ static void vop2_crtc_atomic_begin(struct drm_crtc *crtc, struct drm_crtc_state 
 		vpstate = to_vop2_plane_state(plane->state);
 		vop2_zpos[nr_layers].win_phys_id = win->phys_id;
 		vop2_zpos[nr_layers].zpos = vpstate->zpos;
-		vop2_zpos[nr_layers].plane = plane;
 		nr_layers++;
 		DRM_DEV_DEBUG(vop2->dev, "%s active zpos:%d for vp%d from vp%d\n",
 			     win->name, vpstate->zpos, vp->id, old_vp->id);
@@ -6184,8 +6162,6 @@ static int vop2_create_crtc(struct vop2 *vop2)
 		vp->id = vp_data->id;
 		vp->regs = vp_data->regs;
 		vp->cursor_win_id = -1;
-		if (vop2->disable_win_move)
-			possible_crtcs = BIT(registered_num_crtcs);
 
 		/*
 		 * we assume a vp with a zere plane_mask(set from dts or bootloader)
@@ -6218,10 +6194,8 @@ static int vop2_create_crtc(struct vop2 *vop2)
 
 		if (vp->primary_plane_phy_id >= 0) {
 			win = vop2_find_win_by_phys_id(vop2, vp->primary_plane_phy_id);
-			if (win) {
+			if (win)
 				find_primary_plane = true;
-				win->type = DRM_PLANE_TYPE_PRIMARY;
-			}
 		} else {
 			while (j < vop2->registered_num_wins) {
 				be_used_for_primary_plane = false;
@@ -6340,14 +6314,6 @@ static int vop2_create_crtc(struct vop2 *vop2)
 		 */
 		if (registered_num_crtcs < 2 && vop2_is_mirror_win(win))
 			continue;
-
-		if (vop2->disable_win_move) {
-			crtc = vop2_find_crtc_by_plane_mask(vop2, win->phys_id);
-			if (crtc)
-				possible_crtcs = drm_crtc_mask(crtc);
-			else
-				possible_crtcs = (1 << vop2_data->nr_vps) - 1;
-		}
 
 		ret = vop2_plane_init(vop2, win, possible_crtcs);
 		if (ret)
@@ -6536,7 +6502,6 @@ static int vop2_bind(struct device *dev, struct device *master, void *data)
 
 	vop2->support_multi_area = of_property_read_bool(dev->of_node, "support-multi-area");
 	vop2->disable_afbc_win = of_property_read_bool(dev->of_node, "disable-afbc-win");
-	vop2->disable_win_move = of_property_read_bool(dev->of_node, "disable-win-move");
 
 	ret = vop2_win_init(vop2);
 	if (ret)
