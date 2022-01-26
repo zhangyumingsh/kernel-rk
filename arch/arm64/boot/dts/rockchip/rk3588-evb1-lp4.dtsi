@@ -502,6 +502,7 @@
 
 &pcie2x1l0 {
 	reset-gpios = <&gpio4 RK_PA5 GPIO_ACTIVE_HIGH>;
+	rockchip,skip-scan-in-resume;
 	status = "okay";
 };
 
@@ -641,6 +642,10 @@
 
 &sata0 {
 	status = "okay";
+};
+
+&u2phy0_otg {
+	rockchip,typec-vbus-det;
 };
 
 &u2phy1_otg {

@@ -13,9 +13,15 @@
 
 #include "rga_drv.h"
 
-#define RGA_JOB_DONE (1 << 0)
-#define RGA_JOB_ASYNC (1 << 1)
-#define RGA_JOB_SYNC (1 << 2)
+enum job_flags {
+	RGA_JOB_DONE			= 1 << 0,
+	RGA_JOB_ASYNC			= 1 << 1,
+	RGA_JOB_SYNC			= 1 << 2,
+	RGA_JOB_USE_HANDLE		= 1 << 3,
+	RGA_JOB_UNSUPPORT_RGA2		= 1 << 4,
+};
+
+struct rga_scheduler_t *rga_job_get_scheduler(int core);
 
 void rga_job_done(struct rga_scheduler_t *rga_scheduler, int ret);
 int rga_job_commit(struct rga_req *rga_command_base, int flags);

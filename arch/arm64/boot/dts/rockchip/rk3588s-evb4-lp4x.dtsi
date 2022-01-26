@@ -589,6 +589,7 @@
 
 &pcie2x1l2 {
 	reset-gpios = <&gpio4 RK_PC1 GPIO_ACTIVE_HIGH>;
+	rockchip,skip-scan-in-resume;
 	status = "okay";
 };
 
@@ -819,6 +820,10 @@
 	pinctrl-names = "default";
 	pinctrl-0 = <&spi2m2_cs0 &spi2m2_pins>;
 	num-cs = <1>;
+};
+
+&u2phy0_otg {
+	rockchip,typec-vbus-det;
 };
 
 &u2phy2_host {

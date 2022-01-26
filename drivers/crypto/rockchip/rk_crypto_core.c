@@ -22,6 +22,7 @@
 #include "rk_crypto_core.h"
 #include "rk_crypto_v1.h"
 #include "rk_crypto_v2.h"
+#include "cryptodev_linux/rk_cryptodev_int.h"
 
 #define RK_CRYPTO_V1_SOC_DATA_INIT(names) {\
 	.use_soft_aes192 = false,\
@@ -96,6 +97,22 @@ static int check_scatter_align(struct scatterlist *sg_src,
 	return (align && (sg_src->length == sg_dst->length));
 }
 
+static bool check_from_dmafd(struct crypto_async_request *async_req)
+{
+	struct rk_alg_ctx *alg_ctx = rk_alg_ctx_cast(async_req);
+
+	if (alg_ctx->src_nents == 1 &&
+	    sg_virt(alg_ctx->req_src) &&
+	    sg_dma_address(alg_ctx->req_src) &&
+	    alg_ctx->dst_nents == 1 &&
+	    sg_virt(alg_ctx->req_dst) &&
+	    sg_dma_address(alg_ctx->req_dst) &&
+	    sg_dma_len(alg_ctx->req_src) == sg_dma_len(alg_ctx->req_dst))
+		return true;
+
+	return false;
+}
+
 static bool check_scatterlist_align(struct crypto_async_request *async_req,
 				    int align_mask)
 {
@@ -133,9 +150,11 @@ static int rk_load_data(struct rk_crypto_dev *rk_dev,
 	struct device *dev = rk_dev->dev;
 	struct rk_alg_ctx *alg_ctx = rk_alg_ctx_cast(rk_dev->async_req);
 
-	if (alg_ctx->left_bytes == alg_ctx->total)
+	if (alg_ctx->left_bytes == alg_ctx->total) {
+		alg_ctx->is_dma = check_from_dmafd(rk_dev->async_req);
 		alg_ctx->aligned = check_scatterlist_align(rk_dev->async_req,
-							   alg_ctx->align_size);
+							   alg_ctx->align_size) | alg_ctx->is_dma;
+	}
 
 	CRYPTO_TRACE("aligned = %d, total = %u, left_bytes = %u\n",
 		     alg_ctx->aligned, alg_ctx->total, alg_ctx->left_bytes);
@@ -154,7 +173,7 @@ static int rk_load_data(struct rk_crypto_dev *rk_dev,
 		alg_ctx->addr_in = sg_dma_address(sg_src);
 
 		if (sg_dst) {
-			if (!dma_map_sg(dev, sg_dst, 1, DMA_FROM_DEVICE)) {
+			if (!alg_ctx->is_dma && !dma_map_sg(dev, sg_dst, 1, DMA_FROM_DEVICE)) {
 				dev_err(dev,
 					"[%s:%d] dma_map_sg(dst)  error\n",
 					__func__, __LINE__);
@@ -221,11 +240,13 @@ static int rk_unload_data(struct rk_crypto_dev *rk_dev)
 		return 0;
 
 	sg_in = alg_ctx->aligned ? alg_ctx->sg_src : &alg_ctx->sg_tmp;
-	dma_unmap_sg(rk_dev->dev, sg_in, 1, DMA_TO_DEVICE);
+	if (!alg_ctx->is_dma)
+		dma_unmap_sg(rk_dev->dev, sg_in, 1, DMA_TO_DEVICE);
 
 	if (alg_ctx->sg_dst) {
 		sg_out = alg_ctx->aligned ? alg_ctx->sg_dst : &alg_ctx->sg_tmp;
-		dma_unmap_sg(rk_dev->dev, sg_out, 1, DMA_FROM_DEVICE);
+		if (!alg_ctx->is_dma)
+			dma_unmap_sg(rk_dev->dev, sg_out, 1, DMA_FROM_DEVICE);
 	}
 
 	if (!alg_ctx->aligned && alg_ctx->req_dst) {
@@ -769,6 +790,8 @@ static int rk_crypto_probe(struct platform_device *pdev)
 		goto err_register_alg;
 	}
 
+	rk_cryptodev_register_dev(rk_dev->dev, "rk_crypto");
+
 	dev_info(dev, "Crypto Accelerator successfully registered\n");
 	return 0;
 
@@ -782,6 +805,8 @@ err_crypto:
 static int rk_crypto_remove(struct platform_device *pdev)
 {
 	struct rk_crypto_dev *rk_dev = platform_get_drvdata(pdev);
+
+	rk_cryptodev_unregister_dev(rk_dev->dev);
 
 	del_timer_sync(&rk_dev->timer);
 

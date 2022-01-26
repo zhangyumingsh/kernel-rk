@@ -29,6 +29,7 @@
 #include <linux/mfd/syscon.h>
 #include <linux/usb/of.h>
 #include <linux/usb/otg.h>
+#include <linux/usb/typec_mux.h>
 #include <linux/wakelock.h>
 
 #define BIT_WRITEABLE_SHIFT	16
@@ -121,10 +122,13 @@ struct rockchip_chg_det_reg {
 /**
  * struct rockchip_usb2phy_port_cfg - usb-phy port configuration.
  * @phy_sus: phy suspend register.
+ * @pipe_phystatus: select pipe phystatus from grf or phy.
  * @bvalid_det_en: vbus valid rise detection enable register.
  * @bvalid_det_st: vbus valid rise detection status register.
  * @bvalid_det_clr: vbus valid rise detection clear register.
- * @bvalid_set: bvalid select and set to usb controller.
+ * @bvalid_grf_con: vbus valid software control.
+ * @bvalid_grf_sel: vbus valid software control select.
+ * @bvalid_phy_con: vbus valid external select and enable.
  * @bypass_dm_en: usb bypass uart DM enable register.
  * @bypass_sel: usb bypass uart select register.
  * @bypass_iomux: usb bypass uart GRF iomux register.
@@ -158,10 +162,13 @@ struct rockchip_chg_det_reg {
  */
 struct rockchip_usb2phy_port_cfg {
 	struct usb2phy_reg	phy_sus;
+	struct usb2phy_reg	pipe_phystatus;
 	struct usb2phy_reg	bvalid_det_en;
 	struct usb2phy_reg	bvalid_det_st;
 	struct usb2phy_reg	bvalid_det_clr;
-	struct usb2phy_reg	bvalid_set;
+	struct usb2phy_reg	bvalid_grf_con;
+	struct usb2phy_reg	bvalid_grf_sel;
+	struct usb2phy_reg	bvalid_phy_con;
 	struct usb2phy_reg	bypass_dm_en;
 	struct usb2phy_reg	bypass_sel;
 	struct usb2phy_reg	bypass_iomux;
@@ -220,7 +227,9 @@ struct rockchip_usb2phy_cfg {
  * @low_power_en: enable enter low power when suspend.
  * @perip_connected: flag for periphyeral connect status.
  * @prev_iddig: previous otg port id pin status.
+ * @sel_pipe_phystatus: select pipe phystatus from grf.
  * @suspended: phy suspended flag.
+ * @typec_vbus_det: Type-C otg vbus detect.
  * @utmi_avalid: utmi avalid status usage flag.
  *	true	- use avalid to get vbus status
  *	false	- use bvalid to get vbus status
@@ -240,6 +249,7 @@ struct rockchip_usb2phy_cfg {
  * @otg_sm_work: OTG state machine work.
  * @sm_work: HOST state machine work.
  * @vbus: vbus regulator supply on few rockchip boards.
+ * @sw: orientation switch, communicate with TCPM (Type-C Port Manager).
  * @port_cfg: port register configuration, assigned by driver data.
  * @event_nb: hold event notification callback.
  * @state: define OTG enumeration states before device reset.
@@ -251,7 +261,9 @@ struct rockchip_usb2phy_port {
 	bool		low_power_en;
 	bool		perip_connected;
 	bool		prev_iddig;
+	bool		sel_pipe_phystatus;
 	bool		suspended;
+	bool		typec_vbus_det;
 	bool		utmi_avalid;
 	bool		vbus_attached;
 	bool		vbus_always_on;
@@ -268,6 +280,7 @@ struct rockchip_usb2phy_port {
 	struct		delayed_work otg_sm_work;
 	struct		delayed_work sm_work;
 	struct		regulator *vbus;
+	struct		typec_switch *sw;
 	const struct	rockchip_usb2phy_port_cfg *port_cfg;
 	struct notifier_block	event_nb;
 	struct wake_lock	wakelock;
@@ -280,6 +293,7 @@ struct rockchip_usb2phy_port {
  * @dev: pointer to device.
  * @grf: General Register Files regmap.
  * @usbgrf: USB General Register Files regmap.
+ * @usbctrl_grf: USB Controller General Register Files regmap.
  * *phy_base: the base address of USB PHY.
  * @phy_reset: phy reset control.
  * @clk: clock struct of phy input clk.
@@ -303,6 +317,7 @@ struct rockchip_usb2phy {
 	struct device	*dev;
 	struct regmap	*grf;
 	struct regmap	*usbgrf;
+	struct regmap	*usbctrl_grf;
 	void __iomem	*phy_base;
 	struct reset_control	*phy_reset;
 	struct clk	*clk;
@@ -724,8 +739,7 @@ static int rockchip_usb2phy_init(struct phy *phy)
 				goto out;
 			}
 
-			schedule_delayed_work(&rport->otg_sm_work,
-					      OTG_SCHEDULE_DELAY);
+			schedule_delayed_work(&rport->otg_sm_work, 0);
 		}
 	} else if (rport->port_id == USB2PHY_PORT_HOST) {
 		if (rport->port_cfg->disfall_en.offset) {
@@ -780,6 +794,10 @@ static int rockchip_usb2phy_power_on(struct phy *phy)
 	ret = clk_prepare_enable(rphy->clk480m);
 	if (ret)
 		goto unlock;
+
+	if (rport->sel_pipe_phystatus)
+		property_enable(rphy->usbctrl_grf,
+				&rport->port_cfg->pipe_phystatus, true);
 
 	ret = property_enable(base, &rport->port_cfg->phy_sus, false);
 	if (ret)
@@ -1086,7 +1104,10 @@ static void rockchip_usb2phy_otg_sm_work(struct work_struct *work)
 
 	mutex_lock(&rport->mutex);
 
-	if (rport->utmi_avalid)
+	if (rport->port_cfg->bvalid_grf_con.enable && rport->typec_vbus_det)
+		rport->vbus_attached =
+			property_enabled(rphy->grf, &rport->port_cfg->bvalid_grf_con);
+	else if (rport->utmi_avalid)
 		rport->vbus_attached =
 			property_enabled(rphy->grf, &rport->port_cfg->utmi_avalid);
 	else
@@ -1833,6 +1854,61 @@ static int rockchip_usb2phy_port_irq_init(struct rockchip_usb2phy *rphy,
 	return ret;
 }
 
+static void rockchip_usb2phy_usb_bvalid_enable(struct rockchip_usb2phy_port *rport,
+					       u8 enable)
+{
+	struct rockchip_usb2phy *rphy = dev_get_drvdata(rport->phy->dev.parent);
+	const struct rockchip_usb2phy_port_cfg *cfg = rport->port_cfg;
+
+	if (cfg->bvalid_phy_con.enable)
+		property_enable(rphy->grf, &cfg->bvalid_phy_con, enable);
+
+	if (cfg->bvalid_grf_con.enable)
+		property_enable(rphy->grf, &cfg->bvalid_grf_con, enable);
+}
+
+static int rockchip_usb2phy_orien_sw_set(struct typec_switch *sw,
+					 enum typec_orientation orien)
+{
+	struct rockchip_usb2phy_port *rport = typec_switch_get_drvdata(sw);
+
+	dev_dbg(&rport->phy->dev, "type-c orientation: %d\n", orien);
+
+	mutex_lock(&rport->mutex);
+	rockchip_usb2phy_usb_bvalid_enable(rport, orien != TYPEC_ORIENTATION_NONE);
+	mutex_unlock(&rport->mutex);
+
+	return 0;
+}
+
+static int
+rockchip_usb2phy_setup_orien_switch(struct rockchip_usb2phy *rphy,
+				    struct rockchip_usb2phy_port *rport)
+{
+	struct typec_switch_desc sw_desc = { };
+	struct device *dev = rphy->dev;
+
+	sw_desc.drvdata = rport;
+	sw_desc.fwnode = dev_fwnode(dev);
+	sw_desc.set = rockchip_usb2phy_orien_sw_set;
+
+	rport->sw = typec_switch_register(dev, &sw_desc);
+	if (IS_ERR(rport->sw)) {
+		dev_err(dev, "Error register typec orientation switch: %ld\n",
+			PTR_ERR(rport->sw));
+		return PTR_ERR(rport->sw);
+	}
+
+	return 0;
+}
+
+static void rockchip_usb2phy_orien_switch_unregister(void *data)
+{
+	struct rockchip_usb2phy_port *rport = data;
+
+	typec_switch_unregister(rport->sw);
+}
+
 static int rockchip_usb2phy_host_port_init(struct rockchip_usb2phy *rphy,
 					   struct rockchip_usb2phy_port *rport,
 					   struct device_node *child_np)
@@ -1910,6 +1986,23 @@ static int rockchip_usb2phy_otg_port_init(struct rockchip_usb2phy *rphy,
 	rport->low_power_en =
 		of_property_read_bool(child_np, "rockchip,low-power-mode");
 
+	/* For type-c with vbus_det always pull up */
+	rport->typec_vbus_det =
+		of_property_read_bool(child_np, "rockchip,typec-vbus-det");
+
+	rport->sel_pipe_phystatus =
+		of_property_read_bool(child_np, "rockchip,sel-pipe-phystatus");
+
+	if (rport->sel_pipe_phystatus) {
+		rphy->usbctrl_grf =
+			syscon_regmap_lookup_by_phandle(rphy->dev->of_node,
+							"rockchip,usbctrl-grf");
+		if (IS_ERR(rphy->usbctrl_grf)) {
+			dev_err(rphy->dev, "Failed to map usbctrl-grf\n");
+			return PTR_ERR(rphy->usbctrl_grf);
+		}
+	}
+
 	/* Get Vbus regulators */
 	rport->vbus = devm_regulator_get_optional(&rport->phy->dev, "vbus");
 	if (IS_ERR(rport->vbus)) {
@@ -1941,13 +2034,26 @@ static int rockchip_usb2phy_otg_port_init(struct rockchip_usb2phy *rphy,
 		return ret;
 	}
 
+	if (IS_REACHABLE(CONFIG_TYPEC) &&
+	    device_property_present(rphy->dev, "orientation-switch")) {
+		ret = rockchip_usb2phy_setup_orien_switch(rphy, rport);
+		if (ret)
+			return ret;
+
+		ret = devm_add_action_or_reset(rphy->dev,
+					       rockchip_usb2phy_orien_switch_unregister,
+					       rport);
+		if (ret)
+			return ret;
+	}
+
 	if (rport->vbus_always_on || rport->mode == USB_DR_MODE_HOST ||
 	    rport->mode == USB_DR_MODE_UNKNOWN)
 		goto out;
 
 	/* Select bvalid of usb phy as bvalid of usb controller */
-	if (rport->port_cfg->bvalid_set.enable != 0)
-		property_enable(base, &rport->port_cfg->bvalid_set, false);
+	if (rport->port_cfg->bvalid_grf_sel.enable != 0)
+		property_enable(base, &rport->port_cfg->bvalid_grf_sel, false);
 
 	wake_lock_init(&rport->wakelock, WAKE_LOCK_SUSPEND, "rockchip_otg");
 	INIT_DELAYED_WORK(&rport->bypass_uart_work,
@@ -3151,7 +3257,7 @@ static const struct rockchip_usb2phy_cfg rk3568_phy_cfgs[] = {
 				.bvalid_det_en	= { 0x0080, 2, 2, 0, 1 },
 				.bvalid_det_st	= { 0x0084, 2, 2, 0, 1 },
 				.bvalid_det_clr = { 0x0088, 2, 2, 0, 1 },
-				.bvalid_set	= { 0x0008, 15, 14, 0, 3 },
+				.bvalid_grf_sel	= { 0x0008, 15, 14, 0, 3 },
 				.bypass_dm_en	= { 0x0008, 2, 2, 0, 1},
 				.bypass_sel	= { 0x0008, 3, 3, 0, 1},
 				.iddig_output	= { 0x0000, 10, 10, 0, 1 },
@@ -3229,9 +3335,13 @@ static const struct rockchip_usb2phy_cfg rk3588_phy_cfgs[] = {
 		.port_cfgs	= {
 			[USB2PHY_PORT_OTG] = {
 				.phy_sus	= { 0x000c, 11, 11, 0, 1 },
+				.pipe_phystatus	= { 0x001c, 3, 2, 0, 2 },
 				.bvalid_det_en	= { 0x0080, 1, 1, 0, 1 },
 				.bvalid_det_st	= { 0x0084, 1, 1, 0, 1 },
 				.bvalid_det_clr = { 0x0088, 1, 1, 0, 1 },
+				.bvalid_grf_sel	= { 0x0010, 3, 3, 0, 1 },
+				.bvalid_grf_con	= { 0x0010, 3, 2, 2, 3 },
+				.bvalid_phy_con	= { 0x0008, 1, 0, 2, 3 },
 				.bypass_dm_en	= { 0x000c, 5, 5, 0, 1 },
 				.bypass_sel	= { 0x000c, 6, 6, 0, 1 },
 				.iddig_output	= { 0x0010, 0, 0, 0, 1 },
@@ -3279,6 +3389,7 @@ static const struct rockchip_usb2phy_cfg rk3588_phy_cfgs[] = {
 			/* Select suspend control from controller */
 			[USB2PHY_PORT_OTG] = {
 				.phy_sus	= { 0x000c, 11, 11, 0, 0 },
+				.pipe_phystatus	= { 0x0034, 3, 2, 0, 2 },
 				.bvalid_det_en	= { 0x0080, 1, 1, 0, 1 },
 				.bvalid_det_st	= { 0x0084, 1, 1, 0, 1 },
 				.bvalid_det_clr = { 0x0088, 1, 1, 0, 1 },

@@ -36,6 +36,11 @@
 #include "cpufreq-dt.h"
 #include "rockchip-cpufreq.h"
 
+#define CPUFREQ_INTERNAL_VERSION	0x80
+#define CPUFREQ_LENGTH_MARGIN		0x1
+#define CPUFREQ_INTERMEDIATE_RATE	(CPUFREQ_INTERNAL_VERSION | \
+					 CPUFREQ_LENGTH_MARGIN)
+
 struct cluster_info {
 	struct list_head list_head;
 	struct monitor_dev_info *mdev_info;
@@ -186,7 +191,7 @@ static int rk3588_cpu_set_read_margin(struct device *dev,
 	u32 rm;
 	int i;
 
-	if (!opp_info->grf || !opp_info->volt_rm_tbl)
+	if (!opp_info->volt_rm_tbl)
 		return 0;
 
 	for (i = 0; opp_info->volt_rm_tbl[i].rm != VOLT_RM_TABLE_END; i++) {
@@ -203,12 +208,24 @@ static int rk3588_cpu_set_read_margin(struct device *dev,
 		return 0;
 
 	dev_dbg(dev, "set rm to %d\n", rm);
-	regmap_write(opp_info->grf, 0x20, 0x001c0000 | (rm << 2));
-	regmap_write(opp_info->grf, 0x28, 0x003c0000 | (rm << 2));
-	regmap_write(opp_info->grf, 0x2c, 0x003c0000 | (rm << 2));
-	regmap_write(opp_info->grf, 0x30, 0x00200020);
-	udelay(1);
-	regmap_write(opp_info->grf, 0x30, 0x00200000);
+	if (opp_info->grf) {
+		regmap_write(opp_info->grf, 0x20, 0x001c0000 | (rm << 2));
+		regmap_write(opp_info->grf, 0x28, 0x003c0000 | (rm << 2));
+		regmap_write(opp_info->grf, 0x2c, 0x003c0000 | (rm << 2));
+		regmap_write(opp_info->grf, 0x30, 0x00200020);
+		udelay(1);
+		regmap_write(opp_info->grf, 0x30, 0x00200000);
+	}
+	if (opp_info->dsu_grf) {
+		regmap_write(opp_info->dsu_grf, 0x20, 0x001c0000 | (rm << 2));
+		regmap_write(opp_info->dsu_grf, 0x28, 0x003c0000 | (rm << 2));
+		regmap_write(opp_info->dsu_grf, 0x2c, 0x003c0000 | (rm << 2));
+		regmap_write(opp_info->dsu_grf, 0x30, 0x001c0000 | (rm << 2));
+		regmap_write(opp_info->dsu_grf, 0x38, 0x001c0000 | (rm << 2));
+		regmap_write(opp_info->dsu_grf, 0x18, 0x40004000);
+		udelay(1);
+		regmap_write(opp_info->dsu_grf, 0x18, 0x40000000);
+	}
 
 	opp_info->current_rm = rm;
 
@@ -326,6 +343,28 @@ static int rockchip_cpufreq_set_volt(struct device *dev,
 	return ret;
 }
 
+static int rockchip_cpufreq_set_read_margin(struct device *dev,
+					    struct rockchip_opp_info *opp_info,
+					    unsigned long volt)
+{
+	if (opp_info->data && opp_info->data->set_read_margin) {
+		opp_info->data->set_read_margin(dev, opp_info, volt);
+		opp_info->volt_rm = volt;
+	}
+
+	return 0;
+}
+
+static int
+rockchip_cpufreq_set_intermediate_rate(struct rockchip_opp_info *opp_info,
+				       struct clk *clk, unsigned long new_freq)
+{
+	if (opp_info->data && opp_info->data->set_read_margin)
+		return clk_set_rate(clk, new_freq | CPUFREQ_INTERMEDIATE_RATE);
+
+	return 0;
+}
+
 static int cpu_opp_helper(struct dev_pm_set_opp_data *data)
 {
 	struct dev_pm_opp_supply *old_supply_vdd = &data->old_opp.supplies[0];
@@ -349,6 +388,13 @@ static int cpu_opp_helper(struct dev_pm_set_opp_data *data)
 
 	/* Scaling up? Scale voltage before frequency */
 	if (new_freq >= old_freq) {
+		ret = rockchip_cpufreq_set_intermediate_rate(opp_info, clk,
+							     new_freq);
+		if (ret) {
+			dev_err(dev, "%s: failed to set clk rate: %lu\n",
+				__func__, new_freq);
+			return -EINVAL;
+		}
 		ret = rockchip_cpufreq_set_volt(dev, mem_reg, new_supply_mem,
 						"mem");
 		if (ret)
@@ -357,9 +403,8 @@ static int cpu_opp_helper(struct dev_pm_set_opp_data *data)
 						"vdd");
 		if (ret)
 			goto restore_voltage;
-		if (opp_info->data->set_read_margin)
-			opp_info->data->set_read_margin(dev, opp_info,
-							new_supply_vdd->u_volt);
+		rockchip_cpufreq_set_read_margin(dev, opp_info,
+						 new_supply_vdd->u_volt);
 	}
 
 	/* Change frequency */
@@ -373,9 +418,8 @@ static int cpu_opp_helper(struct dev_pm_set_opp_data *data)
 
 	/* Scaling down? Scale voltage after frequency */
 	if (new_freq < old_freq) {
-		if (opp_info->data->set_read_margin)
-			opp_info->data->set_read_margin(dev, opp_info,
-							new_supply_vdd->u_volt);
+		rockchip_cpufreq_set_read_margin(dev, opp_info,
+						 new_supply_vdd->u_volt);
 		ret = rockchip_cpufreq_set_volt(dev, vdd_reg, new_supply_vdd,
 						"vdd");
 		if (ret)
@@ -393,9 +437,8 @@ restore_freq:
 		dev_err(dev, "%s: failed to restore old-freq (%lu Hz)\n",
 			__func__, old_freq);
 restore_rm:
-	if (opp_info->data->set_read_margin)
-		opp_info->data->set_read_margin(dev, opp_info,
-						old_supply_vdd->u_volt);
+	rockchip_cpufreq_set_read_margin(dev, opp_info,
+					 old_supply_vdd->u_volt);
 restore_voltage:
 	rockchip_cpufreq_set_volt(dev, mem_reg, old_supply_mem, "mem");
 	rockchip_cpufreq_set_volt(dev, vdd_reg, old_supply_vdd, "vdd");
@@ -448,6 +491,10 @@ static int rockchip_cpufreq_cluster_init(int cpu, struct cluster_info *cluster)
 								"rockchip,grf");
 		if (IS_ERR(opp_info->grf))
 			opp_info->grf = NULL;
+		opp_info->dsu_grf =
+			syscon_regmap_lookup_by_phandle(np, "rockchip,dsu-grf");
+		if (IS_ERR(opp_info->dsu_grf))
+			opp_info->dsu_grf = NULL;
 		rockchip_get_volt_rm_table(dev, np, "volt-mem-read-margin",
 					   &opp_info->volt_rm_tbl);
 	}

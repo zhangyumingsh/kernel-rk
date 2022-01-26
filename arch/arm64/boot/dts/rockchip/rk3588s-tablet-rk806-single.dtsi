@@ -110,6 +110,7 @@
 		simple-audio-card,format = "i2s";
 		simple-audio-card,mclk-fs = <256>;
 		simple-audio-card,name = "rockchip,es8388-codec";
+		simple-audio-card,aux-devs = <&aw87xxx_pa1 &aw87xxx_pa2>;
 		simple-audio-card,dai-link@0 {
 			format = "i2s";
 			cpu {
@@ -926,8 +927,8 @@
 	pinctrl-0 = <&lcd_rst_gpio>;
 	dsi,lanes  = <8>;
 	panel-init-sequence = [
-		29 00 02 00 00
-		29 00 03 99 95 27
+		29 02 02 00 00
+		29 02 03 99 95 27
 		05 78 01 11
 		05 01 01 29
 		29 00 02 00 00
@@ -1148,15 +1149,17 @@
 		pinctrl-0 = <&i2s0_mclk>;
 	};
 
-	aw87xxx_pa1@58 {
+	aw87xxx_pa1: aw87xxx_pa1@58 {
 		compatible = "awinic,aw87xxx_pa";
+		#sound-dai-cells = <0>;
 		reg = <0x58>;
 		dev_index = < 0 >;
 		status = "okay";
 	};
 
-	aw87xxx_pa2@59 {
+	aw87xxx_pa2: aw87xxx_pa2@59 {
 		compatible = "awinic,aw87xxx_pa";
+		#sound-dai-cells = <0>;
 		reg = <0x59>;
 		dev_index = < 1 >;
 		status = "okay";
@@ -1253,6 +1256,18 @@
 			source-pdos =
 				<PDO_FIXED(5000, 3000, PDO_FIXED_USB_COMM)>;
 
+			ports {
+				#address-cells = <1>;
+				#size-cells = <0>;
+
+				port@0 {
+					reg = <0>;
+					usbc0_orien_sw: endpoint {
+						remote-endpoint = <&u2phy0_orientation_switch>;
+					};
+				};
+			};
+
 		};
 	};
 
@@ -1317,6 +1332,7 @@
 
 &pcie2x1l2 {
 	reset-gpios = <&gpio4 RK_PC1 GPIO_ACTIVE_HIGH>;
+	rockchip,skip-scan-in-resume;
 	status = "okay";
 };
 
@@ -1449,8 +1465,13 @@
 	status = "okay";
 };
 
+&rockchip_suspend {
+	status = "okay";
+	rockchip,sleep-debug-en = <1>;
+};
+
 &route_dsi0 {
-	status = "disabled";
+	status = "okay";
 	connect = <&vp2_out_dsi0>;
 };
 
@@ -1488,18 +1509,22 @@
 };
 
 &u2phy0 {
+	orientation-switch;
 	status = "okay";
+
+	port {
+		#address-cells = <1>;
+		#size-cells = <0>;
+		u2phy0_orientation_switch: endpoint@0 {
+			reg = <0>;
+			remote-endpoint = <&usbc0_orien_sw>;
+		};
+	};
 };
 
 &u2phy0_otg {
-	status = "okay";
-};
-
-&usbdp_phy0 {
-	status = "okay";
-};
-
-&usbdp_phy0_u3 {
+	rockchip,sel-pipe-phystatus;
+	rockchip,typec-vbus-det;
 	status = "okay";
 };
 
@@ -1512,8 +1537,8 @@
 	status = "okay";
 
 	maximum-speed = "high-speed";
-	/*phys = <&u2phy0_otg>;*/
-	/*phy-names = "usb2-phy";*/
+	phys = <&u2phy0_otg>;
+	phy-names = "usb2-phy";
 	usb-role-switch;
 	port {
 		#address-cells = <1>;

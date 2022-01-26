@@ -45,12 +45,19 @@ int rga_mpi_commit(struct rga_req *cmd, struct rga_mpi_job_t *mpi_job)
 {
 	int ret;
 
-	if (RGA_DEBUG_MSG)
+	if (DEBUGGER_EN(MSG))
 		rga_cmd_print_debug_info(cmd);
 
 	ret = rga_job_mpi_commit(cmd, mpi_job, RGA_BLIT_SYNC);
 	if (ret < 0) {
-		pr_err("%s, commit mpi job failed\n", __func__);
+		if (ret == -ERESTARTSYS) {
+			if (DEBUGGER_EN(MSG))
+				pr_err("%s, commit mpi job failed, by a software interrupt.\n",
+				       __func__);
+		} else {
+			pr_err("%s, commit mpi job failed\n", __func__);
+		}
+
 		return ret;
 	}
 
@@ -62,12 +69,19 @@ int rga_kernel_commit(struct rga_req *cmd)
 {
 	int ret;
 
-	if (RGA_DEBUG_MSG)
+	if (DEBUGGER_EN(MSG))
 		rga_cmd_print_debug_info(cmd);
 
 	ret = rga_job_commit(cmd, RGA_BLIT_SYNC);
 	if (ret < 0) {
-		pr_err("%s, commit kernel job failed\n", __func__);
+		if (ret == -ERESTARTSYS) {
+			if (DEBUGGER_EN(MSG))
+				pr_err("%s, commit kernel job failed, by a software interrupt.\n",
+				       __func__);
+		} else {
+			pr_err("%s, commit kernel job failed\n", __func__);
+		}
+
 		return ret;
 	}
 
@@ -304,9 +318,8 @@ static long rga_ioctl(struct file *file, uint32_t cmd, unsigned long arg)
 		return -ENODEV;
 	}
 
-	if (RGA_DEBUG_NONUSE) {
+	if (DEBUGGER_EN(NONUSE))
 		return 0;
-	}
 
 	switch (cmd) {
 	case RGA_BLIT_SYNC:
@@ -318,12 +331,18 @@ static long rga_ioctl(struct file *file, uint32_t cmd, unsigned long arg)
 			break;
 		}
 
-		if (RGA_DEBUG_MSG)
+		if (DEBUGGER_EN(MSG))
 			rga_cmd_print_debug_info(&req_rga);
 
 		ret = rga_job_commit(&req_rga, cmd);
 		if (ret < 0) {
-			pr_err("rga_job_commit failed\n");
+			if (ret == -ERESTARTSYS) {
+				if (DEBUGGER_EN(MSG))
+					pr_err("rga_job_commit failed, by a software interrupt.\n");
+			} else {
+				pr_err("rga_job_commit failed\n");
+			}
+
 			break;
 		}
 
@@ -485,7 +504,7 @@ static irqreturn_t rga3_irq_handler(int irq, void *data)
 {
 	struct rga_scheduler_t *rga_scheduler = data;
 
-	if (RGA_DEBUG_INT_FLAG)
+	if (DEBUGGER_EN(INT_FLAG))
 		pr_info("irqthread INT[%x],STATS0[%x], STATS1[%x]\n",
 			rga_read(RGA3_INT_RAW, rga_scheduler),
 			rga_read(RGA3_STATUS0, rga_scheduler),
@@ -512,7 +531,7 @@ static irqreturn_t rga3_irq_thread(int irq, void *data)
 		return IRQ_HANDLED;
 	}
 
-	if (RGA_DEBUG_INT_FLAG)
+	if (DEBUGGER_EN(INT_FLAG))
 		pr_info("irq INT[%x], STATS0[%x], STATS1[%x]\n",
 			rga_read(RGA3_INT_RAW, rga_scheduler),
 			rga_read(RGA3_STATUS0, rga_scheduler),
@@ -527,7 +546,7 @@ static irqreturn_t rga2_irq_handler(int irq, void *data)
 {
 	struct rga_scheduler_t *rga_scheduler = data;
 
-	if (RGA_DEBUG_INT_FLAG)
+	if (DEBUGGER_EN(INT_FLAG))
 		pr_info("irqthread INT[%x],STATS0[%x]\n",
 			rga_read(RGA2_INT, rga_scheduler), rga_read(RGA2_STATUS,
 								 rga_scheduler));
@@ -558,7 +577,7 @@ static irqreturn_t rga2_irq_thread(int irq, void *data)
 	if (!job)
 		return IRQ_HANDLED;
 
-	if (RGA_DEBUG_INT_FLAG)
+	if (DEBUGGER_EN(INT_FLAG))
 		pr_info("irq INT[%x], STATS0[%x]\n",
 			rga_read(RGA2_INT, rga_scheduler), rga_read(RGA2_STATUS,
 								 rga_scheduler));

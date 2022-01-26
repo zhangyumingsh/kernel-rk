@@ -689,12 +689,14 @@ static int dw_hdmi_i2c_read(struct dw_hdmi_qp *hdmi,
 		stat = wait_for_completion_timeout(&i2c->cmp, HZ / 10);
 		if (!stat) {
 			dev_err(hdmi->dev, "i2c read time out!\n");
+			hdmi_writel(hdmi, 0x01, I2CM_CONTROL0);
 			return -EAGAIN;
 		}
 
 		/* Check for error condition on the bus */
 		if (i2c->stat & I2CM_NACK_RCVD_IRQ) {
 			dev_err(hdmi->dev, "i2c read err!\n");
+			hdmi_writel(hdmi, 0x01, I2CM_CONTROL0);
 			return -EIO;
 		}
 
@@ -734,12 +736,14 @@ static int dw_hdmi_i2c_write(struct dw_hdmi_qp *hdmi,
 		stat = wait_for_completion_timeout(&i2c->cmp, HZ / 10);
 		if (!stat) {
 			dev_err(hdmi->dev, "i2c write time out!\n");
+			hdmi_writel(hdmi, 0x01, I2CM_CONTROL0);
 			return -EAGAIN;
 		}
 
 		/* Check for error condition on the bus */
 		if (i2c->stat & I2CM_NACK_RCVD_IRQ) {
 			dev_err(hdmi->dev, "i2c write nack!\n");
+			hdmi_writel(hdmi, 0x01, I2CM_CONTROL0);
 			return -EIO;
 		}
 		hdmi_modb(hdmi, 0, I2CM_WR_MASK, I2CM_INTERFACE_CONTROL0);
@@ -1256,12 +1260,6 @@ static int hdmi_start_flt(struct dw_hdmi_qp *hdmi, u8 rate)
 	u8 ffe_lv = 0;
 	int i = 0, stat;
 
-	hdmi_modb(hdmi, SCDC_UPD_FLAGS_RD_IRQ, SCDC_UPD_FLAGS_RD_IRQ,
-		  MAINUNIT_1_INT_MASK_N);
-	hdmi_modb(hdmi, SCDC_UPD_FLAGS_POLL_EN | SCDC_UPD_FLAGS_AUTO_CLR,
-		  SCDC_UPD_FLAGS_POLL_EN | SCDC_UPD_FLAGS_AUTO_CLR,
-		  SCDC_CONFIG0);
-
 	/* FLT_READY & FFE_LEVELS read */
 	for (i = 0; i < 20; i++) {
 		drm_scdc_readb(hdmi->ddc, SCDC_STATUS_FLAGS_0, &val);
@@ -1274,6 +1272,12 @@ static int hdmi_start_flt(struct dw_hdmi_qp *hdmi, u8 rate)
 		dev_err(hdmi->dev, "sink flt isn't ready\n");
 		return -EINVAL;
 	}
+
+	hdmi_modb(hdmi, SCDC_UPD_FLAGS_RD_IRQ, SCDC_UPD_FLAGS_RD_IRQ,
+		  MAINUNIT_1_INT_MASK_N);
+	hdmi_modb(hdmi, SCDC_UPD_FLAGS_POLL_EN | SCDC_UPD_FLAGS_AUTO_CLR,
+		  SCDC_UPD_FLAGS_POLL_EN | SCDC_UPD_FLAGS_AUTO_CLR,
+		  SCDC_CONFIG0);
 
 	/* max ffe level 3 */
 	val = 3 << 4 | hdmi_set_frl_mask(rate);
@@ -1292,11 +1296,19 @@ static int hdmi_start_flt(struct dw_hdmi_qp *hdmi, u8 rate)
 	stat = wait_for_completion_timeout(&hdmi->flt_cmp, HZ * 2);
 	if (!stat) {
 		dev_err(hdmi->dev, "wait lts3 finish time out\n");
+		hdmi_modb(hdmi, 0, SCDC_UPD_FLAGS_POLL_EN |
+			  SCDC_UPD_FLAGS_AUTO_CLR, SCDC_CONFIG0);
+		hdmi_modb(hdmi, 0, SCDC_UPD_FLAGS_RD_IRQ,
+			  MAINUNIT_1_INT_MASK_N);
 		return -EAGAIN;
 	}
 
 	if (!(hdmi->flt_intr & FLT_EXIT_TO_LTSP_IRQ)) {
 		dev_err(hdmi->dev, "not to ltsp\n");
+		hdmi_modb(hdmi, 0, SCDC_UPD_FLAGS_POLL_EN |
+			  SCDC_UPD_FLAGS_AUTO_CLR, SCDC_CONFIG0);
+		hdmi_modb(hdmi, 0, SCDC_UPD_FLAGS_RD_IRQ,
+			  MAINUNIT_1_INT_MASK_N);
 		return -EINVAL;
 	}
 
@@ -1311,10 +1323,15 @@ static void hdmi_set_op_mode(struct dw_hdmi_qp *hdmi,
 {
 	int frl_rate;
 
+	/* set sink frl mode disable and wait sink ready */
 	hdmi_writel(hdmi, 0, FLT_CONFIG0);
 	if (dw_hdmi_support_scdc(hdmi, &connector->display_info))
 		drm_scdc_writeb(hdmi->ddc, 0x31, 0);
-	msleep(20);
+	/*
+	 * some TVs must wait a while before switching frl mode resolution,
+	 * or the signal may not be recognized.
+	 */
+	msleep(200);
 	if (!link_cfg->frl_mode) {
 		dev_info(hdmi->dev, "dw hdmi qp use tmds mode\n");
 		hdmi_modb(hdmi, 0, OPMODE_FRL, LINK_CONFIG0);
@@ -1371,7 +1388,6 @@ static int dw_hdmi_qp_setup(struct dw_hdmi_qp *hdmi,
 	u8 bytes = 0;
 
 	hdmi->vic = drm_match_cea_mode(mode);
-
 	if (!hdmi->vic)
 		dev_dbg(hdmi->dev, "Non-CEA mode used in HDMI\n");
 	else
@@ -1460,6 +1476,9 @@ static int dw_hdmi_qp_setup(struct dw_hdmi_qp *hdmi,
 	ret = hdmi->phy.ops->init(hdmi, hdmi->phy.data, &hdmi->previous_mode);
 	if (ret)
 		return ret;
+
+	if (hdmi->plat_data->set_grf_cfg)
+		hdmi->plat_data->set_grf_cfg(data);
 
 	if (hdmi->sink_has_audio) {
 		dev_dbg(hdmi->dev, "sink has audio support\n");
@@ -1903,7 +1922,6 @@ static void dw_hdmi_qp_bridge_atomic_disable(struct drm_bridge *bridge,
 	mutex_lock(&hdmi->mutex);
 	hdmi->disabled = true;
 	hdmi->curr_conn = NULL;
-	hdmi_writel(hdmi, 0, PKTSCHED_PKT_EN);
 	if (hdmi->phy.ops->disable)
 		hdmi->phy.ops->disable(hdmi, hdmi->phy.data);
 	mutex_unlock(&hdmi->mutex);

@@ -247,7 +247,6 @@ struct dw_dp {
 	struct completion complete;
 	int irq;
 	int id;
-	bool phy_enabled;
 	struct work_struct hpd_work;
 	struct gpio_desc *hpd_gpio;
 	struct dw_dp_hotplug hotplug;
@@ -421,20 +420,6 @@ static void dw_dp_phy_xmit_enable(struct dw_dp *dp, u32 lanes)
 			   FIELD_PREP(XMIT_ENABLE, xmit_enable));
 }
 
-static void dw_dp_phy_power_on(struct dw_dp *dp)
-{
-	phy_power_on(dp->phy);
-
-	dp->phy_enabled = true;
-}
-
-static void dw_dp_phy_power_off(struct dw_dp *dp)
-{
-	phy_power_off(dp->phy);
-
-	dp->phy_enabled = false;
-}
-
 static bool dw_dp_bandwidth_ok(struct dw_dp *dp,
 			       const struct drm_display_mode *mode, u32 bpp,
 			       unsigned int lanes, unsigned int rate)
@@ -486,17 +471,20 @@ static int dw_dp_connector_get_modes(struct drm_connector *connector)
 	struct dw_dp *dp = connector_to_dp(connector);
 	struct drm_display_info *di = &connector->display_info;
 	struct edid *edid;
-	int num_modes;
+	int num_modes = 0;
 
 	edid = drm_bridge_get_edid(&dp->bridge, connector);
-	if (!edid) {
-		DRM_DEV_ERROR(dp->dev, "failed to get edid\n");
-		return 0;
+	if (edid) {
+		drm_connector_update_edid_property(connector, edid);
+		num_modes = drm_add_edid_modes(connector, edid);
+		kfree(edid);
 	}
 
-	drm_connector_update_edid_property(connector, edid);
-	num_modes = drm_add_edid_modes(connector, edid);
-	kfree(edid);
+	if (!di->color_formats)
+		di->color_formats = DRM_COLOR_FORMAT_RGB444;
+
+	if (!di->bpc)
+		di->bpc = 8;
 
 	if (num_modes > 0 && dp->split_mode) {
 		struct drm_display_mode *mode;
@@ -1641,9 +1629,6 @@ static ssize_t dw_dp_aux_transfer(struct drm_dp_aux *aux,
 	if (WARN_ON(msg->size > 16))
 		return -E2BIG;
 
-	if (!dp->phy_enabled)
-		dw_dp_phy_power_on(dp);
-
 	switch (msg->request & ~DP_AUX_I2C_MOT) {
 	case DP_AUX_NATIVE_WRITE:
 	case DP_AUX_I2C_WRITE:
@@ -1804,8 +1789,7 @@ static void dw_dp_link_disable(struct dw_dp *dp)
 
 	dw_dp_phy_xmit_enable(dp, 0);
 
-	if (dp->phy_enabled)
-		dw_dp_phy_power_off(dp);
+	phy_power_off(dp->phy);
 
 	link->train.clock_recovered = false;
 	link->train.channel_equalized = false;
@@ -1815,8 +1799,9 @@ static int dw_dp_link_enable(struct dw_dp *dp)
 {
 	int ret;
 
-	if (!dp->phy_enabled)
-		dw_dp_phy_power_on(dp);
+	ret = phy_power_on(dp->phy);
+	if (ret)
+		return ret;
 
 	ret = dw_dp_link_power_up(dp);
 	if (ret < 0)
@@ -1866,11 +1851,18 @@ static enum drm_connector_status dw_dp_detect_dpcd(struct dw_dp *dp)
 {
 	int ret;
 
+	ret = phy_power_on(dp->phy);
+	if (ret)
+		return ret;
+
 	ret = dw_dp_link_probe(dp);
 	if (ret) {
+		phy_power_off(dp->phy);
 		dev_err(dp->dev, "failed to probe DP link: %d\n", ret);
 		return connector_status_disconnected;
 	}
+
+	phy_power_off(dp->phy);
 
 	return connector_status_connected;
 }
@@ -1892,8 +1884,18 @@ static struct edid *dw_dp_bridge_get_edid(struct drm_bridge *bridge,
 					  struct drm_connector *connector)
 {
 	struct dw_dp *dp = bridge_to_dp(bridge);
+	struct edid *edid;
+	int ret;
 
-	return drm_get_edid(connector, &dp->aux.ddc);
+	ret = phy_power_on(dp->phy);
+	if (ret)
+		return NULL;
+
+	edid = drm_get_edid(connector, &dp->aux.ddc);
+
+	phy_power_off(dp->phy);
+
+	return edid;
 }
 
 static u32 *dw_dp_bridge_atomic_get_output_bus_fmts(struct drm_bridge *bridge,
@@ -2295,8 +2297,6 @@ static int dw_dp_bind(struct device *dev, struct device *master, void *data)
 
 	pm_runtime_enable(dp->dev);
 	pm_runtime_get_sync(dp->dev);
-	dw_dp_init(dp);
-	enable_irq(dp->irq);
 
 	return 0;
 }
@@ -2305,7 +2305,6 @@ static void dw_dp_unbind(struct device *dev, struct device *master, void *data)
 {
 	struct dw_dp *dp = dev_get_drvdata(dev);
 
-	disable_irq(dp->irq);
 	pm_runtime_put(dp->dev);
 	pm_runtime_disable(dp->dev);
 
@@ -2477,6 +2476,8 @@ static int __maybe_unused dw_dp_runtime_suspend(struct device *dev)
 {
 	struct dw_dp *dp = dev_get_drvdata(dev);
 
+	disable_irq(dp->irq);
+
 	clk_bulk_disable_unprepare(dp->nr_clks, dp->clks);
 
 	return 0;
@@ -2492,14 +2493,19 @@ static int __maybe_unused dw_dp_runtime_resume(struct device *dev)
 		return ret;
 
 	reset_control_assert(dp->rstc);
-	usleep_range(10, 20);
+	udelay(10);
 	reset_control_deassert(dp->rstc);
+
+	dw_dp_init(dp);
+	enable_irq(dp->irq);
 
 	return 0;
 }
 
 static const struct dev_pm_ops dw_dp_pm_ops = {
 	SET_RUNTIME_PM_OPS(dw_dp_runtime_suspend, dw_dp_runtime_resume, NULL)
+	SET_SYSTEM_SLEEP_PM_OPS(pm_runtime_force_suspend,
+				pm_runtime_force_resume)
 };
 
 static const struct of_device_id dw_dp_of_match[] = {

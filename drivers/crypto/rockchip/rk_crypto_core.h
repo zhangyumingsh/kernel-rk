@@ -29,7 +29,11 @@
 
 #include "rk_crypto_bignum.h"
 
-#define RK_CRYPTO_PRIORITY		300
+/*
+ * Change to the lowest priority, and hardware encryption is
+ * invoked explicitly only at the User layer.
+ */
+#define RK_CRYPTO_PRIORITY		0
 
 /*  Increase the addr_vir buffer size from 1 to 8 pages */
 #define RK_BUFFER_ORDER			3
@@ -109,6 +113,7 @@ struct rk_alg_ctx {
 	dma_addr_t			addr_out;
 
 	bool				aligned;
+	bool				is_dma;
 	int				align_size;
 	int				chunk_size;
 };
@@ -218,7 +223,8 @@ enum rk_cipher_mode {
 		.base.cra_name		= #algo_name,\
 		.base.cra_driver_name	= #driver_name,\
 		.base.cra_priority	= RK_CRYPTO_PRIORITY,\
-		.base.cra_flags		= CRYPTO_ALG_ASYNC |\
+		.base.cra_flags		= CRYPTO_ALG_KERN_DRIVER_ONLY |\
+					  CRYPTO_ALG_ASYNC |\
 					  CRYPTO_ALG_NEED_FALLBACK,\
 		.base.cra_blocksize	= cipher_algo##_BLOCK_SIZE,\
 		.base.cra_ctxsize	= sizeof(struct rk_cipher_ctx),\
@@ -245,7 +251,8 @@ enum rk_cipher_mode {
 		.base.cra_name		= #algo_name,\
 		.base.cra_driver_name	= #driver_name,\
 		.base.cra_priority	= RK_CRYPTO_PRIORITY,\
-		.base.cra_flags		= CRYPTO_ALG_ASYNC |\
+		.base.cra_flags		= CRYPTO_ALG_KERN_DRIVER_ONLY |\
+					  CRYPTO_ALG_ASYNC |\
 					  CRYPTO_ALG_NEED_FALLBACK,\
 		.base.cra_blocksize	= cipher_algo##_BLOCK_SIZE,\
 		.base.cra_ctxsize	= sizeof(struct rk_cipher_ctx),\
@@ -282,8 +289,9 @@ enum rk_cipher_mode {
 				.cra_name = #algo_name,\
 				.cra_driver_name = #algo_name"-rk",\
 				.cra_priority = RK_CRYPTO_PRIORITY,\
-				.cra_flags = CRYPTO_ALG_ASYNC |\
-						 CRYPTO_ALG_NEED_FALLBACK,\
+				.cra_flags = CRYPTO_ALG_KERN_DRIVER_ONLY |\
+					     CRYPTO_ALG_ASYNC |\
+					     CRYPTO_ALG_NEED_FALLBACK,\
 				.cra_blocksize = hash_algo##_BLOCK_SIZE,\
 				.cra_ctxsize = sizeof(struct rk_ahash_ctx),\
 				.cra_alignmask = 3,\
@@ -315,8 +323,9 @@ enum rk_cipher_mode {
 				.cra_name = "hmac(" #algo_name ")",\
 				.cra_driver_name = "hmac-" #algo_name "-rk",\
 				.cra_priority = RK_CRYPTO_PRIORITY,\
-				.cra_flags = CRYPTO_ALG_ASYNC |\
-						 CRYPTO_ALG_NEED_FALLBACK,\
+				.cra_flags = CRYPTO_ALG_KERN_DRIVER_ONLY |\
+					     CRYPTO_ALG_ASYNC |\
+					     CRYPTO_ALG_NEED_FALLBACK,\
 				.cra_blocksize = hash_algo##_BLOCK_SIZE,\
 				.cra_ctxsize = sizeof(struct rk_ahash_ctx),\
 				.cra_alignmask = 3,\

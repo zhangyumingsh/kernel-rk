@@ -10,6 +10,7 @@
 #include "rga_job.h"
 #include "rga_fence.h"
 #include "rga_dma_buf.h"
+#include "rga_mm.h"
 #include "rga2_mmu_info.h"
 
 struct rga_job *
@@ -43,16 +44,16 @@ rga_scheduler_get_running_job(struct rga_scheduler_t *scheduler)
 	return job;
 }
 
-static struct rga_scheduler_t *get_scheduler(struct rga_job *job)
+struct rga_scheduler_t *rga_job_get_scheduler(int core)
 {
 	struct rga_scheduler_t *scheduler = NULL;
 	int i;
 
 	for (i = 0; i < rga_drvdata->num_of_scheduler; i++) {
-		if (job->core == rga_drvdata->rga_scheduler[i]->core) {
+		if (core == rga_drvdata->rga_scheduler[i]->core) {
 			scheduler = rga_drvdata->rga_scheduler[i];
 
-			if (RGA_DEBUG_MSG)
+			if (DEBUGGER_EN(MSG))
 				pr_info("job choose core: %d\n",
 					rga_drvdata->rga_scheduler[i]->core);
 			break;
@@ -60,53 +61,6 @@ static struct rga_scheduler_t *get_scheduler(struct rga_job *job)
 	}
 
 	return scheduler;
-}
-
-static void rga_job_free(struct rga_job *job)
-{
-	if (job->out_fence)
-		dma_fence_put(job->out_fence);
-
-	free_page((unsigned long)job);
-}
-
-static int rga_job_cleanup(struct rga_job *job)
-{
-	rga_job_free(job);
-
-	return 0;
-}
-
-static struct rga_job *rga_job_alloc(struct rga_req *rga_command_base)
-{
-	struct rga_job *job = NULL;
-
-	job = (struct rga_job *)get_zeroed_page(GFP_KERNEL | GFP_DMA32);
-	if (!job)
-		return NULL;
-
-	spin_lock_init(&job->fence_lock);
-	INIT_LIST_HEAD(&job->head);
-
-	job->timestamp = ktime_get();
-	job->running_time = ktime_get();
-
-	job->rga_command_base = *rga_command_base;
-
-	if (rga_command_base->priority > 0) {
-		if (rga_command_base->priority > RGA_SCHED_PRIORITY_MAX)
-			job->priority = RGA_SCHED_PRIORITY_MAX;
-		else
-			job->priority = rga_command_base->priority;
-	}
-
-	return job;
-}
-
-static void print_job_info(struct rga_job *job)
-{
-	pr_info("job: priority = %d, core = %d\n",
-		job->priority, job->core);
 }
 
 static int rga_job_get_current_mm(struct rga_job *job)
@@ -169,6 +123,125 @@ static void rga_job_put_current_mm(struct rga_job *job)
 	job->mm = NULL;
 }
 
+static void rga_job_free(struct rga_job *job)
+{
+	if (job->out_fence)
+		dma_fence_put(job->out_fence);
+
+	if (~job->flags & RGA_JOB_USE_HANDLE)
+		rga_job_put_current_mm(job);
+
+	free_page((unsigned long)job);
+}
+
+static int rga_job_cleanup(struct rga_job *job)
+{
+	rga_job_free(job);
+
+	return 0;
+}
+
+static int rga_job_judgment_support_core(struct rga_job *job)
+{
+	int ret = 0;
+	uint32_t mm_flag;
+	struct rga_req *req;
+	struct rga_mm *mm;
+
+	req = &job->rga_command_base;
+	mm = rga_drvdata->mm;
+	if (mm == NULL) {
+		pr_err("rga mm is null!\n");
+		return -EFAULT;
+	}
+
+	mutex_lock(&mm->lock);
+
+	if (likely(req->src.yrgb_addr > 0)) {
+		ret = rga_mm_lookup_flag(mm, req->src.yrgb_addr);
+		if (ret < 0)
+			goto out_finish;
+		else
+			mm_flag = (uint32_t)ret;
+
+		if (~mm_flag & RGA_MM_UNDER_4G) {
+			job->flags |= RGA_JOB_UNSUPPORT_RGA2;
+			goto out_finish;
+		}
+	}
+
+	if (likely(req->dst.yrgb_addr > 0)) {
+		ret = rga_mm_lookup_flag(mm, req->dst.yrgb_addr);
+		if (ret < 0)
+			goto out_finish;
+		else
+			mm_flag = (uint32_t)ret;
+
+		if (~mm_flag & RGA_MM_UNDER_4G) {
+			job->flags |= RGA_JOB_UNSUPPORT_RGA2;
+			goto out_finish;
+		}
+	}
+
+	if (req->pat.yrgb_addr > 0) {
+		ret = rga_mm_lookup_flag(mm, req->pat.yrgb_addr);
+		if (ret < 0)
+			goto out_finish;
+		else
+			mm_flag = (uint32_t)ret;
+
+		if (~mm_flag & RGA_MM_UNDER_4G) {
+			job->flags |= RGA_JOB_UNSUPPORT_RGA2;
+			goto out_finish;
+		}
+	}
+
+out_finish:
+	mutex_unlock(&mm->lock);
+
+	return ret;
+}
+
+static struct rga_job *rga_job_alloc(struct rga_req *rga_command_base)
+{
+	struct rga_job *job = NULL;
+
+	job = (struct rga_job *)get_zeroed_page(GFP_KERNEL | GFP_DMA32);
+	if (!job)
+		return NULL;
+
+	spin_lock_init(&job->fence_lock);
+	INIT_LIST_HEAD(&job->head);
+
+	job->timestamp = ktime_get();
+	job->running_time = ktime_get();
+
+	job->rga_command_base = *rga_command_base;
+
+	if (rga_command_base->priority > 0) {
+		if (rga_command_base->priority > RGA_SCHED_PRIORITY_MAX)
+			job->priority = RGA_SCHED_PRIORITY_MAX;
+		else
+			job->priority = rga_command_base->priority;
+	}
+
+	if (job->rga_command_base.handle_flag & 1) {
+		job->flags |= RGA_JOB_USE_HANDLE;
+
+		rga_job_judgment_support_core(job);
+	} else {
+		rga_job_get_current_mm(job);
+	}
+
+	return job;
+}
+
+static void print_job_info(struct rga_job *job)
+{
+	pr_info("job: priority = %d, core = %d\n",
+		job->priority, job->core);
+}
+
 static int rga_job_run(struct rga_job *job, struct rga_scheduler_t *scheduler)
 {
 	int ret = 0;
@@ -180,10 +253,18 @@ static int rga_job_run(struct rga_job *job, struct rga_scheduler_t *scheduler)
 		return ret;
 	}
 
-	ret = rga_dma_get_info(job);
-	if (ret < 0) {
-		pr_err("dma buf get failed");
-		goto failed;
+	if (job->flags & RGA_JOB_USE_HANDLE) {
+		ret = rga_mm_get_handle_info(job);
+		if (ret < 0) {
+			pr_err("%s: failed to get buffer from handle\n", __func__);
+			goto failed;
+		}
+	} else {
+		ret = rga_dma_get_info(job);
+		if (ret < 0) {
+			pr_err("dma buf get failed");
+			goto failed;
+		}
 	}
 
 	ret = scheduler->ops->init_reg(job);
@@ -199,7 +280,7 @@ static int rga_job_run(struct rga_job *job, struct rga_scheduler_t *scheduler)
 	}
 
 	/* for debug */
-	if (RGA_DEBUG_MSG)
+	if (DEBUGGER_EN(MSG))
 		print_job_info(job);
 
 	return ret;
@@ -247,6 +328,11 @@ next_job:
 
 		spin_unlock_irqrestore(&rga_scheduler->irq_lock, flags);
 
+		if (job->flags & RGA_JOB_USE_HANDLE)
+			rga_mm_put_handle_info(job);
+		else
+			rga_dma_put_info(job);
+
 		if (job->out_fence)
 			dma_fence_signal(job->out_fence);
 
@@ -256,8 +342,6 @@ next_job:
 			job->flags |= RGA_JOB_DONE;
 			wake_up(&rga_scheduler->job_done_wq);
 		}
-
-		rga_dma_put_info(job);
 
 		goto next_job;
 	}
@@ -282,7 +366,7 @@ void rga_job_done(struct rga_scheduler_t *rga_scheduler, int ret)
 	job->flags |= RGA_JOB_DONE;
 	job->ret = ret;
 
-	if (RGA_DEBUG_TIME)
+	if (DEBUGGER_EN(TIME))
 		pr_err("%s use time = %lld\n", __func__,
 			ktime_us_delta(now, job->running_time));
 
@@ -292,8 +376,10 @@ void rga_job_done(struct rga_scheduler_t *rga_scheduler, int ret)
 		rga2_dma_flush_cache_for_virtual_address(&job->vir_page_table,
 			rga_scheduler);
 
-	rga_dma_put_info(job);
-	rga_job_put_current_mm(job);
+	if (job->flags & RGA_JOB_USE_HANDLE)
+		rga_mm_put_handle_info(job);
+	else
+		rga_dma_put_info(job);
 
 	if (job->out_fence)
 		dma_fence_signal(job->out_fence);
@@ -325,8 +411,10 @@ static void rga_job_timeout_clean(struct rga_scheduler_t *scheduler)
 
 		scheduler->ops->soft_reset(scheduler);
 
-		rga_dma_put_info(job);
-		rga_job_put_current_mm(job);
+		if (job->flags & RGA_JOB_USE_HANDLE)
+			rga_mm_put_handle_info(job);
+		else
+			rga_dma_put_info(job);
 
 		if (job->out_fence)
 			dma_fence_signal(job->out_fence);
@@ -356,7 +444,7 @@ static struct rga_scheduler_t *rga_job_schedule(struct rga_job *job)
 		job->core = rga_drvdata->rga_scheduler[0]->core;
 	}
 
-	scheduler = get_scheduler(job);
+	scheduler = rga_job_get_scheduler(job->core);
 	if (scheduler == NULL) {
 		pr_err("failed to get scheduler, %s(%d)\n", __func__, __LINE__);
 		return NULL;
@@ -447,7 +535,7 @@ static inline int rga_job_wait(struct rga_scheduler_t *rga_scheduler,
 
 	now = ktime_get();
 
-	if (RGA_DEBUG_TIME)
+	if (DEBUGGER_EN(TIME))
 		pr_err("%s use time = %lld\n", __func__,
 			 ktime_to_us(ktime_sub(now, job->running_time)));
 
@@ -464,7 +552,7 @@ static void rga_input_fence_signaled(struct dma_fence *fence,
 
 	now = ktime_get();
 
-	if (RGA_DEBUG_TIME)
+	if (DEBUGGER_EN(TIME))
 		pr_err("rga job wait in_fence signal use time = %lld\n",
 			ktime_to_us(ktime_sub(now, waiter->job->timestamp)));
 
@@ -501,8 +589,6 @@ int rga_job_commit(struct rga_req *rga_command_base, int flags)
 		return ret;
 	}
 
-	rga_job_get_current_mm(job);
-
 	if (flags == RGA_BLIT_ASYNC) {
 		ret = rga_out_fence_alloc(job);
 		if (ret) {
@@ -512,7 +598,7 @@ int rga_job_commit(struct rga_req *rga_command_base, int flags)
 		job->flags |= RGA_JOB_ASYNC;
 		rga_command_base->out_fence_fd = rga_out_fence_get_fd(job);
 
-		if (RGA_DEBUG_MSG)
+		if (DEBUGGER_EN(MSG))
 			pr_err("in_fence_fd = %d",
 				rga_command_base->in_fence_fd);
 

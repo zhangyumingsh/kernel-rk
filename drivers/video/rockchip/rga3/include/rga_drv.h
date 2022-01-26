@@ -74,8 +74,8 @@
 #define STR(x) STR_HELPER(x)
 
 #define DRIVER_MAJOR_VERISON		1
-#define DRIVER_MINOR_VERSION		1
-#define DRIVER_REVISION_VERSION		7
+#define DRIVER_MINOR_VERSION		2
+#define DRIVER_REVISION_VERSION		0
 
 #define DRIVER_VERSION (STR(DRIVER_MAJOR_VERISON) "." STR(DRIVER_MINOR_VERSION) \
 			"." STR(DRIVER_REVISION_VERSION))
@@ -98,6 +98,8 @@
 #define CLIP(x, a, b)	 (((x) < (a)) \
 	? (a) : (((x) > (b)) ? (b) : (x)))
 #endif
+
+extern struct rga_drvdata_t *rga_drvdata;
 
 enum {
 	RGA3_SCHEDULER_CORE0		= 1 << 0,
@@ -170,14 +172,29 @@ struct rga_dma_buffer {
 	struct dma_buf *dma_buf;
 	struct dma_buf_attachment *attach;
 	struct sg_table *sgt;
+	void *vmap_ptr;
+
+	struct iommu_domain *domain;
+	struct rga_iommu_dma_cookie *cookie;
+
+	enum dma_data_direction dir;
 
 	dma_addr_t iova;
 	unsigned long size;
-	void *vmap_ptr;
-	enum dma_data_direction dir;
 
 	/* The core of the mapping */
 	int core;
+};
+
+struct rga_virt_addr {
+	uint64_t addr;
+
+	struct page **pages;
+	int pages_order;
+	int page_count;
+	unsigned long size;
+
+	int result;
 };
 
 struct rga_internal_buffer {
@@ -186,14 +203,15 @@ struct rga_internal_buffer {
 	uint32_t dma_buffer_size;
 
 	/* virtual address */
-	uint64_t vir_addr;
+	struct rga_virt_addr *virt_addr;
 
 	/* physical address */
-	uint64_t phy_addr;
+	uint64_t phys_addr;
 
-	/* cached pagetable. */
-	struct sg_table *sgt;
-	uint64_t pt_size;
+	struct rga_memory_parm memory_parm;
+
+
+	struct mm_struct *current_mm;
 
 	/* memory type. */
 	uint32_t type;
@@ -233,6 +251,12 @@ struct rga_job {
 	struct rga_dma_buffer_t *rga_dma_buffer_dst;
 	/* used by rga2 */
 	struct rga_dma_buffer_t *rga_dma_buffer_els;
+
+	struct rga_internal_buffer *src_buffer;
+	struct rga_internal_buffer *src1_buffer;
+	struct rga_internal_buffer *dst_buffer;
+	/* used by rga2 */
+	struct rga_internal_buffer *els_buffer;
 
 	struct dma_buf *dma_buf_src0;
 	struct dma_buf *dma_buf_src1;

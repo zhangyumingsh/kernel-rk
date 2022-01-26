@@ -6,7 +6,7 @@
 
 #include "rk3588s.dtsi"
 #include "rk3588s-evb.dtsi"
-#include "rk3588-rk806-dual.dtsi"
+#include "rk3588s-rk806-dual.dtsi"
 
 / {
 	es7202_sound_micarray: es7202-sound-micarray {
@@ -944,8 +944,9 @@
 };
 
 &usbdrd_dwc3_0 {
-	dr_mode = "peripheral";
+	dr_mode = "otg";
 	phys = <&u2phy0_otg>;
 	phy-names = "usb2-phy";
 	maximum-speed = "high-speed";
+	extcon = <&u2phy0>;
 };

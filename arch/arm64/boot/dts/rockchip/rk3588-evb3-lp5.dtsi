@@ -1021,6 +1021,7 @@
 
 &pcie2x1l2 {
 	reset-gpios = <&gpio3 RK_PD1 GPIO_ACTIVE_HIGH>;
+	rockchip,skip-scan-in-resume;
 	status = "okay";
 };
 
@@ -1144,6 +1145,10 @@
 &sdmmc {
 	status = "okay";
 	vmmc-supply = <&vcc_3v3_sd_s0>;
+};
+
+&u2phy0_otg {
+	rockchip,typec-vbus-det;
 };
 
 &u2phy1_otg {

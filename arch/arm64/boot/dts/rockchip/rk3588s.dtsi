@@ -10,6 +10,7 @@
 #include <dt-bindings/power/rk3588-power.h>
 #include <dt-bindings/soc/rockchip,boot-mode.h>
 #include <dt-bindings/soc/rockchip-system-status.h>
+#include <dt-bindings/suspend/rockchip-rk3588.h>
 
 / {
 	compatible = "rockchip,rk3588";
@@ -27,6 +28,11 @@
 		dsi0 = &dsi0;
 		dsi1 = &dsi1;
 		ethernet1 = &gmac1;
+		gpio0 = &gpio0;
+		gpio1 = &gpio1;
+		gpio2 = &gpio2;
+		gpio3 = &gpio3;
+		gpio4 = &gpio4;
 		i2c0 = &i2c0;
 		i2c1 = &i2c1;
 		i2c2 = &i2c2;
@@ -318,6 +324,13 @@
 			clocks = <&scmi_clk SCMI_CLK_CPUL>;
 			operating-points-v2 = <&cluster0_opp_table>;
 			cpu-idle-states = <&CPU_SLEEP>;
+			i-cache-size = <32768>;
+			i-cache-line-size = <64>;
+			i-cache-sets = <128>;
+			d-cache-size = <32768>;
+			d-cache-line-size = <64>;
+			d-cache-sets = <128>;
+			next-level-cache = <&l2_cache_l0>;
 		};
 
 		cpu_l1: cpu@100 {
@@ -329,6 +342,13 @@
 			clocks = <&scmi_clk SCMI_CLK_CPUL>;
 			operating-points-v2 = <&cluster0_opp_table>;
 			cpu-idle-states = <&CPU_SLEEP>;
+			i-cache-size = <32768>;
+			i-cache-line-size = <64>;
+			i-cache-sets = <128>;
+			d-cache-size = <32768>;
+			d-cache-line-size = <64>;
+			d-cache-sets = <128>;
+			next-level-cache = <&l2_cache_l1>;
 		};
 
 		cpu_l2: cpu@200 {
@@ -340,6 +360,13 @@
 			clocks = <&scmi_clk SCMI_CLK_CPUL>;
 			operating-points-v2 = <&cluster0_opp_table>;
 			cpu-idle-states = <&CPU_SLEEP>;
+			i-cache-size = <32768>;
+			i-cache-line-size = <64>;
+			i-cache-sets = <128>;
+			d-cache-size = <32768>;
+			d-cache-line-size = <64>;
+			d-cache-sets = <128>;
+			next-level-cache = <&l2_cache_l2>;
 		};
 
 		cpu_l3: cpu@300 {
@@ -351,6 +378,13 @@
 			clocks = <&scmi_clk SCMI_CLK_CPUL>;
 			operating-points-v2 = <&cluster0_opp_table>;
 			cpu-idle-states = <&CPU_SLEEP>;
+			i-cache-size = <32768>;
+			i-cache-line-size = <64>;
+			i-cache-sets = <128>;
+			d-cache-size = <32768>;
+			d-cache-line-size = <64>;
+			d-cache-sets = <128>;
+			next-level-cache = <&l2_cache_l3>;
 		};
 
 		cpu_b0: cpu@400 {
@@ -362,6 +396,13 @@
 			clocks = <&scmi_clk SCMI_CLK_CPUB01>;
 			operating-points-v2 = <&cluster1_opp_table>;
 			cpu-idle-states = <&CPU_SLEEP>;
+			i-cache-size = <65536>;
+			i-cache-line-size = <64>;
+			i-cache-sets = <256>;
+			d-cache-size = <65536>;
+			d-cache-line-size = <64>;
+			d-cache-sets = <256>;
+			next-level-cache = <&l2_cache_b0>;
 		};
 
 		cpu_b1: cpu@500 {
@@ -373,6 +414,13 @@
 			clocks = <&scmi_clk SCMI_CLK_CPUB01>;
 			operating-points-v2 = <&cluster1_opp_table>;
 			cpu-idle-states = <&CPU_SLEEP>;
+			i-cache-size = <65536>;
+			i-cache-line-size = <64>;
+			i-cache-sets = <256>;
+			d-cache-size = <65536>;
+			d-cache-line-size = <64>;
+			d-cache-sets = <256>;
+			next-level-cache = <&l2_cache_b1>;
 		};
 
 		cpu_b2: cpu@600 {
@@ -384,6 +432,13 @@
 			clocks = <&scmi_clk SCMI_CLK_CPUB23>;
 			operating-points-v2 = <&cluster2_opp_table>;
 			cpu-idle-states = <&CPU_SLEEP>;
+			i-cache-size = <65536>;
+			i-cache-line-size = <64>;
+			i-cache-sets = <256>;
+			d-cache-size = <65536>;
+			d-cache-line-size = <64>;
+			d-cache-sets = <256>;
+			next-level-cache = <&l2_cache_b2>;
 		};
 
 		cpu_b3: cpu@700 {
@@ -395,6 +450,13 @@
 			clocks = <&scmi_clk SCMI_CLK_CPUB23>;
 			operating-points-v2 = <&cluster2_opp_table>;
 			cpu-idle-states = <&CPU_SLEEP>;
+			i-cache-size = <65536>;
+			i-cache-line-size = <64>;
+			i-cache-sets = <256>;
+			d-cache-size = <65536>;
+			d-cache-line-size = <64>;
+			d-cache-sets = <256>;
+			next-level-cache = <&l2_cache_b3>;
 		};
 
 		idle-states {
@@ -406,7 +468,79 @@
 				entry-latency-us = <100>;
 				exit-latency-us = <120>;
 				min-residency-us = <1000>;
+				status = "disabled";
 			};
+		};
+
+		l2_cache_l0: l2-cache-l0 {
+			compatible = "cache";
+			cache-size = <131072>;
+			cache-line-size = <64>;
+			cache-sets = <512>;
+			next-level-cache = <&l3_cache>;
+		};
+
+		l2_cache_l1: l2-cache-l1 {
+			compatible = "cache";
+			cache-size = <131072>;
+			cache-line-size = <64>;
+			cache-sets = <512>;
+			next-level-cache = <&l3_cache>;
+		};
+
+		l2_cache_l2: l2-cache-l2 {
+			compatible = "cache";
+			cache-size = <131072>;
+			cache-line-size = <64>;
+			cache-sets = <512>;
+			next-level-cache = <&l3_cache>;
+		};
+
+		l2_cache_l3: l2-cache-l3 {
+			compatible = "cache";
+			cache-size = <131072>;
+			cache-line-size = <64>;
+			cache-sets = <512>;
+			next-level-cache = <&l3_cache>;
+		};
+
+		l2_cache_b0: l2-cache-b0 {
+			compatible = "cache";
+			cache-size = <524288>;
+			cache-line-size = <64>;
+			cache-sets = <1024>;
+			next-level-cache = <&l3_cache>;
+		};
+
+		l2_cache_b1: l2-cache-b1 {
+			compatible = "cache";
+			cache-size = <524288>;
+			cache-line-size = <64>;
+			cache-sets = <1024>;
+			next-level-cache = <&l3_cache>;
+		};
+
+		l2_cache_b2: l2-cache-b2 {
+			compatible = "cache";
+			cache-size = <524288>;
+			cache-line-size = <64>;
+			cache-sets = <1024>;
+			next-level-cache = <&l3_cache>;
+		};
+
+		l2_cache_b3: l2-cache-b3 {
+			compatible = "cache";
+			cache-size = <524288>;
+			cache-line-size = <64>;
+			cache-sets = <1024>;
+			next-level-cache = <&l3_cache>;
+		};
+
+		l3_cache: l3-cache {
+			compatible = "cache";
+			cache-size = <3145728>;
+			cache-line-size = <64>;
+			cache-sets = <4096>;
 		};
 	};
 
@@ -962,6 +1096,26 @@
 		status = "disabled";
 	};
 
+	rockchip_suspend: rockchip-suspend {
+		compatible = "rockchip,pm-rk3588";
+		status = "disabled";
+		rockchip,sleep-debug-en = <0>;
+		rockchip,sleep-mode-config = <
+			(0
+			| RKPM_SLP_ARMOFF_DDRPD
+			| RKPM_SLP_PMU_PMUALIVE_32K
+			| RKPM_SLP_PMU_DIS_OSC
+			| RKPM_SLP_32K_EXT
+			| RKPM_SLP_PMU_DBG
+			)
+		>;
+		rockchip,wakeup-config = <
+			(0
+			| RKPM_GPIO_WKUP_EN
+			)
+		>;
+	};
+
 	rockchip_system_monitor: rockchip-system-monitor {
 		compatible = "rockchip,system-monitor";
 
@@ -1151,6 +1305,7 @@
 			snps,dis-u2-freeclk-exists-quirk;
 			snps,dis-del-phy-power-chg-quirk;
 			snps,dis-tx-ipgap-linecheck-quirk;
+			quirk-skip-phy-init;
 			status = "disabled";
 		};
 	};
@@ -1392,6 +1547,7 @@
 			clock-names = "phyclk";
 			clock-output-names = "usb480m_phy0";
 			#clock-cells = <0>;
+			rockchip,usbctrl-grf = <&usb_grf>;
 			status = "disabled";
 
 			u2phy0_otg: otg-port {
@@ -2062,6 +2218,7 @@
 		assigned-clock-rates = <594000000>;
 		resets = <&cru SRST_A_VPU>, <&cru SRST_H_VPU>;
 		reset-names = "video_a", "video_h";
+		rockchip,skip-pmu-idle-request;
 		iommus = <&vdpu_mmu>;
 		rockchip,srv = <&mpp_srv>;
 		rockchip,taskqueue-node = <0>;
@@ -2152,6 +2309,7 @@
 		assigned-clock-rates = <600000000>;
 		resets = <&cru SRST_A_JPEG_DECODER>, <&cru SRST_H_JPEG_DECODER>;
 		reset-names = "video_a", "video_h";
+		rockchip,skip-pmu-idle-request;
 		iommus = <&jpegd_mmu>;
 		rockchip,srv = <&mpp_srv>;
 		rockchip,taskqueue-node = <1>;
@@ -2183,6 +2341,7 @@
 		assigned-clock-rates = <594000000>;
 		resets = <&cru SRST_A_JPEG_ENCODER0>, <&cru SRST_H_JPEG_ENCODER0>;
 		reset-names = "video_a", "video_h";
+		rockchip,skip-pmu-idle-request;
 		iommus = <&jpege0_mmu>;
 		rockchip,srv = <&mpp_srv>;
 		rockchip,taskqueue-node = <2>;
@@ -2215,6 +2374,7 @@
 		assigned-clock-rates = <594000000>;
 		resets = <&cru SRST_A_JPEG_ENCODER1>, <&cru SRST_H_JPEG_ENCODER1>;
 		reset-names = "video_a", "video_h";
+		rockchip,skip-pmu-idle-request;
 		iommus = <&jpege1_mmu>;
 		rockchip,srv = <&mpp_srv>;
 		rockchip,taskqueue-node = <3>;
@@ -2247,6 +2407,7 @@
 		assigned-clock-rates = <594000000>;
 		resets = <&cru SRST_A_JPEG_ENCODER2>, <&cru SRST_H_JPEG_ENCODER2>;
 		reset-names = "video_a", "video_h";
+		rockchip,skip-pmu-idle-request;
 		iommus = <&jpege2_mmu>;
 		rockchip,srv = <&mpp_srv>;
 		rockchip,taskqueue-node = <4>;
@@ -2279,6 +2440,7 @@
 		assigned-clock-rates = <594000000>;
 		resets = <&cru SRST_A_JPEG_ENCODER3>, <&cru SRST_H_JPEG_ENCODER3>;
 		reset-names = "video_a", "video_h";
+		rockchip,skip-pmu-idle-request;
 		iommus = <&jpege3_mmu>;
 		rockchip,srv = <&mpp_srv>;
 		rockchip,taskqueue-node = <5>;
@@ -2308,6 +2470,7 @@
 		clock-names = "aclk", "hclk", "sclk";
 		resets = <&cru SRST_A_IEP2P0>, <&cru SRST_H_IEP2P0>, <&cru SRST_IEP2P0_CORE>;
 		reset-names = "rst_a", "rst_h", "rst_s";
+		rockchip,skip-pmu-idle-request;
 		power-domains = <&power RK3588_PD_VDPU>;
 		rockchip,srv = <&mpp_srv>;
 		rockchip,taskqueue-node = <6>;
@@ -2339,6 +2502,7 @@
 		assigned-clock-rates = <600000000>, <800000000>;
 		resets = <&cru SRST_A_RKVENC0>, <&cru SRST_H_RKVENC0>, <&cru SRST_RKVENC0_CORE>;
 		reset-names = "video_a", "video_h", "video_core";
+		rockchip,skip-pmu-idle-request;
 		iommus = <&rkvenc0_mmu>;
 		rockchip,srv = <&mpp_srv>;
 		rockchip,ccu = <&rkvenc_ccu>;
@@ -2376,6 +2540,7 @@
 		assigned-clock-rates = <600000000>, <800000000>;
 		resets = <&cru SRST_A_RKVENC1>, <&cru SRST_H_RKVENC1>, <&cru SRST_RKVENC1_CORE>;
 		reset-names = "video_a", "video_h", "video_core";
+		rockchip,skip-pmu-idle-request;
 		iommus = <&rkvenc1_mmu>;
 		rockchip,srv = <&mpp_srv>;
 		rockchip,ccu = <&rkvenc_ccu>;
@@ -2411,6 +2576,7 @@
 		assigned-clock-rates = <600000000>;
 		resets = <&cru SRST_A_RKVDEC_CCU>;
 		reset-names = "video_ccu";
+		rockchip,skip-pmu-idle-request;
 		power-domains = <&power RK3588_PD_RKVDEC0>;
 		status = "disabled";
 	};
@@ -2435,6 +2601,7 @@
 			 <&cru SRST_RKVDEC0_CA>, <&cru SRST_RKVDEC0_HEVC_CA>;
 		reset-names = "video_a", "video_h", "video_core",
 			      "video_cabac", "video_hevc_cabac";
+		rockchip,skip-pmu-idle-request;
 		iommus = <&rkvdec0_mmu>;
 		rockchip,srv = <&mpp_srv>;
 		rockchip,ccu = <&rkvdec_ccu>;
@@ -2483,6 +2650,7 @@
 			 <&cru SRST_RKVDEC1_CA>, <&cru SRST_RKVDEC1_HEVC_CA>;
 		reset-names = "video_a", "video_h", "video_core",
 			      "video_cabac", "video_hevc_cabac";
+		rockchip,skip-pmu-idle-request;
 		iommus = <&rkvdec1_mmu>;
 		rockchip,srv = <&mpp_srv>;
 		rockchip,ccu = <&rkvdec_ccu>;
@@ -2759,14 +2927,22 @@
 			 <&cru DCLK_VOP1>,
 			 <&cru DCLK_VOP2>,
 			 <&cru DCLK_VOP3>,
-			 <&cru PCLK_VOP_ROOT>;
+			 <&cru PCLK_VOP_ROOT>,
+			 <&cru DCLK_VOP0_SRC>,
+			 <&cru DCLK_VOP1_SRC>,
+			 <&cru DCLK_VOP2_SRC>,
+			 <&hdptxphy_hdmi0>;
 		clock-names = "aclk_vop",
 			      "hclk_vop",
 			      "dclk_vp0",
 			      "dclk_vp1",
 			      "dclk_vp2",
 			      "dclk_vp3",
-			      "pclk_vop";
+			      "pclk_vop",
+			      "dclk_src_vp0",
+			      "dclk_src_vp1",
+			      "dclk_src_vp2",
+			      "hdmi0_phy_pll";
 		resets = <&cru SRST_A_VOP>,
 			 <&cru SRST_H_VOP>,
 			 <&cru SRST_D_VOP0>,
@@ -3505,14 +3681,16 @@
 		linux,pci-domain = <3>;
 		num-ib-windows = <8>;
 		num-ob-windows = <8>;
+		num-viewport = <4>;
 		max-link-speed = <2>;
 		msi-map = <0x3000 &its0 0x3000 0x1000>;
 		num-lanes = <1>;
 		phys = <&combphy2_psu PHY_TYPE_PCIE>;
 		phy-names = "pcie-phy";
-		ranges = <0x00000800 0x0 0xc0000000 0x9 0xc0000000 0x0 0x100000
-			  0x81000000 0x0 0xc0100000 0x9 0xc0100000 0x0 0x100000
-			  0x83000000 0x0 0xc0200000 0x9 0xc0200000 0x0 0x3fe00000>;
+		ranges = <0x00000800 0x0 0xf3000000 0x0 0xf3000000 0x0 0x100000
+			  0x81000000 0x0 0xf3100000 0x0 0xf3100000 0x0 0x100000
+			  0x82000000 0x0 0xf3200000 0x0 0xf3200000 0x0 0xe00000
+			  0xc3000000 0x9 0xc0000000 0x9 0xc0000000 0x0 0x40000000>;
 		reg = <0x0 0xfe180000 0x0 0x10000>,
 		      <0xa 0x40c00000 0x0 0x400000>;
 		reg-names = "pcie-apb", "pcie-dbi";
@@ -3557,14 +3735,16 @@
 		linux,pci-domain = <4>;
 		num-ib-windows = <8>;
 		num-ob-windows = <8>;
+		num-viewport = <4>;
 		max-link-speed = <2>;
 		msi-map = <0x4000 &its0 0x4000 0x1000>;
 		num-lanes = <1>;
 		phys = <&combphy0_ps PHY_TYPE_PCIE>;
 		phy-names = "pcie-phy";
-		ranges = <0x00000800 0x0 0xe0000000 0xa 0x00000000 0x0 0x100000
-			  0x81000000 0x0 0xe0100000 0xa 0x00100000 0x0 0x100000
-			  0x83000000 0x0 0xe0200000 0xa 0x00200000 0x0 0x3fe00000>;
+		ranges = <0x00000800 0x0 0xf4000000 0x0 0xf4000000 0x0 0x100000
+			  0x81000000 0x0 0xf4100000 0x0 0xf4100000 0x0 0x100000
+			  0x82000000 0x0 0xf4200000 0x0 0xf4200000 0x0 0xe00000
+			  0xc3000000 0xa 0x00000000 0xa 0x00000000 0x0 0x40000000>;
 		reg = <0x0 0xfe190000 0x0 0x10000>,
 		      <0xa 0x41000000 0x0 0x400000>;
 		reg-names = "pcie-apb", "pcie-dbi";
@@ -4653,6 +4833,7 @@
 			      "lcpll";
 		rockchip,grf = <&hdptxphy0_grf>;
 		#phy-cells = <0>;
+		#clock-cells = <0>;
 		status = "disabled";
 	};
 

@@ -13,7 +13,9 @@
 
 enum memory_flag {
 	/* It will identify whether the buffer is within 0 ~ 4G. */
-	RGA_MM_UNDER_4G	= 1 << 0,
+	RGA_MM_UNDER_4G		= 1 << 0,
+	/* Logo enable IOMMU */
+	RGA_MM_NEED_USE_IOMMU	= 1 << 1,
 };
 
 struct rga_mm {
@@ -31,9 +33,15 @@ struct rga_mm {
 	int buffer_count;
 };
 
-struct rga_internal_buffer *
-	rga_mm_internal_buffer_lookup_handle(struct rga_mm *mm_session, uint32_t handle);
+struct rga_internal_buffer *rga_mm_lookup_handle(struct rga_mm *mm_session, uint32_t handle);
+int rga_mm_lookup_flag(struct rga_mm *mm_session, uint64_t handle);
+dma_addr_t rga_mm_lookup_iova(struct rga_internal_buffer *buffer, int core);
+struct sg_table *rga_mm_lookup_sgt(struct rga_internal_buffer *buffer, int core);
+
 void rga_mm_dump_info(struct rga_mm *session);
+
+int rga_mm_get_handle_info(struct rga_job *job);
+void rga_mm_put_handle_info(struct rga_job *job);
 
 uint32_t rga_mm_import_buffer(struct rga_external_buffer *external_buffer);
 int rga_mm_release_buffer(uint32_t handle);

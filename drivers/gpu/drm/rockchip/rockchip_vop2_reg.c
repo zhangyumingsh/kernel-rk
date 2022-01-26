@@ -67,8 +67,11 @@ static const uint32_t formats_for_esmart[] = {
 	DRM_FORMAT_RGB565,
 	DRM_FORMAT_BGR565,
 	DRM_FORMAT_NV12, /* yuv420_8bit linear mode, 2 plane */
+	DRM_FORMAT_NV21, /* yvu420_8bit linear mode, 2 plane */
 	DRM_FORMAT_NV16, /* yuv422_8bit linear mode, 2 plane */
+	DRM_FORMAT_NV61, /* yvu422_8bit linear mode, 2 plane */
 	DRM_FORMAT_NV24, /* yuv444_8bit linear mode, 2 plane */
+	DRM_FORMAT_NV42, /* yvu444_8bit linear mode, 2 plane */
 	DRM_FORMAT_NV15, /* yuv420_10bit linear mode, 2 plane, no padding */
 #ifdef CONFIG_NO_GKI
 	DRM_FORMAT_NV20, /* yuv422_10bit linear mode, 2 plane, no padding */
@@ -1171,7 +1174,7 @@ static const struct vop2_video_port_data rk3588_vop_video_ports[] = {
 	 .dclk_max = 600000000,
 	 .max_output = { 7680, 4320 },
 	 /* hdr2sdr sdr2hdr hdr2hdr sdr2sdr */
-	 .pre_scan_max_dly = { 76, 65, 53, 54 },
+	 .pre_scan_max_dly = { 76, 65, 65, 54 },
 	 .intr = &rk3568_vp0_intr,
 	 .hdr_table = &rk3568_vop_hdr_table,
 	 .regs = &rk3588_vop_vp0_regs,
@@ -1185,7 +1188,7 @@ static const struct vop2_video_port_data rk3588_vop_video_ports[] = {
 	 .cubic_lut_len = 729, /* 9x9x9 */
 	 .dclk_max = 600000000,
 	 .max_output = { 4096, 2304 },
-	 .pre_scan_max_dly = { 76, 65, 53, 54 },
+	 .pre_scan_max_dly = { 76, 65, 65, 54 },
 	 .intr = &rk3568_vp1_intr,
 	 /* vp1 share the same hdr curve with vp0 */
 	 .hdr_table = &rk3568_vop_hdr_table,
