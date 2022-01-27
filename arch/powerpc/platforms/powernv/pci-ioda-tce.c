@@ -340,6 +340,14 @@ free_tces_exit:
 	return -ENOMEM;
 }
 
+static void pnv_iommu_table_group_link_free(struct rcu_head *head)
+{
+	struct iommu_table_group_link *tgl = container_of(head,
+			struct iommu_table_group_link, rcu);
+
+	kfree(tgl);
+}
+
 void pnv_pci_unlink_table_and_group(struct iommu_table *tbl,
 		struct iommu_table_group *table_group)
 {
@@ -355,7 +363,7 @@ void pnv_pci_unlink_table_and_group(struct iommu_table *tbl,
 	list_for_each_entry_rcu(tgl, &tbl->it_group_list, next) {
 		if (tgl->table_group == table_group) {
 			list_del_rcu(&tgl->next);
-			kfree_rcu(tgl, rcu);
+			call_rcu(&tgl->rcu, pnv_iommu_table_group_link_free);
 			found = true;
 			break;
 		}
@@ -367,7 +375,6 @@ void pnv_pci_unlink_table_and_group(struct iommu_table *tbl,
 	found = false;
 	for (i = 0; i < IOMMU_TABLE_GROUP_MAX_TABLES; ++i) {
 		if (table_group->tables[i] == tbl) {
-			iommu_tce_table_put(tbl);
 			table_group->tables[i] = NULL;
 			found = true;
 			break;
@@ -393,7 +400,7 @@ long pnv_pci_link_table_and_group(int node, int num,
 	tgl->table_group = table_group;
 	list_add_rcu(&tgl->next, &tbl->it_group_list);
 
-	table_group->tables[num] = iommu_tce_table_get(tbl);
+	table_group->tables[num] = tbl;
 
 	return 0;
 }

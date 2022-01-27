@@ -9,7 +9,7 @@
 #define _CEC_PRIV_H
 
 #include <linux/cec-funcs.h>
-#include <media/cec-notifier.h>
+#include <media/cec.h>
 
 #define dprintk(lvl, fmt, arg...)					\
 	do {								\
@@ -20,14 +20,8 @@
 /* devnode to cec_adapter */
 #define to_cec_adapter(node) container_of(node, struct cec_adapter, devnode)
 
-static inline bool msg_is_raw(const struct cec_msg *msg)
-{
-	return msg->flags & CEC_MSG_FL_RAW;
-}
-
 /* cec-core.c */
 extern int cec_debug;
-extern int cec_debounce_ms;
 int cec_get_device(struct cec_devnode *devnode);
 void cec_put_device(struct cec_devnode *devnode);
 

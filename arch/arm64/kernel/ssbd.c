@@ -30,14 +30,16 @@ static void ssbd_ssbs_disable(struct task_struct *task)
 
 /*
  * prctl interface for SSBD
+ * FIXME: Drop the below ifdefery once merged in 4.18.
  */
+#ifdef PR_SPEC_STORE_BYPASS
 static int ssbd_prctl_set(struct task_struct *task, unsigned long ctrl)
 {
 	int state = arm64_get_ssbd_state();
 
 	/* Unsupported */
 	if (state == ARM64_SSBD_UNKNOWN)
-		return -ENODEV;
+		return -EINVAL;
 
 	/* Treat the unaffected/mitigated state separately */
 	if (state == ARM64_SSBD_MITIGATED) {
@@ -102,7 +104,7 @@ static int ssbd_prctl_get(struct task_struct *task)
 {
 	switch (arm64_get_ssbd_state()) {
 	case ARM64_SSBD_UNKNOWN:
-		return -ENODEV;
+		return -EINVAL;
 	case ARM64_SSBD_FORCE_ENABLE:
 		return PR_SPEC_DISABLE;
 	case ARM64_SSBD_KERNEL:
@@ -127,3 +129,4 @@ int arch_prctl_spec_ctrl_get(struct task_struct *task, unsigned long which)
 		return -ENODEV;
 	}
 }
+#endif	/* PR_SPEC_STORE_BYPASS */

@@ -26,27 +26,8 @@
 #include <drm/drm_dp_helper.h>
 #include <drm/drm_atomic.h>
 
-#if IS_ENABLED(CONFIG_DRM_DEBUG_DP_MST_TOPOLOGY_REFS)
-#include <linux/stackdepot.h>
-#include <linux/timekeeping.h>
-
-enum drm_dp_mst_topology_ref_type {
-	DRM_DP_MST_TOPOLOGY_REF_GET,
-	DRM_DP_MST_TOPOLOGY_REF_PUT,
-};
-
-struct drm_dp_mst_topology_ref_history {
-	struct drm_dp_mst_topology_ref_entry {
-		enum drm_dp_mst_topology_ref_type type;
-		int count;
-		ktime_t ts_nsec;
-		depot_stack_handle_t backtrace;
-	} *entries;
-	int len;
-};
-#endif /* IS_ENABLED(CONFIG_DRM_DEBUG_DP_MST_TOPOLOGY_REFS) */
-
 struct drm_dp_mst_branch;
+struct drm_dp_mst_port;
 
 /**
  * struct drm_dp_vcpi - Virtual Channel Payload Identifier
@@ -62,60 +43,44 @@ struct drm_dp_vcpi {
 	int num_slots;
 };
 
+struct drm_dp_mst_dsc_dpcd_cache {
+	bool valid;
+	bool use_parent_dpcd;
+	u8 dsc_dpcd[16];
+};
+
+struct drm_dp_mst_dsc_info {
+	bool dsc_support;
+	struct drm_dp_mst_port *dsc_port;
+	struct drm_dp_mst_dsc_dpcd_cache dsc_dpcd_cache;
+};
+
 /**
  * struct drm_dp_mst_port - MST port
+ * @kref: reference count for this port.
  * @port_num: port number
- * @input: if this port is an input port. Protected by
- * &drm_dp_mst_topology_mgr.base.lock.
- * @mcs: message capability status - DP 1.2 spec. Protected by
- * &drm_dp_mst_topology_mgr.base.lock.
- * @ddps: DisplayPort Device Plug Status - DP 1.2. Protected by
- * &drm_dp_mst_topology_mgr.base.lock.
- * @pdt: Peer Device Type. Protected by
- * &drm_dp_mst_topology_mgr.base.lock.
- * @ldps: Legacy Device Plug Status. Protected by
- * &drm_dp_mst_topology_mgr.base.lock.
- * @dpcd_rev: DPCD revision of device on this port. Protected by
- * &drm_dp_mst_topology_mgr.base.lock.
- * @num_sdp_streams: Number of simultaneous streams. Protected by
- * &drm_dp_mst_topology_mgr.base.lock.
- * @num_sdp_stream_sinks: Number of stream sinks. Protected by
- * &drm_dp_mst_topology_mgr.base.lock.
- * @full_pbn: Max possible bandwidth for this port. Protected by
- * &drm_dp_mst_topology_mgr.base.lock.
+ * @input: if this port is an input port.
+ * @mcs: message capability status - DP 1.2 spec.
+ * @ddps: DisplayPort Device Plug Status - DP 1.2
+ * @pdt: Peer Device Type
+ * @ldps: Legacy Device Plug Status
+ * @dpcd_rev: DPCD revision of device on this port
+ * @num_sdp_streams: Number of simultaneous streams
+ * @num_sdp_stream_sinks: Number of stream sinks
+ * @available_pbn: Available bandwidth for this port.
  * @next: link to next port on this branch device
- * @aux: i2c aux transport to talk to device connected to this port, protected
- * by &drm_dp_mst_topology_mgr.base.lock.
+ * @mstb: branch device attach below this port
+ * @aux: i2c aux transport to talk to device connected to this port.
  * @parent: branch device parent of this port
  * @vcpi: Virtual Channel Payload info for this port.
- * @connector: DRM connector this port is connected to. Protected by
- * &drm_dp_mst_topology_mgr.base.lock.
+ * @connector: DRM connector this port is connected to.
  * @mgr: topology manager this port lives under.
  *
  * This structure represents an MST port endpoint on a device somewhere
  * in the MST topology.
  */
 struct drm_dp_mst_port {
-	/**
-	 * @topology_kref: refcount for this port's lifetime in the topology,
-	 * only the DP MST helpers should need to touch this
-	 */
-	struct kref topology_kref;
-
-	/**
-	 * @malloc_kref: refcount for the memory allocation containing this
-	 * structure. See drm_dp_mst_get_port_malloc() and
-	 * drm_dp_mst_put_port_malloc().
-	 */
-	struct kref malloc_kref;
-
-#if IS_ENABLED(CONFIG_DRM_DEBUG_DP_MST_TOPOLOGY_REFS)
-	/**
-	 * @topology_ref_history: A history of each topology
-	 * reference/dereference. See CONFIG_DRM_DEBUG_DP_MST_TOPOLOGY_REFS.
-	 */
-	struct drm_dp_mst_topology_ref_history topology_ref_history;
-#endif
+	struct kref kref;
 
 	u8 port_num;
 	bool input;
@@ -126,19 +91,9 @@ struct drm_dp_mst_port {
 	u8 dpcd_rev;
 	u8 num_sdp_streams;
 	u8 num_sdp_stream_sinks;
-	uint16_t full_pbn;
+	uint16_t available_pbn;
 	struct list_head next;
-	/**
-	 * @mstb: the branch device connected to this port, if there is one.
-	 * This should be considered protected for reading by
-	 * &drm_dp_mst_topology_mgr.lock. There are two exceptions to this:
-	 * &drm_dp_mst_topology_mgr.up_req_work and
-	 * &drm_dp_mst_topology_mgr.work, which do not grab
-	 * &drm_dp_mst_topology_mgr.lock during reads but are the only
-	 * updaters of this list and are protected from writing concurrently
-	 * by &drm_dp_mst_topology_mgr.probe_lock.
-	 */
-	struct drm_dp_mst_branch *mstb;
+	struct drm_dp_mst_branch *mstb; /* pointer to an mstb if this port has one */
 	struct drm_dp_aux aux; /* i2c bus for this port? */
 	struct drm_dp_mst_branch *parent;
 
@@ -158,14 +113,18 @@ struct drm_dp_mst_port {
 	bool has_audio;
 
 	bool fec_capable;
+
+	struct drm_dp_mst_dsc_info dsc_info;
 };
 
 /**
  * struct drm_dp_mst_branch - MST branch device.
+ * @kref: reference count for this port.
  * @rad: Relative Address to talk to this branch device.
  * @lct: Link count total to talk to this branch device.
  * @num_ports: number of ports on the branch.
  * @msg_slots: one bit per transmitted msg slot.
+ * @ports: linked list of ports on this branch.
  * @port_parent: pointer to the port parent, NULL if toplevel.
  * @mgr: topology manager for this branch device.
  * @tx_slots: transmission slots for this device.
@@ -179,48 +138,12 @@ struct drm_dp_mst_port {
  * to downstream port of parent branches.
  */
 struct drm_dp_mst_branch {
-	/**
-	 * @topology_kref: refcount for this branch device's lifetime in the
-	 * topology, only the DP MST helpers should need to touch this
-	 */
-	struct kref topology_kref;
-
-	/**
-	 * @malloc_kref: refcount for the memory allocation containing this
-	 * structure. See drm_dp_mst_get_mstb_malloc() and
-	 * drm_dp_mst_put_mstb_malloc().
-	 */
-	struct kref malloc_kref;
-
-#if IS_ENABLED(CONFIG_DRM_DEBUG_DP_MST_TOPOLOGY_REFS)
-	/**
-	 * @topology_ref_history: A history of each topology
-	 * reference/dereference. See CONFIG_DRM_DEBUG_DP_MST_TOPOLOGY_REFS.
-	 */
-	struct drm_dp_mst_topology_ref_history topology_ref_history;
-#endif
-
-	/**
-	 * @destroy_next: linked-list entry used by
-	 * drm_dp_delayed_destroy_work()
-	 */
-	struct list_head destroy_next;
-
+	struct kref kref;
 	u8 rad[8];
 	u8 lct;
 	int num_ports;
 
 	int msg_slots;
-	/**
-	 * @ports: the list of ports on this branch device. This should be
-	 * considered protected for reading by &drm_dp_mst_topology_mgr.lock.
-	 * There are two exceptions to this:
-	 * &drm_dp_mst_topology_mgr.up_req_work and
-	 * &drm_dp_mst_topology_mgr.work, which do not grab
-	 * &drm_dp_mst_topology_mgr.lock during reads but are the only
-	 * updaters of this list and are protected from updating the list
-	 * concurrently by @drm_dp_mst_topology_mgr.probe_lock
-	 */
 	struct list_head ports;
 
 	/* list of tx ops queue for this port */
@@ -360,7 +283,7 @@ struct drm_dp_remote_dpcd_write {
 struct drm_dp_remote_i2c_read {
 	u8 num_transactions;
 	u8 port_number;
-	struct drm_dp_remote_i2c_read_tx {
+	struct {
 		u8 i2c_dev_id;
 		u8 num_bytes;
 		u8 *bytes;
@@ -482,6 +405,8 @@ struct drm_dp_mst_topology_cbs {
 	void (*register_connector)(struct drm_connector *connector);
 	void (*destroy_connector)(struct drm_dp_mst_topology_mgr *mgr,
 				  struct drm_connector *connector);
+	void (*hotplug)(struct drm_dp_mst_topology_mgr *mgr);
+
 };
 
 #define DP_MAX_PAYLOAD (sizeof(unsigned long) * 8)
@@ -499,17 +424,10 @@ struct drm_dp_payload {
 
 #define to_dp_mst_topology_state(x) container_of(x, struct drm_dp_mst_topology_state, base)
 
-struct drm_dp_vcpi_allocation {
-	struct drm_dp_mst_port *port;
-	int vcpi;
-	int pbn;
-	bool dsc_enabled;
-	struct list_head next;
-};
-
 struct drm_dp_mst_topology_state {
 	struct drm_private_state base;
-	struct list_head vcpis;
+	int avail_slots;
+	struct drm_atomic_state *state;
 	struct drm_dp_mst_topology_mgr *mgr;
 };
 
@@ -557,39 +475,28 @@ struct drm_dp_mst_topology_mgr {
 	int conn_base_id;
 
 	/**
-	 * @down_rep_recv: Message receiver state for down replies.
+	 * @down_rep_recv: Message receiver state for down replies. This and
+	 * @up_req_recv are only ever access from the work item, which is
+	 * serialised.
 	 */
 	struct drm_dp_sideband_msg_rx down_rep_recv;
 	/**
-	 * @up_req_recv: Message receiver state for up requests.
+	 * @up_req_recv: Message receiver state for up requests. This and
+	 * @down_rep_recv are only ever access from the work item, which is
+	 * serialised.
 	 */
 	struct drm_dp_sideband_msg_rx up_req_recv;
 
 	/**
-	 * @lock: protects @mst_state, @mst_primary, @dpcd, and
-	 * @payload_id_table_cleared.
+	 * @lock: protects mst state, primary, dpcd.
 	 */
 	struct mutex lock;
-
-	/**
-	 * @probe_lock: Prevents @work and @up_req_work, the only writers of
-	 * &drm_dp_mst_port.mstb and &drm_dp_mst_branch.ports, from racing
-	 * while they update the topology.
-	 */
-	struct mutex probe_lock;
 
 	/**
 	 * @mst_state: If this manager is enabled for an MST capable port. False
 	 * if no MST sink/branch devices is connected.
 	 */
-	bool mst_state : 1;
-
-	/**
-	 * @payload_id_table_cleared: Whether or not we've cleared the payload
-	 * ID table for @mst_primary. Protected by @lock.
-	 */
-	bool payload_id_table_cleared : 1;
-
+	bool mst_state;
 	/**
 	 * @mst_primary: Pointer to the primary/first branch device.
 	 */
@@ -609,6 +516,11 @@ struct drm_dp_mst_topology_mgr {
 	int pbn_div;
 
 	/**
+	 * @state: State information for topology manager
+	 */
+	struct drm_dp_mst_topology_state *state;
+
+	/**
 	 * @funcs: Atomic helper callbacks
 	 */
 	const struct drm_private_state_funcs *funcs;
@@ -618,12 +530,6 @@ struct drm_dp_mst_topology_mgr {
 	 * &drm_dp_sideband_msg_tx.state once they are queued
 	 */
 	struct mutex qlock;
-
-	/**
-	 * @is_waiting_for_dwn_reply: indicate whether is waiting for down reply
-	 */
-	bool is_waiting_for_dwn_reply;
-
 	/**
 	 * @tx_msg_downq: List of pending down replies.
 	 */
@@ -668,49 +574,18 @@ struct drm_dp_mst_topology_mgr {
 	struct work_struct tx_work;
 
 	/**
-	 * @destroy_port_list: List of to be destroyed connectors.
+	 * @destroy_connector_list: List of to be destroyed connectors.
 	 */
-	struct list_head destroy_port_list;
+	struct list_head destroy_connector_list;
 	/**
-	 * @destroy_branch_device_list: List of to be destroyed branch
-	 * devices.
+	 * @destroy_connector_lock: Protects @connector_list.
 	 */
-	struct list_head destroy_branch_device_list;
+	struct mutex destroy_connector_lock;
 	/**
-	 * @delayed_destroy_lock: Protects @destroy_port_list and
-	 * @destroy_branch_device_list.
+	 * @destroy_connector_work: Work item to destroy connectors. Needed to
+	 * avoid locking inversion.
 	 */
-	struct mutex delayed_destroy_lock;
-	/**
-	 * @delayed_destroy_work: Work item to destroy MST port and branch
-	 * devices, needed to avoid locking inversion.
-	 */
-	struct work_struct delayed_destroy_work;
-
-	/**
-	 * @up_req_list: List of pending up requests from the topology that
-	 * need to be processed, in chronological order.
-	 */
-	struct list_head up_req_list;
-	/**
-	 * @up_req_lock: Protects @up_req_list
-	 */
-	struct mutex up_req_lock;
-	/**
-	 * @up_req_work: Work item to process up requests received from the
-	 * topology. Needed to avoid blocking hotplug handling and sideband
-	 * transmissions.
-	 */
-	struct work_struct up_req_work;
-
-#if IS_ENABLED(CONFIG_DRM_DEBUG_DP_MST_TOPOLOGY_REFS)
-	/**
-	 * @topology_ref_history_lock: protects
-	 * &drm_dp_mst_port.topology_ref_history and
-	 * &drm_dp_mst_branch.topology_ref_history.
-	 */
-	struct mutex topology_ref_history_lock;
-#endif
+	struct work_struct destroy_connector_work;
 };
 
 int drm_dp_mst_topology_mgr_init(struct drm_dp_mst_topology_mgr *mgr,
@@ -727,18 +602,19 @@ int drm_dp_mst_topology_mgr_set_mst(struct drm_dp_mst_topology_mgr *mgr, bool ms
 int drm_dp_mst_hpd_irq(struct drm_dp_mst_topology_mgr *mgr, u8 *esi, bool *handled);
 
 
-int
-drm_dp_mst_detect_port(struct drm_connector *connector,
-		       struct drm_modeset_acquire_ctx *ctx,
-		       struct drm_dp_mst_topology_mgr *mgr,
-		       struct drm_dp_mst_port *port);
+enum drm_connector_status drm_dp_mst_detect_port(struct drm_connector *connector, struct drm_dp_mst_topology_mgr *mgr, struct drm_dp_mst_port *port);
 
 bool drm_dp_mst_port_has_audio(struct drm_dp_mst_topology_mgr *mgr,
 					struct drm_dp_mst_port *port);
+
+bool drm_dp_mst_has_fec(struct drm_dp_mst_topology_mgr *mgr,
+			struct drm_dp_mst_port *port);
+
 struct edid *drm_dp_mst_get_edid(struct drm_connector *connector, struct drm_dp_mst_topology_mgr *mgr, struct drm_dp_mst_port *port);
 
 
-int drm_dp_calc_pbn_mode(int clock, int bpp, bool dsc);
+int drm_dp_calc_pbn_mode(int clock, int bpp);
+
 
 bool drm_dp_mst_allocate_vcpi(struct drm_dp_mst_topology_mgr *mgr,
 			      struct drm_dp_mst_port *port, int pbn, int slots);
@@ -768,141 +644,36 @@ void drm_dp_mst_dump_topology(struct seq_file *m,
 			      struct drm_dp_mst_topology_mgr *mgr);
 
 void drm_dp_mst_topology_mgr_suspend(struct drm_dp_mst_topology_mgr *mgr);
-int __must_check
-drm_dp_mst_topology_mgr_resume(struct drm_dp_mst_topology_mgr *mgr,
-			       bool sync);
-
-ssize_t drm_dp_mst_dpcd_read(struct drm_dp_aux *aux,
-			     unsigned int offset, void *buffer, size_t size);
-ssize_t drm_dp_mst_dpcd_write(struct drm_dp_aux *aux,
-			      unsigned int offset, void *buffer, size_t size);
-
-int drm_dp_mst_connector_late_register(struct drm_connector *connector,
-				       struct drm_dp_mst_port *port);
-void drm_dp_mst_connector_early_unregister(struct drm_connector *connector,
-					   struct drm_dp_mst_port *port);
-
+int drm_dp_mst_topology_mgr_resume(struct drm_dp_mst_topology_mgr *mgr);
 struct drm_dp_mst_topology_state *drm_atomic_get_mst_topology_state(struct drm_atomic_state *state,
 								    struct drm_dp_mst_topology_mgr *mgr);
-int __must_check
-drm_dp_atomic_find_vcpi_slots(struct drm_atomic_state *state,
-			      struct drm_dp_mst_topology_mgr *mgr,
-			      struct drm_dp_mst_port *port, int pbn,
-			      int pbn_div);
-int drm_dp_mst_atomic_enable_dsc(struct drm_atomic_state *state,
-				 struct drm_dp_mst_port *port,
-				 int pbn, int pbn_div,
-				 bool enable);
-int __must_check
-drm_dp_mst_add_affected_dsc_crtcs(struct drm_atomic_state *state,
-				  struct drm_dp_mst_topology_mgr *mgr);
-int __must_check
-drm_dp_atomic_release_vcpi_slots(struct drm_atomic_state *state,
-				 struct drm_dp_mst_topology_mgr *mgr,
-				 struct drm_dp_mst_port *port);
+int drm_dp_atomic_find_vcpi_slots(struct drm_atomic_state *state,
+				  struct drm_dp_mst_topology_mgr *mgr,
+				  struct drm_dp_mst_port *port, int pbn);
+int drm_dp_atomic_release_vcpi_slots(struct drm_atomic_state *state,
+				     struct drm_dp_mst_topology_mgr *mgr,
+				     int slots);
 int drm_dp_send_power_updown_phy(struct drm_dp_mst_topology_mgr *mgr,
 				 struct drm_dp_mst_port *port, bool power_up);
-int __must_check drm_dp_mst_atomic_check(struct drm_atomic_state *state);
 
-void drm_dp_mst_get_port_malloc(struct drm_dp_mst_port *port);
-void drm_dp_mst_put_port_malloc(struct drm_dp_mst_port *port);
+int drm_dp_mst_get_dsc_info(struct drm_dp_mst_topology_mgr *mgr,
+			    struct drm_dp_mst_port *port,
+			    struct drm_dp_mst_dsc_info *dsc_info);
 
-struct drm_dp_aux *drm_dp_mst_dsc_aux_for_port(struct drm_dp_mst_port *port);
+int drm_dp_mst_update_dsc_info(struct drm_dp_mst_topology_mgr *mgr,
+			       struct drm_dp_mst_port *port,
+			       struct drm_dp_mst_dsc_info *dsc_info);
 
-extern const struct drm_private_state_funcs drm_dp_mst_topology_state_funcs;
+int drm_dp_send_dpcd_write(struct drm_dp_mst_topology_mgr *mgr,
+			   struct drm_dp_mst_port *port,
+			   int offset, int size, u8 *bytes);
 
-/**
- * __drm_dp_mst_state_iter_get - private atomic state iterator function for
- * macro-internal use
- * @state: &struct drm_atomic_state pointer
- * @mgr: pointer to the &struct drm_dp_mst_topology_mgr iteration cursor
- * @old_state: optional pointer to the old &struct drm_dp_mst_topology_state
- * iteration cursor
- * @new_state: optional pointer to the new &struct drm_dp_mst_topology_state
- * iteration cursor
- * @i: int iteration cursor, for macro-internal use
- *
- * Used by for_each_oldnew_mst_mgr_in_state(),
- * for_each_old_mst_mgr_in_state(), and for_each_new_mst_mgr_in_state(). Don't
- * call this directly.
- *
- * Returns:
- * True if the current &struct drm_private_obj is a &struct
- * drm_dp_mst_topology_mgr, false otherwise.
- */
-static inline bool
-__drm_dp_mst_state_iter_get(struct drm_atomic_state *state,
-			    struct drm_dp_mst_topology_mgr **mgr,
-			    struct drm_dp_mst_topology_state **old_state,
-			    struct drm_dp_mst_topology_state **new_state,
-			    int i)
-{
-	struct __drm_private_objs_state *objs_state = &state->private_objs[i];
+int drm_dp_send_dpcd_read(struct drm_dp_mst_topology_mgr *mgr,
+			  struct drm_dp_mst_port *port,
+			  int offset, int size, u8 *bytes);
 
-	if (objs_state->ptr->funcs != &drm_dp_mst_topology_state_funcs)
-		return false;
-
-	*mgr = to_dp_mst_topology_mgr(objs_state->ptr);
-	if (old_state)
-		*old_state = to_dp_mst_topology_state(objs_state->old_state);
-	if (new_state)
-		*new_state = to_dp_mst_topology_state(objs_state->new_state);
-
-	return true;
-}
-
-/**
- * for_each_oldnew_mst_mgr_in_state - iterate over all DP MST topology
- * managers in an atomic update
- * @__state: &struct drm_atomic_state pointer
- * @mgr: &struct drm_dp_mst_topology_mgr iteration cursor
- * @old_state: &struct drm_dp_mst_topology_state iteration cursor for the old
- * state
- * @new_state: &struct drm_dp_mst_topology_state iteration cursor for the new
- * state
- * @__i: int iteration cursor, for macro-internal use
- *
- * This iterates over all DRM DP MST topology managers in an atomic update,
- * tracking both old and new state. This is useful in places where the state
- * delta needs to be considered, for example in atomic check functions.
- */
-#define for_each_oldnew_mst_mgr_in_state(__state, mgr, old_state, new_state, __i) \
-	for ((__i) = 0; (__i) < (__state)->num_private_objs; (__i)++) \
-		for_each_if(__drm_dp_mst_state_iter_get((__state), &(mgr), &(old_state), &(new_state), (__i)))
-
-/**
- * for_each_old_mst_mgr_in_state - iterate over all DP MST topology managers
- * in an atomic update
- * @__state: &struct drm_atomic_state pointer
- * @mgr: &struct drm_dp_mst_topology_mgr iteration cursor
- * @old_state: &struct drm_dp_mst_topology_state iteration cursor for the old
- * state
- * @__i: int iteration cursor, for macro-internal use
- *
- * This iterates over all DRM DP MST topology managers in an atomic update,
- * tracking only the old state. This is useful in disable functions, where we
- * need the old state the hardware is still in.
- */
-#define for_each_old_mst_mgr_in_state(__state, mgr, old_state, __i) \
-	for ((__i) = 0; (__i) < (__state)->num_private_objs; (__i)++) \
-		for_each_if(__drm_dp_mst_state_iter_get((__state), &(mgr), &(old_state), NULL, (__i)))
-
-/**
- * for_each_new_mst_mgr_in_state - iterate over all DP MST topology managers
- * in an atomic update
- * @__state: &struct drm_atomic_state pointer
- * @mgr: &struct drm_dp_mst_topology_mgr iteration cursor
- * @new_state: &struct drm_dp_mst_topology_state iteration cursor for the new
- * state
- * @__i: int iteration cursor, for macro-internal use
- *
- * This iterates over all DRM DP MST topology managers in an atomic update,
- * tracking only the new state. This is useful in enable functions, where we
- * need the new state the hardware should be in when the atomic commit
- * operation has completed.
- */
-#define for_each_new_mst_mgr_in_state(__state, mgr, new_state, __i) \
-	for ((__i) = 0; (__i) < (__state)->num_private_objs; (__i)++) \
-		for_each_if(__drm_dp_mst_state_iter_get((__state), &(mgr), NULL, &(new_state), (__i)))
+int drm_dp_mst_get_max_sdp_streams_supported(
+		struct drm_dp_mst_topology_mgr *mgr,
+		struct drm_dp_mst_port *port);
 
 #endif

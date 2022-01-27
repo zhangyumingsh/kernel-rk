@@ -135,7 +135,7 @@ static ssize_t chp_measurement_chars_read(struct file *filp,
 	struct channel_path *chp;
 	struct device *device;
 
-	device = kobj_to_dev(kobj);
+	device = container_of(kobj, struct device, kobj);
 	chp = to_channelpath(device);
 	if (chp->cmg == -1)
 		return 0;
@@ -184,7 +184,7 @@ static ssize_t chp_measurement_read(struct file *filp, struct kobject *kobj,
 	struct device *device;
 	unsigned int size;
 
-	device = kobj_to_dev(kobj);
+	device = container_of(kobj, struct device, kobj);
 	chp = to_channelpath(device);
 	css = to_css(chp->dev.parent);
 

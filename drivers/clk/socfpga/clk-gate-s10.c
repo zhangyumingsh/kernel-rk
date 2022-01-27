@@ -3,7 +3,6 @@
  * Copyright (C) 2017, Intel Corporation
  */
 #include <linux/clk-provider.h>
-#include <linux/io.h>
 #include <linux/slab.h>
 #include "stratix10-clk.h"
 #include "clk.h"
@@ -76,7 +75,7 @@ struct clk *s10_register_gate(const char *name, const char *parent_name,
 {
 	struct clk *clk;
 	struct socfpga_gate_clk *socfpga_clk;
-	struct clk_init_data init;
+	struct clk_init_data init = {};
 
 	socfpga_clk = kzalloc(sizeof(*socfpga_clk), GFP_KERNEL);
 	if (!socfpga_clk)

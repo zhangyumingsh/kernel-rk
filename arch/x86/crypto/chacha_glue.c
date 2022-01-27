@@ -1,20 +1,22 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * x64 SIMD accelerated ChaCha and XChaCha stream ciphers,
  * including ChaCha20 (RFC7539)
  *
  * Copyright (C) 2015 Martin Willi
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  */
 
 #include <crypto/algapi.h>
 #include <crypto/internal/chacha.h>
-#include <crypto/internal/simd.h>
 #include <crypto/internal/skcipher.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
+#include <asm/fpu/api.h>
 #include <asm/simd.h>
-
-#define CHACHA_STATE_ALIGN 16
 
 asmlinkage void chacha_block_xor_ssse3(u32 *state, u8 *dst, const u8 *src,
 				       unsigned int len, int nrounds);
@@ -125,9 +127,7 @@ static void chacha_dosimd(u32 *state, u8 *dst, const u8 *src,
 
 void hchacha_block_arch(const u32 *state, u32 *stream, int nrounds)
 {
-	state = PTR_ALIGN(state, CHACHA_STATE_ALIGN);
-
-	if (!static_branch_likely(&chacha_use_simd) || !crypto_simd_usable()) {
+	if (!static_branch_likely(&chacha_use_simd) || !may_use_simd()) {
 		hchacha_block_generic(state, stream, nrounds);
 	} else {
 		kernel_fpu_begin();
@@ -139,8 +139,6 @@ EXPORT_SYMBOL(hchacha_block_arch);
 
 void chacha_init_arch(u32 *state, const u32 *key, const u8 *iv)
 {
-	state = PTR_ALIGN(state, CHACHA_STATE_ALIGN);
-
 	chacha_init_generic(state, key, iv);
 }
 EXPORT_SYMBOL(chacha_init_arch);
@@ -148,29 +146,32 @@ EXPORT_SYMBOL(chacha_init_arch);
 void chacha_crypt_arch(u32 *state, u8 *dst, const u8 *src, unsigned int bytes,
 		       int nrounds)
 {
-	state = PTR_ALIGN(state, CHACHA_STATE_ALIGN);
-
-	if (!static_branch_likely(&chacha_use_simd) || !crypto_simd_usable() ||
+	if (!static_branch_likely(&chacha_use_simd) || !may_use_simd() ||
 	    bytes <= CHACHA_BLOCK_SIZE)
 		return chacha_crypt_generic(state, dst, src, bytes, nrounds);
 
-	kernel_fpu_begin();
-	chacha_dosimd(state, dst, src, bytes, nrounds);
-	kernel_fpu_end();
+	do {
+		unsigned int todo = min_t(unsigned int, bytes, SZ_4K);
+
+		kernel_fpu_begin();
+		chacha_dosimd(state, dst, src, todo, nrounds);
+		kernel_fpu_end();
+
+		bytes -= todo;
+		src += todo;
+		dst += todo;
+	} while (bytes);
 }
 EXPORT_SYMBOL(chacha_crypt_arch);
 
 static int chacha_simd_stream_xor(struct skcipher_request *req,
 				  const struct chacha_ctx *ctx, const u8 *iv)
 {
-	u32 *state, state_buf[16 + 2] __aligned(8);
+	u32 state[CHACHA_STATE_WORDS] __aligned(8);
 	struct skcipher_walk walk;
 	int err;
 
 	err = skcipher_walk_virt(&walk, req, false);
-
-	BUILD_BUG_ON(CHACHA_STATE_ALIGN != 16);
-	state = PTR_ALIGN(state_buf + 0, CHACHA_STATE_ALIGN);
 
 	chacha_init_generic(state, ctx->key, iv);
 
@@ -181,7 +182,7 @@ static int chacha_simd_stream_xor(struct skcipher_request *req,
 			nbytes = round_down(nbytes, walk.stride);
 
 		if (!static_branch_likely(&chacha_use_simd) ||
-		    !crypto_simd_usable()) {
+		    !may_use_simd()) {
 			chacha_crypt_generic(state, walk.dst.virt.addr,
 					     walk.src.virt.addr, nbytes,
 					     ctx->nrounds);
@@ -210,15 +211,13 @@ static int xchacha_simd(struct skcipher_request *req)
 {
 	struct crypto_skcipher *tfm = crypto_skcipher_reqtfm(req);
 	struct chacha_ctx *ctx = crypto_skcipher_ctx(tfm);
-	u32 *state, state_buf[16 + 2] __aligned(8);
+	u32 state[CHACHA_STATE_WORDS] __aligned(8);
 	struct chacha_ctx subctx;
 	u8 real_iv[16];
 
-	BUILD_BUG_ON(CHACHA_STATE_ALIGN != 16);
-	state = PTR_ALIGN(state_buf + 0, CHACHA_STATE_ALIGN);
 	chacha_init_generic(state, ctx->key, req->iv);
 
-	if (req->cryptlen > CHACHA_BLOCK_SIZE && crypto_simd_usable()) {
+	if (req->cryptlen > CHACHA_BLOCK_SIZE && irq_fpu_usable()) {
 		kernel_fpu_begin();
 		hchacha_block_ssse3(state, subctx.key, ctx->nrounds);
 		kernel_fpu_end();
@@ -299,13 +298,13 @@ static int __init chacha_simd_mod_init(void)
 		    boot_cpu_has(X86_FEATURE_AVX512BW)) /* kmovq */
 			static_branch_enable(&chacha_use_avx512vl);
 	}
-	return IS_REACHABLE(CONFIG_CRYPTO_SKCIPHER) ?
+	return IS_REACHABLE(CONFIG_CRYPTO_BLKCIPHER) ?
 		crypto_register_skciphers(algs, ARRAY_SIZE(algs)) : 0;
 }
 
 static void __exit chacha_simd_mod_fini(void)
 {
-	if (IS_REACHABLE(CONFIG_CRYPTO_SKCIPHER) && boot_cpu_has(X86_FEATURE_SSSE3))
+	if (IS_REACHABLE(CONFIG_CRYPTO_BLKCIPHER) && boot_cpu_has(X86_FEATURE_SSSE3))
 		crypto_unregister_skciphers(algs, ARRAY_SIZE(algs));
 }
 

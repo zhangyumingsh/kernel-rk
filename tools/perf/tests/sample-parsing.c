@@ -1,18 +1,13 @@
 // SPDX-License-Identifier: GPL-2.0
 #include <stdbool.h>
 #include <inttypes.h>
-#include <stdlib.h>
-#include <string.h>
-#include <linux/bitops.h>
 #include <linux/kernel.h>
 #include <linux/types.h>
 
-#include "map_symbol.h"
-#include "branch.h"
+#include "util.h"
 #include "event.h"
 #include "evsel.h"
 #include "debug.h"
-#include "util/synthetic-events.h"
 
 #include "tests.h"
 
@@ -150,27 +145,16 @@ static bool samples_same(const struct perf_sample *s1,
 	if (type & PERF_SAMPLE_PHYS_ADDR)
 		COMP(phys_addr);
 
-	if (type & PERF_SAMPLE_AUX) {
-		COMP(aux_sample.size);
-		if (memcmp(s1->aux_sample.data, s2->aux_sample.data,
-			   s1->aux_sample.size)) {
-			pr_debug("Samples differ at 'aux_sample'\n");
-			return false;
-		}
-	}
-
 	return true;
 }
 
 static int do_test(u64 sample_type, u64 sample_regs, u64 read_format)
 {
-	struct evsel evsel = {
+	struct perf_evsel evsel = {
 		.needs_swap = false,
-		.core = {
-			. attr = {
-				.sample_type = sample_type,
-				.read_format = read_format,
-			},
+		.attr = {
+			.sample_type = sample_type,
+			.read_format = read_format,
 		},
 	};
 	union perf_event *event;
@@ -189,9 +173,8 @@ static int do_test(u64 sample_type, u64 sample_regs, u64 read_format)
 		.data = {1, 211, 212, 213},
 	};
 	u64 regs[64];
-	const u64 raw_data[] = {0x123456780a0b0c0dULL, 0x1102030405060708ULL};
+	const u32 raw_data[] = {0x12345678, 0x0a0b0c0d, 0x11020304, 0x05060708, 0 };
 	const u64 data[] = {0x2211443366558877ULL, 0, 0xaabbccddeeff4321ULL};
-	const u64 aux_data[] = {0xa55a, 0, 0xeeddee, 0x0282028202820282};
 	struct perf_sample sample = {
 		.ip		= 101,
 		.pid		= 102,
@@ -228,10 +211,6 @@ static int do_test(u64 sample_type, u64 sample_regs, u64 read_format)
 			.regs	= regs,
 		},
 		.phys_addr	= 113,
-		.aux_sample	= {
-			.size	= sizeof(aux_data),
-			.data	= (void *)aux_data,
-		},
 	};
 	struct sample_read_value values[] = {{1, 5}, {9, 3}, {2, 7}, {6, 4},};
 	struct perf_sample sample_out;
@@ -239,10 +218,10 @@ static int do_test(u64 sample_type, u64 sample_regs, u64 read_format)
 	int err, ret = -1;
 
 	if (sample_type & PERF_SAMPLE_REGS_USER)
-		evsel.core.attr.sample_regs_user = sample_regs;
+		evsel.attr.sample_regs_user = sample_regs;
 
 	if (sample_type & PERF_SAMPLE_REGS_INTR)
-		evsel.core.attr.sample_regs_intr = sample_regs;
+		evsel.attr.sample_regs_intr = sample_regs;
 
 	for (i = 0; i < sizeof(regs); i++)
 		*(i + (u8 *)regs) = i & 0xfe;
@@ -331,7 +310,7 @@ int test__sample_parsing(struct test *test __maybe_unused, int subtest __maybe_u
 	 * were added.  Please actually update the test rather than just change
 	 * the condition below.
 	 */
-	if (PERF_SAMPLE_MAX > PERF_SAMPLE_AUX << 1) {
+	if (PERF_SAMPLE_MAX > PERF_SAMPLE_PHYS_ADDR << 1) {
 		pr_debug("sample format has changed, some new PERF_SAMPLE_ bit was introduced - test needs updating\n");
 		return -1;
 	}

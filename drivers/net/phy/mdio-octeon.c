@@ -1,5 +1,8 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
+ * This file is subject to the terms and conditions of the GNU General Public
+ * License.  See the file "COPYING" in the main directory of this archive
+ * for more details.
+ *
  * Copyright (C) 2009-2015 Cavium, Inc.
  */
 
@@ -72,7 +75,6 @@ static int octeon_mdiobus_probe(struct platform_device *pdev)
 
 	return 0;
 fail_register:
-	mdiobus_free(bus->mii_bus);
 	smi_en.u64 = 0;
 	oct_mdio_writeq(smi_en.u64, bus->register_base + SMI_EN);
 	return err;
@@ -86,7 +88,6 @@ static int octeon_mdiobus_remove(struct platform_device *pdev)
 	bus = platform_get_drvdata(pdev);
 
 	mdiobus_unregister(bus->mii_bus);
-	mdiobus_free(bus->mii_bus);
 	smi_en.u64 = 0;
 	oct_mdio_writeq(smi_en.u64, bus->register_base + SMI_EN);
 	return 0;
@@ -119,4 +120,4 @@ module_platform_driver(octeon_mdiobus_driver);
 
 MODULE_DESCRIPTION("Cavium OCTEON MDIO bus driver");
 MODULE_AUTHOR("David Daney");
-MODULE_LICENSE("GPL v2");
+MODULE_LICENSE("GPL");

@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Contiguous Memory Allocator
  *
@@ -10,6 +9,11 @@
  *	Michal Nazarewicz <mina86@mina86.com>
  *	Aneesh Kumar K.V <aneesh.kumar@linux.vnet.ibm.com>
  *	Joonsoo Kim <iamjoonsoo.kim@lge.com>
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License as
+ * published by the Free Software Foundation; either version 2 of the
+ * License or (at your optional) any later version of the license.
  */
 
 #define pr_fmt(fmt) "cma: " fmt
@@ -44,16 +48,19 @@ phys_addr_t cma_get_base(const struct cma *cma)
 {
 	return PFN_PHYS(cma->base_pfn);
 }
+EXPORT_SYMBOL(cma_get_base);
 
 unsigned long cma_get_size(const struct cma *cma)
 {
 	return cma->count << PAGE_SHIFT;
 }
+EXPORT_SYMBOL(cma_get_size);
 
 const char *cma_get_name(const struct cma *cma)
 {
 	return cma->name ? cma->name : "(undefined)";
 }
+EXPORT_SYMBOL_GPL(cma_get_name);
 
 static unsigned long cma_bitmap_aligned_mask(const struct cma *cma,
 					     unsigned int align_order)
@@ -95,11 +102,13 @@ static void cma_clear_bitmap(struct cma *cma, unsigned long pfn,
 
 static int __init cma_activate_area(struct cma *cma)
 {
+	int bitmap_size = BITS_TO_LONGS(cma_bitmap_maxno(cma)) * sizeof(long);
 	unsigned long base_pfn = cma->base_pfn, pfn = base_pfn;
 	unsigned i = cma->count >> pageblock_order;
 	struct zone *zone;
 
-	cma->bitmap = bitmap_zalloc(cma_bitmap_maxno(cma), GFP_KERNEL);
+	cma->bitmap = kzalloc(bitmap_size, GFP_KERNEL);
+
 	if (!cma->bitmap) {
 		cma->count = 0;
 		return -ENOMEM;
@@ -137,7 +146,7 @@ static int __init cma_activate_area(struct cma *cma)
 
 not_in_zone:
 	pr_err("CMA area %s could not be activated\n", cma->name);
-	bitmap_free(cma->bitmap);
+	kfree(cma->bitmap);
 	cma->count = 0;
 	return -EINVAL;
 }
@@ -336,14 +345,16 @@ int __init cma_declare_contiguous(phys_addr_t base,
 		 * memory in case of failure.
 		 */
 		if (base < highmem_start && limit > highmem_start) {
-			addr = memblock_phys_alloc_range(size, alignment,
-							 highmem_start, limit);
+			addr = memblock_alloc_range(size, alignment,
+						    highmem_start, limit,
+						    MEMBLOCK_NONE);
 			limit = highmem_start;
 		}
 
 		if (!addr) {
-			addr = memblock_phys_alloc_range(size, alignment, base,
-							 limit);
+			addr = memblock_alloc_range(size, alignment, base,
+						    limit,
+						    MEMBLOCK_NONE);
 			if (!addr) {
 				ret = -ENOMEM;
 				goto err;
@@ -498,6 +509,7 @@ struct page *cma_alloc(struct cma *cma, size_t count, unsigned int align,
 	pr_debug("%s(): returned %p\n", __func__, page);
 	return page;
 }
+EXPORT_SYMBOL_GPL(cma_alloc);
 
 /**
  * cma_release() - release allocated pages
@@ -505,7 +517,7 @@ struct page *cma_alloc(struct cma *cma, size_t count, unsigned int align,
  * @pages: Allocated pages.
  * @count: Number of allocated pages.
  *
- * This function releases memory allocated by cma_alloc().
+ * This function releases memory allocated by alloc_cma().
  * It returns false when provided pages do not belong to contiguous area and
  * true otherwise.
  */
@@ -531,6 +543,7 @@ bool cma_release(struct cma *cma, const struct page *pages, unsigned int count)
 
 	return true;
 }
+EXPORT_SYMBOL_GPL(cma_release);
 
 int cma_for_each_area(int (*it)(struct cma *cma, void *data), void *data)
 {
@@ -545,3 +558,4 @@ int cma_for_each_area(int (*it)(struct cma *cma, void *data), void *data)
 
 	return 0;
 }
+EXPORT_SYMBOL_GPL(cma_for_each_area);

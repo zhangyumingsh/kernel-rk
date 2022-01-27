@@ -9,9 +9,9 @@
 #include <linux/list.h>
 #include <linux/nvmem-consumer.h>
 #include <linux/nvmem-provider.h>
-#include <linux/gpio/consumer.h>
 
 struct nvmem_device {
+	const char		*name;
 	struct module		*owner;
 	struct device		dev;
 	int			stride;
@@ -21,13 +21,11 @@ struct nvmem_device {
 	size_t			size;
 	bool			read_only;
 	int			flags;
-	enum nvmem_type		type;
 	struct bin_attribute	eeprom;
 	struct device		*base_dev;
 	struct list_head	cells;
 	nvmem_reg_read_t	reg_read;
 	nvmem_reg_write_t	reg_write;
-	struct gpio_desc	*wp_gpio;
 	void *priv;
 };
 

@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0+
 /*
  * DaVinci Ethernet Medium Access Controller
  *
@@ -6,6 +5,21 @@
  *
  * Copyright (C) 2009 Texas Instruments.
  *
+ * ---------------------------------------------------------------------------
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  * ---------------------------------------------------------------------------
  * History:
  * 0-5 A number of folks worked on this driver in bits and pieces but the major
@@ -169,11 +183,11 @@ static const char emac_version_string[] = "TI DaVinci EMAC Linux v6.1";
 /* EMAC mac_status register */
 #define EMAC_MACSTATUS_TXERRCODE_MASK	(0xF00000)
 #define EMAC_MACSTATUS_TXERRCODE_SHIFT	(20)
-#define EMAC_MACSTATUS_TXERRCH_MASK	(0x7)
+#define EMAC_MACSTATUS_TXERRCH_MASK	(0x70000)
 #define EMAC_MACSTATUS_TXERRCH_SHIFT	(16)
 #define EMAC_MACSTATUS_RXERRCODE_MASK	(0xF000)
 #define EMAC_MACSTATUS_RXERRCODE_SHIFT	(12)
-#define EMAC_MACSTATUS_RXERRCH_MASK	(0x7)
+#define EMAC_MACSTATUS_RXERRCH_MASK	(0x700)
 #define EMAC_MACSTATUS_RXERRCH_SHIFT	(8)
 
 /* EMAC RX register masks */
@@ -983,7 +997,7 @@ fail_tx:
  * error and re-initialize the TX channel for hardware operation
  *
  */
-static void emac_dev_tx_timeout(struct net_device *ndev, unsigned int txqueue)
+static void emac_dev_tx_timeout(struct net_device *ndev)
 {
 	struct emac_priv *priv = netdev_priv(ndev);
 	struct device *emac_dev = &ndev->dev;
@@ -1226,7 +1240,7 @@ static int emac_poll(struct napi_struct *napi, int budget)
 	struct net_device *ndev = priv->ndev;
 	struct device *emac_dev = &ndev->dev;
 	u32 status = 0;
-	u32 num_tx_pkts = 0, num_rx_pkts = 0;
+	u32 num_rx_pkts = 0;
 
 	/* Check interrupt vectors and call packet processing */
 	status = emac_read(EMAC_MACINVECTOR);
@@ -1237,8 +1251,7 @@ static int emac_poll(struct napi_struct *napi, int budget)
 		mask = EMAC_DM646X_MAC_IN_VECTOR_TX_INT_VEC;
 
 	if (status & mask) {
-		num_tx_pkts = cpdma_chan_process(priv->txchan,
-					      EMAC_DEF_TX_MAX_SERVICE);
+		cpdma_chan_process(priv->txchan, EMAC_DEF_TX_MAX_SERVICE);
 	} /* TX processing */
 
 	mask = EMAC_DM644X_MAC_IN_VECTOR_RX_INT_VEC;
@@ -1371,7 +1384,7 @@ static int emac_devioctl(struct net_device *ndev, struct ifreq *ifrq, int cmd)
 		return -EOPNOTSUPP;
 }
 
-static int match_first_device(struct device *dev, const void *data)
+static int match_first_device(struct device *dev, void *data)
 {
 	if (dev->parent && dev->parent->of_node)
 		return of_device_is_compatible(dev->parent->of_node,
@@ -1428,8 +1441,8 @@ static int emac_dev_open(struct net_device *ndev)
 		if (!skb)
 			break;
 
-		ret = cpdma_chan_idle_submit(priv->rxchan, skb, skb->data,
-					     skb_tailroom(skb), 0);
+		ret = cpdma_chan_submit(priv->rxchan, skb, skb->data,
+					skb_tailroom(skb), 0);
 		if (WARN_ON(ret < 0))
 			break;
 	}
@@ -1700,7 +1713,7 @@ davinci_emac_of_get_pdata(struct platform_device *pdev, struct emac_priv *priv)
 
 	if (!is_valid_ether_addr(pdata->mac_addr)) {
 		mac_addr = of_get_mac_address(np);
-		if (!IS_ERR(mac_addr))
+		if (mac_addr)
 			ether_addr_copy(pdata->mac_addr, mac_addr);
 	}
 
@@ -1898,11 +1911,11 @@ static int davinci_emac_probe(struct platform_device *pdev)
 		ether_addr_copy(ndev->dev_addr, priv->mac_addr);
 
 	if (!is_valid_ether_addr(priv->mac_addr)) {
-		/* Use random MAC if still none obtained. */
+		/* Use random MAC if none passed */
 		eth_hw_addr_random(ndev);
 		memcpy(priv->mac_addr, ndev->dev_addr, ndev->addr_len);
 		dev_warn(&pdev->dev, "using random MAC addr: %pM\n",
-			 priv->mac_addr);
+							priv->mac_addr);
 	}
 
 	ndev->netdev_ops = &emac_netdev_ops;
@@ -1988,7 +2001,8 @@ static int davinci_emac_remove(struct platform_device *pdev)
 
 static int davinci_emac_suspend(struct device *dev)
 {
-	struct net_device *ndev = dev_get_drvdata(dev);
+	struct platform_device *pdev = to_platform_device(dev);
+	struct net_device *ndev = platform_get_drvdata(pdev);
 
 	if (netif_running(ndev))
 		emac_dev_stop(ndev);
@@ -1998,7 +2012,8 @@ static int davinci_emac_suspend(struct device *dev)
 
 static int davinci_emac_resume(struct device *dev)
 {
-	struct net_device *ndev = dev_get_drvdata(dev);
+	struct platform_device *pdev = to_platform_device(dev);
+	struct net_device *ndev = platform_get_drvdata(pdev);
 
 	if (netif_running(ndev))
 		emac_dev_open(ndev);
@@ -2011,6 +2026,7 @@ static const struct dev_pm_ops davinci_emac_pm_ops = {
 	.resume		= davinci_emac_resume,
 };
 
+#if IS_ENABLED(CONFIG_OF)
 static const struct emac_platform_data am3517_emac_data = {
 	.version		= EMAC_VERSION_2,
 	.hw_ram_addr		= 0x01e20000,
@@ -2027,13 +2043,14 @@ static const struct of_device_id davinci_emac_of_match[] = {
 	{},
 };
 MODULE_DEVICE_TABLE(of, davinci_emac_of_match);
+#endif
 
 /* davinci_emac_driver: EMAC platform driver structure */
 static struct platform_driver davinci_emac_driver = {
 	.driver = {
 		.name	 = "davinci_emac",
 		.pm	 = &davinci_emac_pm_ops,
-		.of_match_table = davinci_emac_of_match,
+		.of_match_table = of_match_ptr(davinci_emac_of_match),
 	},
 	.probe = davinci_emac_probe,
 	.remove = davinci_emac_remove,

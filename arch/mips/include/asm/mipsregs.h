@@ -667,7 +667,6 @@
 #define MIPS_CONF5_FRE		(_ULCAST_(1) << 8)
 #define MIPS_CONF5_UFE		(_ULCAST_(1) << 9)
 #define MIPS_CONF5_CA2		(_ULCAST_(1) << 14)
-#define MIPS_CONF5_MI		(_ULCAST_(1) << 17)
 #define MIPS_CONF5_CRCP		(_ULCAST_(1) << 18)
 #define MIPS_CONF5_MSAEN	(_ULCAST_(1) << 27)
 #define MIPS_CONF5_EVA		(_ULCAST_(1) << 28)
@@ -688,9 +687,6 @@
 
 #define MIPS_CONF7_IAR		(_ULCAST_(1) << 10)
 #define MIPS_CONF7_AR		(_ULCAST_(1) << 16)
-
-/* Ingenic HPTLB off bits */
-#define XBURST_PAGECTRL_HPTLB_DIS 0xa9000000
 
 /* Ingenic Config7 bits */
 #define MIPS_CONF7_BTB_LOOP_EN	(_ULCAST_(1) << 4)
@@ -753,7 +749,7 @@
 
 /* MAAR bit definitions */
 #define MIPS_MAAR_VH		(_U64CAST_(1) << 63)
-#define MIPS_MAAR_ADDR		((BIT_ULL(BITS_PER_LONG - 12) - 1) << 12)
+#define MIPS_MAAR_ADDR		GENMASK_ULL(55, 12)
 #define MIPS_MAAR_ADDR_SHIFT	12
 #define MIPS_MAAR_S		(_ULCAST_(1) << 1)
 #define MIPS_MAAR_VL		(_ULCAST_(1) << 0)
@@ -1101,12 +1097,9 @@
 /*
  * Bits 22:20 of the FPU Status Register will be read as 0,
  * and should be written as zero.
- * MAC2008 was removed in Release 5 so we still treat it as
- * reserved.
  */
 #define FPU_CSR_RSVD	(_ULCAST_(7) << 20)
 
-#define FPU_CSR_MAC2008	(_ULCAST_(1) << 20)
 #define FPU_CSR_ABS2008	(_ULCAST_(1) << 19)
 #define FPU_CSR_NAN2008	(_ULCAST_(1) << 18)
 
@@ -1257,13 +1250,6 @@ __asm__(".macro	parse_r var r\n\t"
 		ENC							\
 		".endm")
 
-/* Instructions with 1 register operand & 1 immediate operand */
-#define _ASM_MACRO_1R1I(OP, R1, I2, ENC)				\
-	__asm__(".macro	" #OP " " #R1 ", " #I2 "\n\t"			\
-		"parse_r __" #R1 ", \\" #R1 "\n\t"			\
-		ENC							\
-		".endm")
-
 /* Instructions with 2 register operands */
 #define _ASM_MACRO_2R(OP, R1, R2, ENC)					\
 	__asm__(".macro	" #OP " " #R1 ", " #R2 "\n\t"			\
@@ -1362,10 +1348,9 @@ do {								\
 			: "=r" (__res));				\
 	else								\
 		__asm__ vol(						\
-			".set\tpush\n\t"				\
 			".set\tmips32\n\t"				\
 			"mfc0\t%0, " #source ", " #sel "\n\t"		\
-			".set\tpop\n\t"					\
+			".set\tmips0\n\t"				\
 			: "=r" (__res));				\
 	__res;								\
 })
@@ -1376,17 +1361,15 @@ do {								\
 		__res = __read_64bit_c0_split(source, sel, vol);	\
 	else if (sel == 0)						\
 		__asm__ vol(						\
-			".set\tpush\n\t"				\
 			".set\tmips3\n\t"				\
 			"dmfc0\t%0, " #source "\n\t"			\
-			".set\tpop"					\
+			".set\tmips0"					\
 			: "=r" (__res));				\
 	else								\
 		__asm__ vol(						\
-			".set\tpush\n\t"				\
 			".set\tmips64\n\t"				\
 			"dmfc0\t%0, " #source ", " #sel "\n\t"		\
-			".set\tpop"					\
+			".set\tmips0"					\
 			: "=r" (__res));				\
 	__res;								\
 })
@@ -1411,10 +1394,9 @@ do {									\
 			: : "Jr" ((unsigned int)(value)));		\
 	else								\
 		__asm__ __volatile__(					\
-			".set\tpush\n\t"				\
 			".set\tmips32\n\t"				\
 			"mtc0\t%z0, " #register ", " #sel "\n\t"	\
-			".set\tpop"					\
+			".set\tmips0"					\
 			: : "Jr" ((unsigned int)(value)));		\
 } while (0)
 
@@ -1424,17 +1406,15 @@ do {									\
 		__write_64bit_c0_split(register, sel, value);		\
 	else if (sel == 0)						\
 		__asm__ __volatile__(					\
-			".set\tpush\n\t"				\
 			".set\tmips3\n\t"				\
 			"dmtc0\t%z0, " #register "\n\t"			\
-			".set\tpop"					\
+			".set\tmips0"					\
 			: : "Jr" (value));				\
 	else								\
 		__asm__ __volatile__(					\
-			".set\tpush\n\t"				\
 			".set\tmips64\n\t"				\
 			"dmtc0\t%z0, " #register ", " #sel "\n\t"	\
-			".set\tpop"					\
+			".set\tmips0"					\
 			: : "Jr" (value));				\
 } while (0)
 
@@ -1486,21 +1466,19 @@ do {									\
 	local_irq_save(__flags);					\
 	if (sel == 0)							\
 		__asm__ vol(						\
-			".set\tpush\n\t"				\
 			".set\tmips64\n\t"				\
 			"dmfc0\t%L0, " #source "\n\t"			\
 			"dsra\t%M0, %L0, 32\n\t"			\
 			"sll\t%L0, %L0, 0\n\t"				\
-			".set\tpop"					\
+			".set\tmips0"					\
 			: "=r" (__val));				\
 	else								\
 		__asm__ vol(						\
-			".set\tpush\n\t"				\
 			".set\tmips64\n\t"				\
 			"dmfc0\t%L0, " #source ", " #sel "\n\t"		\
 			"dsra\t%M0, %L0, 32\n\t"			\
 			"sll\t%L0, %L0, 0\n\t"				\
-			".set\tpop"					\
+			".set\tmips0"					\
 			: "=r" (__val));				\
 	local_irq_restore(__flags);					\
 									\
@@ -1523,25 +1501,23 @@ do {									\
 			: "+r" (__tmp));				\
 	else if (sel == 0)						\
 		__asm__ __volatile__(					\
-			".set\tpush\n\t"				\
 			".set\tmips64\n\t"				\
 			"dsll\t%L0, %L0, 32\n\t"			\
 			"dsrl\t%L0, %L0, 32\n\t"			\
 			"dsll\t%M0, %M0, 32\n\t"			\
 			"or\t%L0, %L0, %M0\n\t"				\
 			"dmtc0\t%L0, " #source "\n\t"			\
-			".set\tpop"					\
+			".set\tmips0"					\
 			: "+r" (__tmp));				\
 	else								\
 		__asm__ __volatile__(					\
-			".set\tpush\n\t"				\
 			".set\tmips64\n\t"				\
 			"dsll\t%L0, %L0, 32\n\t"			\
 			"dsrl\t%L0, %L0, 32\n\t"			\
 			"dsll\t%M0, %M0, 32\n\t"			\
 			"or\t%L0, %L0, %M0\n\t"				\
 			"dmtc0\t%L0, " #source ", " #sel "\n\t"		\
-			".set\tpop"					\
+			".set\tmips0"					\
 			: "+r" (__tmp));				\
 	local_irq_restore(__flags);					\
 } while (0)
@@ -1619,9 +1595,6 @@ do {									\
 
 #define read_c0_xcontextconfig()	__read_ulong_c0_register($4, 3)
 #define write_c0_xcontextconfig(val)	__write_ulong_c0_register($4, 3, val)
-
-#define read_c0_memorymapid()		__read_32bit_c0_register($4, 5)
-#define write_c0_memorymapid(val)	__write_32bit_c0_register($4, 5, val)
 
 #define read_c0_pagemask()	__read_32bit_c0_register($5, 0)
 #define write_c0_pagemask(val)	__write_32bit_c0_register($5, 0, val)
@@ -1977,9 +1950,6 @@ do {									\
 #define read_c0_brcm_sleepcount()	__read_32bit_c0_register($22, 7)
 #define write_c0_brcm_sleepcount(val)	__write_32bit_c0_register($22, 7, val)
 
-/* Ingenic page ctrl register */
-#define write_c0_page_ctrl(val)	__write_32bit_c0_register($5, 4, val)
-
 /*
  * Macros to access the guest system control coprocessor
  */
@@ -2320,14 +2290,13 @@ do {									\
 	_write_32bit_cp1_register(dest, val, )
 #endif
 
-#ifdef TOOLCHAIN_SUPPORTS_DSP
+#ifdef HAVE_AS_DSP
 #define rddsp(mask)							\
 ({									\
 	unsigned int __dspctl;						\
 									\
 	__asm__ __volatile__(						\
 	"	.set push					\n"	\
-	"	.set " MIPS_ISA_LEVEL "				\n"	\
 	"	.set dsp					\n"	\
 	"	rddsp	%0, %x1					\n"	\
 	"	.set pop					\n"	\
@@ -2340,7 +2309,6 @@ do {									\
 do {									\
 	__asm__ __volatile__(						\
 	"	.set push					\n"	\
-	"	.set " MIPS_ISA_LEVEL "				\n"	\
 	"	.set dsp					\n"	\
 	"	wrdsp	%0, %x1					\n"	\
 	"	.set pop					\n"	\
@@ -2353,7 +2321,6 @@ do {									\
 	long mflo0;							\
 	__asm__(							\
 	"	.set push					\n"	\
-	"	.set " MIPS_ISA_LEVEL "				\n"	\
 	"	.set dsp					\n"	\
 	"	mflo %0, $ac0					\n"	\
 	"	.set pop					\n" 	\
@@ -2366,7 +2333,6 @@ do {									\
 	long mflo1;							\
 	__asm__(							\
 	"	.set push					\n"	\
-	"	.set " MIPS_ISA_LEVEL "				\n"	\
 	"	.set dsp					\n"	\
 	"	mflo %0, $ac1					\n"	\
 	"	.set pop					\n" 	\
@@ -2379,7 +2345,6 @@ do {									\
 	long mflo2;							\
 	__asm__(							\
 	"	.set push					\n"	\
-	"	.set " MIPS_ISA_LEVEL "				\n"	\
 	"	.set dsp					\n"	\
 	"	mflo %0, $ac2					\n"	\
 	"	.set pop					\n" 	\
@@ -2392,7 +2357,6 @@ do {									\
 	long mflo3;							\
 	__asm__(							\
 	"	.set push					\n"	\
-	"	.set " MIPS_ISA_LEVEL "				\n"	\
 	"	.set dsp					\n"	\
 	"	mflo %0, $ac3					\n"	\
 	"	.set pop					\n" 	\
@@ -2405,7 +2369,6 @@ do {									\
 	long mfhi0;							\
 	__asm__(							\
 	"	.set push					\n"	\
-	"	.set " MIPS_ISA_LEVEL "				\n"	\
 	"	.set dsp					\n"	\
 	"	mfhi %0, $ac0					\n"	\
 	"	.set pop					\n" 	\
@@ -2418,7 +2381,6 @@ do {									\
 	long mfhi1;							\
 	__asm__(							\
 	"	.set push					\n"	\
-	"	.set " MIPS_ISA_LEVEL "				\n"	\
 	"	.set dsp					\n"	\
 	"	mfhi %0, $ac1					\n"	\
 	"	.set pop					\n" 	\
@@ -2431,7 +2393,6 @@ do {									\
 	long mfhi2;							\
 	__asm__(							\
 	"	.set push					\n"	\
-	"	.set " MIPS_ISA_LEVEL "				\n"	\
 	"	.set dsp					\n"	\
 	"	mfhi %0, $ac2					\n"	\
 	"	.set pop					\n" 	\
@@ -2444,7 +2405,6 @@ do {									\
 	long mfhi3;							\
 	__asm__(							\
 	"	.set push					\n"	\
-	"	.set " MIPS_ISA_LEVEL "				\n"	\
 	"	.set dsp					\n"	\
 	"	mfhi %0, $ac3					\n"	\
 	"	.set pop					\n" 	\
@@ -2457,7 +2417,6 @@ do {									\
 ({									\
 	__asm__(							\
 	"	.set push					\n"	\
-	"	.set " MIPS_ISA_LEVEL "				\n"	\
 	"	.set dsp					\n"	\
 	"	mtlo %0, $ac0					\n"	\
 	"	.set pop					\n"	\
@@ -2469,7 +2428,6 @@ do {									\
 ({									\
 	__asm__(							\
 	"	.set push					\n"	\
-	"	.set " MIPS_ISA_LEVEL "				\n"	\
 	"	.set dsp					\n"	\
 	"	mtlo %0, $ac1					\n"	\
 	"	.set pop					\n"	\
@@ -2481,7 +2439,6 @@ do {									\
 ({									\
 	__asm__(							\
 	"	.set push					\n"	\
-	"	.set " MIPS_ISA_LEVEL "				\n"	\
 	"	.set dsp					\n"	\
 	"	mtlo %0, $ac2					\n"	\
 	"	.set pop					\n"	\
@@ -2493,7 +2450,6 @@ do {									\
 ({									\
 	__asm__(							\
 	"	.set push					\n"	\
-	"	.set " MIPS_ISA_LEVEL "				\n"	\
 	"	.set dsp					\n"	\
 	"	mtlo %0, $ac3					\n"	\
 	"	.set pop					\n"	\
@@ -2505,7 +2461,6 @@ do {									\
 ({									\
 	__asm__(							\
 	"	.set push					\n"	\
-	"	.set " MIPS_ISA_LEVEL "				\n"	\
 	"	.set dsp					\n"	\
 	"	mthi %0, $ac0					\n"	\
 	"	.set pop					\n"	\
@@ -2517,7 +2472,6 @@ do {									\
 ({									\
 	__asm__(							\
 	"	.set push					\n"	\
-	"	.set " MIPS_ISA_LEVEL "				\n"	\
 	"	.set dsp					\n"	\
 	"	mthi %0, $ac1					\n"	\
 	"	.set pop					\n"	\
@@ -2529,7 +2483,6 @@ do {									\
 ({									\
 	__asm__(							\
 	"	.set push					\n"	\
-	"	.set " MIPS_ISA_LEVEL "				\n"	\
 	"	.set dsp					\n"	\
 	"	mthi %0, $ac2					\n"	\
 	"	.set pop					\n"	\
@@ -2541,7 +2494,6 @@ do {									\
 ({									\
 	__asm__(							\
 	"	.set push					\n"	\
-	"	.set " MIPS_ISA_LEVEL "				\n"	\
 	"	.set dsp					\n"	\
 	"	mthi %0, $ac3					\n"	\
 	"	.set pop					\n"	\

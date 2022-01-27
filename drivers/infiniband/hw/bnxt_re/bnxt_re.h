@@ -40,6 +40,7 @@
 #ifndef __BNXT_RE_H__
 #define __BNXT_RE_H__
 #define ROCE_DRV_MODULE_NAME		"bnxt_re"
+#define ROCE_DRV_MODULE_VERSION		"1.0.0"
 
 #define BNXT_RE_DESC	"Broadcom NetXtreme-C/E RoCE Driver"
 #define BNXT_RE_PAGE_SHIFT_4K		(12)
@@ -108,7 +109,6 @@ struct bnxt_re_sqp_entries {
 #define BNXT_RE_MAX_MSIX		9
 #define BNXT_RE_AEQ_IDX			0
 #define BNXT_RE_NQ_IDX			1
-#define BNXT_RE_GEN_P5_MAX_VF		64
 
 struct bnxt_re_dev {
 	struct ib_device		ibdev;
@@ -125,7 +125,6 @@ struct bnxt_re_dev {
 #define BNXT_RE_FLAG_ISSUE_ROCE_STATS          29
 	struct net_device		*netdev;
 	unsigned int			version, major, minor;
-	struct bnxt_qplib_chip_ctx	chip_ctx;
 	struct bnxt_en_dev		*en_dev;
 	struct bnxt_msix_entry		msix_entries[BNXT_RE_MAX_MSIX];
 	int				num_msix;

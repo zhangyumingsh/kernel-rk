@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * kvm asynchronous fault support
  *
@@ -6,6 +5,19 @@
  *
  * Author:
  *      Gleb Natapov <gleb@redhat.com>
+ *
+ * This file is free software; you can redistribute it and/or modify
+ * it under the terms of version 2 of the GNU General Public License
+ * as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software Foundation,
+ * Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA.
  */
 
 #include <linux/kvm_host.h>
@@ -16,6 +28,21 @@
 
 #include "async_pf.h"
 #include <trace/events/kvm.h>
+
+static inline void kvm_async_page_present_sync(struct kvm_vcpu *vcpu,
+					       struct kvm_async_pf *work)
+{
+#ifdef CONFIG_KVM_ASYNC_PF_SYNC
+	kvm_arch_async_page_present(vcpu, work);
+#endif
+}
+static inline void kvm_async_page_present_async(struct kvm_vcpu *vcpu,
+						struct kvm_async_pf *work)
+{
+#ifndef CONFIG_KVM_ASYNC_PF_SYNC
+	kvm_arch_async_page_present(vcpu, work);
+#endif
+}
 
 static struct kmem_cache *async_pf_cache;
 
@@ -55,7 +82,7 @@ static void async_pf_execute(struct work_struct *work)
 	might_sleep();
 
 	/*
-	 * This work is run asynchronously to the task which owns
+	 * This work is run asynchromously to the task which owns
 	 * mm and might be done in another context, so we must
 	 * access remotely.
 	 */
@@ -65,8 +92,7 @@ static void async_pf_execute(struct work_struct *work)
 	if (locked)
 		up_read(&mm->mmap_sem);
 
-	if (IS_ENABLED(CONFIG_KVM_ASYNC_PF_SYNC))
-		kvm_arch_async_page_present(vcpu, apf);
+	kvm_async_page_present_sync(vcpu, apf);
 
 	spin_lock(&vcpu->async_pf.lock);
 	list_add_tail(&apf->link, &vcpu->async_pf.done);
@@ -143,8 +169,7 @@ void kvm_check_async_pf_completion(struct kvm_vcpu *vcpu)
 		spin_unlock(&vcpu->async_pf.lock);
 
 		kvm_arch_async_page_ready(vcpu, work);
-		if (!IS_ENABLED(CONFIG_KVM_ASYNC_PF_SYNC))
-			kvm_arch_async_page_present(vcpu, work);
+		kvm_async_page_present_async(vcpu, work);
 
 		list_del(&work->queue);
 		vcpu->async_pf.queued--;

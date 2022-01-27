@@ -483,7 +483,8 @@ static void	tc35815_txdone(struct net_device *dev);
 static int	tc35815_close(struct net_device *dev);
 static struct	net_device_stats *tc35815_get_stats(struct net_device *dev);
 static void	tc35815_set_multicast_list(struct net_device *dev);
-static void	tc35815_tx_timeout(struct net_device *dev, unsigned int txqueue);
+static void	tc35815_tx_timeout(struct net_device *dev);
+static int	tc35815_ioctl(struct net_device *dev, struct ifreq *rq, int cmd);
 #ifdef CONFIG_NET_POLL_CONTROLLER
 static void	tc35815_poll_controller(struct net_device *dev);
 #endif
@@ -606,9 +607,9 @@ static void tc_handle_link_change(struct net_device *dev)
 
 static int tc_mii_probe(struct net_device *dev)
 {
-	__ETHTOOL_DECLARE_LINK_MODE_MASK(mask) = { 0, };
 	struct tc35815_local *lp = netdev_priv(dev);
 	struct phy_device *phydev;
+	u32 dropmask;
 
 	phydev = phy_find_first(lp->mii_bus);
 	if (!phydev) {
@@ -628,23 +629,18 @@ static int tc_mii_probe(struct net_device *dev)
 	phy_attached_info(phydev);
 
 	/* mask with MAC supported features */
-	phy_set_max_speed(phydev, SPEED_100);
-	if (options.speed == 10) {
-		linkmode_set_bit(ETHTOOL_LINK_MODE_100baseT_Half_BIT, mask);
-		linkmode_set_bit(ETHTOOL_LINK_MODE_100baseT_Full_BIT, mask);
-	} else if (options.speed == 100) {
-		linkmode_set_bit(ETHTOOL_LINK_MODE_10baseT_Half_BIT, mask);
-		linkmode_set_bit(ETHTOOL_LINK_MODE_10baseT_Full_BIT, mask);
-	}
-	if (options.duplex == 1) {
-		linkmode_set_bit(ETHTOOL_LINK_MODE_10baseT_Full_BIT, mask);
-		linkmode_set_bit(ETHTOOL_LINK_MODE_100baseT_Full_BIT, mask);
-	} else if (options.duplex == 2) {
-		linkmode_set_bit(ETHTOOL_LINK_MODE_10baseT_Half_BIT, mask);
-		linkmode_set_bit(ETHTOOL_LINK_MODE_100baseT_Half_BIT, mask);
-	}
-	linkmode_and(phydev->supported, phydev->supported, mask);
-	linkmode_copy(phydev->advertising, phydev->supported);
+	phydev->supported &= PHY_BASIC_FEATURES;
+	dropmask = 0;
+	if (options.speed == 10)
+		dropmask |= SUPPORTED_100baseT_Half | SUPPORTED_100baseT_Full;
+	else if (options.speed == 100)
+		dropmask |= SUPPORTED_10baseT_Half | SUPPORTED_10baseT_Full;
+	if (options.duplex == 1)
+		dropmask |= SUPPORTED_10baseT_Full | SUPPORTED_100baseT_Full;
+	else if (options.duplex == 2)
+		dropmask |= SUPPORTED_10baseT_Half | SUPPORTED_100baseT_Half;
+	phydev->supported &= ~dropmask;
+	phydev->advertising = phydev->supported;
 
 	lp->link = 0;
 	lp->speed = 0;
@@ -693,10 +689,10 @@ err_out:
  * should provide a "tc35815-mac" device with a MAC address in its
  * platform_data.
  */
-static int tc35815_mac_match(struct device *dev, const void *data)
+static int tc35815_mac_match(struct device *dev, void *data)
 {
 	struct platform_device *plat_dev = to_platform_device(dev);
-	const struct pci_dev *pci_dev = data;
+	struct pci_dev *pci_dev = data;
 	unsigned int id = pci_dev->irq;
 	return !strcmp(plat_dev->name, "tc35815-mac") && plat_dev->id == id;
 }
@@ -750,7 +746,7 @@ static const struct net_device_ops tc35815_netdev_ops = {
 	.ndo_get_stats		= tc35815_get_stats,
 	.ndo_set_rx_mode	= tc35815_set_multicast_list,
 	.ndo_tx_timeout		= tc35815_tx_timeout,
-	.ndo_do_ioctl		= phy_do_ioctl_running,
+	.ndo_do_ioctl		= tc35815_ioctl,
 	.ndo_validate_addr	= eth_validate_addr,
 	.ndo_set_mac_address	= eth_mac_addr,
 #ifdef CONFIG_NET_POLL_CONTROLLER
@@ -1188,7 +1184,7 @@ static void tc35815_schedule_restart(struct net_device *dev)
 	spin_unlock_irqrestore(&lp->lock, flags);
 }
 
-static void tc35815_tx_timeout(struct net_device *dev, unsigned int txqueue)
+static void tc35815_tx_timeout(struct net_device *dev)
 {
 	struct tc35815_regs __iomem *tr =
 		(struct tc35815_regs __iomem *)dev->base_addr;
@@ -2007,6 +2003,15 @@ static const struct ethtool_ops tc35815_ethtool_ops = {
 	.get_link_ksettings = phy_ethtool_get_link_ksettings,
 	.set_link_ksettings = phy_ethtool_set_link_ksettings,
 };
+
+static int tc35815_ioctl(struct net_device *dev, struct ifreq *rq, int cmd)
+{
+	if (!netif_running(dev))
+		return -EINVAL;
+	if (!dev->phydev)
+		return -ENODEV;
+	return phy_mii_ioctl(dev->phydev, rq, cmd);
+}
 
 static void tc35815_chip_reset(struct net_device *dev)
 {

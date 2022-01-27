@@ -1,10 +1,23 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2012 - Virtual Open Systems and Columbia University
  * Author: Christoffer Dall <c.dall@virtualopensystems.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License, version 2, as
+ * published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  */
 
 #include <linux/kvm_host.h>
+#include <asm/kvm_mmio.h>
 #include <asm/kvm_emulate.h>
 #include <trace/events/kvm.h>
 
@@ -91,23 +104,26 @@ int kvm_handle_mmio_return(struct kvm_vcpu *vcpu, struct kvm_run *run)
 
 	vcpu->mmio_needed = 0;
 
-	if (!kvm_vcpu_dabt_iswrite(vcpu)) {
-		len = kvm_vcpu_dabt_get_as(vcpu);
+	if (!run->mmio.is_write) {
+		len = run->mmio.len;
+		if (len > sizeof(unsigned long))
+			return -EINVAL;
+
 		data = kvm_mmio_read_buf(run->mmio.data, len);
 
-		if (kvm_vcpu_dabt_issext(vcpu) &&
+		if (vcpu->arch.mmio_decode.sign_extend &&
 		    len < sizeof(unsigned long)) {
 			mask = 1U << ((len * 8) - 1);
 			data = (data ^ mask) - mask;
 		}
 
-		if (!kvm_vcpu_dabt_issf(vcpu))
+		if (!vcpu->arch.mmio_decode.sixty_four)
 			data = data & 0xffffffff;
 
 		trace_kvm_mmio(KVM_TRACE_MMIO_READ, len, run->mmio.phys_addr,
 			       &data);
 		data = vcpu_data_host_to_guest(vcpu, data, len);
-		vcpu_set_reg(vcpu, kvm_vcpu_dabt_get_rd(vcpu), data);
+		vcpu_set_reg(vcpu, vcpu->arch.mmio_decode.rt, data);
 	}
 
 	/*
@@ -115,6 +131,36 @@ int kvm_handle_mmio_return(struct kvm_vcpu *vcpu, struct kvm_run *run)
 	 * in the guest.
 	 */
 	kvm_skip_instr(vcpu, kvm_vcpu_trap_il_is32bit(vcpu));
+
+	return 0;
+}
+
+static int decode_hsr(struct kvm_vcpu *vcpu, bool *is_write, int *len)
+{
+	unsigned long rt;
+	int access_size;
+	bool sign_extend;
+	bool sixty_four;
+
+	if (kvm_vcpu_abt_iss1tw(vcpu)) {
+		/* page table accesses IO mem: tell guest to fix its TTBR */
+		kvm_inject_dabt(vcpu, kvm_vcpu_get_hfar(vcpu));
+		return 1;
+	}
+
+	access_size = kvm_vcpu_dabt_get_as(vcpu);
+	if (unlikely(access_size < 0))
+		return access_size;
+
+	*is_write = kvm_vcpu_dabt_iswrite(vcpu);
+	sign_extend = kvm_vcpu_dabt_issext(vcpu);
+	sixty_four = kvm_vcpu_dabt_issf(vcpu);
+	rt = kvm_vcpu_dabt_get_rd(vcpu);
+
+	*len = access_size;
+	vcpu->arch.mmio_decode.sign_extend = sign_extend;
+	vcpu->arch.mmio_decode.rt = rt;
+	vcpu->arch.mmio_decode.sixty_four = sixty_four;
 
 	return 0;
 }
@@ -130,35 +176,20 @@ int io_mem_abort(struct kvm_vcpu *vcpu, struct kvm_run *run,
 	u8 data_buf[8];
 
 	/*
-	 * No valid syndrome? Ask userspace for help if it has
-	 * voluntered to do so, and bail out otherwise.
-	 */
-	if (!kvm_vcpu_dabt_isvalid(vcpu)) {
-		if (vcpu->kvm->arch.return_nisv_io_abort_to_user) {
-			run->exit_reason = KVM_EXIT_ARM_NISV;
-			run->arm_nisv.esr_iss = kvm_vcpu_dabt_iss_nisv_sanitized(vcpu);
-			run->arm_nisv.fault_ipa = fault_ipa;
-			return 0;
-		}
-
-		kvm_pr_unimpl("Data abort outside memslots with no valid syndrome info\n");
-		return -ENOSYS;
-	}
-
-	/* Page table accesses IO mem: tell guest to fix its TTBR */
-	if (kvm_vcpu_dabt_iss1tw(vcpu)) {
-		kvm_inject_dabt(vcpu, kvm_vcpu_get_hfar(vcpu));
-		return 1;
-	}
-
-	/*
 	 * Prepare MMIO operation. First decode the syndrome data we get
 	 * from the CPU. Then try if some in-kernel emulation feels
 	 * responsible, otherwise let user space do its magic.
 	 */
-	is_write = kvm_vcpu_dabt_iswrite(vcpu);
-	len = kvm_vcpu_dabt_get_as(vcpu);
-	rt = kvm_vcpu_dabt_get_rd(vcpu);
+	if (kvm_vcpu_dabt_isvalid(vcpu)) {
+		ret = decode_hsr(vcpu, &is_write, &len);
+		if (ret)
+			return ret;
+	} else {
+		kvm_err("load/store instruction decoding not implemented\n");
+		return -ENOSYS;
+	}
+
+	rt = vcpu->arch.mmio_decode.rt;
 
 	if (is_write) {
 		data = vcpu_data_guest_to_host(vcpu, vcpu_get_reg(vcpu, rt),

@@ -292,10 +292,10 @@ EXPORT_SYMBOL_GPL(usb_ep_queue);
  * @ep:the endpoint associated with the request
  * @req:the request being canceled
  *
- * If the request is still active on the endpoint, it is dequeued and
- * eventually its completion routine is called (with status -ECONNRESET);
- * else a negative error code is returned.  This routine is asynchronous,
- * that is, it may return before the completion routine runs.
+ * If the request is still active on the endpoint, it is dequeued and its
+ * completion routine is called (with status -ECONNRESET); else a negative
+ * error code is returned. This is guaranteed to happen before the call to
+ * usb_ep_dequeue() returns.
  *
  * Note that some hardware can't clear out write fifos (to unlink the request
  * at the head of the queue) except as part of disconnecting from usb. Such
@@ -507,6 +507,43 @@ out:
 EXPORT_SYMBOL_GPL(usb_gadget_wakeup);
 
 /**
+ * usb_gsi_ep_op - performs operation on GSI accelerated EP based on EP op code
+ *
+ * Operations such as EP configuration, TRB allocation, StartXfer etc.
+ * See gsi_ep_op for more details.
+ */
+int usb_gsi_ep_op(struct usb_ep *ep,
+		struct usb_gsi_request *req, enum gsi_ep_op op)
+{
+	if (ep && ep->ops && ep->ops->gsi_ep_op)
+		return ep->ops->gsi_ep_op(ep, req, op);
+
+	return -EOPNOTSUPP;
+}
+EXPORT_SYMBOL_GPL(usb_gsi_ep_op);
+
+/**
+ * usb_gadget_func_wakeup - send a function remote wakeup up notification
+ * to the host connected to this gadget
+ * @gadget: controller used to wake up the host
+ * @interface_id: the interface which triggered the remote wakeup event
+ *
+ * Returns zero on success. Otherwise, negative error code is returned.
+ */
+int usb_gadget_func_wakeup(struct usb_gadget *gadget,
+	int interface_id)
+{
+	if (!gadget || (gadget->speed != USB_SPEED_SUPER))
+		return -EOPNOTSUPP;
+
+	if (!gadget->ops || !gadget->ops->func_wakeup)
+		return -EOPNOTSUPP;
+
+	return gadget->ops->func_wakeup(gadget, interface_id);
+}
+EXPORT_SYMBOL_GPL(usb_gadget_func_wakeup);
+
+/**
  * usb_gadget_set_selfpowered - sets the device selfpowered feature.
  * @gadget:the device being declared as self-powered
  *
@@ -701,9 +738,6 @@ EXPORT_SYMBOL_GPL(usb_gadget_connect);
  * as a disconnect (when a VBUS session is active).  Not all systems
  * support software pullup controls.
  *
- * Following a successful disconnect, invoke the ->disconnect() callback
- * for the current gadget driver so that UDC drivers don't need to.
- *
  * Returns zero on success, else negative errno.
  */
 int usb_gadget_disconnect(struct usb_gadget *gadget)
@@ -725,10 +759,8 @@ int usb_gadget_disconnect(struct usb_gadget *gadget)
 	}
 
 	ret = gadget->ops->pullup(gadget, 0);
-	if (!ret) {
+	if (!ret)
 		gadget->connected = 0;
-		gadget->udc->driver->disconnect(gadget);
-	}
 
 out:
 	trace_usb_gadget_disconnect(gadget, ret);
@@ -1297,6 +1329,7 @@ static void usb_gadget_remove_driver(struct usb_udc *udc)
 	kobject_uevent(&udc->dev.kobj, KOBJ_CHANGE);
 
 	usb_gadget_disconnect(udc->gadget);
+	udc->driver->disconnect(udc->gadget);
 	udc->driver->unbind(udc->gadget);
 	usb_gadget_udc_stop(udc);
 
@@ -1414,8 +1447,6 @@ int usb_gadget_probe_driver(struct usb_gadget_driver *driver)
 	}
 
 	mutex_unlock(&udc_lock);
-	if (ret)
-		pr_warn("udc-core: couldn't find an available UDC or it's busy\n");
 	return ret;
 found:
 	ret = udc_bind_to_driver(udc, driver);
@@ -1477,10 +1508,13 @@ static ssize_t soft_connect_store(struct device *dev,
 		struct device_attribute *attr, const char *buf, size_t n)
 {
 	struct usb_udc		*udc = container_of(dev, struct usb_udc, dev);
+	ssize_t			ret;
 
+	mutex_lock(&udc_lock);
 	if (!udc->driver) {
 		dev_err(dev, "soft-connect without a gadget driver\n");
-		return -EOPNOTSUPP;
+		ret = -EOPNOTSUPP;
+		goto out;
 	}
 
 	if (sysfs_streq(buf, "connect")) {
@@ -1488,13 +1522,18 @@ static ssize_t soft_connect_store(struct device *dev,
 		usb_gadget_connect(udc->gadget);
 	} else if (sysfs_streq(buf, "disconnect")) {
 		usb_gadget_disconnect(udc->gadget);
+		udc->driver->disconnect(udc->gadget);
 		usb_gadget_udc_stop(udc);
 	} else {
 		dev_err(dev, "unsupported command '%s'\n", buf);
-		return -EINVAL;
+		ret = -EINVAL;
+		goto out;
 	}
 
-	return n;
+	ret = n;
+out:
+	mutex_unlock(&udc_lock);
+	return ret;
 }
 static DEVICE_ATTR_WO(soft_connect);
 

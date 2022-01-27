@@ -1,7 +1,18 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (C) 2015 - ARM Ltd
  * Author: Marc Zyngier <marc.zyngier@arm.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <linux/linkage.h>
@@ -14,7 +25,6 @@
 #include <asm/kvm_arm.h>
 #include <asm/kvm_asm.h>
 #include <asm/kvm_mmu.h>
-#include <asm/kvm_ptrauth.h>
 
 #define CPU_GP_REG_OFFSET(x)	(CPU_GP_REGS + x)
 #define CPU_XREG_OFFSET(x)	CPU_GP_REG_OFFSET(CPU_USER_PT_REGS + 8*x)
@@ -51,7 +61,7 @@
  * u64 __guest_enter(struct kvm_vcpu *vcpu,
  *		     struct kvm_cpu_context *host_ctxt);
  */
-SYM_FUNC_START(__guest_enter)
+ENTRY(__guest_enter)
 	// x0: vcpu
 	// x1: host context
 	// x2-x17: clobbered by macros
@@ -76,13 +86,6 @@ alternative_else_nop_endif
 1:
 	add	x29, x0, #VCPU_CONTEXT
 
-	// Macro ptrauth_switch_to_guest format:
-	// 	ptrauth_switch_to_guest(guest cxt, tmp1, tmp2, tmp3)
-	// The below macro to restore guest keys is not implemented in C code
-	// as it may cause Pointer Authentication key signing mismatch errors
-	// when this feature is enabled for kernel code.
-	ptrauth_switch_to_guest x29, x0, x1, x2
-
 	// Restore guest regs x0-x17
 	ldp	x0, x1,   [x29, #CPU_XREG_OFFSET(0)]
 	ldp	x2, x3,   [x29, #CPU_XREG_OFFSET(2)]
@@ -99,9 +102,9 @@ alternative_else_nop_endif
 
 	// Do not touch any register after this!
 	eret
-	sb
+ENDPROC(__guest_enter)
 
-SYM_INNER_LABEL(__guest_exit, SYM_L_GLOBAL)
+ENTRY(__guest_exit)
 	// x0: return code
 	// x1: vcpu
 	// x2-x29,lr: vcpu regs
@@ -132,20 +135,13 @@ SYM_INNER_LABEL(__guest_exit, SYM_L_GLOBAL)
 
 	get_host_ctxt	x2, x3
 
-	// Macro ptrauth_switch_to_guest format:
-	// 	ptrauth_switch_to_host(guest cxt, host cxt, tmp1, tmp2, tmp3)
-	// The below macro to save/restore keys is not implemented in C code
-	// as it may cause Pointer Authentication key signing mismatch errors
-	// when this feature is enabled for kernel code.
-	ptrauth_switch_to_host x1, x2, x3, x4, x5
-
 	// Now restore the host regs
 	restore_callee_saved_regs x2
 
 alternative_if ARM64_HAS_RAS_EXTN
 	// If we have the RAS extensions we can consume a pending error
-	// without an unmask-SError and isb. The ESB-instruction consumed any
-	// pending guest error when we took the exception from the guest.
+	// without an unmask-SError and isb.
+	esb
 	mrs_s	x2, SYS_DISR_EL1
 	str	x2, [x1, #(VCPU_FAULT_DISR - VCPU_CONTEXT)]
 	cbz	x2, 1f
@@ -153,16 +149,8 @@ alternative_if ARM64_HAS_RAS_EXTN
 	orr	x0, x0, #(1<<ARM_EXIT_WITH_SERROR_BIT)
 1:	ret
 alternative_else
-	dsb	sy		// Synchronize against in-flight ld/st
-	isb			// Prevent an early read of side-effect free ISR
-	mrs	x2, isr_el1
-	tbnz	x2, #8, 2f	// ISR_EL1.A
-	ret
-	nop
-2:
-alternative_endif
-	// We know we have a pending asynchronous abort, now is the
-	// time to flush it out. From your VAXorcist book, page 666:
+	// If we have a pending asynchronous abort, now is the
+	// time to find out. From your VAXorcist book, page 666:
 	// "Threaten me not, oh Evil one!  For I speak with
 	// the power of DEC, and I command thee to show thyself!"
 	mrs	x2, elr_el2
@@ -170,28 +158,33 @@ alternative_endif
 	mrs	x4, spsr_el2
 	mov	x5, x0
 
+	dsb	sy		// Synchronize against in-flight ld/st
+	nop
 	msr	daifclr, #4	// Unmask aborts
+alternative_endif
 
 	// This is our single instruction exception window. A pending
 	// SError is guaranteed to occur at the earliest when we unmask
 	// it, and at the latest just after the ISB.
-	.global	abort_guest_exit_start
 abort_guest_exit_start:
 
 	isb
 
-	.global	abort_guest_exit_end
 abort_guest_exit_end:
-
 	msr	daifset, #4	// Mask aborts
+	ret
 
-	// If the exception took place, restore the EL1 exception
-	// context so that we can report some information.
-	// Merge the exception code with the SError pending bit.
-	tbz	x0, #ARM_EXIT_WITH_SERROR_BIT, 1f
+	_kvm_extable	abort_guest_exit_start, 9997f
+	_kvm_extable	abort_guest_exit_end, 9997f
+9997:
+	msr	daifset, #4	// Mask aborts
+	mov	x0, #(1 << ARM_EXIT_WITH_SERROR_BIT)
+
+	// restore the EL1 exception context so that we can report some
+	// information. Merge the exception code with the SError pending bit.
 	msr	elr_el2, x2
 	msr	esr_el2, x3
 	msr	spsr_el2, x4
 	orr	x0, x0, x5
 1:	ret
-SYM_FUNC_END(__guest_enter)
+ENDPROC(__guest_exit)

@@ -222,7 +222,7 @@ int usb_hcd_pci_probe(struct pci_dev *dev, const struct pci_device_id *id)
 			retval = -EBUSY;
 			goto put_hcd;
 		}
-		hcd->regs = devm_ioremap(&dev->dev, hcd->rsrc_start,
+		hcd->regs = devm_ioremap_nocache(&dev->dev, hcd->rsrc_start,
 				hcd->rsrc_len);
 		if (hcd->regs == NULL) {
 			dev_dbg(&dev->dev, "error mapping memory\n");
@@ -234,7 +234,7 @@ int usb_hcd_pci_probe(struct pci_dev *dev, const struct pci_device_id *id)
 		/* UHCI */
 		int	region;
 
-		for (region = 0; region < PCI_STD_NUM_BARS; region++) {
+		for (region = 0; region < PCI_ROM_RESOURCE; region++) {
 			if (!(pci_resource_flags(dev, region) &
 					IORESOURCE_IO))
 				continue;
@@ -393,7 +393,8 @@ static inline void powermac_set_asic(struct pci_dev *pci_dev, int enable)
 
 static int check_root_hub_suspended(struct device *dev)
 {
-	struct usb_hcd		*hcd = dev_get_drvdata(dev);
+	struct pci_dev		*pci_dev = to_pci_dev(dev);
+	struct usb_hcd		*hcd = pci_get_drvdata(pci_dev);
 
 	if (HCD_RH_RUNNING(hcd)) {
 		dev_warn(dev, "Root hub is not suspended\n");

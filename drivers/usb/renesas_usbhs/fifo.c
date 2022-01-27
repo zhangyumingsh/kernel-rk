@@ -3,7 +3,6 @@
  * Renesas USB driver
  *
  * Copyright (C) 2011 Renesas Solutions Corp.
- * Copyright (C) 2019 Renesas Electronics Corporation
  * Kuninori Morimoto <kuninori.morimoto.gx@renesas.com>
  */
 #include <linux/delay.h>
@@ -13,6 +12,7 @@
 #include "pipe.h"
 
 #define usbhsf_get_cfifo(p)	(&((p)->fifo_info.cfifo))
+#define usbhsf_is_cfifo(p, f)	(usbhsf_get_cfifo(p) == f)
 
 #define usbhsf_fifo_is_busy(f)	((f)->pipe) /* see usbhs_pipe_select_fifo */
 
@@ -126,6 +126,7 @@ struct usbhs_pkt *usbhs_pkt_pop(struct usbhs_pipe *pipe, struct usbhs_pkt *pkt)
 		}
 
 		usbhs_pipe_clear_without_sequence(pipe, 0, 0);
+		usbhs_pipe_running(pipe, 0);
 
 		__usbhsf_pkt_del(pkt);
 	}
@@ -325,7 +326,10 @@ static int usbhsf_fifo_select(struct usbhs_pipe *pipe,
 	}
 
 	/* "base" will be used below  */
-	usbhs_write(priv, fifo->sel, base | MBW_32);
+	if (usbhs_get_dparam(priv, has_sudmac) && !usbhsf_is_cfifo(priv, fifo))
+		usbhs_write(priv, fifo->sel, base);
+	else
+		usbhs_write(priv, fifo->sel, base | MBW_32);
 
 	/* check ISEL and CURPIPE value */
 	while (timeout--) {
@@ -540,13 +544,8 @@ static int usbhsf_pio_try_push(struct usbhs_pkt *pkt, int *is_done)
 	}
 
 	/* the rest operation */
-	if (usbhs_get_dparam(priv, cfifo_byte_addr)) {
-		for (i = 0; i < len; i++)
-			iowrite8(buf[i], addr + (i & 0x03));
-	} else {
-		for (i = 0; i < len; i++)
-			iowrite8(buf[i], addr + (0x03 - (i & 0x03)));
-	}
+	for (i = 0; i < len; i++)
+		iowrite8(buf[i], addr + (0x03 - (i & 0x03)));
 
 	/*
 	 * variable update
@@ -1273,11 +1272,11 @@ static void usbhsf_dma_init_dt(struct device *dev, struct usbhs_fifo *fifo,
 	 */
 	snprintf(name, sizeof(name), "ch%d", channel);
 	if (channel & 1) {
-		fifo->tx_chan = dma_request_chan(dev, name);
+		fifo->tx_chan = dma_request_slave_channel_reason(dev, name);
 		if (IS_ERR(fifo->tx_chan))
 			fifo->tx_chan = NULL;
 	} else {
-		fifo->rx_chan = dma_request_chan(dev, name);
+		fifo->rx_chan = dma_request_slave_channel_reason(dev, name);
 		if (IS_ERR(fifo->rx_chan))
 			fifo->rx_chan = NULL;
 	}
@@ -1288,7 +1287,7 @@ static void usbhsf_dma_init(struct usbhs_priv *priv, struct usbhs_fifo *fifo,
 {
 	struct device *dev = usbhs_priv_to_dev(priv);
 
-	if (dev_of_node(dev))
+	if (dev->of_node)
 		usbhsf_dma_init_dt(dev, fifo, channel);
 	else
 		usbhsf_dma_init_pdev(fifo);

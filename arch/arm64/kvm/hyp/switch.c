@@ -1,19 +1,29 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2015 - ARM Ltd
  * Author: Marc Zyngier <marc.zyngier@arm.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <linux/arm-smccc.h>
-#include <linux/kvm_host.h>
 #include <linux/types.h>
 #include <linux/jump_label.h>
 #include <uapi/linux/psci.h>
 
 #include <kvm/arm_psci.h>
 
-#include <asm/barrier.h>
 #include <asm/cpufeature.h>
+#include <asm/extable.h>
 #include <asm/kprobes.h>
 #include <asm/kvm_asm.h>
 #include <asm/kvm_emulate.h>
@@ -24,6 +34,9 @@
 #include <asm/debug-monitors.h>
 #include <asm/processor.h>
 #include <asm/thread_info.h>
+
+extern struct exception_table_entry __start___kvm_ex_table;
+extern struct exception_table_entry __stop___kvm_ex_table;
 
 /* Check whether the FP regs were dirtied while in the host-side run loop: */
 static bool __hyp_text update_fp_enabled(struct kvm_vcpu *vcpu)
@@ -98,10 +111,7 @@ static void activate_traps_vhe(struct kvm_vcpu *vcpu)
 	val = read_sysreg(cpacr_el1);
 	val |= CPACR_EL1_TTA;
 	val &= ~CPACR_EL1_ZEN;
-	if (update_fp_enabled(vcpu)) {
-		if (vcpu_has_sve(vcpu))
-			val |= CPACR_EL1_ZEN;
-	} else {
+	if (!update_fp_enabled(vcpu)) {
 		val &= ~CPACR_EL1_FPEN;
 		__activate_traps_fpsimd32(vcpu);
 	}
@@ -126,28 +136,11 @@ static void __hyp_text __activate_traps_nvhe(struct kvm_vcpu *vcpu)
 	}
 
 	write_sysreg(val, cptr_el2);
-
-	if (cpus_have_const_cap(ARM64_WORKAROUND_SPECULATIVE_AT_NVHE)) {
-		struct kvm_cpu_context *ctxt = &vcpu->arch.ctxt;
-
-		isb();
-		/*
-		 * At this stage, and thanks to the above isb(), S2 is
-		 * configured and enabled. We can now restore the guest's S1
-		 * configuration: SCTLR, and only then TCR.
-		 */
-		write_sysreg_el1(ctxt->sys_regs[SCTLR_EL1],	SYS_SCTLR);
-		isb();
-		write_sysreg_el1(ctxt->sys_regs[TCR_EL1],	SYS_TCR);
-	}
 }
 
 static void __hyp_text __activate_traps(struct kvm_vcpu *vcpu)
 {
 	u64 hcr = vcpu->arch.hcr_el2;
-
-	if (cpus_have_const_cap(ARM64_WORKAROUND_CAVIUM_TX2_219_TVM))
-		hcr |= HCR_TVM;
 
 	write_sysreg(hcr, hcr_el2);
 
@@ -164,14 +157,6 @@ static void deactivate_traps_vhe(void)
 {
 	extern char vectors[];	/* kernel exception vectors */
 	write_sysreg(HCR_HOST_VHE_FLAGS, hcr_el2);
-
-	/*
-	 * ARM errata 1165522 and 1530923 require the actual execution of the
-	 * above before we can switch to the EL2/EL0 translation regime used by
-	 * the host.
-	 */
-	asm(ALTERNATIVE("nop", "isb", ARM64_WORKAROUND_SPECULATIVE_AT_VHE));
-
 	write_sysreg(CPACR_EL1_DEFAULT, cpacr_el1);
 	write_sysreg(vectors, vbar_el1);
 }
@@ -180,23 +165,6 @@ NOKPROBE_SYMBOL(deactivate_traps_vhe);
 static void __hyp_text __deactivate_traps_nvhe(void)
 {
 	u64 mdcr_el2 = read_sysreg(mdcr_el2);
-
-	if (cpus_have_const_cap(ARM64_WORKAROUND_SPECULATIVE_AT_NVHE)) {
-		u64 val;
-
-		/*
-		 * Set the TCR and SCTLR registers in the exact opposite
-		 * sequence as __activate_traps_nvhe (first prevent walks,
-		 * then force the MMU on). A generous sprinkling of isb()
-		 * ensure that things happen in this exact order.
-		 */
-		val = read_sysreg_el1(SYS_TCR);
-		write_sysreg_el1(val | TCR_EPD1_MASK | TCR_EPD0_MASK, SYS_TCR);
-		isb();
-		val = read_sysreg_el1(SYS_SCTLR);
-		write_sysreg_el1(val | SCTLR_ELx_M, SYS_SCTLR);
-		isb();
-	}
 
 	__deactivate_traps_common();
 
@@ -216,10 +184,8 @@ static void __hyp_text __deactivate_traps(struct kvm_vcpu *vcpu)
 	 * the crucial bit is "On taking a vSError interrupt,
 	 * HCR_EL2.VSE is cleared to 0."
 	 */
-	if (vcpu->arch.hcr_el2 & HCR_VSE) {
-		vcpu->arch.hcr_el2 &= ~HCR_VSE;
-		vcpu->arch.hcr_el2 |= read_sysreg(hcr_el2) & HCR_VSE;
-	}
+	if (vcpu->arch.hcr_el2 & HCR_VSE)
+		vcpu->arch.hcr_el2 = read_sysreg(hcr_el2);
 
 	if (has_vhe())
 		deactivate_traps_vhe();
@@ -247,7 +213,7 @@ void deactivate_traps_vhe_put(void)
 
 static void __hyp_text __activate_vm(struct kvm *kvm)
 {
-	__load_guest_stage2(kvm);
+	write_sysreg(kvm->arch.vttbr, vttbr_el2);
 }
 
 static void __hyp_text __deactivate_vm(struct kvm_vcpu *vcpu)
@@ -273,6 +239,20 @@ static void __hyp_text __hyp_vgic_restore_state(struct kvm_vcpu *vcpu)
 	}
 }
 
+static bool __hyp_text __true_value(void)
+{
+	return true;
+}
+
+static bool __hyp_text __false_value(void)
+{
+	return false;
+}
+
+static hyp_alternate_select(__check_arm_834220,
+			    __false_value, __true_value,
+			    ARM64_WORKAROUND_834220);
+
 static bool __hyp_text __translate_far_to_hpfar(u64 far, u64 *hpfar)
 {
 	u64 par, tmp;
@@ -288,17 +268,17 @@ static bool __hyp_text __translate_far_to_hpfar(u64 far, u64 *hpfar)
 	 * saved the guest context yet, and we may return early...
 	 */
 	par = read_sysreg(par_el1);
-	asm volatile("at s1e1r, %0" : : "r" (far));
-	isb();
-
-	tmp = read_sysreg(par_el1);
+	if (!__kvm_at("s1e1r", far))
+		tmp = read_sysreg(par_el1);
+	else
+		tmp = 1; /* back to the guest */
 	write_sysreg(par, par_el1);
 
-	if (unlikely(tmp & SYS_PAR_EL1_F))
+	if (unlikely(tmp & 1))
 		return false; /* Translation failed, back to guest */
 
 	/* Convert PAR to HPFAR format */
-	*hpfar = PAR_TO_HPFAR(tmp);
+	*hpfar = ((tmp >> 12) & ((1UL << 36) - 1)) << 4;
 	return true;
 }
 
@@ -314,7 +294,7 @@ static bool __hyp_text __populate_fault_info(struct kvm_vcpu *vcpu)
 	if (ec != ESR_ELx_EC_DABT_LOW && ec != ESR_ELx_EC_IABT_LOW)
 		return true;
 
-	far = read_sysreg_el2(SYS_FAR);
+	far = read_sysreg_el2(far);
 
 	/*
 	 * The HPFAR can be invalid if the stage 2 fault did not
@@ -328,8 +308,7 @@ static bool __hyp_text __populate_fault_info(struct kvm_vcpu *vcpu)
 	 * resolve the IPA using the AT instruction.
 	 */
 	if (!(esr & ESR_ELx_S1PTW) &&
-	    (cpus_have_const_cap(ARM64_WORKAROUND_834220) ||
-	     (esr & ESR_ELx_FSC_TYPE) == FSC_PERM)) {
+	    (__check_arm_834220()() || (esr & ESR_ELx_FSC_TYPE) == FSC_PERM)) {
 		if (!__translate_far_to_hpfar(far, &hpfar))
 			return false;
 	} else {
@@ -341,48 +320,43 @@ static bool __hyp_text __populate_fault_info(struct kvm_vcpu *vcpu)
 	return true;
 }
 
-/* Check for an FPSIMD/SVE trap and handle as appropriate */
-static bool __hyp_text __hyp_handle_fpsimd(struct kvm_vcpu *vcpu)
+/* Skip an instruction which has been emulated. Returns true if
+ * execution can continue or false if we need to exit hyp mode because
+ * single-step was in effect.
+ */
+static bool __hyp_text __skip_instr(struct kvm_vcpu *vcpu)
 {
-	bool vhe, sve_guest, sve_host;
-	u8 hsr_ec;
+	*vcpu_pc(vcpu) = read_sysreg_el2(elr);
 
-	if (!system_supports_fpsimd())
-		return false;
-
-	if (system_supports_sve()) {
-		sve_guest = vcpu_has_sve(vcpu);
-		sve_host = vcpu->arch.flags & KVM_ARM64_HOST_SVE_IN_USE;
-		vhe = true;
+	if (vcpu_mode_is_32bit(vcpu)) {
+		vcpu->arch.ctxt.gp_regs.regs.pstate = read_sysreg_el2(spsr);
+		kvm_skip_instr32(vcpu, kvm_vcpu_trap_il_is32bit(vcpu));
+		write_sysreg_el2(vcpu->arch.ctxt.gp_regs.regs.pstate, spsr);
 	} else {
-		sve_guest = false;
-		sve_host = false;
-		vhe = has_vhe();
+		*vcpu_pc(vcpu) += 4;
 	}
 
-	hsr_ec = kvm_vcpu_trap_get_class(vcpu);
-	if (hsr_ec != ESR_ELx_EC_FP_ASIMD &&
-	    hsr_ec != ESR_ELx_EC_SVE)
+	write_sysreg_el2(*vcpu_pc(vcpu), elr);
+
+	if (vcpu->guest_debug & KVM_GUESTDBG_SINGLESTEP) {
+		vcpu->arch.fault.esr_el2 =
+			(ESR_ELx_EC_SOFTSTP_LOW << ESR_ELx_EC_SHIFT) | 0x22;
 		return false;
-
-	/* Don't handle SVE traps for non-SVE vcpus here: */
-	if (!sve_guest)
-		if (hsr_ec != ESR_ELx_EC_FP_ASIMD)
-			return false;
-
-	/* Valid trap.  Switch the context: */
-
-	if (vhe) {
-		u64 reg = read_sysreg(cpacr_el1) | CPACR_EL1_FPEN;
-
-		if (sve_guest)
-			reg |= CPACR_EL1_ZEN;
-
-		write_sysreg(reg, cpacr_el1);
 	} else {
+		return true;
+	}
+}
+
+static bool __hyp_text __hyp_switch_fpsimd(struct kvm_vcpu *vcpu)
+{
+	struct user_fpsimd_state *host_fpsimd = vcpu->arch.host_fpsimd_state;
+
+	if (has_vhe())
+		write_sysreg(read_sysreg(cpacr_el1) | CPACR_EL1_FPEN,
+			     cpacr_el1);
+	else
 		write_sysreg(read_sysreg(cptr_el2) & ~(u64)CPTR_EL2_TFP,
 			     cptr_el2);
-	}
 
 	isb();
 
@@ -391,28 +365,21 @@ static bool __hyp_text __hyp_handle_fpsimd(struct kvm_vcpu *vcpu)
 		 * In the SVE case, VHE is assumed: it is enforced by
 		 * Kconfig and kvm_arch_init().
 		 */
-		if (sve_host) {
+		if (system_supports_sve() &&
+		    (vcpu->arch.flags & KVM_ARM64_HOST_SVE_IN_USE)) {
 			struct thread_struct *thread = container_of(
-				vcpu->arch.host_fpsimd_state,
+				host_fpsimd,
 				struct thread_struct, uw.fpsimd_state);
 
-			sve_save_state(sve_pffr(thread),
-				       &vcpu->arch.host_fpsimd_state->fpsr);
+			sve_save_state(sve_pffr(thread), &host_fpsimd->fpsr);
 		} else {
-			__fpsimd_save_state(vcpu->arch.host_fpsimd_state);
+			__fpsimd_save_state(host_fpsimd);
 		}
 
 		vcpu->arch.flags &= ~KVM_ARM64_FP_HOST;
 	}
 
-	if (sve_guest) {
-		sve_load_state(vcpu_sve_pffr(vcpu),
-			       &vcpu->arch.ctxt.gp_regs.fp_regs.fpsr,
-			       sve_vq_from_vl(vcpu->arch.sve_max_vl) - 1);
-		write_sysreg_s(vcpu->arch.ctxt.sys_regs[ZCR_EL1], SYS_ZCR_EL12);
-	} else {
-		__fpsimd_restore_state(&vcpu->arch.ctxt.gp_regs.fp_regs);
-	}
+	__fpsimd_restore_state(&vcpu->arch.ctxt.gp_regs.fp_regs);
 
 	/* Skip restoring fpexc32 for AArch64 guests */
 	if (!(read_sysreg(hcr_el2) & HCR_RW))
@@ -424,61 +391,6 @@ static bool __hyp_text __hyp_handle_fpsimd(struct kvm_vcpu *vcpu)
 	return true;
 }
 
-static bool __hyp_text handle_tx2_tvm(struct kvm_vcpu *vcpu)
-{
-	u32 sysreg = esr_sys64_to_sysreg(kvm_vcpu_get_hsr(vcpu));
-	int rt = kvm_vcpu_sys_get_rt(vcpu);
-	u64 val = vcpu_get_reg(vcpu, rt);
-
-	/*
-	 * The normal sysreg handling code expects to see the traps,
-	 * let's not do anything here.
-	 */
-	if (vcpu->arch.hcr_el2 & HCR_TVM)
-		return false;
-
-	switch (sysreg) {
-	case SYS_SCTLR_EL1:
-		write_sysreg_el1(val, SYS_SCTLR);
-		break;
-	case SYS_TTBR0_EL1:
-		write_sysreg_el1(val, SYS_TTBR0);
-		break;
-	case SYS_TTBR1_EL1:
-		write_sysreg_el1(val, SYS_TTBR1);
-		break;
-	case SYS_TCR_EL1:
-		write_sysreg_el1(val, SYS_TCR);
-		break;
-	case SYS_ESR_EL1:
-		write_sysreg_el1(val, SYS_ESR);
-		break;
-	case SYS_FAR_EL1:
-		write_sysreg_el1(val, SYS_FAR);
-		break;
-	case SYS_AFSR0_EL1:
-		write_sysreg_el1(val, SYS_AFSR0);
-		break;
-	case SYS_AFSR1_EL1:
-		write_sysreg_el1(val, SYS_AFSR1);
-		break;
-	case SYS_MAIR_EL1:
-		write_sysreg_el1(val, SYS_MAIR);
-		break;
-	case SYS_AMAIR_EL1:
-		write_sysreg_el1(val, SYS_AMAIR);
-		break;
-	case SYS_CONTEXTIDR_EL1:
-		write_sysreg_el1(val, SYS_CONTEXTIDR);
-		break;
-	default:
-		return false;
-	}
-
-	__kvm_skip_instr(vcpu);
-	return true;
-}
-
 /*
  * Return true when we were able to fixup the guest exit and should return to
  * the guest, false when we should restore the host state and return to the
@@ -487,7 +399,7 @@ static bool __hyp_text handle_tx2_tvm(struct kvm_vcpu *vcpu)
 static bool __hyp_text fixup_guest_exit(struct kvm_vcpu *vcpu, u64 *exit_code)
 {
 	if (ARM_EXCEPTION_CODE(*exit_code) != ARM_EXCEPTION_IRQ)
-		vcpu->arch.fault.esr_el2 = read_sysreg_el2(SYS_ESR);
+		vcpu->arch.fault.esr_el2 = read_sysreg_el2(esr);
 
 	/*
 	 * We're using the raw exception code in order to only process
@@ -498,20 +410,15 @@ static bool __hyp_text fixup_guest_exit(struct kvm_vcpu *vcpu, u64 *exit_code)
 	if (*exit_code != ARM_EXCEPTION_TRAP)
 		goto exit;
 
-	if (cpus_have_const_cap(ARM64_WORKAROUND_CAVIUM_TX2_219_TVM) &&
-	    kvm_vcpu_trap_get_class(vcpu) == ESR_ELx_EC_SYS64 &&
-	    handle_tx2_tvm(vcpu))
-		return true;
-
 	/*
 	 * We trap the first access to the FP/SIMD to save the host context
 	 * and restore the guest context lazily.
 	 * If FP/SIMD is not implemented, handle the trap and inject an
 	 * undefined instruction exception to the guest.
-	 * Similarly for trapped SVE accesses.
 	 */
-	if (__hyp_handle_fpsimd(vcpu))
-		return true;
+	if (system_supports_fpsimd() &&
+	    kvm_vcpu_trap_get_class(vcpu) == ESR_ELx_EC_FP_ASIMD)
+		return __hyp_switch_fpsimd(vcpu);
 
 	if (!__populate_fault_info(vcpu))
 		return true;
@@ -523,17 +430,25 @@ static bool __hyp_text fixup_guest_exit(struct kvm_vcpu *vcpu, u64 *exit_code)
 			kvm_vcpu_trap_get_fault_type(vcpu) == FSC_FAULT &&
 			kvm_vcpu_dabt_isvalid(vcpu) &&
 			!kvm_vcpu_dabt_isextabt(vcpu) &&
-			!kvm_vcpu_dabt_iss1tw(vcpu);
+			!kvm_vcpu_abt_iss1tw(vcpu);
 
 		if (valid) {
 			int ret = __vgic_v2_perform_cpuif_access(vcpu);
 
-			if (ret == 1)
+			if (ret ==  1 && __skip_instr(vcpu))
 				return true;
 
-			/* Promote an illegal access to an SError.*/
-			if (ret == -1)
+			if (ret == -1) {
+				/* Promote an illegal access to an
+				 * SError. If we would be returning
+				 * due to single-step clear the SS
+				 * bit so handle_exit knows what to
+				 * do after dealing with the error.
+				 */
+				if (!__skip_instr(vcpu))
+					*vcpu_cpsr(vcpu) &= ~DBG_SPSR_SS;
 				*exit_code = ARM_EXCEPTION_EL1_SERROR;
+			}
 
 			goto exit;
 		}
@@ -544,7 +459,7 @@ static bool __hyp_text fixup_guest_exit(struct kvm_vcpu *vcpu, u64 *exit_code)
 	     kvm_vcpu_trap_get_class(vcpu) == ESR_ELx_EC_CP15_32)) {
 		int ret = __vgic_v3_perform_cpuif_access(vcpu);
 
-		if (ret == 1)
+		if (ret == 1 && __skip_instr(vcpu))
 			return true;
 	}
 
@@ -586,46 +501,8 @@ static void __hyp_text __set_host_arch_workaround_state(struct kvm_vcpu *vcpu)
 #endif
 }
 
-/**
- * Disable host events, enable guest events
- */
-static bool __hyp_text __pmu_switch_to_guest(struct kvm_cpu_context *host_ctxt)
-{
-	struct kvm_host_data *host;
-	struct kvm_pmu_events *pmu;
-
-	host = container_of(host_ctxt, struct kvm_host_data, host_ctxt);
-	pmu = &host->pmu_events;
-
-	if (pmu->events_host)
-		write_sysreg(pmu->events_host, pmcntenclr_el0);
-
-	if (pmu->events_guest)
-		write_sysreg(pmu->events_guest, pmcntenset_el0);
-
-	return (pmu->events_host || pmu->events_guest);
-}
-
-/**
- * Disable guest events, enable host events
- */
-static void __hyp_text __pmu_switch_to_host(struct kvm_cpu_context *host_ctxt)
-{
-	struct kvm_host_data *host;
-	struct kvm_pmu_events *pmu;
-
-	host = container_of(host_ctxt, struct kvm_host_data, host_ctxt);
-	pmu = &host->pmu_events;
-
-	if (pmu->events_guest)
-		write_sysreg(pmu->events_guest, pmcntenclr_el0);
-
-	if (pmu->events_host)
-		write_sysreg(pmu->events_host, pmcntenset_el0);
-}
-
 /* Switch to the guest for VHE systems running in EL2 */
-static int __kvm_vcpu_run_vhe(struct kvm_vcpu *vcpu)
+int kvm_vcpu_run_vhe(struct kvm_vcpu *vcpu)
 {
 	struct kvm_cpu_context *host_ctxt;
 	struct kvm_cpu_context *guest_ctxt;
@@ -637,19 +514,8 @@ static int __kvm_vcpu_run_vhe(struct kvm_vcpu *vcpu)
 
 	sysreg_save_host_state_vhe(host_ctxt);
 
-	/*
-	 * ARM erratum 1165522 requires us to configure both stage 1 and
-	 * stage 2 translation for the guest context before we clear
-	 * HCR_EL2.TGE.
-	 *
-	 * We have already configured the guest's stage 1 translation in
-	 * kvm_vcpu_load_sysregs above.  We must now call __activate_vm
-	 * before __activate_traps, because __activate_vm configures
-	 * stage 2 translation, and __activate_traps clear HCR_EL2.TGE
-	 * (among other things).
-	 */
-	__activate_vm(vcpu->kvm);
 	__activate_traps(vcpu);
+	__activate_vm(vcpu->kvm);
 
 	sysreg_restore_guest_state_vhe(guest_ctxt);
 	__debug_switch_to_guest(vcpu);
@@ -678,61 +544,14 @@ static int __kvm_vcpu_run_vhe(struct kvm_vcpu *vcpu)
 
 	return exit_code;
 }
-NOKPROBE_SYMBOL(__kvm_vcpu_run_vhe);
-
-int kvm_vcpu_run_vhe(struct kvm_vcpu *vcpu)
-{
-	int ret;
-
-	local_daif_mask();
-
-	/*
-	 * Having IRQs masked via PMR when entering the guest means the GIC
-	 * will not signal the CPU of interrupts of lower priority, and the
-	 * only way to get out will be via guest exceptions.
-	 * Naturally, we want to avoid this.
-	 *
-	 * local_daif_mask() already sets GIC_PRIO_PSR_I_SET, we just need a
-	 * dsb to ensure the redistributor is forwards EL2 IRQs to the CPU.
-	 */
-	pmr_sync();
-
-	ret = __kvm_vcpu_run_vhe(vcpu);
-
-	/*
-	 * local_daif_restore() takes care to properly restore PSTATE.DAIF
-	 * and the GIC PMR if the host is using IRQ priorities.
-	 */
-	local_daif_restore(DAIF_PROCCTX_NOIRQ);
-
-	/*
-	 * When we exit from the guest we change a number of CPU configuration
-	 * parameters, such as traps.  Make sure these changes take effect
-	 * before running the host or additional guests.
-	 */
-	isb();
-
-	return ret;
-}
+NOKPROBE_SYMBOL(kvm_vcpu_run_vhe);
 
 /* Switch to the guest for legacy non-VHE systems */
 int __hyp_text __kvm_vcpu_run_nvhe(struct kvm_vcpu *vcpu)
 {
 	struct kvm_cpu_context *host_ctxt;
 	struct kvm_cpu_context *guest_ctxt;
-	bool pmu_switch_needed;
 	u64 exit_code;
-
-	/*
-	 * Having IRQs masked via PMR when entering the guest means the GIC
-	 * will not signal the CPU of interrupts of lower priority, and the
-	 * only way to get out will be via guest exceptions.
-	 * Naturally, we want to avoid this.
-	 */
-	if (system_uses_irq_prio_masking()) {
-		gic_write_pmr(GIC_PRIO_IRQON | GIC_PRIO_PSR_I_SET);
-		pmr_sync();
-	}
 
 	vcpu = kern_hyp_va(vcpu);
 
@@ -740,27 +559,21 @@ int __hyp_text __kvm_vcpu_run_nvhe(struct kvm_vcpu *vcpu)
 	host_ctxt->__hyp_running_vcpu = vcpu;
 	guest_ctxt = &vcpu->arch.ctxt;
 
-	pmu_switch_needed = __pmu_switch_to_guest(host_ctxt);
-
 	__sysreg_save_state_nvhe(host_ctxt);
+	__debug_save_host_buffers_nvhe(vcpu);
 
-	/*
-	 * We must restore the 32-bit state before the sysregs, thanks
-	 * to erratum #852523 (Cortex-A57) or #853709 (Cortex-A72).
-	 *
-	 * Also, and in order to be able to deal with erratum #1319537 (A57)
-	 * and #1319367 (A72), we must ensure that all VM-related sysreg are
-	 * restored before we enable S2 translation.
-	 */
-	__sysreg32_restore_state(vcpu);
-	__sysreg_restore_state_nvhe(guest_ctxt);
-
-	__activate_vm(kern_hyp_va(vcpu->kvm));
 	__activate_traps(vcpu);
+	__activate_vm(kern_hyp_va(vcpu->kvm));
 
 	__hyp_vgic_restore_state(vcpu);
 	__timer_enable_traps(vcpu);
 
+	/*
+	 * We must restore the 32-bit state before the sysregs, thanks
+	 * to erratum #852523 (Cortex-A57) or #853709 (Cortex-A72).
+	 */
+	__sysreg32_restore_state(vcpu);
+	__sysreg_restore_state_nvhe(guest_ctxt);
 	__debug_switch_to_guest(vcpu);
 
 	__set_guest_arch_workaround_state(vcpu);
@@ -787,18 +600,12 @@ int __hyp_text __kvm_vcpu_run_nvhe(struct kvm_vcpu *vcpu)
 	if (vcpu->arch.flags & KVM_ARM64_FP_ENABLED)
 		__fpsimd_save_fpexc32(vcpu);
 
+	__debug_switch_to_host(vcpu);
 	/*
 	 * This must come after restoring the host sysregs, since a non-VHE
 	 * system may enable SPE here and make use of the TTBRs.
 	 */
-	__debug_switch_to_host(vcpu);
-
-	if (pmu_switch_needed)
-		__pmu_switch_to_host(host_ctxt);
-
-	/* Returning to host will clear PSR.I, remask PMR if needed */
-	if (system_uses_irq_prio_masking())
-		gic_write_pmr(GIC_PRIO_IRQOFF);
+	__debug_restore_host_buffers_nvhe(vcpu);
 
 	return exit_code;
 }
@@ -825,11 +632,11 @@ static void __hyp_text __hyp_call_panic_nvhe(u64 spsr, u64 elr, u64 par,
 	 * making sure it is a kernel address and not a PC-relative
 	 * reference.
 	 */
-	asm volatile("ldr %0, =__hyp_panic_string" : "=r" (str_va));
+	asm volatile("ldr %0, =%1" : "=r" (str_va) : "S" (__hyp_panic_string));
 
 	__hyp_do_panic(str_va,
-		       spsr, elr,
-		       read_sysreg(esr_el2), read_sysreg_el2(SYS_FAR),
+		       spsr,  elr,
+		       read_sysreg(esr_el2),   read_sysreg_el2(far),
 		       read_sysreg(hpfar_el2), par, vcpu);
 }
 
@@ -844,15 +651,15 @@ static void __hyp_call_panic_vhe(u64 spsr, u64 elr, u64 par,
 
 	panic(__hyp_panic_string,
 	      spsr,  elr,
-	      read_sysreg_el2(SYS_ESR),   read_sysreg_el2(SYS_FAR),
+	      read_sysreg_el2(esr),   read_sysreg_el2(far),
 	      read_sysreg(hpfar_el2), par, vcpu);
 }
 NOKPROBE_SYMBOL(__hyp_call_panic_vhe);
 
 void __hyp_text __noreturn hyp_panic(struct kvm_cpu_context *host_ctxt)
 {
-	u64 spsr = read_sysreg_el2(SYS_SPSR);
-	u64 elr = read_sysreg_el2(SYS_ELR);
+	u64 spsr = read_sysreg_el2(spsr);
+	u64 elr = read_sysreg_el2(elr);
 	u64 par = read_sysreg(par_el1);
 
 	if (!has_vhe())
@@ -861,4 +668,31 @@ void __hyp_text __noreturn hyp_panic(struct kvm_cpu_context *host_ctxt)
 		__hyp_call_panic_vhe(spsr, elr, par, host_ctxt);
 
 	unreachable();
+}
+
+asmlinkage void __hyp_text kvm_unexpected_el2_exception(void)
+{
+	unsigned long addr, fixup;
+	struct kvm_cpu_context *host_ctxt;
+	struct exception_table_entry *entry, *end;
+	unsigned long elr_el2 = read_sysreg(elr_el2);
+
+	entry = hyp_symbol_addr(__start___kvm_ex_table);
+	end = hyp_symbol_addr(__stop___kvm_ex_table);
+	host_ctxt = __hyp_this_cpu_ptr(kvm_host_cpu_state);
+
+	while (entry < end) {
+		addr = (unsigned long)&entry->insn + entry->insn;
+		fixup = (unsigned long)&entry->fixup + entry->fixup;
+
+		if (addr != elr_el2) {
+			entry++;
+			continue;
+		}
+
+		write_sysreg(fixup, elr_el2);
+		return;
+	}
+
+	hyp_panic(host_ctxt);
 }

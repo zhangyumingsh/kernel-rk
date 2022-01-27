@@ -505,6 +505,7 @@ int usb_driver_claim_interface(struct usb_driver *driver,
 				struct usb_interface *iface, void *priv)
 {
 	struct device *dev;
+	struct usb_device *udev;
 	int retval = 0;
 
 	if (!iface)
@@ -517,6 +518,8 @@ int usb_driver_claim_interface(struct usb_driver *driver,
 	/* reject claim if interface is not authorized */
 	if (!iface->authorized)
 		return -ENODEV;
+
+	udev = interface_to_usbdev(iface);
 
 	dev->driver = &driver->drvwrap.driver;
 	usb_set_intfdata(iface, priv);
@@ -892,7 +895,6 @@ int usb_register_device_driver(struct usb_device_driver *new_udriver,
 	new_udriver->drvwrap.driver.probe = usb_probe_device;
 	new_udriver->drvwrap.driver.remove = usb_unbind_device;
 	new_udriver->drvwrap.driver.owner = owner;
-	new_udriver->drvwrap.driver.dev_groups = new_udriver->dev_groups;
 
 	retval = driver_register(&new_udriver->drvwrap.driver);
 
@@ -955,7 +957,6 @@ int usb_register_driver(struct usb_driver *new_driver, struct module *owner,
 	new_driver->drvwrap.driver.remove = usb_unbind_interface;
 	new_driver->drvwrap.driver.owner = owner;
 	new_driver->drvwrap.driver.mod_name = mod_name;
-	new_driver->drvwrap.driver.dev_groups = new_driver->dev_groups;
 	spin_lock_init(&new_driver->dynids.lock);
 	INIT_LIST_HEAD(&new_driver->dynids.list);
 
@@ -1457,6 +1458,9 @@ int usb_suspend(struct device *dev, pm_message_t msg)
 	struct usb_device	*udev = to_usb_device(dev);
 	int r;
 
+	if (udev->bus->skip_resume && udev->state == USB_STATE_SUSPENDED)
+		return 0;
+
 	unbind_no_pm_drivers_interfaces(udev);
 
 	/* From now on we are sure all drivers support suspend/resume
@@ -1492,6 +1496,15 @@ int usb_resume(struct device *dev, pm_message_t msg)
 {
 	struct usb_device	*udev = to_usb_device(dev);
 	int			status;
+
+	/*
+	 * Some buses would like to keep their devices in suspend
+	 * state after system resume.  Their resume happen when
+	 * a remote wakeup is detected or interface driver start
+	 * I/O.
+	 */
+	if (udev->bus->skip_resume)
+		return 0;
 
 	/* For all calls, take the device back to full power and
 	 * tell the PM core in case it was autosuspended previously.

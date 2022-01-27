@@ -46,6 +46,7 @@
 #include <linux/cleancache.h>
 
 #include "ext4.h"
+#include <trace/events/android_fs.h>
 
 #define NUM_PREALLOC_POST_READ_CTXS	128
 
@@ -57,7 +58,6 @@ enum bio_post_read_step {
 	STEP_INITIAL = 0,
 	STEP_DECRYPT,
 	STEP_VERITY,
-	STEP_MAX,
 };
 
 struct bio_post_read_ctx {
@@ -71,9 +71,9 @@ static void __read_end_io(struct bio *bio)
 {
 	struct page *page;
 	struct bio_vec *bv;
-	struct bvec_iter_all iter_all;
+	int i;
 
-	bio_for_each_segment_all(bv, bio, iter_all) {
+	bio_for_each_segment_all(bv, bio, i) {
 		page = bv->bv_page;
 
 		/* PG_error was set if any post_read step failed */
@@ -107,22 +107,10 @@ static void verity_work(struct work_struct *work)
 {
 	struct bio_post_read_ctx *ctx =
 		container_of(work, struct bio_post_read_ctx, work);
-	struct bio *bio = ctx->bio;
 
-	/*
-	 * fsverity_verify_bio() may call readpages() again, and although verity
-	 * will be disabled for that, decryption may still be needed, causing
-	 * another bio_post_read_ctx to be allocated.  So to guarantee that
-	 * mempool_alloc() never deadlocks we must free the current ctx first.
-	 * This is safe because verity is the last post-read step.
-	 */
-	BUILD_BUG_ON(STEP_VERITY + 1 != STEP_MAX);
-	mempool_free(ctx, bio_post_read_ctx_pool);
-	bio->bi_private = NULL;
+	fsverity_verify_bio(ctx->bio);
 
-	fsverity_verify_bio(bio);
-
-	__read_end_io(bio);
+	bio_post_read_processing(ctx);
 }
 
 static void bio_post_read_processing(struct bio_post_read_ctx *ctx)
@@ -159,6 +147,17 @@ static bool bio_post_read_required(struct bio *bio)
 	return bio->bi_private && !bio->bi_status;
 }
 
+static void
+ext4_trace_read_completion(struct bio *bio)
+{
+	struct page *first_page = bio->bi_io_vec[0].bv_page;
+
+	if (first_page != NULL)
+		trace_android_fs_dataread_end(first_page->mapping->host,
+					      page_offset(first_page),
+					      bio->bi_iter.bi_size);
+}
+
 /*
  * I/O completion handler for multipage BIOs.
  *
@@ -173,6 +172,9 @@ static bool bio_post_read_required(struct bio *bio)
  */
 static void mpage_end_io(struct bio *bio)
 {
+	if (trace_android_fs_dataread_start_enabled())
+		ext4_trace_read_completion(bio);
+
 	if (bio_post_read_required(bio)) {
 		struct bio_post_read_ctx *ctx = bio->bi_private;
 
@@ -189,27 +191,28 @@ static inline bool ext4_need_verity(const struct inode *inode, pgoff_t idx)
 	       idx < DIV_ROUND_UP(inode->i_size, PAGE_SIZE);
 }
 
-static void ext4_set_bio_post_read_ctx(struct bio *bio,
-				       const struct inode *inode,
-				       pgoff_t first_idx)
+static struct bio_post_read_ctx *get_bio_post_read_ctx(struct inode *inode,
+						       struct bio *bio,
+						       pgoff_t first_idx)
 {
 	unsigned int post_read_steps = 0;
+	struct bio_post_read_ctx *ctx = NULL;
 
-	if (IS_ENCRYPTED(inode) && S_ISREG(inode->i_mode))
+	if (fscrypt_inode_uses_fs_layer_crypto(inode))
 		post_read_steps |= 1 << STEP_DECRYPT;
 
 	if (ext4_need_verity(inode, first_idx))
 		post_read_steps |= 1 << STEP_VERITY;
 
 	if (post_read_steps) {
-		/* Due to the mempool, this never fails. */
-		struct bio_post_read_ctx *ctx =
-			mempool_alloc(bio_post_read_ctx_pool, GFP_NOFS);
-
+		ctx = mempool_alloc(bio_post_read_ctx_pool, GFP_NOFS);
+		if (!ctx)
+			return ERR_PTR(-ENOMEM);
 		ctx->bio = bio;
 		ctx->enabled_steps = post_read_steps;
 		bio->bi_private = ctx;
 	}
+	return ctx;
 }
 
 static inline loff_t ext4_readpage_limit(struct inode *inode)
@@ -219,6 +222,30 @@ static inline loff_t ext4_readpage_limit(struct inode *inode)
 		return inode->i_sb->s_maxbytes;
 
 	return i_size_read(inode);
+}
+
+static void
+ext4_submit_bio_read(struct bio *bio)
+{
+	if (trace_android_fs_dataread_start_enabled()) {
+		struct page *first_page = bio->bi_io_vec[0].bv_page;
+
+		if (first_page != NULL) {
+			char *path, pathbuf[MAX_TRACE_PATHBUF_LEN];
+
+			path = android_fstrace_get_pathname(pathbuf,
+						    MAX_TRACE_PATHBUF_LEN,
+						    first_page->mapping->host);
+			trace_android_fs_dataread_start(
+				first_page->mapping->host,
+				page_offset(first_page),
+				bio->bi_iter.bi_size,
+				current->pid,
+				path,
+				current->comm);
+		}
+	}
+	submit_bio(bio);
 }
 
 int ext4_mpage_readpages(struct address_space *mapping,
@@ -232,6 +259,7 @@ int ext4_mpage_readpages(struct address_space *mapping,
 	const unsigned blkbits = inode->i_blkbits;
 	const unsigned blocks_per_page = PAGE_SIZE >> blkbits;
 	const unsigned blocksize = 1 << blkbits;
+	sector_t next_block;
 	sector_t block_in_file;
 	sector_t last_block;
 	sector_t last_block_in_file;
@@ -251,10 +279,9 @@ int ext4_mpage_readpages(struct address_space *mapping,
 		int fully_mapped = 1;
 		unsigned first_hole = blocks_per_page;
 
+		prefetchw(&page->flags);
 		if (pages) {
-			page = lru_to_page(pages);
-
-			prefetchw(&page->flags);
+			page = list_entry(pages->prev, struct page, lru);
 			list_del(&page->lru);
 			if (add_to_page_cache_lru(page, mapping, page->index,
 				  readahead_gfp_mask(mapping)))
@@ -264,7 +291,8 @@ int ext4_mpage_readpages(struct address_space *mapping,
 		if (page_has_buffers(page))
 			goto confused;
 
-		block_in_file = (sector_t)page->index << (PAGE_SHIFT - blkbits);
+		block_in_file = next_block =
+			(sector_t)page->index << (PAGE_SHIFT - blkbits);
 		last_block = block_in_file + nr_pages * blocks_per_page;
 		last_block_in_file = (ext4_readpage_limit(inode) +
 				      blocksize - 1) >> blkbits;
@@ -364,22 +392,31 @@ int ext4_mpage_readpages(struct address_space *mapping,
 		 * This page will go to BIO.  Do we need to send this
 		 * BIO off first?
 		 */
-		if (bio && (last_block_in_bio != blocks[0] - 1)) {
+		if (bio && (last_block_in_bio != blocks[0] - 1 ||
+			    !fscrypt_mergeable_bio(bio, inode, next_block))) {
 		submit_and_realloc:
-			submit_bio(bio);
+			ext4_submit_bio_read(bio);
 			bio = NULL;
 		}
 		if (bio == NULL) {
-			/*
-			 * bio_alloc will _always_ be able to allocate a bio if
-			 * __GFP_DIRECT_RECLAIM is set, see bio_alloc_bioset().
-			 */
+			struct bio_post_read_ctx *ctx;
+
 			bio = bio_alloc(GFP_KERNEL,
 				min_t(int, nr_pages, BIO_MAX_PAGES));
-			ext4_set_bio_post_read_ctx(bio, inode, page->index);
+			if (!bio)
+				goto set_error_page;
+			fscrypt_set_bio_crypt_ctx(bio, inode, next_block,
+						  GFP_KERNEL);
+			ctx = get_bio_post_read_ctx(inode, bio, page->index);
+			if (IS_ERR(ctx)) {
+				bio_put(bio);
+				bio = NULL;
+				goto set_error_page;
+			}
 			bio_set_dev(bio, bdev);
 			bio->bi_iter.bi_sector = blocks[0] << (blkbits - 9);
 			bio->bi_end_io = mpage_end_io;
+			bio->bi_private = ctx;
 			bio_set_op_attrs(bio, REQ_OP_READ,
 						is_readahead ? REQ_RAHEAD : 0);
 		}
@@ -391,14 +428,14 @@ int ext4_mpage_readpages(struct address_space *mapping,
 		if (((map.m_flags & EXT4_MAP_BOUNDARY) &&
 		     (relative_block == map.m_len)) ||
 		    (first_hole != blocks_per_page)) {
-			submit_bio(bio);
+			ext4_submit_bio_read(bio);
 			bio = NULL;
 		} else
 			last_block_in_bio = blocks[blocks_per_page - 1];
 		goto next_page;
 	confused:
 		if (bio) {
-			submit_bio(bio);
+			ext4_submit_bio_read(bio);
 			bio = NULL;
 		}
 		if (!PageUptodate(page))
@@ -411,7 +448,7 @@ int ext4_mpage_readpages(struct address_space *mapping,
 	}
 	BUG_ON(pages && !list_empty(pages));
 	if (bio)
-		submit_bio(bio);
+		ext4_submit_bio_read(bio);
 	return 0;
 }
 

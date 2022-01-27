@@ -2,12 +2,7 @@
 #ifndef _M68K_PGTABLE_H
 #define _M68K_PGTABLE_H
 
-
-#if defined(CONFIG_SUN3) || defined(CONFIG_COLDFIRE)
-#include <asm-generic/pgtable-nopmd.h>
-#else
-#include <asm-generic/pgtable-nopud.h>
-#endif
+#include <asm-generic/4level-fixup.h>
 
 #include <asm/setup.h>
 
@@ -35,7 +30,9 @@
 
 
 /* PMD_SHIFT determines the size of the area a second-level page table can map */
-#if CONFIG_PGTABLE_LEVELS == 3
+#ifdef CONFIG_SUN3
+#define PMD_SHIFT       17
+#else
 #define PMD_SHIFT	22
 #endif
 #define PMD_SIZE	(1UL << PMD_SHIFT)
@@ -172,11 +169,15 @@ static inline void update_mmu_cache(struct vm_area_struct *vma,
 	    ? (__pgprot((pgprot_val(prot) & _CACHEMASK040) | _PAGE_NOCACHE_S))	\
 	    : (prot)))
 
-pgprot_t pgprot_dmacoherent(pgprot_t prot);
-#define pgprot_dmacoherent(prot)	pgprot_dmacoherent(prot)
-
 #endif /* CONFIG_COLDFIRE */
 #include <asm-generic/pgtable.h>
 #endif /* !__ASSEMBLY__ */
+
+/*
+ * No page table caches to initialise
+ */
+#define pgtable_cache_init()	do { } while (0)
+
+#define check_pgt_cache()	do { } while (0)
 
 #endif /* _M68K_PGTABLE_H */

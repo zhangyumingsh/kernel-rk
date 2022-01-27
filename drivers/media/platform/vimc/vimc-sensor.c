@@ -1,10 +1,24 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * vimc-sensor.c Virtual Media Controller Driver
  *
  * Copyright (C) 2015-2017 Helen Koike <helen.fornazier@gmail.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
  */
 
+#include <linux/component.h>
+#include <linux/module.h>
+#include <linux/mod_devicetable.h>
+#include <linux/platform_device.h>
 #include <linux/v4l2-mediabus.h>
 #include <linux/vmalloc.h>
 #include <media/v4l2-ctrls.h>
@@ -14,15 +28,18 @@
 
 #include "vimc-common.h"
 
+#define VIMC_SEN_DRV_NAME "vimc-sensor"
+
 struct vimc_sen_device {
 	struct vimc_ent_device ved;
 	struct v4l2_subdev sd;
+	struct device *dev;
 	struct tpg_data tpg;
+	struct task_struct *kthread_sen;
 	u8 *frame;
 	/* The active format */
 	struct v4l2_mbus_framefmt mbus_format;
 	struct v4l2_ctrl_handler hdl;
-	struct media_pad pad;
 };
 
 static const struct v4l2_mbus_framefmt fmt_default = {
@@ -157,7 +174,7 @@ static int vimc_sen_set_fmt(struct v4l2_subdev *sd,
 	/* Set the new format */
 	vimc_sen_adjust_fmt(&fmt->format);
 
-	dev_dbg(vsen->ved.dev, "%s: format update: "
+	dev_dbg(vsen->dev, "%s: format update: "
 		"old:%dx%d (0x%x, %d, %d, %d, %d) "
 		"new:%dx%d (0x%x, %d, %d, %d, %d)\n", vsen->sd.name,
 		/* old */
@@ -201,6 +218,10 @@ static int vimc_sen_s_stream(struct v4l2_subdev *sd, int enable)
 		const struct vimc_pix_map *vpix;
 		unsigned int frame_size;
 
+		if (vsen->kthread_sen)
+			/* tpg is already executing */
+			return 0;
+
 		/* Calculate the frame size */
 		vpix = vimc_pix_map_by_code(vsen->mbus_format.code);
 		frame_size = vsen->mbus_format.width * vpix->bpp *
@@ -221,12 +242,13 @@ static int vimc_sen_s_stream(struct v4l2_subdev *sd, int enable)
 
 		vfree(vsen->frame);
 		vsen->frame = NULL;
+		return 0;
 	}
 
 	return 0;
 }
 
-static const struct v4l2_subdev_core_ops vimc_sen_core_ops = {
+static struct v4l2_subdev_core_ops vimc_sen_core_ops = {
 	.log_status = v4l2_ctrl_subdev_log_status,
 	.subscribe_event = v4l2_ctrl_subdev_subscribe_event,
 	.unsubscribe_event = v4l2_event_subdev_unsubscribe,
@@ -257,18 +279,6 @@ static int vimc_sen_s_ctrl(struct v4l2_ctrl *ctrl)
 	case V4L2_CID_VFLIP:
 		tpg_s_vflip(&vsen->tpg, ctrl->val);
 		break;
-	case V4L2_CID_BRIGHTNESS:
-		tpg_s_brightness(&vsen->tpg, ctrl->val);
-		break;
-	case V4L2_CID_CONTRAST:
-		tpg_s_contrast(&vsen->tpg, ctrl->val);
-		break;
-	case V4L2_CID_HUE:
-		tpg_s_hue(&vsen->tpg, ctrl->val);
-		break;
-	case V4L2_CID_SATURATION:
-		tpg_s_saturation(&vsen->tpg, ctrl->val);
-		break;
 	default:
 		return -EINVAL;
 	}
@@ -279,27 +289,17 @@ static const struct v4l2_ctrl_ops vimc_sen_ctrl_ops = {
 	.s_ctrl = vimc_sen_s_ctrl,
 };
 
-static void vimc_sen_release(struct v4l2_subdev *sd)
+static void vimc_sen_comp_unbind(struct device *comp, struct device *master,
+				 void *master_data)
 {
+	struct vimc_ent_device *ved = dev_get_drvdata(comp);
 	struct vimc_sen_device *vsen =
-				container_of(sd, struct vimc_sen_device, sd);
+				container_of(ved, struct vimc_sen_device, ved);
 
+	vimc_ent_sd_unregister(ved, &vsen->sd);
 	v4l2_ctrl_handler_free(&vsen->hdl);
 	tpg_free(&vsen->tpg);
-	media_entity_cleanup(vsen->ved.ent);
 	kfree(vsen);
-}
-
-static const struct v4l2_subdev_internal_ops vimc_sen_int_ops = {
-	.release = vimc_sen_release,
-};
-
-void vimc_sen_rm(struct vimc_device *vimc, struct vimc_ent_device *ved)
-{
-	struct vimc_sen_device *vsen;
-
-	vsen = container_of(ved, struct vimc_sen_device, ved);
-	v4l2_device_unregister_subdev(&vsen->sd);
 }
 
 /* Image Processing Controls */
@@ -319,17 +319,18 @@ static const struct v4l2_ctrl_config vimc_sen_ctrl_test_pattern = {
 	.qmenu = tpg_pattern_strings,
 };
 
-struct vimc_ent_device *vimc_sen_add(struct vimc_device *vimc,
-				     const char *vcfg_name)
+static int vimc_sen_comp_bind(struct device *comp, struct device *master,
+			      void *master_data)
 {
-	struct v4l2_device *v4l2_dev = &vimc->v4l2_dev;
+	struct v4l2_device *v4l2_dev = master_data;
+	struct vimc_platform_data *pdata = comp->platform_data;
 	struct vimc_sen_device *vsen;
 	int ret;
 
 	/* Allocate the vsen struct */
 	vsen = kzalloc(sizeof(*vsen), GFP_KERNEL);
 	if (!vsen)
-		return NULL;
+		return -ENOMEM;
 
 	v4l2_ctrl_handler_init(&vsen->hdl, 4);
 
@@ -339,50 +340,84 @@ struct vimc_ent_device *vimc_sen_add(struct vimc_device *vimc,
 			  V4L2_CID_VFLIP, 0, 1, 1, 0);
 	v4l2_ctrl_new_std(&vsen->hdl, &vimc_sen_ctrl_ops,
 			  V4L2_CID_HFLIP, 0, 1, 1, 0);
-	v4l2_ctrl_new_std(&vsen->hdl, &vimc_sen_ctrl_ops,
-			  V4L2_CID_BRIGHTNESS, 0, 255, 1, 128);
-	v4l2_ctrl_new_std(&vsen->hdl, &vimc_sen_ctrl_ops,
-			  V4L2_CID_CONTRAST, 0, 255, 1, 128);
-	v4l2_ctrl_new_std(&vsen->hdl, &vimc_sen_ctrl_ops,
-			  V4L2_CID_HUE, -128, 127, 1, 0);
-	v4l2_ctrl_new_std(&vsen->hdl, &vimc_sen_ctrl_ops,
-			  V4L2_CID_SATURATION, 0, 255, 1, 128);
 	vsen->sd.ctrl_handler = &vsen->hdl;
 	if (vsen->hdl.error) {
 		ret = vsen->hdl.error;
 		goto err_free_vsen;
 	}
 
+	/* Initialize ved and sd */
+	ret = vimc_ent_sd_register(&vsen->ved, &vsen->sd, v4l2_dev,
+				   pdata->entity_name,
+				   MEDIA_ENT_F_CAM_SENSOR, 1,
+				   (const unsigned long[1]) {MEDIA_PAD_FL_SOURCE},
+				   &vimc_sen_ops);
+	if (ret)
+		goto err_free_hdl;
+
+	vsen->ved.process_frame = vimc_sen_process_frame;
+	dev_set_drvdata(comp, &vsen->ved);
+	vsen->dev = comp;
+
+	/* Initialize the frame format */
+	vsen->mbus_format = fmt_default;
+
 	/* Initialize the test pattern generator */
 	tpg_init(&vsen->tpg, vsen->mbus_format.width,
 		 vsen->mbus_format.height);
 	ret = tpg_alloc(&vsen->tpg, VIMC_FRAME_MAX_WIDTH);
 	if (ret)
-		goto err_free_hdl;
+		goto err_unregister_ent_sd;
 
-	/* Initialize ved and sd */
-	vsen->pad.flags = MEDIA_PAD_FL_SOURCE;
-	ret = vimc_ent_sd_register(&vsen->ved, &vsen->sd, v4l2_dev,
-				   vcfg_name,
-				   MEDIA_ENT_F_CAM_SENSOR, 1, &vsen->pad,
-				   &vimc_sen_int_ops, &vimc_sen_ops);
-	if (ret)
-		goto err_free_tpg;
+	return 0;
 
-	vsen->ved.process_frame = vimc_sen_process_frame;
-	vsen->ved.dev = &vimc->pdev.dev;
-
-	/* Initialize the frame format */
-	vsen->mbus_format = fmt_default;
-
-	return &vsen->ved;
-
-err_free_tpg:
-	tpg_free(&vsen->tpg);
+err_unregister_ent_sd:
+	vimc_ent_sd_unregister(&vsen->ved,  &vsen->sd);
 err_free_hdl:
 	v4l2_ctrl_handler_free(&vsen->hdl);
 err_free_vsen:
 	kfree(vsen);
 
-	return NULL;
+	return ret;
 }
+
+static const struct component_ops vimc_sen_comp_ops = {
+	.bind = vimc_sen_comp_bind,
+	.unbind = vimc_sen_comp_unbind,
+};
+
+static int vimc_sen_probe(struct platform_device *pdev)
+{
+	return component_add(&pdev->dev, &vimc_sen_comp_ops);
+}
+
+static int vimc_sen_remove(struct platform_device *pdev)
+{
+	component_del(&pdev->dev, &vimc_sen_comp_ops);
+
+	return 0;
+}
+
+static const struct platform_device_id vimc_sen_driver_ids[] = {
+	{
+		.name           = VIMC_SEN_DRV_NAME,
+	},
+	{ }
+};
+
+static struct platform_driver vimc_sen_pdrv = {
+	.probe		= vimc_sen_probe,
+	.remove		= vimc_sen_remove,
+	.id_table	= vimc_sen_driver_ids,
+	.driver		= {
+		.name	= VIMC_SEN_DRV_NAME,
+	},
+};
+
+module_platform_driver(vimc_sen_pdrv);
+
+MODULE_DEVICE_TABLE(platform, vimc_sen_driver_ids);
+
+MODULE_DESCRIPTION("Virtual Media Controller Driver (VIMC) Sensor");
+MODULE_AUTHOR("Helen Mae Koike Fornazier <helen.fornazier@gmail.com>");
+MODULE_LICENSE("GPL");

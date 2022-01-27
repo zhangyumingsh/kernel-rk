@@ -7,7 +7,7 @@
    License.  See linux/COPYING for more information.
 
    Uniform CD-ROM driver for Linux.
-   See Documentation/cdrom/cdrom-standard.rst for usage information.
+   See Documentation/cdrom/cdrom-standard.tex for usage information.
 
    The routines in the file provide a uniform interface between the
    software that uses CD-ROMs and the various low-level drivers that
@@ -3017,31 +3017,9 @@ static noinline int mmc_ioctl_cdrom_read_audio(struct cdrom_device_info *cdi,
 	struct cdrom_read_audio ra;
 	int lba;
 
-#ifdef CONFIG_COMPAT
-	if (in_compat_syscall()) {
-		struct compat_cdrom_read_audio {
-			union cdrom_addr	addr;
-			u8			addr_format;
-			compat_int_t		nframes;
-			compat_caddr_t		buf;
-		} ra32;
-
-		if (copy_from_user(&ra32, arg, sizeof(ra32)))
-			return -EFAULT;
-
-		ra = (struct cdrom_read_audio) {
-			.addr		= ra32.addr,
-			.addr_format	= ra32.addr_format,
-			.nframes	= ra32.nframes,
-			.buf		= compat_ptr(ra32.buf),
-		};
-	} else
-#endif
-	{
-		if (copy_from_user(&ra, (struct cdrom_read_audio __user *)arg,
-				   sizeof(ra)))
-			return -EFAULT;
-	}
+	if (copy_from_user(&ra, (struct cdrom_read_audio __user *)arg,
+			   sizeof(ra)))
+		return -EFAULT;
 
 	if (ra.addr_format == CDROM_MSF)
 		lba = msf_to_lba(ra.addr.msf.minute,
@@ -3293,10 +3271,9 @@ static noinline int mmc_ioctl_cdrom_last_written(struct cdrom_device_info *cdi,
 	ret = cdrom_get_last_written(cdi, &last);
 	if (ret)
 		return ret;
-	if (in_compat_syscall())
-		return put_user(last, (__s32 __user *)arg);
-
-	return put_user(last, (long __user *)arg);
+	if (copy_to_user((long __user *)arg, &last, sizeof(last)))
+		return -EFAULT;
+	return 0;
 }
 
 static int mmc_ioctl(struct cdrom_device_info *cdi, unsigned int cmd,

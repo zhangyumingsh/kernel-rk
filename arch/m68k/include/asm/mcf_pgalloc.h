@@ -12,7 +12,8 @@ extern inline void pte_free_kernel(struct mm_struct *mm, pte_t *pte)
 
 extern const char bad_pmd_string[];
 
-extern inline pte_t *pte_alloc_one_kernel(struct mm_struct *mm)
+extern inline pte_t *pte_alloc_one_kernel(struct mm_struct *mm,
+	unsigned long address)
 {
 	unsigned long page = __get_free_page(GFP_DMA);
 
@@ -28,6 +29,11 @@ extern inline pmd_t *pmd_alloc_kernel(pgd_t *pgd, unsigned long address)
 	return (pmd_t *) pgd;
 }
 
+#define pmd_alloc_one_fast(mm, address) ({ BUG(); ((pmd_t *)1); })
+#define pmd_alloc_one(mm, address)      ({ BUG(); ((pmd_t *)2); })
+
+#define pte_alloc_one_fast(mm, addr) pte_alloc_one(mm, addr)
+
 #define pmd_populate(mm, pmd, page) (pmd_val(*pmd) = \
 	(unsigned long)(page_address(page)))
 
@@ -38,18 +44,21 @@ extern inline pmd_t *pmd_alloc_kernel(pgd_t *pgd, unsigned long address)
 static inline void __pte_free_tlb(struct mmu_gather *tlb, pgtable_t page,
 				  unsigned long address)
 {
-	pgtable_pte_page_dtor(page);
+	pgtable_page_dtor(page);
 	__free_page(page);
 }
 
-static inline struct page *pte_alloc_one(struct mm_struct *mm)
+#define __pmd_free_tlb(tlb, pmd, address) do { } while (0)
+
+static inline struct page *pte_alloc_one(struct mm_struct *mm,
+	unsigned long address)
 {
 	struct page *page = alloc_pages(GFP_DMA, 0);
 	pte_t *pte;
 
 	if (!page)
 		return NULL;
-	if (!pgtable_pte_page_ctor(page)) {
+	if (!pgtable_page_ctor(page)) {
 		__free_page(page);
 		return NULL;
 	}
@@ -68,7 +77,7 @@ static inline struct page *pte_alloc_one(struct mm_struct *mm)
 
 static inline void pte_free(struct mm_struct *mm, struct page *page)
 {
-	pgtable_pte_page_dtor(page);
+	pgtable_page_dtor(page);
 	__free_page(page);
 }
 
@@ -94,5 +103,7 @@ static inline pgd_t *pgd_alloc(struct mm_struct *mm)
 	memset(new_pgd, 0, PAGE_OFFSET >> PGDIR_SHIFT);
 	return new_pgd;
 }
+
+#define pgd_populate(mm, pmd, pte) BUG()
 
 #endif /* M68K_MCF_PGALLOC_H */

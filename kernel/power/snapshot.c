@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * linux/kernel/power/snapshot.c
  *
@@ -6,9 +5,12 @@
  *
  * Copyright (C) 1998-2005 Pavel Machek <pavel@ucw.cz>
  * Copyright (C) 2006 Rafael J. Wysocki <rjw@sisk.pl>
+ *
+ * This file is released under the GPLv2.
+ *
  */
 
-#define pr_fmt(fmt) "PM: hibernation: " fmt
+#define pr_fmt(fmt) "PM: " fmt
 
 #include <linux/version.h>
 #include <linux/module.h>
@@ -21,7 +23,7 @@
 #include <linux/pm.h>
 #include <linux/device.h>
 #include <linux/init.h>
-#include <linux/memblock.h>
+#include <linux/bootmem.h>
 #include <linux/nmi.h>
 #include <linux/syscalls.h>
 #include <linux/console.h>
@@ -103,7 +105,7 @@ unsigned long image_size;
 
 void __init hibernate_image_size_init(void)
 {
-	image_size = ((totalram_pages() * 2) / 5) * PAGE_SIZE;
+	image_size = ((totalram_pages * 2) / 5) * PAGE_SIZE;
 }
 
 /*
@@ -968,11 +970,7 @@ void __init __register_nosave_region(unsigned long start_pfn,
 		BUG_ON(!region);
 	} else {
 		/* This allocation cannot fail */
-		region = memblock_alloc(sizeof(struct nosave_region),
-					SMP_CACHE_BYTES);
-		if (!region)
-			panic("%s: Failed to allocate %zu bytes\n", __func__,
-			      sizeof(struct nosave_region));
+		region = memblock_virt_alloc(sizeof(struct nosave_region), 0);
 	}
 	region->start_pfn = start_pfn;
 	region->end_pfn = end_pfn;
@@ -1223,16 +1221,14 @@ static struct page *saveable_highmem_page(struct zone *zone, unsigned long pfn)
 	if (!pfn_valid(pfn))
 		return NULL;
 
-	page = pfn_to_online_page(pfn);
-	if (!page || page_zone(page) != zone)
+	page = pfn_to_page(pfn);
+	if (page_zone(page) != zone)
 		return NULL;
 
 	BUG_ON(!PageHighMem(page));
 
-	if (swsusp_page_is_forbidden(page) ||  swsusp_page_is_free(page))
-		return NULL;
-
-	if (PageReserved(page) || PageOffline(page))
+	if (swsusp_page_is_forbidden(page) ||  swsusp_page_is_free(page) ||
+	    PageReserved(page))
 		return NULL;
 
 	if (page_is_guard(page))
@@ -1287,16 +1283,13 @@ static struct page *saveable_page(struct zone *zone, unsigned long pfn)
 	if (!pfn_valid(pfn))
 		return NULL;
 
-	page = pfn_to_online_page(pfn);
-	if (!page || page_zone(page) != zone)
+	page = pfn_to_page(pfn);
+	if (page_zone(page) != zone)
 		return NULL;
 
 	BUG_ON(PageHighMem(page));
 
 	if (swsusp_page_is_forbidden(page) || swsusp_page_is_free(page))
-		return NULL;
-
-	if (PageOffline(page))
 		return NULL;
 
 	if (PageReserved(page)
@@ -1347,9 +1340,8 @@ static inline void do_copy_page(long *dst, long *src)
  * safe_copy_page - Copy a page in a safe way.
  *
  * Check if the page we are going to copy is marked as present in the kernel
- * page tables. This always is the case if CONFIG_DEBUG_PAGEALLOC or
- * CONFIG_ARCH_HAS_SET_DIRECT_MAP is not set. In that case kernel_page_present()
- * always returns 'true'.
+ * page tables (this always is the case if CONFIG_DEBUG_PAGEALLOC is not set
+ * and in that case kernel_page_present() always returns 'true').
  */
 static void safe_copy_page(void *dst, struct page *s_page)
 {
@@ -1566,7 +1558,9 @@ static unsigned long preallocate_image_highmem(unsigned long nr_pages)
  */
 static unsigned long __fraction(u64 x, u64 multiplier, u64 base)
 {
-	return div64_u64(x * multiplier, base);
+	x *= multiplier;
+	do_div(x, base);
+	return (unsigned long)x;
 }
 
 static unsigned long preallocate_highmem_fraction(unsigned long nr_pages,
@@ -1681,7 +1675,7 @@ static unsigned long minimum_image_size(unsigned long saveable)
  * hibernation for allocations made while saving the image and for device
  * drivers, in case they need to allocate memory from their hibernation
  * callbacks (these two numbers are given by PAGES_FOR_IO (which is a rough
- * estimate) and reserved_size divided by PAGE_SIZE (which is tunable through
+ * estimate) and reserverd_size divided by PAGE_SIZE (which is tunable through
  * /sys/power/reserved_size, respectively).  To make this happen, we compute the
  * total number of available page frames and allocate at least
  *
@@ -1703,20 +1697,16 @@ int hibernate_preallocate_memory(void)
 	ktime_t start, stop;
 	int error;
 
-	pr_info("Preallocating image memory\n");
+	pr_info("Preallocating image memory... ");
 	start = ktime_get();
 
 	error = memory_bm_create(&orig_bm, GFP_IMAGE, PG_ANY);
-	if (error) {
-		pr_err("Cannot allocate original bitmap\n");
+	if (error)
 		goto err_out;
-	}
 
 	error = memory_bm_create(&copy_bm, GFP_IMAGE, PG_ANY);
-	if (error) {
-		pr_err("Cannot allocate copy bitmap\n");
+	if (error)
 		goto err_out;
-	}
 
 	alloc_normal = 0;
 	alloc_highmem = 0;
@@ -1806,11 +1796,8 @@ int hibernate_preallocate_memory(void)
 		alloc -= pages;
 		pages += pages_highmem;
 		pages_highmem = preallocate_image_highmem(alloc);
-		if (pages_highmem < alloc) {
-			pr_err("Image allocation is %lu pages short\n",
-				alloc - pages_highmem);
+		if (pages_highmem < alloc)
 			goto err_out;
-		}
 		pages += pages_highmem;
 		/*
 		 * size is the desired number of saveable pages to leave in
@@ -1841,12 +1828,13 @@ int hibernate_preallocate_memory(void)
 
  out:
 	stop = ktime_get();
-	pr_info("Allocated %lu pages for snapshot\n", pages);
+	pr_cont("done (allocated %lu pages)\n", pages);
 	swsusp_show_speed(start, stop, pages, "Allocated");
 
 	return 0;
 
  err_out:
+	pr_cont("\n");
 	swsusp_free();
 	return -ENOMEM;
 }
@@ -1980,7 +1968,7 @@ asmlinkage __visible int swsusp_save(void)
 {
 	unsigned int nr_pages, nr_highmem;
 
-	pr_info("Creating image:\n");
+	pr_info("Creating hibernation image:\n");
 
 	drain_local_pages(NULL);
 	nr_pages = count_data_pages();
@@ -2014,7 +2002,7 @@ asmlinkage __visible int swsusp_save(void)
 	nr_copy_pages = nr_pages;
 	nr_meta_pages = DIV_ROUND_UP(nr_pages * sizeof(long), PAGE_SIZE);
 
-	pr_info("Image created (%d pages copied)\n", nr_pages);
+	pr_info("Hibernation image created (%d pages copied)\n", nr_pages);
 
 	return 0;
 }

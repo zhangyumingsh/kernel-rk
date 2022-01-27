@@ -30,6 +30,7 @@
 
 #include <drm/drm_file.h>
 #include <drm/drm_modes.h>
+#include <uapi/drm/drm.h>
 
 struct drm_device;
 struct drm_crtc;
@@ -94,7 +95,7 @@ struct drm_vblank_crtc {
 	/**
 	 * @queue: Wait queue for vblank waiters.
 	 */
-	wait_queue_head_t queue;
+	wait_queue_head_t queue;	/**< VBLANK wait queue */
 	/**
 	 * @disable_timer: Disable timer for the delayed vblank disabling
 	 * hysteresis logic. Vblank disabling is controlled through the
@@ -106,23 +107,12 @@ struct drm_vblank_crtc {
 	/**
 	 * @seqlock: Protect vblank count and time.
 	 */
-	seqlock_t seqlock;
+	seqlock_t seqlock;		/* protects vblank count and time */
 
 	/**
-	 * @count:
-	 *
-	 * Current software vblank counter.
-	 *
-	 * Note that for a given vblank counter value drm_crtc_handle_vblank()
-	 * and drm_crtc_vblank_count() or drm_crtc_vblank_count_and_time()
-	 * provide a barrier: Any writes done before calling
-	 * drm_crtc_handle_vblank() will be visible to callers of the later
-	 * functions, iff the vblank count is the same or a later one.
-	 *
-	 * IMPORTANT: This guarantee requires barriers, therefor never access
-	 * this field directly. Use drm_crtc_vblank_count() instead.
+	 * @count: Current software vblank counter.
 	 */
-	atomic64_t count;
+	u64 count;
 	/**
 	 * @time: Vblank timestamp corresponding to @count.
 	 */
@@ -133,7 +123,7 @@ struct drm_vblank_crtc {
 	 * this refcount reaches 0 can the hardware interrupt be disabled using
 	 * @disable_timer.
 	 */
-	atomic_t refcount;
+	atomic_t refcount;		/* number of users of vblank interruptsper crtc */
 	/**
 	 * @last: Protected by &drm_device.vbl_lock, used for wraparound handling.
 	 */
@@ -166,7 +156,7 @@ struct drm_vblank_crtc {
 	 * call drm_crtc_vblank_off() and drm_crtc_vblank_on(), which explicitly
 	 * save and restore the vblank count.
 	 */
-	unsigned int inmodeset;
+	unsigned int inmodeset;		/* Display driver is setting mode */
 	/**
 	 * @pipe: drm_crtc_index() of the &drm_crtc corresponding to this
 	 * structure.

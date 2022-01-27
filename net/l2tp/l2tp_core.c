@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * L2TP core.
  *
@@ -13,6 +12,10 @@
  *		Michal Ostrowski <mostrows@speakeasy.net>
  *		Arnaldo Carvalho de Melo <acme@xconectiva.com.br>
  *		David S. Miller (davem@redhat.com)
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -122,6 +125,8 @@ static inline struct l2tp_tunnel *l2tp_tunnel(struct sock *sk)
 
 static inline struct l2tp_net *l2tp_pernet(const struct net *net)
 {
+	BUG_ON(!net);
+
 	return net_generic(net, l2tp_net_id);
 }
 
@@ -1028,6 +1033,7 @@ static void l2tp_xmit_core(struct l2tp_session *session, struct sk_buff *skb,
 
 	/* Queue the packet to IP for output */
 	skb->ignore_df = 1;
+	skb_dst_drop(skb);
 #if IS_ENABLED(CONFIG_IPV6)
 	if (l2tp_sk_is_v6(tunnel->sock))
 		error = inet6_csk_xmit(tunnel->sock, skb, NULL);
@@ -1081,7 +1087,7 @@ int l2tp_xmit_skb(struct l2tp_session *session, struct sk_buff *skb, int hdr_len
 	memset(&(IPCB(skb)->opt), 0, sizeof(IPCB(skb)->opt));
 	IPCB(skb)->flags &= ~(IPSKB_XFRM_TUNNEL_SIZE | IPSKB_XFRM_TRANSFORMED |
 			      IPSKB_REROUTED);
-	nf_reset_ct(skb);
+	nf_reset(skb);
 
 	bh_lock_sock(sk);
 	if (sock_owned_by_user(sk)) {
@@ -1098,10 +1104,6 @@ int l2tp_xmit_skb(struct l2tp_session *session, struct sk_buff *skb, int hdr_len
 		ret = NET_XMIT_DROP;
 		goto out_unlock;
 	}
-
-	/* Get routing info from the tunnel socket */
-	skb_dst_drop(skb);
-	skb_dst_set(skb, sk_dst_check(sk, 0));
 
 	inet = inet_sk(sk);
 	fl = &inet->cork.fl;
@@ -1456,6 +1458,9 @@ static int l2tp_validate_socket(const struct sock *sk, const struct net *net,
 		return -EINVAL;
 
 	if (sk->sk_type != SOCK_DGRAM)
+		return -EPROTONOSUPPORT;
+
+	if (sk->sk_family != PF_INET && sk->sk_family != PF_INET6)
 		return -EPROTONOSUPPORT;
 
 	if ((encap == L2TP_ENCAPTYPE_UDP && sk->sk_protocol != IPPROTO_UDP) ||

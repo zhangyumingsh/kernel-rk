@@ -17,6 +17,7 @@
 #include <linux/timer.h>
 #include <linux/cec-funcs.h>
 #include <media/rc-core.h>
+#include <media/cec-notifier.h>
 
 #define CEC_CAP_DEFAULTS (CEC_CAP_LOG_ADDRS | CEC_CAP_TRANSMIT | \
 			  CEC_CAP_PASSTHROUGH | CEC_CAP_RC)
@@ -52,7 +53,6 @@ struct cec_devnode {
 struct cec_adapter;
 struct cec_data;
 struct cec_pin;
-struct cec_notifier;
 
 struct cec_data {
 	struct list_head list;
@@ -164,8 +164,6 @@ struct cec_adapter {
 	wait_queue_head_t kthread_waitq;
 	wait_queue_head_t waitq;
 
-	struct delayed_work debounce_work;
-
 	const struct cec_adap_ops *ops;
 	void *priv;
 	u32 capabilities;
@@ -184,7 +182,6 @@ struct cec_adapter {
 	struct cec_fh *cec_initiator;
 	bool passthrough;
 	struct cec_log_addrs log_addrs;
-	struct cec_connector_info conn_info;
 
 	u32 tx_timeouts;
 
@@ -202,7 +199,9 @@ struct cec_adapter {
 	u16 phys_addrs[15];
 	u32 sequence;
 
+	char device_name[32];
 	char input_phys[32];
+	char input_drv[32];
 };
 
 static inline void *cec_get_drvdata(const struct cec_adapter *adap)
@@ -236,7 +235,6 @@ static inline bool cec_is_registered(const struct cec_adapter *adap)
 	((pa) >> 12), ((pa) >> 8) & 0xf, ((pa) >> 4) & 0xf, (pa) & 0xf
 
 struct edid;
-struct drm_connector;
 
 #if IS_REACHABLE(CONFIG_CEC_CORE)
 struct cec_adapter *cec_allocate_adapter(const struct cec_adap_ops *ops,
@@ -251,8 +249,6 @@ void cec_s_phys_addr(struct cec_adapter *adap, u16 phys_addr,
 		     bool block);
 void cec_s_phys_addr_from_edid(struct cec_adapter *adap,
 			       const struct edid *edid);
-void cec_s_conn_info(struct cec_adapter *adap,
-		     const struct cec_connector_info *conn_info);
 int cec_transmit_msg(struct cec_adapter *adap, struct cec_msg *msg,
 		     bool block);
 
@@ -337,9 +333,6 @@ void cec_queue_pin_5v_event(struct cec_adapter *adap, bool is_high, ktime_t ts);
 u16 cec_get_edid_phys_addr(const u8 *edid, unsigned int size,
 			   unsigned int *offset);
 
-void cec_fill_conn_info_from_drm(struct cec_connector_info *conn_info,
-				 const struct drm_connector *connector);
-
 #else
 
 static inline int cec_register_adapter(struct cec_adapter *adap,
@@ -372,18 +365,6 @@ static inline u16 cec_get_edid_phys_addr(const u8 *edid, unsigned int size,
 	if (offset)
 		*offset = 0;
 	return CEC_PHYS_ADDR_INVALID;
-}
-
-static inline void cec_s_conn_info(struct cec_adapter *adap,
-				   const struct cec_connector_info *conn_info)
-{
-}
-
-static inline void
-cec_fill_conn_info_from_drm(struct cec_connector_info *conn_info,
-			    const struct drm_connector *connector)
-{
-	memset(conn_info, 0, sizeof(*conn_info));
 }
 
 #endif

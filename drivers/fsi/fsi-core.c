@@ -1,8 +1,16 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * FSI core driver
  *
  * Copyright (C) IBM Corporation 2016
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  *
  * TODO:
  *  - Rework topology
@@ -1264,19 +1272,6 @@ static ssize_t master_break_store(struct device *dev,
 
 static DEVICE_ATTR(break, 0200, NULL, master_break_store);
 
-static struct attribute *master_attrs[] = {
-	&dev_attr_break.attr,
-	&dev_attr_rescan.attr,
-	NULL
-};
-
-ATTRIBUTE_GROUPS(master);
-
-static struct class fsi_master_class = {
-	.name = "fsi-master",
-	.dev_groups = master_groups,
-};
-
 int fsi_master_register(struct fsi_master *master)
 {
 	int rc;
@@ -1285,10 +1280,23 @@ int fsi_master_register(struct fsi_master *master)
 	mutex_init(&master->scan_lock);
 	master->idx = ida_simple_get(&master_ida, 0, INT_MAX, GFP_KERNEL);
 	dev_set_name(&master->dev, "fsi%d", master->idx);
-	master->dev.class = &fsi_master_class;
 
 	rc = device_register(&master->dev);
 	if (rc) {
+		ida_simple_remove(&master_ida, master->idx);
+		return rc;
+	}
+
+	rc = device_create_file(&master->dev, &dev_attr_rescan);
+	if (rc) {
+		device_del(&master->dev);
+		ida_simple_remove(&master_ida, master->idx);
+		return rc;
+	}
+
+	rc = device_create_file(&master->dev, &dev_attr_break);
+	if (rc) {
+		device_del(&master->dev);
 		ida_simple_remove(&master_ida, master->idx);
 		return rc;
 	}
@@ -1373,15 +1381,8 @@ static int __init fsi_init(void)
 	rc = bus_register(&fsi_bus_type);
 	if (rc)
 		goto fail_bus;
-
-	rc = class_register(&fsi_master_class);
-	if (rc)
-		goto fail_class;
-
 	return 0;
 
- fail_class:
-	bus_unregister(&fsi_bus_type);
  fail_bus:
 	unregister_chrdev_region(fsi_base_dev, FSI_CHAR_MAX_DEVICES);
 	return rc;
@@ -1390,7 +1391,6 @@ postcore_initcall(fsi_init);
 
 static void fsi_exit(void)
 {
-	class_unregister(&fsi_master_class);
 	bus_unregister(&fsi_bus_type);
 	unregister_chrdev_region(fsi_base_dev, FSI_CHAR_MAX_DEVICES);
 	ida_destroy(&fsi_minor_ida);

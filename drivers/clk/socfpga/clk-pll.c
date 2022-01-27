@@ -1,9 +1,19 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *  Copyright 2011-2012 Calxeda, Inc.
  *  Copyright (C) 2012-2013 Altera Corporation <www.altera.com>
  *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
  * Based from clk-highbank.c
+ *
  */
 #include <linux/slab.h>
 #include <linux/clk-provider.h>
@@ -78,7 +88,7 @@ static __init struct clk *__socfpga_pll_init(struct device_node *node,
 	struct socfpga_pll *pll_clk;
 	const char *clk_name = node->name;
 	const char *parent_name[SOCFPGA_MAX_PARENTS];
-	struct clk_init_data init;
+	struct clk_init_data init = {};
 	struct device_node *clkmgr_np;
 	int rc;
 

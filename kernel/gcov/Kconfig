@@ -1,4 +1,3 @@
-# SPDX-License-Identifier: GPL-2.0-only
 menu "GCOV-based kernel profiling"
 
 config GCOV_KERNEL

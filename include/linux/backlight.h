@@ -13,6 +13,7 @@
 #include <linux/fb.h>
 #include <linux/mutex.h>
 #include <linux/notifier.h>
+#include <linux/thermal.h>
 
 /* Notes on locking:
  *
@@ -44,12 +45,6 @@ enum backlight_type {
 enum backlight_notification {
 	BACKLIGHT_REGISTERED,
 	BACKLIGHT_UNREGISTERED,
-};
-
-enum backlight_scale {
-	BACKLIGHT_SCALE_UNKNOWN = 0,
-	BACKLIGHT_SCALE_LINEAR,
-	BACKLIGHT_SCALE_NON_LINEAR,
 };
 
 struct backlight_device;
@@ -86,8 +81,6 @@ struct backlight_properties {
 	enum backlight_type type;
 	/* Flags used to signal drivers of state changes */
 	unsigned int state;
-	/* Type of the brightness scale (linear, non-linear, ...) */
-	enum backlight_scale scale;
 
 #define BL_CORE_SUSPENDED	(1 << 0)	/* backlight is suspended */
 #define BL_CORE_FBBLANK		(1 << 1)	/* backlight is under an fb blank event */
@@ -114,6 +107,12 @@ struct backlight_device {
 	struct list_head entry;
 
 	struct device dev;
+	/* Backlight cooling device */
+	struct thermal_cooling_device *cdev;
+	/* Thermally limited max brightness */
+	int thermal_brightness_limit;
+	/* User brightness request */
+	int usr_brightness_req;
 
 	/* Multiple framebuffers may share one backlight device */
 	bool fb_bl_on[FB_MAX];

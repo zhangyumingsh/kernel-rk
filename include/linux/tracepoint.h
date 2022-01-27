@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
 #ifndef _LINUX_TRACEPOINT_H
 #define _LINUX_TRACEPOINT_H
 
@@ -10,6 +9,9 @@
  * Copyright (C) 2008-2014 Mathieu Desnoyers <mathieu.desnoyers@efficios.com>
  *
  * Heavily inspired from the Linux Kernel Markers.
+ *
+ * This file is released under the GPLv2.
+ * See the file COPYING for more details.
  */
 
 #include <linux/smp.h>
@@ -80,7 +82,7 @@ int unregister_tracepoint_module_notifier(struct notifier_block *nb)
 static inline void tracepoint_synchronize_unregister(void)
 {
 	synchronize_srcu(&tracepoint_srcu);
-	synchronize_rcu();
+	synchronize_sched();
 }
 #else
 static inline void tracepoint_synchronize_unregister(void)
@@ -362,7 +364,7 @@ static inline struct tracepoint *tracepoint_ptr_deref(tracepoint_ptr_t *p)
 		static const char *___tp_str __tracepoint_string = str; \
 		___tp_str;						\
 	})
-#define __tracepoint_string	__attribute__((section("__tracepoint_str")))
+#define __tracepoint_string	__attribute__((section("__tracepoint_str"), used))
 #else
 /*
  * tracepoint_string() is used to save the string address for userspace
@@ -545,20 +547,5 @@ static inline struct tracepoint *tracepoint_ptr_deref(tracepoint_ptr_t *p)
 #define TRACE_EVENT_FLAGS(event, flag)
 
 #define TRACE_EVENT_PERF_PERM(event, expr...)
-
-#define DECLARE_EVENT_NOP(name, proto, args)				\
-	static inline void trace_##name(proto)				\
-	{ }								\
-	static inline bool trace_##name##_enabled(void)			\
-	{								\
-		return false;						\
-	}
-
-#define TRACE_EVENT_NOP(name, proto, args, struct, assign, print)	\
-	DECLARE_EVENT_NOP(name, PARAMS(proto), PARAMS(args))
-
-#define DECLARE_EVENT_CLASS_NOP(name, proto, args, tstruct, assign, print)
-#define DEFINE_EVENT_NOP(template, name, proto, args)			\
-	DECLARE_EVENT_NOP(name, PARAMS(proto), PARAMS(args))
 
 #endif /* ifdef TRACE_EVENT (see note above) */

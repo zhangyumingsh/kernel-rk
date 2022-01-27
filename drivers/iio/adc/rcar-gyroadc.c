@@ -1,8 +1,17 @@
-// SPDX-License-Identifier: GPL-2.0+
 /*
  * Renesas R-Car GyroADC driver
  *
  * Copyright 2016 Marek Vasut <marek.vasut@gmail.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/module.h>
@@ -334,8 +343,8 @@ static int rcar_gyroadc_parse_subdevs(struct iio_dev *indio_dev)
 	for_each_child_of_node(np, child) {
 		of_id = of_match_node(rcar_gyroadc_child_match, child);
 		if (!of_id) {
-			dev_err(dev, "Ignoring unsupported ADC \"%pOFn\".",
-				child);
+			dev_err(dev, "Ignoring unsupported ADC \"%s\".",
+				child->name);
 			continue;
 		}
 
@@ -372,16 +381,16 @@ static int rcar_gyroadc_parse_subdevs(struct iio_dev *indio_dev)
 			ret = of_property_read_u32(child, "reg", &reg);
 			if (ret) {
 				dev_err(dev,
-					"Failed to get child reg property of ADC \"%pOFn\".\n",
-					child);
+					"Failed to get child reg property of ADC \"%s\".\n",
+					child->name);
 				return ret;
 			}
 
 			/* Channel number is too high. */
 			if (reg >= num_channels) {
 				dev_err(dev,
-					"Only %i channels supported with %pOFn, but reg = <%i>.\n",
-					num_channels, child, reg);
+					"Only %i channels supported with %s, but reg = <%i>.\n",
+					num_channels, child->name, reg);
 				return -EINVAL;
 			}
 		}
@@ -481,16 +490,20 @@ static int rcar_gyroadc_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	struct rcar_gyroadc *priv;
 	struct iio_dev *indio_dev;
+	struct resource *mem;
 	int ret;
 
 	indio_dev = devm_iio_device_alloc(dev, sizeof(*priv));
-	if (!indio_dev)
+	if (!indio_dev) {
+		dev_err(dev, "Failed to allocate IIO device.\n");
 		return -ENOMEM;
+	}
 
 	priv = iio_priv(indio_dev);
 	priv->dev = dev;
 
-	priv->regs = devm_platform_ioremap_resource(pdev, 0);
+	mem = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	priv->regs = devm_ioremap_resource(dev, mem);
 	if (IS_ERR(priv->regs))
 		return PTR_ERR(priv->regs);
 

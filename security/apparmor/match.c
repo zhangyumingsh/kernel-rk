@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * AppArmor security module
  *
@@ -6,6 +5,11 @@
  *
  * Copyright (C) 1998-2008 Novell/SUSE
  * Copyright 2009-2012 Canonical Ltd.
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License as
+ * published by the Free Software Foundation, version 2 of the
+ * License.
  */
 
 #include <linux/errno.h>
@@ -97,6 +101,9 @@ static struct table_header *unpack_table(char *blob, size_t bsize)
 	      th.td_flags == YYTD_DATA8))
 		goto out;
 
+	/* if we have a table it must have some entries */
+	if (th.td_lolen == 0)
+		goto out;
 	tsize = table_size(th.td_lolen, th.td_flags);
 	if (bsize < tsize)
 		goto out;
@@ -198,6 +205,8 @@ static int verify_dfa(struct aa_dfa *dfa)
 
 	state_count = dfa->tables[YYTD_ID_BASE]->td_lolen;
 	trans_count = dfa->tables[YYTD_ID_NXT]->td_lolen;
+	if (state_count == 0)
+		goto out;
 	for (i = 0; i < state_count; i++) {
 		if (!(BASE_TABLE(dfa)[i] & MATCH_FLAG_DIFF_ENCODE) &&
 		    (DEFAULT_TABLE(dfa)[i] >= state_count))
@@ -616,8 +625,8 @@ unsigned int aa_dfa_matchn_until(struct aa_dfa *dfa, unsigned int start,
 
 #define inc_wb_pos(wb)						\
 do {								\
-	wb->pos = (wb->pos + 1) & (WB_HISTORY_SIZE - 1);		\
-	wb->len = (wb->len + 1) & (WB_HISTORY_SIZE - 1);		\
+	wb->pos = (wb->pos + 1) & (wb->size - 1);		\
+	wb->len = (wb->len + 1) & (wb->size - 1);		\
 } while (0)
 
 /* For DFAs that don't support extended tagging of states */
@@ -636,7 +645,7 @@ static bool is_loop(struct match_workbuf *wb, unsigned int state,
 			return true;
 		}
 		if (pos == 0)
-			pos = WB_HISTORY_SIZE;
+			pos = wb->size;
 		pos--;
 	}
 

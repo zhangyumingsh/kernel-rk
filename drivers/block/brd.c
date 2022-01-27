@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Ram backed block device driver.
  *
@@ -154,12 +153,6 @@ static void brd_free_pages(struct brd_device *brd)
 		pos++;
 
 		/*
-		 * It takes 3.4 seconds to remove 80GiB ramdisk.
-		 * So, we need cond_resched to avoid stalling the CPU.
-		 */
-		cond_resched();
-
-		/*
 		 * This assumes radix_tree_gang_lookup always returns as
 		 * many pages as possible. If the radix-tree code changes,
 		 * so will this have to.
@@ -297,10 +290,6 @@ static blk_qc_t brd_make_request(struct request_queue *q, struct bio *bio)
 		unsigned int len = bvec.bv_len;
 		int err;
 
-		/* Don't support un-aligned buffer */
-		WARN_ON_ONCE((bvec.bv_offset & (SECTOR_SIZE - 1)) ||
-				(len & (SECTOR_SIZE - 1)));
-
 		err = brd_do_bvec(brd, bvec.bv_page, len, bvec.bv_offset,
 				  bio_op(bio), sector);
 		if (err)
@@ -386,6 +375,7 @@ static struct brd_device *brd_alloc(int i)
 		goto out_free_dev;
 
 	blk_queue_make_request(brd->brd_queue, brd_make_request);
+	blk_queue_max_hw_sectors(brd->brd_queue, 1024);
 
 	/* This is so fdisk will align partitions on 4k, because of
 	 * direct_access API needing 4k alignment, returning a PFN

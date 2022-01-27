@@ -87,6 +87,10 @@ static unsigned long get_boot_seed(void)
 #define KASLR_COMPRESSED_BOOT
 #include "../../lib/kaslr.c"
 
+struct mem_vector {
+	unsigned long long start;
+	unsigned long long size;
+};
 
 /* Only supporting at most 4 unusable memmap regions with kaslr */
 #define MAX_MEMMAP_REGIONS	4
@@ -97,8 +101,6 @@ static bool memmap_too_large;
 /* Store memory limit specified by "mem=nn[KMG]" or "memmap=nn[KMG]" */
 static unsigned long long mem_limit = ULLONG_MAX;
 
-/* Number of immovable memory regions */
-static int num_immovable_mem;
 
 enum mem_avoid_index {
 	MEM_AVOID_ZO_RANGE = 0,
@@ -132,14 +134,8 @@ char *skip_spaces(const char *str)
 #include "../../../../lib/ctype.c"
 #include "../../../../lib/cmdline.c"
 
-enum parse_mode {
-	PARSE_MEMMAP,
-	PARSE_EFI,
-};
-
 static int
-parse_memmap(char *p, unsigned long long *start, unsigned long long *size,
-		enum parse_mode mode)
+parse_memmap(char *p, unsigned long long *start, unsigned long long *size)
 {
 	char *oldp;
 
@@ -162,29 +158,8 @@ parse_memmap(char *p, unsigned long long *start, unsigned long long *size,
 		*start = memparse(p + 1, &p);
 		return 0;
 	case '@':
-		if (mode == PARSE_MEMMAP) {
-			/*
-			 * memmap=nn@ss specifies usable region, should
-			 * be skipped
-			 */
-			*size = 0;
-		} else {
-			unsigned long long flags;
-
-			/*
-			 * efi_fake_mem=nn@ss:attr the attr specifies
-			 * flags that might imply a soft-reservation.
-			 */
-			*start = memparse(p + 1, &p);
-			if (p && *p == ':') {
-				p++;
-				if (kstrtoull(p, 0, &flags) < 0)
-					*size = 0;
-				else if (flags & EFI_MEMORY_SP)
-					return 0;
-			}
-			*size = 0;
-		}
+		/* memmap=nn@ss specifies usable region, should be skipped */
+		*size = 0;
 		/* Fall through */
 	default:
 		/*
@@ -199,7 +174,7 @@ parse_memmap(char *p, unsigned long long *start, unsigned long long *size,
 	return -EINVAL;
 }
 
-static void mem_avoid_memmap(enum parse_mode mode, char *str)
+static void mem_avoid_memmap(char *str)
 {
 	static int i;
 
@@ -214,7 +189,7 @@ static void mem_avoid_memmap(enum parse_mode mode, char *str)
 		if (k)
 			*k++ = 0;
 
-		rc = parse_memmap(str, &start, &size, mode);
+		rc = parse_memmap(str, &start, &size);
 		if (rc < 0)
 			break;
 		str = k;
@@ -265,7 +240,8 @@ static void parse_gb_huge_pages(char *param, char *val)
 	}
 }
 
-static void handle_mem_options(void)
+
+static int handle_mem_options(void)
 {
 	char *args = (char *)get_cmd_line_ptr();
 	size_t len = strlen((char *)args);
@@ -275,7 +251,7 @@ static void handle_mem_options(void)
 
 	if (!strstr(args, "memmap=") && !strstr(args, "mem=") &&
 		!strstr(args, "hugepages"))
-		return;
+		return 0;
 
 	tmp_cmdline = malloc(len + 1);
 	if (!tmp_cmdline)
@@ -293,11 +269,12 @@ static void handle_mem_options(void)
 		/* Stop at -- */
 		if (!val && strcmp(param, "--") == 0) {
 			warn("Only '--' specified in cmdline");
-			goto out;
+			free(tmp_cmdline);
+			return -1;
 		}
 
 		if (!strcmp(param, "memmap")) {
-			mem_avoid_memmap(PARSE_MEMMAP, val);
+			mem_avoid_memmap(val);
 		} else if (strstr(param, "hugepages")) {
 			parse_gb_huge_pages(param, val);
 		} else if (!strcmp(param, "mem")) {
@@ -306,18 +283,16 @@ static void handle_mem_options(void)
 			if (!strcmp(p, "nopentium"))
 				continue;
 			mem_size = memparse(p, &p);
-			if (mem_size == 0)
-				goto out;
-
+			if (mem_size == 0) {
+				free(tmp_cmdline);
+				return -EINVAL;
+			}
 			mem_limit = mem_size;
-		} else if (!strcmp(param, "efi_fake_mem")) {
-			mem_avoid_memmap(PARSE_EFI, val);
 		}
 	}
 
-out:
 	free(tmp_cmdline);
-	return;
+	return 0;
 }
 
 /*
@@ -443,9 +418,6 @@ static void mem_avoid_init(unsigned long input, unsigned long input_size,
 	/* Mark the memmap regions we need to avoid */
 	handle_mem_options();
 
-	/* Enumerate the immovable memory regions */
-	num_immovable_mem = count_immovable_mem_regions();
-
 #ifdef CONFIG_X86_VERBOSE_BOOTUP
 	/* Make sure video RAM can be used. */
 	add_identity_map(0, PMD_SIZE);
@@ -485,18 +457,6 @@ static bool mem_avoid_overlap(struct mem_vector *img,
 			*overlap = avoid;
 			earliest = overlap->start;
 			is_overlapping = true;
-		}
-
-		if (ptr->type == SETUP_INDIRECT &&
-		    ((struct setup_indirect *)ptr->data)->type != SETUP_INDIRECT) {
-			avoid.start = ((struct setup_indirect *)ptr->data)->addr;
-			avoid.size = ((struct setup_indirect *)ptr->data)->len;
-
-			if (mem_overlaps(img, &avoid) && (avoid.start < earliest)) {
-				*overlap = avoid;
-				earliest = overlap->start;
-				is_overlapping = true;
-			}
 		}
 
 		ptr = (struct setup_data *)(unsigned long)ptr->next;
@@ -613,11 +573,12 @@ static unsigned long slots_fetch_random(void)
 	return 0;
 }
 
-static void __process_mem_region(struct mem_vector *entry,
-				 unsigned long minimum,
-				 unsigned long image_size)
+static void process_mem_region(struct mem_vector *entry,
+			       unsigned long minimum,
+			       unsigned long image_size)
 {
 	struct mem_vector region, overlap;
+	struct slot_area slot_area;
 	unsigned long start_orig, end;
 	struct mem_vector cur_entry;
 
@@ -691,56 +652,6 @@ static void __process_mem_region(struct mem_vector *entry,
 	}
 }
 
-static bool process_mem_region(struct mem_vector *region,
-			       unsigned long long minimum,
-			       unsigned long long image_size)
-{
-	int i;
-	/*
-	 * If no immovable memory found, or MEMORY_HOTREMOVE disabled,
-	 * use @region directly.
-	 */
-	if (!num_immovable_mem) {
-		__process_mem_region(region, minimum, image_size);
-
-		if (slot_area_index == MAX_SLOT_AREA) {
-			debug_putstr("Aborted e820/efi memmap scan (slot_areas full)!\n");
-			return 1;
-		}
-		return 0;
-	}
-
-#if defined(CONFIG_MEMORY_HOTREMOVE) && defined(CONFIG_ACPI)
-	/*
-	 * If immovable memory found, filter the intersection between
-	 * immovable memory and @region.
-	 */
-	for (i = 0; i < num_immovable_mem; i++) {
-		unsigned long long start, end, entry_end, region_end;
-		struct mem_vector entry;
-
-		if (!mem_overlaps(region, &immovable_mem[i]))
-			continue;
-
-		start = immovable_mem[i].start;
-		end = start + immovable_mem[i].size;
-		region_end = region->start + region->size;
-
-		entry.start = clamp(region->start, start, end);
-		entry_end = clamp(region_end, start, end);
-		entry.size = entry_end - entry.start;
-
-		__process_mem_region(&entry, minimum, image_size);
-
-		if (slot_area_index == MAX_SLOT_AREA) {
-			debug_putstr("Aborted e820/efi memmap scan when walking immovable regions(slot_areas full)!\n");
-			return 1;
-		}
-	}
-#endif
-	return 0;
-}
-
 #ifdef CONFIG_EFI
 /*
  * Returns true if mirror region found (and must have been processed
@@ -800,18 +711,17 @@ process_efi_entries(unsigned long minimum, unsigned long image_size)
 		if (md->type != EFI_CONVENTIONAL_MEMORY)
 			continue;
 
-		if (efi_soft_reserve_enabled() &&
-		    (md->attribute & EFI_MEMORY_SP))
-			continue;
-
 		if (efi_mirror_found &&
 		    !(md->attribute & EFI_MEMORY_MORE_RELIABLE))
 			continue;
 
 		region.start = md->phys_addr;
 		region.size = md->num_pages << EFI_PAGE_SHIFT;
-		if (process_mem_region(&region, minimum, image_size))
+		process_mem_region(&region, minimum, image_size);
+		if (slot_area_index == MAX_SLOT_AREA) {
+			debug_putstr("Aborted EFI scan (slot_areas full)!\n");
 			break;
+		}
 	}
 	return true;
 }
@@ -838,8 +748,11 @@ static void process_e820_entries(unsigned long minimum,
 			continue;
 		region.start = entry->addr;
 		region.size = entry->size;
-		if (process_mem_region(&region, minimum, image_size))
+		process_mem_region(&region, minimum, image_size);
+		if (slot_area_index == MAX_SLOT_AREA) {
+			debug_putstr("Aborted e820 scan (slot_areas full)!\n");
 			break;
+		}
 	}
 }
 

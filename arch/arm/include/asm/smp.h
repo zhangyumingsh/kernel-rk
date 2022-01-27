@@ -1,8 +1,11 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  *  arch/arm/include/asm/smp.h
  *
  *  Copyright (C) 2004-2005 ARM Ltd.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  */
 #ifndef __ASM_ARM_SMP_H
 #define __ASM_ARM_SMP_H
@@ -46,6 +49,12 @@ extern void smp_init_cpus(void);
 extern void set_smp_cross_call(void (*)(const struct cpumask *, unsigned int));
 
 /*
+ * Provide a function to set a callback function pointer for updating the ipi
+ * history.
+ */
+extern void set_update_ipi_history_callback(void (*fn)(int));
+
+/*
  * Called from platform specific assembly code, this is the
  * secondary CPU entry point.
  */
@@ -64,6 +73,7 @@ struct secondary_data {
 	void *stack;
 };
 extern struct secondary_data secondary_data;
+extern volatile int pen_release;
 extern void secondary_startup(void);
 extern void secondary_startup_arm(void);
 

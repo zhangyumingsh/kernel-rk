@@ -5,14 +5,13 @@
 
 #define pr_fmt(fmt) "### dt-test ### " fmt
 
-#include <linux/memblock.h>
+#include <linux/bootmem.h>
 #include <linux/clk.h>
 #include <linux/err.h>
 #include <linux/errno.h>
 #include <linux/hashtable.h>
 #include <linux/libfdt.h>
 #include <linux/of.h>
-#include <linux/of_address.h>
 #include <linux/of_fdt.h>
 #include <linux/of_irq.h>
 #include <linux/of_platform.h>
@@ -300,10 +299,6 @@ static void __init of_unittest_printf(void)
 
 	of_unittest_printf_one(np, "%pOF",  full_name);
 	of_unittest_printf_one(np, "%pOFf", full_name);
-	of_unittest_printf_one(np, "%pOFn", "dev");
-	of_unittest_printf_one(np, "%2pOFn", "dev");
-	of_unittest_printf_one(np, "%5pOFn", "  dev");
-	of_unittest_printf_one(np, "%pOFnc", "dev:test-sub-device");
 	of_unittest_printf_one(np, "%pOFp", phandle_str);
 	of_unittest_printf_one(np, "%pOFP", "dev@100");
 	of_unittest_printf_one(np, "ABC %pOFP ABC", "ABC dev@100 ABC");
@@ -345,7 +340,7 @@ static void __init of_unittest_check_phandles(void)
 		}
 
 		nh = kzalloc(sizeof(*nh), GFP_KERNEL);
-		if (!nh)
+		if (WARN_ON(!nh))
 			return;
 
 		nh->np = np;
@@ -777,96 +772,11 @@ static void __init of_unittest_changeset(void)
 	unittest(!of_changeset_revert(&chgset), "revert failed\n");
 
 	of_changeset_destroy(&chgset);
+
+	of_node_put(n1);
+	of_node_put(n2);
+	of_node_put(n21);
 #endif
-}
-
-static void __init of_unittest_dma_ranges_one(const char *path,
-		u64 expect_dma_addr, u64 expect_paddr, u64 expect_size)
-{
-	struct device_node *np;
-	u64 dma_addr, paddr, size;
-	int rc;
-
-	np = of_find_node_by_path(path);
-	if (!np) {
-		pr_err("missing testcase data\n");
-		return;
-	}
-
-	rc = of_dma_get_range(np, &dma_addr, &paddr, &size);
-
-	unittest(!rc, "of_dma_get_range failed on node %pOF rc=%i\n", np, rc);
-	if (!rc) {
-		unittest(size == expect_size,
-			 "of_dma_get_range wrong size on node %pOF size=%llx\n", np, size);
-		unittest(paddr == expect_paddr,
-			 "of_dma_get_range wrong phys addr (%llx) on node %pOF", paddr, np);
-		unittest(dma_addr == expect_dma_addr,
-			 "of_dma_get_range wrong DMA addr (%llx) on node %pOF", dma_addr, np);
-	}
-	of_node_put(np);
-}
-
-static void __init of_unittest_parse_dma_ranges(void)
-{
-	of_unittest_dma_ranges_one("/testcase-data/address-tests/device@70000000",
-		0x0, 0x20000000, 0x40000000);
-	of_unittest_dma_ranges_one("/testcase-data/address-tests/bus@80000000/device@1000",
-		0x10000000, 0x20000000, 0x40000000);
-	of_unittest_dma_ranges_one("/testcase-data/address-tests/pci@90000000",
-		0x80000000, 0x20000000, 0x10000000);
-}
-
-static void __init of_unittest_pci_dma_ranges(void)
-{
-	struct device_node *np;
-	struct of_pci_range range;
-	struct of_pci_range_parser parser;
-	int i = 0;
-
-	if (!IS_ENABLED(CONFIG_PCI))
-		return;
-
-	np = of_find_node_by_path("/testcase-data/address-tests/pci@90000000");
-	if (!np) {
-		pr_err("missing testcase data\n");
-		return;
-	}
-
-	if (of_pci_dma_range_parser_init(&parser, np)) {
-		pr_err("missing dma-ranges property\n");
-		return;
-	}
-
-	/*
-	 * Get the dma-ranges from the device tree
-	 */
-	for_each_of_pci_range(&parser, &range) {
-		if (!i) {
-			unittest(range.size == 0x10000000,
-				 "for_each_of_pci_range wrong size on node %pOF size=%llx\n",
-				 np, range.size);
-			unittest(range.cpu_addr == 0x20000000,
-				 "for_each_of_pci_range wrong CPU addr (%llx) on node %pOF",
-				 range.cpu_addr, np);
-			unittest(range.pci_addr == 0x80000000,
-				 "for_each_of_pci_range wrong DMA addr (%llx) on node %pOF",
-				 range.pci_addr, np);
-		} else {
-			unittest(range.size == 0x10000000,
-				 "for_each_of_pci_range wrong size on node %pOF size=%llx\n",
-				 np, range.size);
-			unittest(range.cpu_addr == 0x40000000,
-				 "for_each_of_pci_range wrong CPU addr (%llx) on node %pOF",
-				 range.cpu_addr, np);
-			unittest(range.pci_addr == 0xc0000000,
-				 "for_each_of_pci_range wrong DMA addr (%llx) on node %pOF",
-				 range.pci_addr, np);
-		}
-		i++;
-	}
-
-	of_node_put(np);
 }
 
 static void __init of_unittest_parse_interrupts(void)
@@ -1134,10 +1044,8 @@ static void __init of_unittest_platform_populate(void)
 	test_bus = platform_device_register_full(&test_bus_info);
 	rc = PTR_ERR_OR_ZERO(test_bus);
 	unittest(!rc, "testbus registration failed; rc=%i\n", rc);
-	if (rc) {
-		of_node_put(np);
+	if (rc)
 		return;
-	}
 	test_bus->dev.of_node = np;
 
 	/*
@@ -1151,10 +1059,13 @@ static void __init of_unittest_platform_populate(void)
 
 	of_platform_populate(np, match, NULL, &test_bus->dev);
 	for_each_child_of_node(np, child) {
-		for_each_child_of_node(child, grandchild)
-			unittest(of_find_device_by_node(grandchild),
+		for_each_child_of_node(child, grandchild) {
+			pdev = of_find_device_by_node(grandchild);
+			unittest(pdev,
 				 "Could not create device for node '%pOFn'\n",
 				 grandchild);
+			of_dev_put(pdev);
+		}
 	}
 
 	of_platform_depopulate(&test_bus->dev);
@@ -1208,22 +1119,15 @@ static void update_node_properties(struct device_node *np,
 	for (prop = np->properties; prop != NULL; prop = save_next) {
 		save_next = prop->next;
 		ret = of_add_property(dup, prop);
-		if (ret) {
-			if (ret == -EEXIST && !strcmp(prop->name, "name"))
-				continue;
+		if (ret)
 			pr_err("unittest internal error: unable to add testdata property %pOF/%s",
 			       np, prop->name);
-		}
 	}
 }
 
 /**
  *	attach_node_and_children - attaches nodes
- *	and its children to live tree.
- *	CAUTION: misleading function name - if node @np already exists in
- *	the live tree then children of @np are *not* attached to the live
- *	tree.  This works for the current test devicetree nodes because such
- *	nodes do not have child nodes.
+ *	and its children to live tree
  *
  *	@np:	Node to attach to live tree
  */
@@ -1293,9 +1197,12 @@ static int __init unittest_data_add(void)
 
 	/* creating copy */
 	unittest_data = kmemdup(__dtb_testcases_begin, size, GFP_KERNEL);
-	if (!unittest_data)
-		return -ENOMEM;
 
+	if (!unittest_data) {
+		pr_warn("%s: Failed to allocate memory for unittest_data; "
+			"not running tests\n", __func__);
+		return -ENOMEM;
+	}
 	of_fdt_unflatten_tree(unittest_data, NULL, &unittest_data_node);
 	if (!unittest_data_node) {
 		pr_warn("%s: No tree to attach; not running tests\n", __func__);
@@ -1570,7 +1477,8 @@ static void of_unittest_destroy_tracked_overlays(void)
 	} while (defers > 0);
 }
 
-static int __init of_unittest_apply_overlay(int overlay_nr, int *overlay_id)
+static int __init of_unittest_apply_overlay(int overlay_nr, int unittest_nr,
+		int *overlay_id)
 {
 	const char *overlay_name;
 
@@ -1603,7 +1511,7 @@ static int __init of_unittest_apply_overlay_check(int overlay_nr,
 	}
 
 	ovcs_id = 0;
-	ret = of_unittest_apply_overlay(overlay_nr, &ovcs_id);
+	ret = of_unittest_apply_overlay(overlay_nr, unittest_nr, &ovcs_id);
 	if (ret != 0) {
 		/* of_unittest_apply_overlay already called unittest() */
 		return ret;
@@ -1639,7 +1547,7 @@ static int __init of_unittest_apply_revert_overlay_check(int overlay_nr,
 
 	/* apply the overlay */
 	ovcs_id = 0;
-	ret = of_unittest_apply_overlay(overlay_nr, &ovcs_id);
+	ret = of_unittest_apply_overlay(overlay_nr, unittest_nr, &ovcs_id);
 	if (ret != 0) {
 		/* of_unittest_apply_overlay already called unittest() */
 		return ret;
@@ -1937,8 +1845,10 @@ static int unittest_i2c_bus_probe(struct platform_device *pdev)
 	dev_dbg(dev, "%s for node @%pOF\n", __func__, np);
 
 	std = devm_kzalloc(dev, sizeof(*std), GFP_KERNEL);
-	if (!std)
+	if (!std) {
+		dev_err(dev, "Failed to allocate unittest i2c data\n");
 		return -ENOMEM;
+	}
 
 	/* link them together */
 	std->pdev = pdev;
@@ -2041,7 +1951,7 @@ static int unittest_i2c_mux_probe(struct i2c_client *client,
 {
 	int i, nchans;
 	struct device *dev = &client->dev;
-	struct i2c_adapter *adap = client->adapter;
+	struct i2c_adapter *adap = to_i2c_adapter(dev->parent);
 	struct device_node *np = client->dev.of_node, *child;
 	struct i2c_mux_core *muxc;
 	u32 reg, max_reg;
@@ -2295,12 +2205,10 @@ OVERLAY_INFO_EXTERN(overlay_11);
 OVERLAY_INFO_EXTERN(overlay_12);
 OVERLAY_INFO_EXTERN(overlay_13);
 OVERLAY_INFO_EXTERN(overlay_15);
-OVERLAY_INFO_EXTERN(overlay_bad_add_dup_node);
-OVERLAY_INFO_EXTERN(overlay_bad_add_dup_prop);
 OVERLAY_INFO_EXTERN(overlay_bad_phandle);
 OVERLAY_INFO_EXTERN(overlay_bad_symbol);
 
-/* entries found by name */
+/* order of entries is hard-coded into users of overlays[] */
 static struct overlay_info overlays[] = {
 	OVERLAY_INFO(overlay_base, -9999),
 	OVERLAY_INFO(overlay, 0),
@@ -2319,25 +2227,16 @@ static struct overlay_info overlays[] = {
 	OVERLAY_INFO(overlay_12, 0),
 	OVERLAY_INFO(overlay_13, 0),
 	OVERLAY_INFO(overlay_15, 0),
-	OVERLAY_INFO(overlay_bad_add_dup_node, -EINVAL),
-	OVERLAY_INFO(overlay_bad_add_dup_prop, -EINVAL),
 	OVERLAY_INFO(overlay_bad_phandle, -EINVAL),
 	OVERLAY_INFO(overlay_bad_symbol, -EINVAL),
-	/* end marker */
-	{.dtb_begin = NULL, .dtb_end = NULL, .expected_result = 0, .name = NULL}
+	{}
 };
 
 static struct device_node *overlay_base_root;
 
 static void * __init dt_alloc_memory(u64 size, u64 align)
 {
-	void *ptr = memblock_alloc(size, align);
-
-	if (!ptr)
-		panic("%s: Failed to allocate %llu bytes align=0x%llx\n",
-		      __func__, size, align);
-
-	return ptr;
+	return memblock_virt_alloc(size, align);
 }
 
 /*
@@ -2360,19 +2259,6 @@ void __init unittest_unflatten_overlay_base(void)
 	u32 data_size;
 	void *new_fdt;
 	u32 size;
-	int found = 0;
-	const char *overlay_name = "overlay_base";
-
-	for (info = overlays; info && info->name; info++) {
-		if (!strcmp(overlay_name, info->name)) {
-			found = 1;
-			break;
-		}
-	}
-	if (!found) {
-		pr_err("no overlay data for %s\n", overlay_name);
-		return;
-	}
 
 	info = &overlays[0];
 
@@ -2420,10 +2306,11 @@ static int __init overlay_data_apply(const char *overlay_name, int *overlay_id)
 {
 	struct overlay_info *info;
 	int found = 0;
+	int k;
 	int ret;
 	u32 size;
 
-	for (info = overlays; info && info->name; info++) {
+	for (k = 0, info = overlays; info && info->name; info++, k++) {
 		if (!strcmp(overlay_name, info->name)) {
 			found = 1;
 			break;
@@ -2496,7 +2383,7 @@ static __init void of_unittest_overlay_high_level(void)
 	 */
 	pprev = &overlay_base_root->child;
 	for (np = overlay_base_root->child; np; np = np->sibling) {
-		if (of_node_name_eq(np, "__local_fixups__")) {
+		if (!of_node_cmp(np->name, "__local_fixups__")) {
 			*pprev = np->sibling;
 			break;
 		}
@@ -2509,7 +2396,7 @@ static __init void of_unittest_overlay_high_level(void)
 		/* will have to graft properties from node into live tree */
 		pprev = &overlay_base_root->child;
 		for (np = overlay_base_root->child; np; np = np->sibling) {
-			if (of_node_name_eq(np, "__symbols__")) {
+			if (!of_node_cmp(np->name, "__symbols__")) {
 				overlay_base_symbols = np;
 				*pprev = np->sibling;
 				break;
@@ -2518,14 +2405,11 @@ static __init void of_unittest_overlay_high_level(void)
 		}
 	}
 
-	for_each_child_of_node(overlay_base_root, np) {
-		struct device_node *base_child;
-		for_each_child_of_node(of_root, base_child) {
-			if (!strcmp(np->full_name, base_child->full_name)) {
-				unittest(0, "illegal node name in overlay_base %pOFn",
-					 np);
-				return;
-			}
+	for (np = overlay_base_root->child; np; np = np->sibling) {
+		if (of_get_child_by_name(of_root, np->name)) {
+			unittest(0, "illegal node name in overlay_base %s",
+				np->name);
+			return;
 		}
 	}
 
@@ -2564,8 +2448,11 @@ static __init void of_unittest_overlay_high_level(void)
 				goto err_unlock;
 			}
 			if (__of_add_property(of_symbols, new_prop)) {
+				kfree(new_prop->name);
+				kfree(new_prop->value);
+				kfree(new_prop);
 				/* "name" auto-generated by unflatten */
-				if (!strcmp(new_prop->name, "name"))
+				if (!strcmp(prop->name, "name"))
 					continue;
 				unittest(0, "duplicate property '%s' in overlay_base node __symbols__",
 					 prop->name);
@@ -2586,12 +2473,6 @@ static __init void of_unittest_overlay_high_level(void)
 
 	unittest(overlay_data_apply("overlay", NULL),
 		 "Adding overlay 'overlay' failed\n");
-
-	unittest(overlay_data_apply("overlay_bad_add_dup_node", NULL),
-		 "Adding overlay 'overlay_bad_add_dup_node' failed\n");
-
-	unittest(overlay_data_apply("overlay_bad_add_dup_prop", NULL),
-		 "Adding overlay 'overlay_bad_add_dup_prop' failed\n");
 
 	unittest(overlay_data_apply("overlay_bad_phandle", NULL),
 		 "Adding overlay 'overlay_bad_phandle' failed\n");
@@ -2617,10 +2498,6 @@ static int __init of_unittest(void)
 	int res;
 
 	/* adding data for unittest */
-
-	if (IS_ENABLED(CONFIG_UML))
-		unittest_unflatten_overlay_base();
-
 	res = unittest_data_add();
 	if (res)
 		return res;
@@ -2647,8 +2524,6 @@ static int __init of_unittest(void)
 	of_unittest_changeset();
 	of_unittest_parse_interrupts();
 	of_unittest_parse_interrupts_extended();
-	of_unittest_parse_dma_ranges();
-	of_unittest_pci_dma_ranges();
 	of_unittest_match_node();
 	of_unittest_platform_populate();
 	of_unittest_overlay();

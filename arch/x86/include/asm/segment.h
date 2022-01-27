@@ -31,18 +31,6 @@
  */
 #define SEGMENT_RPL_MASK	0x3
 
-/*
- * When running on Xen PV, the actual privilege level of the kernel is 1,
- * not 0. Testing the Requested Privilege Level in a segment selector to
- * determine whether the context is user mode or kernel mode with
- * SEGMENT_RPL_MASK is wrong because the PV kernel's privilege level
- * matches the 0x3 mask.
- *
- * Testing with USER_SEGMENT_RPL_MASK is valid for both native and Xen PV
- * kernels because privilege level 2 is never used.
- */
-#define USER_SEGMENT_RPL_MASK	0x2
-
 /* User mode is privilege level 3: */
 #define USER_RPL		0x3
 
@@ -222,7 +210,7 @@
 
 #endif
 
-#ifndef CONFIG_PARAVIRT_XXL
+#ifndef CONFIG_PARAVIRT
 # define get_kernel_rpl()		0
 #endif
 

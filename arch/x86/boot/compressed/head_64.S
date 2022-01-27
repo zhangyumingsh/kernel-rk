@@ -42,10 +42,11 @@
 	.hidden _ebss
 	.hidden _got
 	.hidden _egot
+	.hidden _end
 
 	__HEAD
 	.code32
-SYM_FUNC_START(startup_32)
+ENTRY(startup_32)
 	/*
 	 * 32bit entry is 0 and it is ABI so immutable!
 	 * If we come here directly from a bootloader,
@@ -87,7 +88,7 @@ SYM_FUNC_START(startup_32)
 
 	call	verify_cpu
 	testl	%eax, %eax
-	jnz	.Lno_longmode
+	jnz	no_longmode
 
 /*
  * Compute the delta between where we were compiled to run at
@@ -208,12 +209,10 @@ SYM_FUNC_START(startup_32)
 	pushl	$__KERNEL_CS
 	leal	startup_64(%ebp), %eax
 #ifdef CONFIG_EFI_MIXED
-	movl	efi32_boot_args(%ebp), %edi
-	cmp	$0, %edi
+	movl	efi32_config(%ebp), %ebx
+	cmp	$0, %ebx
 	jz	1f
-	leal	efi64_stub_entry(%ebp), %eax
-	movl	%esi, %edx
-	movl	efi32_boot_args+4(%ebp), %esi
+	leal	handover_entry(%ebp), %eax
 1:
 #endif
 	pushl	%eax
@@ -224,24 +223,27 @@ SYM_FUNC_START(startup_32)
 
 	/* Jump from 32bit compatibility mode into 64bit mode. */
 	lret
-SYM_FUNC_END(startup_32)
+ENDPROC(startup_32)
 
 #ifdef CONFIG_EFI_MIXED
 	.org 0x190
-SYM_FUNC_START(efi32_stub_entry)
+ENTRY(efi32_stub_entry)
 	add	$0x4, %esp		/* Discard return address */
 	popl	%ecx
 	popl	%edx
 	popl	%esi
 
+	leal	(BP_scratch+4)(%esi), %esp
 	call	1f
 1:	pop	%ebp
 	subl	$1b, %ebp
 
-	movl	%ecx, efi32_boot_args(%ebp)
-	movl	%edx, efi32_boot_args+4(%ebp)
+	movl	%ecx, efi32_config(%ebp)
+	movl	%edx, efi32_config+8(%ebp)
 	sgdtl	efi32_boot_gdt(%ebp)
-	movb	$0, efi_is64(%ebp)
+
+	leal	efi32_config(%ebp), %eax
+	movl	%eax, efi_config(%ebp)
 
 	/* Disable paging */
 	movl	%cr0, %eax
@@ -249,12 +251,12 @@ SYM_FUNC_START(efi32_stub_entry)
 	movl	%eax, %cr0
 
 	jmp	startup_32
-SYM_FUNC_END(efi32_stub_entry)
+ENDPROC(efi32_stub_entry)
 #endif
 
 	.code64
 	.org 0x200
-SYM_CODE_START(startup_64)
+ENTRY(startup_64)
 	/*
 	 * 64bit entry is 0x200 and it is ABI so immutable!
 	 * We come here either from startup_32 or directly from a
@@ -326,7 +328,7 @@ SYM_CODE_START(startup_64)
 1:	popq	%rdi
 	subq	$1b, %rdi
 
-	call	.Ladjust_got
+	call	adjust_got
 
 	/*
 	 * At this point we are in long mode with 4-level paging enabled,
@@ -362,11 +364,8 @@ SYM_CODE_START(startup_64)
 	 * paging_prepare() sets up the trampoline and checks if we need to
 	 * enable 5-level paging.
 	 *
-	 * paging_prepare() returns a two-quadword structure which lands
-	 * into RDX:RAX:
-	 *   - Address of the trampoline is returned in RAX.
-	 *   - Non zero RDX means trampoline needs to enable 5-level
-	 *     paging.
+	 * Address of the trampoline is returned in RAX.
+	 * Non zero RDX on return means we need to enable 5-level paging.
 	 *
 	 * RSI holds real mode data and needs to be preserved across
 	 * this function call.
@@ -425,7 +424,7 @@ trampoline_return:
 
 	/* The new adjustment is the relocation address */
 	movq	%rbx, %rdi
-	call	.Ladjust_got
+	call	adjust_got
 
 /*
  * Copy the compressed kernel to the end of our buffer
@@ -444,26 +443,78 @@ trampoline_return:
 /*
  * Jump to the relocated address.
  */
-	leaq	.Lrelocated(%rbx), %rax
+	leaq	relocated(%rbx), %rax
 	jmp	*%rax
-SYM_CODE_END(startup_64)
 
 #ifdef CONFIG_EFI_STUB
-	.org 0x390
-SYM_FUNC_START(efi64_stub_entry)
-SYM_FUNC_START_ALIAS(efi_stub_entry)
-	and	$~0xf, %rsp			/* realign the stack */
+
+/* The entry point for the PE/COFF executable is efi_pe_entry. */
+ENTRY(efi_pe_entry)
+	movq	%rcx, efi64_config(%rip)	/* Handle */
+	movq	%rdx, efi64_config+8(%rip) /* EFI System table pointer */
+
+	leaq	efi64_config(%rip), %rax
+	movq	%rax, efi_config(%rip)
+
+	call	1f
+1:	popq	%rbp
+	subq	$1b, %rbp
+
+	/*
+	 * Relocate efi_config->call().
+	 */
+	addq	%rbp, efi64_config+40(%rip)
+
+	movq	%rax, %rdi
+	call	make_boot_params
+	cmpq	$0,%rax
+	je	fail
+	mov	%rax, %rsi
+	leaq	startup_32(%rip), %rax
+	movl	%eax, BP_code32_start(%rsi)
+	jmp	2f		/* Skip the relocation */
+
+handover_entry:
+	call	1f
+1:	popq	%rbp
+	subq	$1b, %rbp
+
+	/*
+	 * Relocate efi_config->call().
+	 */
+	movq	efi_config(%rip), %rax
+	addq	%rbp, 40(%rax)
+2:
+	movq	efi_config(%rip), %rdi
 	call	efi_main
 	movq	%rax,%rsi
+	cmpq	$0,%rax
+	jne	2f
+fail:
+	/* EFI init failed, so hang. */
+	hlt
+	jmp	fail
+2:
 	movl	BP_code32_start(%esi), %eax
 	leaq	startup_64(%rax), %rax
 	jmp	*%rax
-SYM_FUNC_END(efi64_stub_entry)
-SYM_FUNC_END_ALIAS(efi_stub_entry)
+ENDPROC(efi_pe_entry)
+
+	.org 0x390
+ENTRY(efi64_stub_entry)
+	movq	%rdi, efi64_config(%rip)	/* Handle */
+	movq	%rsi, efi64_config+8(%rip) /* EFI System table pointer */
+
+	leaq	efi64_config(%rip), %rax
+	movq	%rax, efi_config(%rip)
+
+	movq	%rdx, %rsi
+	jmp	handover_entry
+ENDPROC(efi64_stub_entry)
 #endif
 
 	.text
-SYM_FUNC_START_LOCAL_NOALIGN(.Lrelocated)
+relocated:
 
 /*
  * Clear BSS (stack is currently empty)
@@ -492,7 +543,6 @@ SYM_FUNC_START_LOCAL_NOALIGN(.Lrelocated)
  * Jump to the decompressed kernel.
  */
 	jmp	*%rax
-SYM_FUNC_END(.Lrelocated)
 
 /*
  * Adjust the global offset table
@@ -501,7 +551,7 @@ SYM_FUNC_END(.Lrelocated)
  * first time we touch GOT).
  * RDI is the new adjustment to apply.
  */
-.Ladjust_got:
+adjust_got:
 	/* Walk through the GOT adding the address to the entries */
 	leaq	_got(%rip), %rdx
 	leaq	_egot(%rip), %rcx
@@ -521,9 +571,9 @@ SYM_FUNC_END(.Lrelocated)
  *
  * RDI contains the return address (might be above 4G).
  * ECX contains the base address of the trampoline memory.
- * Non zero RDX means trampoline needs to enable 5-level paging.
+ * Non zero RDX on return means we need to enable 5-level paging.
  */
-SYM_CODE_START(trampoline_32bit_src)
+ENTRY(trampoline_32bit_src)
 	/* Set up data and stack segments */
 	movl	$__KERNEL_DS, %eax
 	movl	%eax, %ds
@@ -575,7 +625,7 @@ SYM_CODE_START(trampoline_32bit_src)
 	movl	%eax, %cr4
 
 	/* Calculate address of paging_enabled() once we are executing in the trampoline */
-	leal	.Lpaging_enabled - trampoline_32bit_src + TRAMPOLINE_32BIT_CODE_OFFSET(%ecx), %eax
+	leal	paging_enabled - trampoline_32bit_src + TRAMPOLINE_32BIT_CODE_OFFSET(%ecx), %eax
 
 	/* Prepare the stack for far return to Long Mode */
 	pushl	$__KERNEL_CS
@@ -586,13 +636,11 @@ SYM_CODE_START(trampoline_32bit_src)
 	movl	%eax, %cr0
 
 	lret
-SYM_CODE_END(trampoline_32bit_src)
 
 	.code64
-SYM_FUNC_START_LOCAL_NOALIGN(.Lpaging_enabled)
+paging_enabled:
 	/* Return from the trampoline */
 	jmp	*%rdi
-SYM_FUNC_END(.Lpaging_enabled)
 
 	/*
          * The trampoline code has a size limit.
@@ -602,22 +650,21 @@ SYM_FUNC_END(.Lpaging_enabled)
 	.org	trampoline_32bit_src + TRAMPOLINE_32BIT_CODE_SIZE
 
 	.code32
-SYM_FUNC_START_LOCAL_NOALIGN(.Lno_longmode)
+no_longmode:
 	/* This isn't an x86-64 CPU, so hang intentionally, we cannot continue */
 1:
 	hlt
 	jmp     1b
-SYM_FUNC_END(.Lno_longmode)
 
 #include "../../kernel/verify_cpu.S"
 
 	.data
-SYM_DATA_START_LOCAL(gdt64)
+gdt64:
 	.word	gdt_end - gdt
+	.long	0
+	.word	0
 	.quad   0
-SYM_DATA_END(gdt64)
-	.balign	8
-SYM_DATA_START_LOCAL(gdt)
+gdt:
 	.word	gdt_end - gdt
 	.long	gdt
 	.word	0
@@ -626,33 +673,49 @@ SYM_DATA_START_LOCAL(gdt)
 	.quad	0x00cf92000000ffff	/* __KERNEL_DS */
 	.quad	0x0080890000000000	/* TS descriptor */
 	.quad   0x0000000000000000	/* TS continued */
-SYM_DATA_END_LABEL(gdt, SYM_L_LOCAL, gdt_end)
+gdt_end:
+
+#ifdef CONFIG_EFI_STUB
+efi_config:
+	.quad	0
 
 #ifdef CONFIG_EFI_MIXED
-SYM_DATA_LOCAL(efi32_boot_args, .long 0, 0)
-SYM_DATA(efi_is64, .byte 1)
+	.global efi32_config
+efi32_config:
+	.fill	5,8,0
+	.quad	efi64_thunk
+	.byte	0
 #endif
+
+	.global efi64_config
+efi64_config:
+	.fill	5,8,0
+	.quad	efi_call
+	.byte	1
+#endif /* CONFIG_EFI_STUB */
 
 /*
  * Stack and heap for uncompression
  */
 	.bss
 	.balign 4
-SYM_DATA_LOCAL(boot_heap,	.fill BOOT_HEAP_SIZE, 1, 0)
-
-SYM_DATA_START_LOCAL(boot_stack)
+boot_heap:
+	.fill BOOT_HEAP_SIZE, 1, 0
+boot_stack:
 	.fill BOOT_STACK_SIZE, 1, 0
-SYM_DATA_END_LABEL(boot_stack, SYM_L_LOCAL, boot_stack_end)
+boot_stack_end:
 
 /*
  * Space for page tables (not in .bss so not zeroed)
  */
 	.section ".pgtable","a",@nobits
 	.balign 4096
-SYM_DATA_LOCAL(pgtable,		.fill BOOT_PGT_SIZE, 1, 0)
+pgtable:
+	.fill BOOT_PGT_SIZE, 1, 0
 
 /*
  * The page table is going to be used instead of page table in the trampoline
  * memory.
  */
-SYM_DATA_LOCAL(top_pgtable,	.fill PAGE_SIZE, 1, 0)
+top_pgtable:
+	.fill PAGE_SIZE, 1, 0

@@ -1369,7 +1369,7 @@ static int smtc_set_par(struct fb_info *info)
 	return 0;
 }
 
-static const struct fb_ops smtcfb_ops = {
+static struct fb_ops smtcfb_ops = {
 	.owner        = THIS_MODULE,
 	.fb_check_var = smtc_check_var,
 	.fb_set_par   = smtc_set_par,
@@ -1429,6 +1429,8 @@ static int smtc_map_smem(struct smtcfb_info *sfb,
 static void smtc_unmap_smem(struct smtcfb_info *sfb)
 {
 	if (sfb && sfb->fb->screen_base) {
+		if (sfb->chip_id == 0x720)
+			sfb->fb->screen_base -= 0x00200000;
 		iounmap(sfb->fb->screen_base);
 		sfb->fb->screen_base = NULL;
 	}
@@ -1538,6 +1540,7 @@ static int smtcfb_pci_probe(struct pci_dev *pdev,
 
 	info = framebuffer_alloc(sizeof(*sfb), &pdev->dev);
 	if (!info) {
+		dev_err(&pdev->dev, "framebuffer_alloc failed\n");
 		err = -ENOMEM;
 		goto failed_free;
 	}
@@ -1694,8 +1697,10 @@ static void smtcfb_pci_remove(struct pci_dev *pdev)
 
 static int __maybe_unused smtcfb_pci_suspend(struct device *device)
 {
-	struct smtcfb_info *sfb = dev_get_drvdata(device);
+	struct pci_dev *pdev = to_pci_dev(device);
+	struct smtcfb_info *sfb;
 
+	sfb = pci_get_drvdata(pdev);
 
 	/* set the hw in sleep mode use external clock and self memory refresh
 	 * so that we can turn off internal PLLs later on
@@ -1715,8 +1720,10 @@ static int __maybe_unused smtcfb_pci_suspend(struct device *device)
 
 static int __maybe_unused smtcfb_pci_resume(struct device *device)
 {
-	struct smtcfb_info *sfb = dev_get_drvdata(device);
+	struct pci_dev *pdev = to_pci_dev(device);
+	struct smtcfb_info *sfb;
 
+	sfb = pci_get_drvdata(pdev);
 
 	/* reinit hardware */
 	sm7xx_init_hw();

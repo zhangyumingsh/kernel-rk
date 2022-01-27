@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /* linux/drivers/mmc/host/sdhci-s3c.c
  *
  * Copyright 2008 Openmoko Inc.
@@ -7,6 +6,10 @@
  *      http://armlinux.simtec.co.uk/
  *
  * SDHCI (HSMMC) support for Samsung SoC
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  */
 
 #include <linux/spinlock.h>
@@ -117,6 +120,7 @@ struct sdhci_s3c {
 	struct s3c_sdhci_platdata *pdata;
 	int			cur_clk;
 	int			ext_cd_irq;
+	int			ext_cd_gpio;
 
 	struct clk		*clk_io;
 	struct clk		*clk_bus[MAX_BUS_CLK];
@@ -480,6 +484,7 @@ static int sdhci_s3c_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	struct sdhci_host *host;
 	struct sdhci_s3c *sc;
+	struct resource *res;
 	int ret, irq, ptr, clks;
 
 	if (!pdev->dev.platform_data && !pdev->dev.of_node) {
@@ -488,8 +493,10 @@ static int sdhci_s3c_probe(struct platform_device *pdev)
 	}
 
 	irq = platform_get_irq(pdev, 0);
-	if (irq < 0)
+	if (irq < 0) {
+		dev_err(dev, "no irq specified\n");
 		return irq;
+	}
 
 	host = sdhci_alloc_host(dev, sizeof(struct sdhci_s3c));
 	if (IS_ERR(host)) {
@@ -510,6 +517,7 @@ static int sdhci_s3c_probe(struct platform_device *pdev)
 			goto err_pdata_io_clk;
 	} else {
 		memcpy(pdata, pdev->dev.platform_data, sizeof(*pdata));
+		sc->ext_cd_gpio = -1; /* invalid gpio number */
 	}
 
 	drv_data = sdhci_s3c_get_driver_data(pdev);
@@ -552,7 +560,8 @@ static int sdhci_s3c_probe(struct platform_device *pdev)
 		goto err_no_busclks;
 	}
 
-	host->ioaddr = devm_platform_ioremap_resource(pdev, 0);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	host->ioaddr = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(host->ioaddr)) {
 		ret = PTR_ERR(host->ioaddr);
 		goto err_req_regs;
@@ -605,7 +614,6 @@ static int sdhci_s3c_probe(struct platform_device *pdev)
 	switch (pdata->max_width) {
 	case 8:
 		host->mmc->caps |= MMC_CAP_8_BIT_DATA;
-		/* Fall through */
 	case 4:
 		host->mmc->caps |= MMC_CAP_4_BIT_DATA;
 		break;
@@ -740,7 +748,7 @@ static int sdhci_s3c_runtime_resume(struct device *dev)
 	clk_prepare_enable(busclk);
 	if (ourhost->cur_clk >= 0)
 		clk_prepare_enable(ourhost->clk_bus[ourhost->cur_clk]);
-	ret = sdhci_runtime_resume_host(host, 0);
+	ret = sdhci_runtime_resume_host(host);
 	return ret;
 }
 #endif

@@ -684,7 +684,7 @@ acm_bind(struct usb_configuration *c, struct usb_function *f)
 	acm_ss_out_desc.bEndpointAddress = acm_fs_out_desc.bEndpointAddress;
 
 	status = usb_assign_descriptors(f, acm_fs_function, acm_hs_function,
-			acm_ss_function, NULL);
+			acm_ss_function, acm_ss_function);
 	if (status)
 		goto fail;
 
@@ -771,24 +771,6 @@ static struct configfs_item_operations acm_item_ops = {
 	.release                = acm_attr_release,
 };
 
-#ifdef CONFIG_U_SERIAL_CONSOLE
-
-static ssize_t f_acm_console_store(struct config_item *item,
-		const char *page, size_t count)
-{
-	return gserial_set_console(to_f_serial_opts(item)->port_num,
-				   page, count);
-}
-
-static ssize_t f_acm_console_show(struct config_item *item, char *page)
-{
-	return gserial_get_console(to_f_serial_opts(item)->port_num, page);
-}
-
-CONFIGFS_ATTR(f_acm_, console);
-
-#endif /* CONFIG_U_SERIAL_CONSOLE */
-
 static ssize_t f_acm_port_num_show(struct config_item *item, char *page)
 {
 	return sprintf(page, "%u\n", to_f_serial_opts(item)->port_num);
@@ -797,9 +779,6 @@ static ssize_t f_acm_port_num_show(struct config_item *item, char *page)
 CONFIGFS_ATTR_RO(f_acm_, port_num);
 
 static struct configfs_attribute *acm_attrs[] = {
-#ifdef CONFIG_U_SERIAL_CONSOLE
-	&f_acm_attr_console,
-#endif
 	&f_acm_attr_port_num,
 	NULL,
 };

@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * EP93XX PATA controller driver.
  *
@@ -45,7 +44,7 @@
 #include <linux/ktime.h>
 
 #include <linux/platform_data/dma-ep93xx.h>
-#include <linux/soc/cirrus/ep93xx.h>
+#include <mach/platform.h>
 
 #define DRV_NAME	"ep93xx-ide"
 #define DRV_VERSION	"1.0"

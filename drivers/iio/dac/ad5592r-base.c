@@ -1,9 +1,10 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * AD5592R Digital <-> Analog converters driver
  *
  * Copyright 2014-2016 Analog Devices Inc.
  * Author: Paul Cercueil <paul.cercueil@analog.com>
+ *
+ * Licensed under the GPL-2.
  */
 
 #include <linux/bitops.h>
@@ -15,6 +16,7 @@
 #include <linux/regulator/consumer.h>
 #include <linux/gpio/consumer.h>
 #include <linux/gpio/driver.h>
+#include <linux/gpio.h>
 #include <linux/property.h>
 
 #include <dt-bindings/iio/adi,ad5592r.h>
@@ -415,7 +417,7 @@ static int ad5592r_read_raw(struct iio_dev *iio_dev,
 			s64 tmp = *val * (3767897513LL / 25LL);
 			*val = div_s64_rem(tmp, 1000000000LL, val2);
 
-			ret = IIO_VAL_INT_PLUS_MICRO;
+			return IIO_VAL_INT_PLUS_MICRO;
 		} else {
 			int mult;
 
@@ -446,7 +448,7 @@ static int ad5592r_read_raw(struct iio_dev *iio_dev,
 		ret =  IIO_VAL_INT;
 		break;
 	default:
-		ret = -EINVAL;
+		return -EINVAL;
 	}
 
 unlock:

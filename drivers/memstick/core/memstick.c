@@ -1,11 +1,15 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  *  Sony MemoryStick support
  *
  *  Copyright (C) 2007 Alex Dubov <oakad@yahoo.com>
  *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ *
  * Special thanks to Carlos Corbacho for providing various MemoryStick cards
  * that made this driver possible.
+ *
  */
 
 #include <linux/memstick.h>
@@ -465,7 +469,6 @@ static void memstick_check(struct work_struct *work)
 			host->card = card;
 			if (device_register(&card->dev)) {
 				put_device(&card->dev);
-				kfree(host->card);
 				host->card = NULL;
 			}
 		} else

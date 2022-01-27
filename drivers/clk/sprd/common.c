@@ -50,13 +50,10 @@ int sprd_clk_regmap_init(struct platform_device *pdev,
 			return PTR_ERR(regmap);
 		}
 	} else {
-		base = devm_platform_ioremap_resource(pdev, 0);
-		if (IS_ERR(base))
-			return PTR_ERR(base);
-
+		base = of_iomap(node, 0);
 		regmap = devm_regmap_init_mmio(&pdev->dev, base,
 					       &sprdclk_regmap_config);
-		if (IS_ERR(regmap)) {
+		if (IS_ERR_OR_NULL(regmap)) {
 			pr_err("failed to init regmap\n");
 			return PTR_ERR(regmap);
 		}

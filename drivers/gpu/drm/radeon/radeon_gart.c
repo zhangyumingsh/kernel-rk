@@ -25,10 +25,7 @@
  *          Alex Deucher
  *          Jerome Glisse
  */
-
-#include <linux/pci.h>
-#include <linux/vmalloc.h>
-
+#include <drm/drmP.h>
 #include <drm/radeon_drm.h>
 #ifdef CONFIG_X86
 #include <asm/set_memory.h>

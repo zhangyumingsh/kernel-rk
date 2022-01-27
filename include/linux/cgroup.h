@@ -98,8 +98,6 @@ extern struct css_set init_css_set;
 
 bool css_has_online_children(struct cgroup_subsys_state *css);
 struct cgroup_subsys_state *css_from_id(int id, struct cgroup_subsys *ss);
-struct cgroup_subsys_state *cgroup_e_css(struct cgroup *cgroup,
-					 struct cgroup_subsys *ss);
 struct cgroup_subsys_state *cgroup_get_e_css(struct cgroup *cgroup,
 					     struct cgroup_subsys *ss);
 struct cgroup_subsys_state *css_tryget_online_from_dir(struct dentry *dentry,
@@ -304,11 +302,6 @@ void css_task_iter_end(struct css_task_iter *it);
 /*
  * Inline functions.
  */
-
-static inline u64 cgroup_id(struct cgroup *cgrp)
-{
-	return cgrp->kn->id;
-}
 
 /**
  * css_get - obtain a reference on the specified css
@@ -571,7 +564,7 @@ static inline bool cgroup_is_descendant(struct cgroup *cgrp,
 {
 	if (cgrp->root != ancestor->root || cgrp->level < ancestor->level)
 		return false;
-	return cgrp->ancestor_ids[ancestor->level] == cgroup_id(ancestor);
+	return cgrp->ancestor_ids[ancestor->level] == ancestor->id;
 }
 
 /**
@@ -622,7 +615,7 @@ static inline bool cgroup_is_populated(struct cgroup *cgrp)
 /* returns ino associated with a cgroup */
 static inline ino_t cgroup_ino(struct cgroup *cgrp)
 {
-	return kernfs_ino(cgrp->kn);
+	return cgrp->kn->id.ino;
 }
 
 /* cft/css accessors for cftype->write() operation */
@@ -693,14 +686,18 @@ static inline void cgroup_kthread_ready(void)
 	current->no_cgroup_migration = 0;
 }
 
-void cgroup_path_from_kernfs_id(u64 id, char *buf, size_t buflen);
+static inline union kernfs_node_id *cgroup_get_kernfs_id(struct cgroup *cgrp)
+{
+	return &cgrp->kn->id;
+}
+
+void cgroup_path_from_kernfs_id(const union kernfs_node_id *id,
+					char *buf, size_t buflen);
 #else /* !CONFIG_CGROUPS */
 
 struct cgroup_subsys_state;
 struct cgroup;
 
-static inline u64 cgroup_id(struct cgroup *cgrp) { return 1; }
-static inline void css_get(struct cgroup_subsys_state *css) {}
 static inline void css_put(struct cgroup_subsys_state *css) {}
 static inline int cgroup_attach_task_all(struct task_struct *from,
 					 struct task_struct *t) { return 0; }
@@ -719,6 +716,10 @@ static inline int cgroup_init_early(void) { return 0; }
 static inline int cgroup_init(void) { return 0; }
 static inline void cgroup_init_kthreadd(void) {}
 static inline void cgroup_kthread_ready(void) {}
+static inline union kernfs_node_id *cgroup_get_kernfs_id(struct cgroup *cgrp)
+{
+	return NULL;
+}
 
 static inline struct cgroup *cgroup_parent(struct cgroup *cgrp)
 {
@@ -736,8 +737,8 @@ static inline bool task_under_cgroup_hierarchy(struct task_struct *task,
 	return true;
 }
 
-static inline void cgroup_path_from_kernfs_id(u64 id, char *buf, size_t buflen)
-{}
+static inline void cgroup_path_from_kernfs_id(const union kernfs_node_id *id,
+	char *buf, size_t buflen) {}
 #endif /* !CONFIG_CGROUPS */
 
 #ifdef CONFIG_CGROUPS
@@ -817,6 +818,7 @@ extern spinlock_t cgroup_sk_update_lock;
 
 void cgroup_sk_alloc_disable(void);
 void cgroup_sk_alloc(struct sock_cgroup_data *skcd);
+void cgroup_sk_clone(struct sock_cgroup_data *skcd);
 void cgroup_sk_free(struct sock_cgroup_data *skcd);
 
 static inline struct cgroup *sock_cgroup_ptr(struct sock_cgroup_data *skcd)
@@ -830,7 +832,7 @@ static inline struct cgroup *sock_cgroup_ptr(struct sock_cgroup_data *skcd)
 	 */
 	v = READ_ONCE(skcd->val);
 
-	if (v & 1)
+	if (v & 3)
 		return &cgrp_dfl_root.cgrp;
 
 	return (struct cgroup *)(unsigned long)v ?: &cgrp_dfl_root.cgrp;
@@ -842,6 +844,7 @@ static inline struct cgroup *sock_cgroup_ptr(struct sock_cgroup_data *skcd)
 #else	/* CONFIG_CGROUP_DATA */
 
 static inline void cgroup_sk_alloc(struct sock_cgroup_data *skcd) {}
+static inline void cgroup_sk_clone(struct sock_cgroup_data *skcd) {}
 static inline void cgroup_sk_free(struct sock_cgroup_data *skcd) {}
 
 #endif	/* CONFIG_CGROUP_DATA */
@@ -899,7 +902,7 @@ void cgroup_update_frozen(struct cgroup *cgrp);
 void cgroup_freeze(struct cgroup *cgrp, bool freeze);
 void cgroup_freezer_migrate_task(struct task_struct *task, struct cgroup *src,
 				 struct cgroup *dst);
-
+void cgroup_freezer_frozen_exit(struct task_struct *task);
 static inline bool cgroup_task_freeze(struct task_struct *task)
 {
 	bool ret;
@@ -933,23 +936,5 @@ static inline bool cgroup_task_frozen(struct task_struct *task)
 }
 
 #endif /* !CONFIG_CGROUPS */
-
-#ifdef CONFIG_CGROUP_BPF
-static inline void cgroup_bpf_get(struct cgroup *cgrp)
-{
-	percpu_ref_get(&cgrp->bpf.refcnt);
-}
-
-static inline void cgroup_bpf_put(struct cgroup *cgrp)
-{
-	percpu_ref_put(&cgrp->bpf.refcnt);
-}
-
-#else /* CONFIG_CGROUP_BPF */
-
-static inline void cgroup_bpf_get(struct cgroup *cgrp) {}
-static inline void cgroup_bpf_put(struct cgroup *cgrp) {}
-
-#endif /* CONFIG_CGROUP_BPF */
 
 #endif /* _LINUX_CGROUP_H */

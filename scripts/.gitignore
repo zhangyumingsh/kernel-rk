@@ -2,10 +2,14 @@
 # Generated files
 #
 bin2c
+conmakehash
 kallsyms
+pnmtologo
 unifdef
+ihex2fw
 recordmcount
-sorttable
+check-lc_ctype
+sortextable
 asn1_compiler
 extract-cert
 sign-file

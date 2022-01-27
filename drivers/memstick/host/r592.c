@@ -1,7 +1,10 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2010 - Maxim Levitsky
  * driver for Ricoh memstick readers
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  */
 
 #include <linux/kernel.h>
@@ -759,8 +762,10 @@ static int r592_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 		goto error3;
 
 	dev->mmio = pci_ioremap_bar(pdev, 0);
-	if (!dev->mmio)
+	if (!dev->mmio) {
+		error = -ENOMEM;
 		goto error4;
+	}
 
 	dev->irq = pdev->irq;
 	spin_lock_init(&dev->irq_lock);
@@ -786,12 +791,14 @@ static int r592_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 		&dev->dummy_dma_page_physical_address, GFP_KERNEL);
 	r592_stop_dma(dev , 0);
 
-	if (request_irq(dev->irq, &r592_irq, IRQF_SHARED,
-			  DRV_NAME, dev))
+	error = request_irq(dev->irq, &r592_irq, IRQF_SHARED,
+			  DRV_NAME, dev);
+	if (error)
 		goto error6;
 
 	r592_update_card_detect(dev);
-	if (memstick_add_host(host))
+	error = memstick_add_host(host);
+	if (error)
 		goto error7;
 
 	message("driver successfully loaded");
@@ -847,7 +854,8 @@ static void r592_remove(struct pci_dev *pdev)
 #ifdef CONFIG_PM_SLEEP
 static int r592_suspend(struct device *core_dev)
 {
-	struct r592_device *dev = dev_get_drvdata(core_dev);
+	struct pci_dev *pdev = to_pci_dev(core_dev);
+	struct r592_device *dev = pci_get_drvdata(pdev);
 
 	r592_clear_interrupts(dev);
 	memstick_suspend_host(dev->host);
@@ -857,7 +865,8 @@ static int r592_suspend(struct device *core_dev)
 
 static int r592_resume(struct device *core_dev)
 {
-	struct r592_device *dev = dev_get_drvdata(core_dev);
+	struct pci_dev *pdev = to_pci_dev(core_dev);
+	struct r592_device *dev = pci_get_drvdata(pdev);
 
 	r592_clear_interrupts(dev);
 	r592_enable_device(dev, false);

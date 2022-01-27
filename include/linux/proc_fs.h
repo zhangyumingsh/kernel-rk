@@ -12,21 +12,6 @@ struct proc_dir_entry;
 struct seq_file;
 struct seq_operations;
 
-struct proc_ops {
-	int	(*proc_open)(struct inode *, struct file *);
-	ssize_t	(*proc_read)(struct file *, char __user *, size_t, loff_t *);
-	ssize_t	(*proc_write)(struct file *, const char __user *, size_t, loff_t *);
-	loff_t	(*proc_lseek)(struct file *, loff_t, int);
-	int	(*proc_release)(struct inode *, struct file *);
-	__poll_t (*proc_poll)(struct file *, struct poll_table_struct *);
-	long	(*proc_ioctl)(struct file *, unsigned int, unsigned long);
-#ifdef CONFIG_COMPAT
-	long	(*proc_compat_ioctl)(struct file *, unsigned int, unsigned long);
-#endif
-	int	(*proc_mmap)(struct file *, struct vm_area_struct *);
-	unsigned long (*proc_get_unmapped_area)(struct file *, unsigned long, unsigned long, unsigned long, unsigned long);
-};
-
 #ifdef CONFIG_PROC_FS
 
 typedef int (*proc_write_t)(struct file *, char *, size_t);
@@ -36,6 +21,7 @@ extern void proc_flush_task(struct task_struct *);
 
 extern struct proc_dir_entry *proc_symlink(const char *,
 		struct proc_dir_entry *, const char *);
+struct proc_dir_entry *_proc_mkdir(const char *, umode_t, struct proc_dir_entry *, void *, bool);
 extern struct proc_dir_entry *proc_mkdir(const char *, struct proc_dir_entry *);
 extern struct proc_dir_entry *proc_mkdir_data(const char *, umode_t,
 					      struct proc_dir_entry *, void *);
@@ -58,10 +44,10 @@ struct proc_dir_entry *proc_create_single_data(const char *name, umode_t mode,
  
 extern struct proc_dir_entry *proc_create_data(const char *, umode_t,
 					       struct proc_dir_entry *,
-					       const struct proc_ops *,
+					       const struct file_operations *,
 					       void *);
 
-struct proc_dir_entry *proc_create(const char *name, umode_t mode, struct proc_dir_entry *parent, const struct proc_ops *proc_ops);
+struct proc_dir_entry *proc_create(const char *name, umode_t mode, struct proc_dir_entry *parent, const struct file_operations *proc_fops);
 extern void proc_set_size(struct proc_dir_entry *, loff_t);
 extern void proc_set_user(struct proc_dir_entry *, kuid_t, kgid_t);
 extern void *PDE_DATA(const struct inode *);
@@ -73,8 +59,8 @@ extern int remove_proc_subtree(const char *, struct proc_dir_entry *);
 struct proc_dir_entry *proc_create_net_data(const char *name, umode_t mode,
 		struct proc_dir_entry *parent, const struct seq_operations *ops,
 		unsigned int state_size, void *data);
-#define proc_create_net(name, mode, parent, ops, state_size) \
-	proc_create_net_data(name, mode, parent, ops, state_size, NULL)
+#define proc_create_net(name, mode, parent, state_size, ops) \
+	proc_create_net_data(name, mode, parent, state_size, ops, NULL)
 struct proc_dir_entry *proc_create_net_single(const char *name, umode_t mode,
 		struct proc_dir_entry *parent,
 		int (*show)(struct seq_file *, void *), void *data);
@@ -89,15 +75,6 @@ struct proc_dir_entry *proc_create_net_single_write(const char *name, umode_t mo
 						    proc_write_t write,
 						    void *data);
 extern struct pid *tgid_pidfd_to_pid(const struct file *file);
-
-#ifdef CONFIG_PROC_PID_ARCH_STATUS
-/*
- * The architecture which selects CONFIG_PROC_PID_ARCH_STATUS must
- * provide proc_pid_arch_status() definition.
- */
-int proc_pid_arch_status(struct seq_file *m, struct pid_namespace *ns,
-			struct pid *pid, struct task_struct *task);
-#endif /* CONFIG_PROC_PID_ARCH_STATUS */
 
 #else /* CONFIG_PROC_FS */
 
@@ -114,6 +91,11 @@ static inline struct proc_dir_entry *proc_symlink(const char *name,
 static inline struct proc_dir_entry *proc_mkdir(const char *name,
 	struct proc_dir_entry *parent) {return NULL;}
 static inline struct proc_dir_entry *proc_create_mount_point(const char *name) { return NULL; }
+static inline struct proc_dir_entry *_proc_mkdir(const char *name, umode_t mode,
+		struct proc_dir_entry *parent, void *data, bool force_lookup)
+{
+	return NULL;
+}
 static inline struct proc_dir_entry *proc_mkdir_data(const char *name,
 	umode_t mode, struct proc_dir_entry *parent, void *data) { return NULL; }
 static inline struct proc_dir_entry *proc_mkdir_mode(const char *name,
@@ -123,8 +105,8 @@ static inline struct proc_dir_entry *proc_mkdir_mode(const char *name,
 #define proc_create_seq(name, mode, parent, ops) ({NULL;})
 #define proc_create_single(name, mode, parent, show) ({NULL;})
 #define proc_create_single_data(name, mode, parent, show, data) ({NULL;})
-#define proc_create(name, mode, parent, proc_ops) ({NULL;})
-#define proc_create_data(name, mode, parent, proc_ops, data) ({NULL;})
+#define proc_create(name, mode, parent, proc_fops) ({NULL;})
+#define proc_create_data(name, mode, parent, proc_fops, data) ({NULL;})
 
 static inline void proc_set_size(struct proc_dir_entry *de, loff_t size) {}
 static inline void proc_set_user(struct proc_dir_entry *de, kuid_t uid, kgid_t gid) {}
@@ -146,12 +128,18 @@ static inline struct pid *tgid_pidfd_to_pid(const struct file *file)
 
 #endif /* CONFIG_PROC_FS */
 
+#ifdef CONFIG_PROC_UID
+extern void proc_register_uid(kuid_t uid);
+#else
+static inline void proc_register_uid(kuid_t uid) {}
+#endif
+
 struct net;
 
 static inline struct proc_dir_entry *proc_net_mkdir(
 	struct net *net, const char *name, struct proc_dir_entry *parent)
 {
-	return proc_mkdir_data(name, 0, parent, net);
+	return _proc_mkdir(name, 0, parent, net, true);
 }
 
 struct ns_common;

@@ -22,8 +22,6 @@
 #include <linux/utsname.h>
 #include <linux/stackprotector.h>
 #include <linux/cpuidle.h>
-#include <linux/acpi.h>
-#include <linux/elf-randomize.h>
 #include <trace/events/power.h>
 #include <linux/hw_breakpoint.h>
 #include <asm/cpu.h>
@@ -41,8 +39,6 @@
 #include <asm/desc.h>
 #include <asm/prctl.h>
 #include <asm/spec-ctrl.h>
-#include <asm/io_bitmap.h>
-#include <asm/proto.h>
 
 #include "process.h"
 
@@ -73,9 +69,18 @@ __visible DEFINE_PER_CPU_PAGE_ALIGNED(struct tss_struct, cpu_tss_rw) = {
 #ifdef CONFIG_X86_32
 		.ss0 = __KERNEL_DS,
 		.ss1 = __KERNEL_CS,
+		.io_bitmap_base	= INVALID_IO_BITMAP_OFFSET,
 #endif
-		.io_bitmap_base	= IO_BITMAP_OFFSET_INVALID,
 	 },
+#ifdef CONFIG_X86_32
+	 /*
+	  * Note that the .io_bitmap member must be extra-big. This is because
+	  * the CPU will access an additional byte beyond the end of the IO
+	  * permission bitmap. The extra byte must be all 1 bits, and must
+	  * be within the limit.
+	  */
+	.io_bitmap		= { [0 ... IO_BITMAP_LONGS] = ~0 },
+#endif
 };
 EXPORT_PER_CPU_SYMBOL(cpu_tss_rw);
 
@@ -93,7 +98,7 @@ int arch_dup_task_struct(struct task_struct *dst, struct task_struct *src)
 	dst->thread.vm86 = NULL;
 #endif
 
-	return fpu__copy(dst, src);
+	return fpu__copy(&dst->thread.fpu, &src->thread.fpu);
 }
 
 /*
@@ -102,87 +107,26 @@ int arch_dup_task_struct(struct task_struct *dst, struct task_struct *src)
 void exit_thread(struct task_struct *tsk)
 {
 	struct thread_struct *t = &tsk->thread;
+	unsigned long *bp = t->io_bitmap_ptr;
 	struct fpu *fpu = &t->fpu;
 
-	if (test_thread_flag(TIF_IO_BITMAP))
-		io_bitmap_exit();
+	if (bp) {
+		struct tss_struct *tss = &per_cpu(cpu_tss_rw, get_cpu());
+
+		t->io_bitmap_ptr = NULL;
+		clear_thread_flag(TIF_IO_BITMAP);
+		/*
+		 * Careful, clear this in the TSS too:
+		 */
+		memset(tss->io_bitmap, 0xff, t->io_bitmap_max);
+		t->io_bitmap_max = 0;
+		put_cpu();
+		kfree(bp);
+	}
 
 	free_vm86(t);
 
 	fpu__drop(fpu);
-}
-
-static int set_new_tls(struct task_struct *p, unsigned long tls)
-{
-	struct user_desc __user *utls = (struct user_desc __user *)tls;
-
-	if (in_ia32_syscall())
-		return do_set_thread_area(p, -1, utls, 0);
-	else
-		return do_set_thread_area_64(p, ARCH_SET_FS, tls);
-}
-
-int copy_thread_tls(unsigned long clone_flags, unsigned long sp,
-		    unsigned long arg, struct task_struct *p, unsigned long tls)
-{
-	struct inactive_task_frame *frame;
-	struct fork_frame *fork_frame;
-	struct pt_regs *childregs;
-	int ret = 0;
-
-	childregs = task_pt_regs(p);
-	fork_frame = container_of(childregs, struct fork_frame, regs);
-	frame = &fork_frame->frame;
-
-	frame->bp = 0;
-	frame->ret_addr = (unsigned long) ret_from_fork;
-	p->thread.sp = (unsigned long) fork_frame;
-	p->thread.io_bitmap = NULL;
-	memset(p->thread.ptrace_bps, 0, sizeof(p->thread.ptrace_bps));
-
-#ifdef CONFIG_X86_64
-	savesegment(gs, p->thread.gsindex);
-	p->thread.gsbase = p->thread.gsindex ? 0 : current->thread.gsbase;
-	savesegment(fs, p->thread.fsindex);
-	p->thread.fsbase = p->thread.fsindex ? 0 : current->thread.fsbase;
-	savesegment(es, p->thread.es);
-	savesegment(ds, p->thread.ds);
-#else
-	p->thread.sp0 = (unsigned long) (childregs + 1);
-	/*
-	 * Clear all status flags including IF and set fixed bit. 64bit
-	 * does not have this initialization as the frame does not contain
-	 * flags. The flags consistency (especially vs. AC) is there
-	 * ensured via objtool, which lacks 32bit support.
-	 */
-	frame->flags = X86_EFLAGS_FIXED;
-#endif
-
-	/* Kernel thread ? */
-	if (unlikely(p->flags & PF_KTHREAD)) {
-		memset(childregs, 0, sizeof(struct pt_regs));
-		kthread_frame_init(frame, sp, arg);
-		return 0;
-	}
-
-	frame->bx = 0;
-	*childregs = *current_pt_regs();
-	childregs->ax = 0;
-	if (sp)
-		childregs->sp = sp;
-
-#ifdef CONFIG_X86_32
-	task_user_gs(p) = get_user_gs(current_pt_regs());
-#endif
-
-	/* Set a new TLS for the child thread? */
-	if (clone_flags & CLONE_SETTLS)
-		ret = set_new_tls(p, tls);
-
-	if (!ret && unlikely(test_tsk_thread_flag(current, TIF_IO_BITMAP)))
-		io_bitmap_share(p);
-
-	return ret;
 }
 
 void flush_thread(void)
@@ -289,7 +233,7 @@ static int get_cpuid_mode(void)
 
 static int set_cpuid_mode(struct task_struct *task, unsigned long cpuid_enabled)
 {
-	if (!boot_cpu_has(X86_FEATURE_CPUID_FAULT))
+	if (!static_cpu_has(X86_FEATURE_CPUID_FAULT))
 		return -ENODEV;
 
 	if (cpuid_enabled)
@@ -308,110 +252,33 @@ void arch_setup_new_exec(void)
 	/* If cpuid was previously disabled for this task, re-enable it. */
 	if (test_thread_flag(TIF_NOCPUID))
 		enable_cpuid();
-
-	/*
-	 * Don't inherit TIF_SSBD across exec boundary when
-	 * PR_SPEC_DISABLE_NOEXEC is used.
-	 */
-	if (test_thread_flag(TIF_SSBD) &&
-	    task_spec_ssb_noexec(current)) {
-		clear_thread_flag(TIF_SSBD);
-		task_clear_spec_ssb_disable(current);
-		task_clear_spec_ssb_noexec(current);
-		speculation_ctrl_update(task_thread_info(current)->flags);
-	}
 }
 
-#ifdef CONFIG_X86_IOPL_IOPERM
-static inline void tss_invalidate_io_bitmap(struct tss_struct *tss)
-{
-	/*
-	 * Invalidate the I/O bitmap by moving io_bitmap_base outside the
-	 * TSS limit so any subsequent I/O access from user space will
-	 * trigger a #GP.
-	 *
-	 * This is correct even when VMEXIT rewrites the TSS limit
-	 * to 0x67 as the only requirement is that the base points
-	 * outside the limit.
-	 */
-	tss->x86_tss.io_bitmap_base = IO_BITMAP_OFFSET_INVALID;
-}
-
-static inline void switch_to_bitmap(unsigned long tifp)
-{
-	/*
-	 * Invalidate I/O bitmap if the previous task used it. This prevents
-	 * any possible leakage of an active I/O bitmap.
-	 *
-	 * If the next task has an I/O bitmap it will handle it on exit to
-	 * user mode.
-	 */
-	if (tifp & _TIF_IO_BITMAP)
-		tss_invalidate_io_bitmap(this_cpu_ptr(&cpu_tss_rw));
-}
-
-static void tss_copy_io_bitmap(struct tss_struct *tss, struct io_bitmap *iobm)
-{
-	/*
-	 * Copy at least the byte range of the incoming tasks bitmap which
-	 * covers the permitted I/O ports.
-	 *
-	 * If the previous task which used an I/O bitmap had more bits
-	 * permitted, then the copy needs to cover those as well so they
-	 * get turned off.
-	 */
-	memcpy(tss->io_bitmap.bitmap, iobm->bitmap,
-	       max(tss->io_bitmap.prev_max, iobm->max));
-
-	/*
-	 * Store the new max and the sequence number of this bitmap
-	 * and a pointer to the bitmap itself.
-	 */
-	tss->io_bitmap.prev_max = iobm->max;
-	tss->io_bitmap.prev_sequence = iobm->sequence;
-}
-
-/**
- * tss_update_io_bitmap - Update I/O bitmap before exiting to usermode
- */
-void native_tss_update_io_bitmap(void)
+static inline void switch_to_bitmap(struct thread_struct *prev,
+				    struct thread_struct *next,
+				    unsigned long tifp, unsigned long tifn)
 {
 	struct tss_struct *tss = this_cpu_ptr(&cpu_tss_rw);
-	struct thread_struct *t = &current->thread;
-	u16 *base = &tss->x86_tss.io_bitmap_base;
 
-	if (!test_thread_flag(TIF_IO_BITMAP)) {
-		tss_invalidate_io_bitmap(tss);
-		return;
-	}
-
-	if (IS_ENABLED(CONFIG_X86_IOPL_IOPERM) && t->iopl_emul == 3) {
-		*base = IO_BITMAP_OFFSET_VALID_ALL;
-	} else {
-		struct io_bitmap *iobm = t->io_bitmap;
-
+	if (tifn & _TIF_IO_BITMAP) {
 		/*
-		 * Only copy bitmap data when the sequence number differs. The
-		 * update time is accounted to the incoming task.
+		 * Copy the relevant range of the IO bitmap.
+		 * Normally this is 128 bytes or less:
 		 */
-		if (tss->io_bitmap.prev_sequence != iobm->sequence)
-			tss_copy_io_bitmap(tss, iobm);
-
-		/* Enable the bitmap */
-		*base = IO_BITMAP_OFFSET_VALID_MAP;
+		memcpy(tss->io_bitmap, next->io_bitmap_ptr,
+		       max(prev->io_bitmap_max, next->io_bitmap_max));
+		/*
+		 * Make sure that the TSS limit is correct for the CPU
+		 * to notice the IO bitmap.
+		 */
+		refresh_tss_limit();
+	} else if (tifp & _TIF_IO_BITMAP) {
+		/*
+		 * Clear any possible leftover bits:
+		 */
+		memset(tss->io_bitmap, 0xff, prev->io_bitmap_max);
 	}
-
-	/*
-	 * Make sure that the TSS limit is covering the IO bitmap. It might have
-	 * been cut down by a VMEXIT to 0x67 which would cause a subsequent I/O
-	 * access from user space to trigger a #GP because tbe bitmap is outside
-	 * the TSS limit.
-	 */
-	refresh_tss_limit();
 }
-#else /* CONFIG_X86_IOPL_IOPERM */
-static inline void switch_to_bitmap(unsigned long tifp) { }
-#endif
 
 #ifdef CONFIG_SMP
 
@@ -546,28 +413,20 @@ static __always_inline void __speculation_ctrl_update(unsigned long tifp,
 
 	lockdep_assert_irqs_disabled();
 
-	/*
-	 * If TIF_SSBD is different, select the proper mitigation
-	 * method. Note that if SSBD mitigation is disabled or permanentely
-	 * enabled this branch can't be taken because nothing can set
-	 * TIF_SSBD.
-	 */
-	if (tif_diff & _TIF_SSBD) {
-		if (static_cpu_has(X86_FEATURE_VIRT_SSBD)) {
+	/* Handle change of TIF_SSBD depending on the mitigation method. */
+	if (static_cpu_has(X86_FEATURE_VIRT_SSBD)) {
+		if (tif_diff & _TIF_SSBD)
 			amd_set_ssb_virt_state(tifn);
-		} else if (static_cpu_has(X86_FEATURE_LS_CFG_SSBD)) {
+	} else if (static_cpu_has(X86_FEATURE_LS_CFG_SSBD)) {
+		if (tif_diff & _TIF_SSBD)
 			amd_set_core_ssb_state(tifn);
-		} else if (static_cpu_has(X86_FEATURE_SPEC_CTRL_SSBD) ||
-			   static_cpu_has(X86_FEATURE_AMD_SSBD)) {
-			msr |= ssbd_tif_to_spec_ctrl(tifn);
-			updmsr  = true;
-		}
+	} else if (static_cpu_has(X86_FEATURE_SPEC_CTRL_SSBD) ||
+		   static_cpu_has(X86_FEATURE_AMD_SSBD)) {
+		updmsr |= !!(tif_diff & _TIF_SSBD);
+		msr |= ssbd_tif_to_spec_ctrl(tifn);
 	}
 
-	/*
-	 * Only evaluate TIF_SPEC_IB if conditional STIBP is enabled,
-	 * otherwise avoid the MSR write.
-	 */
+	/* Only evaluate TIF_SPEC_IB if conditional STIBP is enabled. */
 	if (IS_ENABLED(CONFIG_SMP) &&
 	    static_branch_unlikely(&switch_to_cond_stibp)) {
 		updmsr |= !!(tif_diff & _TIF_SPEC_IB);
@@ -615,12 +474,15 @@ void speculation_ctrl_update_current(void)
 
 void __switch_to_xtra(struct task_struct *prev_p, struct task_struct *next_p)
 {
+	struct thread_struct *prev, *next;
 	unsigned long tifp, tifn;
+
+	prev = &prev_p->thread;
+	next = &next_p->thread;
 
 	tifn = READ_ONCE(task_thread_info(next_p)->flags);
 	tifp = READ_ONCE(task_thread_info(prev_p)->flags);
-
-	switch_to_bitmap(tifp);
+	switch_to_bitmap(prev, next, tifp, tifn);
 
 	propagate_user_return_notify(prev_p, next_p);
 
@@ -695,7 +557,7 @@ void __cpuidle default_idle(void)
 	safe_halt();
 	trace_cpu_idle_rcuidle(PWR_EVENT_EXIT, smp_processor_id());
 }
-#if defined(CONFIG_APM_MODULE) || defined(CONFIG_HALTPOLL_CPUIDLE_MODULE)
+#ifdef CONFIG_APM_MODULE
 EXPORT_SYMBOL(default_idle);
 #endif
 
@@ -785,7 +647,7 @@ static int prefer_mwait_c1_over_halt(const struct cpuinfo_x86 *c)
 	if (c->x86_vendor != X86_VENDOR_INTEL)
 		return 0;
 
-	if (!cpu_has(c, X86_FEATURE_MWAIT) || boot_cpu_has_bug(X86_BUG_MONITOR))
+	if (!cpu_has(c, X86_FEATURE_MWAIT) || static_cpu_has_bug(X86_BUG_MONITOR))
 		return 0;
 
 	return 1;
@@ -927,7 +789,7 @@ unsigned long get_wchan(struct task_struct *p)
 	unsigned long start, bottom, top, sp, fp, ip, ret = 0;
 	int count = 0;
 
-	if (p == current || p->state == TASK_RUNNING)
+	if (!p || p == current || p->state == TASK_RUNNING)
 		return 0;
 
 	if (!try_get_task_stack(p))

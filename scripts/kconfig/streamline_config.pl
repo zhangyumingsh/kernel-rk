@@ -1,7 +1,7 @@
 #!/usr/bin/env perl
-# SPDX-License-Identifier: GPL-2.0
 #
 # Copyright 2005-2009 - Steven Rostedt
+# Licensed under the terms of the GNU GPL License version 2
 #
 #  It's simple enough to figure out how this works.
 #  If not, then you can ask me at stripconfig@goodmis.org
@@ -55,6 +55,8 @@ sub dprint {
     return if (!$debugprint);
     print STDERR @_;
 }
+
+my $config = ".config";
 
 my $uname = `uname -r`;
 chomp $uname;
@@ -372,7 +374,7 @@ if (defined($lsmod_file)) {
 	    $lsmod = "$dir/lsmod";
 	    last;
 	}
-    }
+}
     if (!defined($lsmod)) {
 	# try just the path
 	$lsmod = "lsmod";

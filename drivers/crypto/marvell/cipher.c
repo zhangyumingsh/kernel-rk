@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Cipher algorithms supported by the CESA: DES, 3DES and AES.
  *
@@ -7,10 +6,14 @@
  *
  * This work is based on an initial version written by
  * Sebastian Andrzej Siewior < sebastian at breakpoint dot cc >
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License version 2 as published
+ * by the Free Software Foundation.
  */
 
 #include <crypto/aes.h>
-#include <crypto/internal/des.h>
+#include <crypto/des.h>
 
 #include "cesa.h"
 
@@ -209,7 +212,7 @@ mv_cesa_skcipher_complete(struct crypto_async_request *req)
 		struct mv_cesa_req *basereq;
 
 		basereq = &creq->base;
-		memcpy(skreq->iv, basereq->chain.last->op->ctx.skcipher.iv,
+		memcpy(skreq->iv, basereq->chain.last->op->ctx.blkcipher.iv,
 		       ivsize);
 	} else {
 		memcpy_fromio(skreq->iv,
@@ -254,9 +257,11 @@ static int mv_cesa_aes_setkey(struct crypto_skcipher *cipher, const u8 *key,
 	int ret;
 	int i;
 
-	ret = aes_expandkey(&ctx->aes, key, len);
-	if (ret)
+	ret = crypto_aes_expand_key(&ctx->aes, key, len);
+	if (ret) {
+		crypto_skcipher_set_flags(cipher, CRYPTO_TFM_RES_BAD_KEY_LEN);
 		return ret;
+	}
 
 	remaining = (ctx->aes.key_length - 16) / 4;
 	offset = ctx->aes.key_length + 24 - remaining;
@@ -270,12 +275,21 @@ static int mv_cesa_aes_setkey(struct crypto_skcipher *cipher, const u8 *key,
 static int mv_cesa_des_setkey(struct crypto_skcipher *cipher, const u8 *key,
 			      unsigned int len)
 {
-	struct mv_cesa_des_ctx *ctx = crypto_skcipher_ctx(cipher);
-	int err;
+	struct crypto_tfm *tfm = crypto_skcipher_tfm(cipher);
+	struct mv_cesa_des_ctx *ctx = crypto_tfm_ctx(tfm);
+	u32 tmp[DES_EXPKEY_WORDS];
+	int ret;
 
-	err = verify_skcipher_des_key(cipher, key);
-	if (err)
-		return err;
+	if (len != DES_KEY_SIZE) {
+		crypto_skcipher_set_flags(cipher, CRYPTO_TFM_RES_BAD_KEY_LEN);
+		return -EINVAL;
+	}
+
+	ret = des_ekey(tmp, key);
+	if (!ret && (tfm->crt_flags & CRYPTO_TFM_REQ_WEAK_KEY)) {
+		tfm->crt_flags |= CRYPTO_TFM_RES_WEAK_KEY;
+		return -EINVAL;
+	}
 
 	memcpy(ctx->key, key, DES_KEY_SIZE);
 
@@ -285,12 +299,13 @@ static int mv_cesa_des_setkey(struct crypto_skcipher *cipher, const u8 *key,
 static int mv_cesa_des3_ede_setkey(struct crypto_skcipher *cipher,
 				   const u8 *key, unsigned int len)
 {
-	struct mv_cesa_des_ctx *ctx = crypto_skcipher_ctx(cipher);
-	int err;
+	struct crypto_tfm *tfm = crypto_skcipher_tfm(cipher);
+	struct mv_cesa_des_ctx *ctx = crypto_tfm_ctx(tfm);
 
-	err = verify_skcipher_des3_key(cipher, key);
-	if (err)
-		return err;
+	if (len != DES3_EDE_KEY_SIZE) {
+		crypto_skcipher_set_flags(cipher, CRYPTO_TFM_RES_BAD_KEY_LEN);
+		return -EINVAL;
+	}
 
 	memcpy(ctx->key, key, DES3_EDE_KEY_SIZE);
 
@@ -307,6 +322,7 @@ static int mv_cesa_skcipher_dma_req_init(struct skcipher_request *req,
 	struct mv_cesa_skcipher_dma_iter iter;
 	bool skip_ctx = false;
 	int ret;
+	unsigned int ivsize;
 
 	basereq->chain.first = NULL;
 	basereq->chain.last = NULL;
@@ -365,6 +381,7 @@ static int mv_cesa_skcipher_dma_req_init(struct skcipher_request *req,
 	} while (mv_cesa_skcipher_req_iter_next_op(&iter));
 
 	/* Add output data for IV */
+	ivsize = crypto_skcipher_ivsize(crypto_skcipher_reqtfm(req));
 	ret = mv_cesa_dma_add_result_op(&basereq->chain, CESA_SA_CFG_SRAM_OFFSET,
 				    CESA_SA_DATA_SRAM_OFFSET,
 				    CESA_TDMA_SRC_IN_SRAM, flags);
@@ -468,7 +485,7 @@ static int mv_cesa_des_op(struct skcipher_request *req,
 	mv_cesa_update_op_cfg(tmpl, CESA_SA_DESC_CFG_CRYPTM_DES,
 			      CESA_SA_DESC_CFG_CRYPTM_MSK);
 
-	memcpy(tmpl->ctx.skcipher.key, ctx->key, DES_KEY_SIZE);
+	memcpy(tmpl->ctx.blkcipher.key, ctx->key, DES_KEY_SIZE);
 
 	return mv_cesa_skcipher_queue_req(req, tmpl);
 }
@@ -521,7 +538,7 @@ static int mv_cesa_cbc_des_op(struct skcipher_request *req,
 	mv_cesa_update_op_cfg(tmpl, CESA_SA_DESC_CFG_CRYPTCM_CBC,
 			      CESA_SA_DESC_CFG_CRYPTCM_MSK);
 
-	memcpy(tmpl->ctx.skcipher.iv, req->iv, DES_BLOCK_SIZE);
+	memcpy(tmpl->ctx.blkcipher.iv, req->iv, DES_BLOCK_SIZE);
 
 	return mv_cesa_des_op(req, tmpl);
 }
@@ -573,7 +590,7 @@ static int mv_cesa_des3_op(struct skcipher_request *req,
 	mv_cesa_update_op_cfg(tmpl, CESA_SA_DESC_CFG_CRYPTM_3DES,
 			      CESA_SA_DESC_CFG_CRYPTM_MSK);
 
-	memcpy(tmpl->ctx.skcipher.key, ctx->key, DES3_EDE_KEY_SIZE);
+	memcpy(tmpl->ctx.blkcipher.key, ctx->key, DES3_EDE_KEY_SIZE);
 
 	return mv_cesa_skcipher_queue_req(req, tmpl);
 }
@@ -626,7 +643,7 @@ struct skcipher_alg mv_cesa_ecb_des3_ede_alg = {
 static int mv_cesa_cbc_des3_op(struct skcipher_request *req,
 			       struct mv_cesa_op_ctx *tmpl)
 {
-	memcpy(tmpl->ctx.skcipher.iv, req->iv, DES3_EDE_BLOCK_SIZE);
+	memcpy(tmpl->ctx.blkcipher.iv, req->iv, DES3_EDE_BLOCK_SIZE);
 
 	return mv_cesa_des3_op(req, tmpl);
 }
@@ -692,7 +709,7 @@ static int mv_cesa_aes_op(struct skcipher_request *req,
 		key = ctx->aes.key_enc;
 
 	for (i = 0; i < ctx->aes.key_length / sizeof(u32); i++)
-		tmpl->ctx.skcipher.key[i] = cpu_to_le32(key[i]);
+		tmpl->ctx.blkcipher.key[i] = cpu_to_le32(key[i]);
 
 	if (ctx->aes.key_length == 24)
 		cfg |= CESA_SA_DESC_CFG_AES_LEN_192;
@@ -753,7 +770,7 @@ static int mv_cesa_cbc_aes_op(struct skcipher_request *req,
 {
 	mv_cesa_update_op_cfg(tmpl, CESA_SA_DESC_CFG_CRYPTCM_CBC,
 			      CESA_SA_DESC_CFG_CRYPTCM_MSK);
-	memcpy(tmpl->ctx.skcipher.iv, req->iv, AES_BLOCK_SIZE);
+	memcpy(tmpl->ctx.blkcipher.iv, req->iv, AES_BLOCK_SIZE);
 
 	return mv_cesa_aes_op(req, tmpl);
 }

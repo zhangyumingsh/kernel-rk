@@ -1,6 +1,6 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright 2017, Nicholas Piggin, IBM Corporation
+ * Licensed under GPLv2.
  */
 
 #define pr_fmt(fmt) "dt-cpu-ftrs: " fmt
@@ -101,7 +101,7 @@ static void __restore_cpu_cpufeatures(void)
 	if (hv_mode) {
 		mtspr(SPRN_LPID, 0);
 		mtspr(SPRN_HFSCR, system_registers.hfscr);
-		mtspr(SPRN_PCR, PCR_MASK);
+		mtspr(SPRN_PCR, 0);
 	}
 	mtspr(SPRN_FSCR, system_registers.fscr);
 
@@ -139,11 +139,11 @@ static void __init cpufeatures_setup_cpu(void)
 	/* Initialize the base environment -- clear FSCR/HFSCR.  */
 	hv_mode = !!(mfmsr() & MSR_HV);
 	if (hv_mode) {
+		/* CPU_FTR_HVMODE is used early in PACA setup */
 		cur_cpu_spec->cpu_features |= CPU_FTR_HVMODE;
 		mtspr(SPRN_HFSCR, 0);
 	}
 	mtspr(SPRN_FSCR, 0);
-	mtspr(SPRN_PCR, PCR_MASK);
 
 	/*
 	 * LPCR does not get cleared, to match behaviour with secondaries
@@ -345,6 +345,14 @@ static int __init feat_enable_mmu_radix(struct dt_cpu_feature *f)
 static int __init feat_enable_dscr(struct dt_cpu_feature *f)
 {
 	u64 lpcr;
+
+	/*
+	 * Linux relies on FSCR[DSCR] being clear, so that we can take the
+	 * facility unavailable interrupt and track the task's usage of DSCR.
+	 * See facility_unavailable_exception().
+	 * Clear the bit here so that feat_enable() doesn't set it.
+	 */
+	f->fscr_bit_nr = -1;
 
 	feat_enable(f);
 
@@ -726,20 +734,17 @@ static __init void cpufeatures_cpu_quirks(void)
 	/*
 	 * Not all quirks can be derived from the cpufeatures device tree.
 	 */
-	if ((version & 0xffffefff) == 0x004e0200) {
-		/* DD2.0 has no feature flag */
-		cur_cpu_spec->cpu_features |= CPU_FTR_P9_RADIX_PREFETCH_BUG;
-	} else if ((version & 0xffffefff) == 0x004e0201) {
+	if ((version & 0xffffefff) == 0x004e0200)
+		; /* DD2.0 has no feature flag */
+	else if ((version & 0xffffefff) == 0x004e0201)
 		cur_cpu_spec->cpu_features |= CPU_FTR_POWER9_DD2_1;
-		cur_cpu_spec->cpu_features |= CPU_FTR_P9_RADIX_PREFETCH_BUG;
-	} else if ((version & 0xffffefff) == 0x004e0202) {
+	else if ((version & 0xffffefff) == 0x004e0202) {
 		cur_cpu_spec->cpu_features |= CPU_FTR_P9_TM_HV_ASSIST;
 		cur_cpu_spec->cpu_features |= CPU_FTR_P9_TM_XER_SO_BUG;
 		cur_cpu_spec->cpu_features |= CPU_FTR_POWER9_DD2_1;
-	} else if ((version & 0xffff0000) == 0x004e0000) {
+	} else if ((version & 0xffff0000) == 0x004e0000)
 		/* DD2.1 and up have DD2_1 */
 		cur_cpu_spec->cpu_features |= CPU_FTR_POWER9_DD2_1;
-	}
 
 	if ((version & 0xffff0000) == 0x004e0000) {
 		cur_cpu_spec->cpu_features &= ~(CPU_FTR_DAWR);
@@ -841,6 +846,7 @@ static int __init process_cpufeatures_node(unsigned long node,
 	int len;
 
 	f = &dt_cpu_features[i];
+	memset(f, 0, sizeof(struct dt_cpu_feature));
 
 	f->node = node;
 
@@ -1035,12 +1041,9 @@ static int __init dt_cpu_ftrs_scan_callback(unsigned long node, const char
 	/* Count and allocate space for cpu features */
 	of_scan_flat_dt_subnodes(node, count_cpufeatures_subnodes,
 						&nr_dt_cpu_features);
-	dt_cpu_features = memblock_alloc(sizeof(struct dt_cpu_feature) * nr_dt_cpu_features, PAGE_SIZE);
-	if (!dt_cpu_features)
-		panic("%s: Failed to allocate %zu bytes align=0x%lx\n",
-		      __func__,
-		      sizeof(struct dt_cpu_feature) * nr_dt_cpu_features,
-		      PAGE_SIZE);
+	dt_cpu_features = __va(
+		memblock_alloc(sizeof(struct dt_cpu_feature)*
+				nr_dt_cpu_features, PAGE_SIZE));
 
 	cpufeatures_setup_start(isa);
 

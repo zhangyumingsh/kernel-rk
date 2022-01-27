@@ -13,7 +13,7 @@
 #include <linux/export.h>
 #include <linux/errno.h>
 #include <linux/mm.h>
-#include <linux/memblock.h>
+#include <linux/bootmem.h>
 #include <linux/spinlock.h>
 #include <linux/gfp.h>
 #include <linux/dma-direct.h>
@@ -105,12 +105,12 @@ unsigned long vdma_alloc(unsigned long paddr, unsigned long size)
 		if (vdma_debug)
 			printk("vdma_alloc: Invalid physical address: %08lx\n",
 			       paddr);
-		return DMA_MAPPING_ERROR;	/* invalid physical address */
+		return VDMA_ERROR;	/* invalid physical address */
 	}
 	if (size > 0x400000 || size == 0) {
 		if (vdma_debug)
 			printk("vdma_alloc: Invalid size: %08lx\n", size);
-		return DMA_MAPPING_ERROR;	/* invalid physical address */
+		return VDMA_ERROR;	/* invalid physical address */
 	}
 
 	spin_lock_irqsave(&vdma_lock, flags);
@@ -124,7 +124,7 @@ unsigned long vdma_alloc(unsigned long paddr, unsigned long size)
 		       first < VDMA_PGTBL_ENTRIES) first++;
 		if (first + pages > VDMA_PGTBL_ENTRIES) {	/* nothing free */
 			spin_unlock_irqrestore(&vdma_lock, flags);
-			return DMA_MAPPING_ERROR;
+			return VDMA_ERROR;
 		}
 
 		last = first + 1;
@@ -565,16 +565,20 @@ static void *jazz_dma_alloc(struct device *dev, size_t size,
 {
 	void *ret;
 
-	ret = dma_direct_alloc_pages(dev, size, dma_handle, gfp, attrs);
+	ret = dma_direct_alloc(dev, size, dma_handle, gfp, attrs);
 	if (!ret)
 		return NULL;
 
 	*dma_handle = vdma_alloc(virt_to_phys(ret), size);
-	if (*dma_handle == DMA_MAPPING_ERROR) {
-		dma_direct_free_pages(dev, size, ret, *dma_handle, attrs);
+	if (*dma_handle == VDMA_ERROR) {
+		dma_direct_free(dev, size, ret, *dma_handle, attrs);
 		return NULL;
 	}
 
+	if (!(attrs & DMA_ATTR_NON_CONSISTENT)) {
+		dma_cache_wback_inv((unsigned long)ret, size);
+		ret = (void *)UNCAC_ADDR(ret);
+	}
 	return ret;
 }
 
@@ -582,7 +586,9 @@ static void jazz_dma_free(struct device *dev, size_t size, void *vaddr,
 		dma_addr_t dma_handle, unsigned long attrs)
 {
 	vdma_free(dma_handle);
-	dma_direct_free_pages(dev, size, vaddr, dma_handle, attrs);
+	if (!(attrs & DMA_ATTR_NON_CONSISTENT))
+		vaddr = (void *)CAC_ADDR((unsigned long)vaddr);
+	return dma_direct_free(dev, size, vaddr, dma_handle, attrs);
 }
 
 static dma_addr_t jazz_dma_map_page(struct device *dev, struct page *page,
@@ -592,7 +598,7 @@ static dma_addr_t jazz_dma_map_page(struct device *dev, struct page *page,
 	phys_addr_t phys = page_to_phys(page) + offset;
 
 	if (!(attrs & DMA_ATTR_SKIP_CPU_SYNC))
-		arch_sync_dma_for_device(phys, size, dir);
+		arch_sync_dma_for_device(dev, phys, size, dir);
 	return vdma_alloc(phys, size);
 }
 
@@ -600,7 +606,7 @@ static void jazz_dma_unmap_page(struct device *dev, dma_addr_t dma_addr,
 		size_t size, enum dma_data_direction dir, unsigned long attrs)
 {
 	if (!(attrs & DMA_ATTR_SKIP_CPU_SYNC))
-		arch_sync_dma_for_cpu(vdma_log2phys(dma_addr), size, dir);
+		arch_sync_dma_for_cpu(dev, vdma_log2phys(dma_addr), size, dir);
 	vdma_free(dma_addr);
 }
 
@@ -612,10 +618,10 @@ static int jazz_dma_map_sg(struct device *dev, struct scatterlist *sglist,
 
 	for_each_sg(sglist, sg, nents, i) {
 		if (!(attrs & DMA_ATTR_SKIP_CPU_SYNC))
-			arch_sync_dma_for_device(sg_phys(sg), sg->length,
+			arch_sync_dma_for_device(dev, sg_phys(sg), sg->length,
 				dir);
 		sg->dma_address = vdma_alloc(sg_phys(sg), sg->length);
-		if (sg->dma_address == DMA_MAPPING_ERROR)
+		if (sg->dma_address == VDMA_ERROR)
 			return 0;
 		sg_dma_len(sg) = sg->length;
 	}
@@ -631,7 +637,8 @@ static void jazz_dma_unmap_sg(struct device *dev, struct scatterlist *sglist,
 
 	for_each_sg(sglist, sg, nents, i) {
 		if (!(attrs & DMA_ATTR_SKIP_CPU_SYNC))
-			arch_sync_dma_for_cpu(sg_phys(sg), sg->length, dir);
+			arch_sync_dma_for_cpu(dev, sg_phys(sg), sg->length,
+				dir);
 		vdma_free(sg->dma_address);
 	}
 }
@@ -639,13 +646,13 @@ static void jazz_dma_unmap_sg(struct device *dev, struct scatterlist *sglist,
 static void jazz_dma_sync_single_for_device(struct device *dev,
 		dma_addr_t addr, size_t size, enum dma_data_direction dir)
 {
-	arch_sync_dma_for_device(vdma_log2phys(addr), size, dir);
+	arch_sync_dma_for_device(dev, vdma_log2phys(addr), size, dir);
 }
 
 static void jazz_dma_sync_single_for_cpu(struct device *dev,
 		dma_addr_t addr, size_t size, enum dma_data_direction dir)
 {
-	arch_sync_dma_for_cpu(vdma_log2phys(addr), size, dir);
+	arch_sync_dma_for_cpu(dev, vdma_log2phys(addr), size, dir);
 }
 
 static void jazz_dma_sync_sg_for_device(struct device *dev,
@@ -655,7 +662,7 @@ static void jazz_dma_sync_sg_for_device(struct device *dev,
 	int i;
 
 	for_each_sg(sgl, sg, nents, i)
-		arch_sync_dma_for_device(sg_phys(sg), sg->length, dir);
+		arch_sync_dma_for_device(dev, sg_phys(sg), sg->length, dir);
 }
 
 static void jazz_dma_sync_sg_for_cpu(struct device *dev,
@@ -665,12 +672,18 @@ static void jazz_dma_sync_sg_for_cpu(struct device *dev,
 	int i;
 
 	for_each_sg(sgl, sg, nents, i)
-		arch_sync_dma_for_cpu(sg_phys(sg), sg->length, dir);
+		arch_sync_dma_for_cpu(dev, sg_phys(sg), sg->length, dir);
+}
+
+static int jazz_dma_mapping_error(struct device *dev, dma_addr_t dma_addr)
+{
+	return dma_addr == VDMA_ERROR;
 }
 
 const struct dma_map_ops jazz_dma_ops = {
 	.alloc			= jazz_dma_alloc,
 	.free			= jazz_dma_free,
+	.mmap			= arch_dma_mmap,
 	.map_page		= jazz_dma_map_page,
 	.unmap_page		= jazz_dma_unmap_page,
 	.map_sg			= jazz_dma_map_sg,
@@ -681,7 +694,6 @@ const struct dma_map_ops jazz_dma_ops = {
 	.sync_sg_for_device	= jazz_dma_sync_sg_for_device,
 	.dma_supported		= dma_direct_supported,
 	.cache_sync		= arch_dma_cache_sync,
-	.mmap			= dma_common_mmap,
-	.get_sgtable		= dma_common_get_sgtable,
+	.mapping_error		= jazz_dma_mapping_error,
 };
 EXPORT_SYMBOL(jazz_dma_ops);

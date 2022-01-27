@@ -165,7 +165,7 @@ EXPORT_SYMBOL_GPL(of_property_read_u64_index);
  *
  * @np:		device node from which the property value is to be read.
  * @propname:	name of the property to be searched.
- * @out_values:	pointer to found values.
+ * @out_values:	pointer to return value, modified only if return value is 0.
  * @sz_min:	minimum number of array elements to read
  * @sz_max:	maximum number of array elements to read, if zero there is no
  *		upper limit on the number of elements in the dts entry but only
@@ -213,7 +213,7 @@ EXPORT_SYMBOL_GPL(of_property_read_variable_u8_array);
  *
  * @np:		device node from which the property value is to be read.
  * @propname:	name of the property to be searched.
- * @out_values:	pointer to found values.
+ * @out_values:	pointer to return value, modified only if return value is 0.
  * @sz_min:	minimum number of array elements to read
  * @sz_max:	maximum number of array elements to read, if zero there is no
  *		upper limit on the number of elements in the dts entry but only
@@ -261,7 +261,7 @@ EXPORT_SYMBOL_GPL(of_property_read_variable_u16_array);
  *
  * @np:		device node from which the property value is to be read.
  * @propname:	name of the property to be searched.
- * @out_values:	pointer to return found values.
+ * @out_values:	pointer to return value, modified only if return value is 0.
  * @sz_min:	minimum number of array elements to read
  * @sz_max:	maximum number of array elements to read, if zero there is no
  *		upper limit on the number of elements in the dts entry but only
@@ -335,7 +335,7 @@ EXPORT_SYMBOL_GPL(of_property_read_u64);
  *
  * @np:		device node from which the property value is to be read.
  * @propname:	name of the property to be searched.
- * @out_values:	pointer to found values.
+ * @out_values:	pointer to return value, modified only if return value is 0.
  * @sz_min:	minimum number of array elements to read
  * @sz_max:	maximum number of array elements to read, if zero there is no
  *		upper limit on the number of elements in the dts entry but only
@@ -572,7 +572,7 @@ struct device_node *of_graph_get_port_by_id(struct device_node *parent, u32 id)
 	for_each_child_of_node(parent, port) {
 		u32 port_id = 0;
 
-		if (!of_node_name_eq(port, "port"))
+		if (of_node_cmp(port->name, "port") != 0)
 			continue;
 		of_property_read_u32(port, "reg", &port_id);
 		if (id == port_id)
@@ -647,7 +647,7 @@ struct device_node *of_graph_get_next_endpoint(const struct device_node *parent,
 			port = of_get_next_child(parent, port);
 			if (!port)
 				return NULL;
-		} while (!of_node_name_eq(port, "port"));
+		} while (of_node_cmp(port->name, "port"));
 	}
 }
 EXPORT_SYMBOL(of_graph_get_next_endpoint);
@@ -660,7 +660,7 @@ EXPORT_SYMBOL(of_graph_get_next_endpoint);
  *
  * Return: An 'endpoint' node pointer which is identified by reg and at the same
  * is the child of a port node identified by port_reg. reg and port_reg are
- * ignored when they are -1. Use of_node_put() on the pointer when done.
+ * ignored when they are -1.
  */
 struct device_node *of_graph_get_endpoint_by_regs(
 	const struct device_node *parent, int port_reg, int reg)
@@ -716,7 +716,7 @@ struct device_node *of_graph_get_port_parent(struct device_node *node)
 	/* Walk 3 levels up only if there is 'ports' node. */
 	for (depth = 3; depth && node; depth--) {
 		node = of_get_next_parent(node);
-		if (depth == 2 && !of_node_name_eq(node, "ports"))
+		if (depth == 2 && of_node_cmp(node->name, "ports"))
 			break;
 	}
 	return node;
@@ -873,20 +873,6 @@ of_fwnode_property_read_string_array(const struct fwnode_handle *fwnode,
 		of_property_count_strings(node, propname);
 }
 
-static const char *of_fwnode_get_name(const struct fwnode_handle *fwnode)
-{
-	return kbasename(to_of_node(fwnode)->full_name);
-}
-
-static const char *of_fwnode_get_name_prefix(const struct fwnode_handle *fwnode)
-{
-	/* Root needs no prefix here (its name is "/"). */
-	if (!to_of_node(fwnode)->parent)
-		return "";
-
-	return "/";
-}
-
 static struct fwnode_handle *
 of_fwnode_get_parent(const struct fwnode_handle *fwnode)
 {
@@ -909,7 +895,7 @@ of_fwnode_get_named_child_node(const struct fwnode_handle *fwnode,
 	struct device_node *child;
 
 	for_each_available_child_of_node(node, child)
-		if (of_node_name_eq(child, childname))
+		if (!of_node_cmp(child->name, childname))
 			return of_fwnode_handle(child);
 
 	return NULL;
@@ -971,7 +957,7 @@ of_fwnode_graph_get_port_parent(struct fwnode_handle *fwnode)
 		return NULL;
 
 	/* Is this the "ports" node? If not, it's the port parent. */
-	if (!of_node_name_eq(np, "ports"))
+	if (of_node_cmp(np->name, "ports"))
 		return of_fwnode_handle(np);
 
 	return of_fwnode_handle(of_get_next_parent(np));
@@ -1045,8 +1031,20 @@ static int of_link_to_phandle(struct device *dev, struct device_node *sup_np,
 	 * Find the device node that contains the supplier phandle.  It may be
 	 * @sup_np or it may be an ancestor of @sup_np.
 	 */
-	while (sup_np && !of_find_property(sup_np, "compatible", NULL))
+	while (sup_np) {
+
+		/* Don't allow linking to a disabled supplier */
+		if (!of_device_is_available(sup_np)) {
+			of_node_put(sup_np);
+			sup_np = NULL;
+		}
+
+		if (of_find_property(sup_np, "compatible", NULL))
+			break;
+
 		sup_np = of_get_next_parent(sup_np);
+	}
+
 	if (!sup_np) {
 		dev_dbg(dev, "Not linking to %pOFP - No device\n", tmp_np);
 		return -ENODEV;
@@ -1176,6 +1174,35 @@ static struct device_node *parse_##fname(struct device_node *np,	     \
 	return parse_suffix_prop_cells(np, prop_name, index, suffix, cells); \
 }
 
+static struct device_node *parse_msm_bus_name(struct device_node *np,
+					    const char *prop_name, int index)
+{
+	static struct device_node *bus_dev_np;
+
+	if (index || strcmp(prop_name, "qcom,msm-bus,name"))
+		return NULL;
+
+	if (!bus_dev_np)
+		bus_dev_np = of_find_compatible_node(NULL, NULL,
+						     "qcom,msm-bus-device");
+
+	return bus_dev_np;
+}
+
+/* Force ignore of any qcom properties. */
+static struct device_node *parse_qcom_any(struct device_node *np,
+					  const char *prop_name, int index)
+{
+	if (index || strncmp(prop_name, "qcom,", strlen("qcom,")))
+		return NULL;
+
+	/*
+	 * Returning np will cause this property to be matched and then
+	 * ignored.
+	 */
+	return np;
+}
+
 /**
  * struct supplier_bindings - Property parsing functions for suppliers
  *
@@ -1197,6 +1224,7 @@ struct supplier_bindings {
 					  const char *prop_name, int index);
 };
 
+DEFINE_SIMPLE_PROP(qcom_wrapper_core, "qcom,wrapper-core", NULL)
 DEFINE_SIMPLE_PROP(clocks, "clocks", "#clock-cells")
 DEFINE_SIMPLE_PROP(interconnects, "interconnects", "#interconnect-cells")
 DEFINE_SIMPLE_PROP(iommus, "iommus", "#iommu-cells")
@@ -1204,6 +1232,14 @@ DEFINE_SIMPLE_PROP(mboxes, "mboxes", "#mbox-cells")
 DEFINE_SIMPLE_PROP(io_channels, "io-channel", "#io-channel-cells")
 DEFINE_SIMPLE_PROP(interrupt_parent, "interrupt-parent", NULL)
 DEFINE_SIMPLE_PROP(dmas, "dmas", "#dma-cells")
+DEFINE_SIMPLE_PROP(power_domains, "power-domains", "#power-domain-cells")
+DEFINE_SIMPLE_PROP(hwlocks, "hwlocks", "#hwlock-cells")
+DEFINE_SIMPLE_PROP(extcon, "extcon", NULL)
+DEFINE_SIMPLE_PROP(phys, "phys", "#phy-cells")
+DEFINE_SIMPLE_PROP(pinctrl0, "pinctrl-0", NULL)
+DEFINE_SIMPLE_PROP(pinctrl1, "pinctrl-1", NULL)
+DEFINE_SIMPLE_PROP(pinctrl2, "pinctrl-2", NULL)
+DEFINE_SIMPLE_PROP(pinctrl3, "pinctrl-3", NULL)
 DEFINE_SUFFIX_PROP(regulators, "-supply", NULL)
 DEFINE_SUFFIX_PROP(gpio, "-gpio", "#gpio-cells")
 DEFINE_SUFFIX_PROP(gpios, "-gpios", "#gpio-cells")
@@ -1218,6 +1254,9 @@ static struct device_node *parse_iommu_maps(struct device_node *np,
 }
 
 static const struct supplier_bindings of_supplier_bindings[] = {
+	{ .parse_prop = parse_msm_bus_name, },
+	{ .parse_prop = parse_qcom_wrapper_core, },
+	{ .parse_prop = parse_qcom_any, },
 	{ .parse_prop = parse_clocks, },
 	{ .parse_prop = parse_interconnects, },
 	{ .parse_prop = parse_iommus, },
@@ -1226,6 +1265,14 @@ static const struct supplier_bindings of_supplier_bindings[] = {
 	{ .parse_prop = parse_io_channels, },
 	{ .parse_prop = parse_interrupt_parent, },
 	{ .parse_prop = parse_dmas, },
+	{ .parse_prop = parse_power_domains, },
+	{ .parse_prop = parse_hwlocks, },
+	{ .parse_prop = parse_extcon, },
+	{ .parse_prop = parse_phys, },
+	{ .parse_prop = parse_pinctrl0, },
+	{ .parse_prop = parse_pinctrl1, },
+	{ .parse_prop = parse_pinctrl2, },
+	{ .parse_prop = parse_pinctrl3, },
 	{ .parse_prop = parse_regulators, },
 	{ .parse_prop = parse_gpio, },
 	{ .parse_prop = parse_gpios, },
@@ -1262,7 +1309,7 @@ static int of_link_property(struct device *dev, struct device_node *con_np,
 	u32 dl_flags;
 
 	if (dev->of_node == con_np)
-		dl_flags = DL_FLAG_AUTOPROBE_CONSUMER;
+		dl_flags = 0;
 	else
 		dl_flags = DL_FLAG_SYNC_STATE_ONLY;
 
@@ -1292,14 +1339,14 @@ static int of_link_to_suppliers(struct device *dev,
 		if (of_link_property(dev, con_np, p->name))
 			ret = -ENODEV;
 
-	for_each_child_of_node(con_np, child)
+	for_each_available_child_of_node(con_np, child)
 		if (of_link_to_suppliers(dev, child) && !ret)
 			ret = -EAGAIN;
 
 	return ret;
 }
 
-static bool of_devlink;
+static bool of_devlink = true;
 core_param(of_devlink, of_devlink, bool, 0);
 
 static int of_fwnode_add_links(const struct fwnode_handle *fwnode,
@@ -1322,8 +1369,6 @@ const struct fwnode_operations of_fwnode_ops = {
 	.property_present = of_fwnode_property_present,
 	.property_read_int_array = of_fwnode_property_read_int_array,
 	.property_read_string_array = of_fwnode_property_read_string_array,
-	.get_name = of_fwnode_get_name,
-	.get_name_prefix = of_fwnode_get_name_prefix,
 	.get_parent = of_fwnode_get_parent,
 	.get_next_child_node = of_fwnode_get_next_child_node,
 	.get_named_child_node = of_fwnode_get_named_child_node,

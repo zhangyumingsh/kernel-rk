@@ -17,7 +17,7 @@
 #include <linux/string.h>
 #include <linux/types.h>
 #include <linux/init.h>
-#include <linux/memblock.h>
+#include <linux/bootmem.h>
 #include <linux/gfp.h>
 
 #include <asm/setup.h>
@@ -93,10 +93,7 @@ void __init paging_init(void)
 
 	high_memory = (void *) end_mem;
 
-	empty_zero_page = memblock_alloc(PAGE_SIZE, PAGE_SIZE);
-	if (!empty_zero_page)
-		panic("%s: Failed to allocate %lu bytes align=0x%lx\n",
-		      __func__, PAGE_SIZE, PAGE_SIZE);
+	empty_zero_page = alloc_bootmem_pages(PAGE_SIZE);
 
 	/*
 	 * Set up SFC/DFC registers (user data space).
@@ -130,10 +127,8 @@ static inline void init_pointer_tables(void)
 	/* insert pointer tables allocated so far into the tablelist */
 	init_pointer_table((unsigned long)kernel_pg_dir);
 	for (i = 0; i < PTRS_PER_PGD; i++) {
-		pud_t *pud = (pud_t *)(&kernel_pg_dir[i]);
-
-		if (pud_present(*pud))
-			init_pointer_table(pgd_page_vaddr(kernel_pg_dir[i]));
+		if (pgd_present(kernel_pg_dir[i]))
+			init_pointer_table(__pgd_page(kernel_pg_dir[i]));
 	}
 
 	/* insert also pointer table that we used to unmap the zero page */
@@ -145,7 +140,14 @@ static inline void init_pointer_tables(void)
 void __init mem_init(void)
 {
 	/* this will put all memory onto the freelists */
-	memblock_free_all();
+	free_all_bootmem();
 	init_pointer_tables();
 	mem_init_print_info(NULL);
 }
+
+#ifdef CONFIG_BLK_DEV_INITRD
+void free_initrd_mem(unsigned long start, unsigned long end)
+{
+	free_reserved_area((void *)start, (void *)end, -1, "initrd");
+}
+#endif

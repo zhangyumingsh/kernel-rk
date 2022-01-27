@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Pid namespaces
  *
@@ -26,6 +25,8 @@
 
 static DEFINE_MUTEX(pid_caches_mutex);
 static struct kmem_cache *pid_ns_cachep;
+/* MAX_PID_NS_LEVEL is needed for limiting size of 'struct pid' */
+#define MAX_PID_NS_LEVEL 32
 /* Write once array, filled from the beginning. */
 static struct kmem_cache *pid_cache[MAX_PID_NS_LEVEL];
 
@@ -215,7 +216,7 @@ void zap_pid_ns_processes(struct pid_namespace *pid_ns)
 	idr_for_each_entry_continue(&pid_ns->idr, pid, nr) {
 		task = pid_task(pid, PIDTYPE_PID);
 		if (task && !__fatal_signal_pending(task))
-			group_send_sig_info(SIGKILL, SEND_SIG_PRIV, task, PIDTYPE_MAX);
+			send_sig_info(SIGKILL, SEND_SIG_FORCED, task);
 	}
 	read_unlock(&tasklist_lock);
 	rcu_read_unlock();
@@ -289,13 +290,14 @@ static int pid_ns_ctl_handler(struct ctl_table *table, int write,
 }
 
 extern int pid_max;
+static int zero = 0;
 static struct ctl_table pid_ns_ctl_table[] = {
 	{
 		.procname = "ns_last_pid",
 		.maxlen = sizeof(int),
 		.mode = 0666, /* permissions are checked in the handler */
 		.proc_handler = pid_ns_ctl_handler,
-		.extra1 = SYSCTL_ZERO,
+		.extra1 = &zero,
 		.extra2 = &pid_max,
 	},
 	{ }

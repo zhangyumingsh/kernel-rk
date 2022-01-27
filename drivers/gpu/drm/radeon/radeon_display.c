@@ -23,27 +23,21 @@
  * Authors: Dave Airlie
  *          Alex Deucher
  */
-
-#include <linux/pci.h>
-#include <linux/pm_runtime.h>
-#include <linux/gcd.h>
-
-#include <asm/div64.h>
-
-#include <drm/drm_crtc_helper.h>
-#include <drm/drm_device.h>
-#include <drm/drm_drv.h>
-#include <drm/drm_edid.h>
-#include <drm/drm_fb_helper.h>
-#include <drm/drm_fourcc.h>
-#include <drm/drm_gem_framebuffer_helper.h>
-#include <drm/drm_plane_helper.h>
-#include <drm/drm_probe_helper.h>
-#include <drm/drm_vblank.h>
+#include <drm/drmP.h>
 #include <drm/radeon_drm.h>
+#include "radeon.h"
 
 #include "atom.h"
-#include "radeon.h"
+#include <asm/div64.h>
+
+#include <linux/pm_runtime.h>
+#include <drm/drm_crtc_helper.h>
+#include <drm/drm_gem_framebuffer_helper.h>
+#include <drm/drm_fb_helper.h>
+#include <drm/drm_plane_helper.h>
+#include <drm/drm_edid.h>
+
+#include <linux/gcd.h>
 
 static void avivo_crtc_load_lut(struct drm_crtc *crtc)
 {
@@ -277,7 +271,7 @@ static void radeon_unpin_work_func(struct work_struct *__work)
 	} else
 		DRM_ERROR("failed to reserve buffer after flip\n");
 
-	drm_gem_object_put_unlocked(&work->old_rbo->tbo.base);
+	drm_gem_object_put_unlocked(&work->old_rbo->gem_base);
 	kfree(work);
 }
 
@@ -535,7 +529,7 @@ static int radeon_crtc_page_flip_target(struct drm_crtc *crtc,
 		DRM_ERROR("failed to pin new rbo buffer before flip\n");
 		goto cleanup;
 	}
-	work->fence = dma_fence_get(dma_resv_get_excl(new_rbo->tbo.base.resv));
+	work->fence = dma_fence_get(reservation_object_get_excl(new_rbo->tbo.resv));
 	radeon_bo_get_tiling_flags(new_rbo, &tiling_flags, NULL);
 	radeon_bo_unreserve(new_rbo);
 
@@ -609,7 +603,7 @@ pflip_cleanup:
 	radeon_bo_unreserve(new_rbo);
 
 cleanup:
-	drm_gem_object_put_unlocked(&work->old_rbo->tbo.base);
+	drm_gem_object_put_unlocked(&work->old_rbo->gem_base);
 	dma_fence_put(work->fence);
 	kfree(work);
 	return r;
@@ -631,8 +625,10 @@ radeon_crtc_set_config(struct drm_mode_set *set,
 	dev = set->crtc->dev;
 
 	ret = pm_runtime_get_sync(dev->dev);
-	if (ret < 0)
+	if (ret < 0) {
+		pm_runtime_put_autosuspend(dev->dev);
 		return ret;
+	}
 
 	ret = drm_crtc_helper_set_config(set, ctx);
 
@@ -674,6 +670,7 @@ static void radeon_crtc_init(struct drm_device *dev, int index)
 {
 	struct radeon_device *rdev = dev->dev_private;
 	struct radeon_crtc *radeon_crtc;
+	int i;
 
 	radeon_crtc = kzalloc(sizeof(struct radeon_crtc) + (RADEONFB_CONN_LIMIT * sizeof(struct drm_connector *)), GFP_KERNEL);
 	if (radeon_crtc == NULL)
@@ -701,6 +698,12 @@ static void radeon_crtc_init(struct drm_device *dev, int index)
 	radeon_crtc->mode_set.connectors = (struct drm_connector **)(radeon_crtc + 1);
 	radeon_crtc->mode_set.num_connectors = 0;
 #endif
+
+	for (i = 0; i < 256; i++) {
+		radeon_crtc->lut_r[i] = i << 2;
+		radeon_crtc->lut_g[i] = i << 2;
+		radeon_crtc->lut_b[i] = i << 2;
+	}
 
 	if (rdev->is_atom_bios && (ASIC_IS_AVIVO(rdev) || radeon_r4xx_atom))
 		radeon_atombios_init_crtc(dev, radeon_crtc);
@@ -842,11 +845,11 @@ static bool radeon_setup_enc_conn(struct drm_device *dev)
 	if (rdev->bios) {
 		if (rdev->is_atom_bios) {
 			ret = radeon_get_atom_connector_info_from_supported_devices_table(dev);
-			if (!ret)
+			if (ret == false)
 				ret = radeon_get_atom_connector_info_from_object_table(dev);
 		} else {
 			ret = radeon_get_legacy_connector_info_from_bios(dev);
-			if (!ret)
+			if (ret == false)
 				ret = radeon_get_legacy_connector_info_from_table(dev);
 		}
 	} else {
@@ -1647,7 +1650,7 @@ void radeon_modeset_fini(struct radeon_device *rdev)
 	if (rdev->mode_info.mode_config_initialized) {
 		drm_kms_helper_poll_fini(rdev->ddev);
 		radeon_hpd_fini(rdev);
-		drm_helper_force_disable_all(rdev->ddev);
+		drm_crtc_force_disable_all(rdev->ddev);
 		radeon_fbdev_fini(rdev);
 		radeon_afmt_fini(rdev);
 		drm_mode_config_cleanup(rdev->ddev);
@@ -1682,6 +1685,7 @@ bool radeon_crtc_scaling_mode_fixup(struct drm_crtc *crtc,
 	struct radeon_crtc *radeon_crtc = to_radeon_crtc(crtc);
 	struct radeon_encoder *radeon_encoder;
 	struct drm_connector *connector;
+	struct radeon_connector *radeon_connector;
 	bool first = true;
 	u32 src_v = 1, dst_v = 1;
 	u32 src_h = 1, dst_h = 1;
@@ -1694,6 +1698,7 @@ bool radeon_crtc_scaling_mode_fixup(struct drm_crtc *crtc,
 			continue;
 		radeon_encoder = to_radeon_encoder(encoder);
 		connector = radeon_get_connector_for_encoder(encoder);
+		radeon_connector = to_radeon_connector(connector);
 
 		if (first) {
 			/* set scaling */

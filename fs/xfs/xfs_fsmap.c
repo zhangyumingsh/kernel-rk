@@ -9,12 +9,16 @@
 #include "xfs_format.h"
 #include "xfs_log_format.h"
 #include "xfs_trans_resv.h"
+#include "xfs_sb.h"
 #include "xfs_mount.h"
+#include "xfs_defer.h"
 #include "xfs_inode.h"
 #include "xfs_trans.h"
+#include "xfs_error.h"
 #include "xfs_btree.h"
 #include "xfs_rmap_btree.h"
 #include "xfs_trace.h"
+#include "xfs_log.h"
 #include "xfs_rmap.h"
 #include "xfs_alloc.h"
 #include "xfs_bit.h"
@@ -146,7 +150,6 @@ xfs_fsmap_owner_from_rmap(
 		dest->fmr_owner = XFS_FMR_OWN_FREE;
 		break;
 	default:
-		ASSERT(0);
 		return -EFSCORRUPTED;
 	}
 	return 0;
@@ -251,23 +254,26 @@ xfs_getfsmap_helper(
 		rec_daddr += XFS_FSB_TO_BB(mp, rec->rm_blockcount);
 		if (info->next_daddr < rec_daddr)
 			info->next_daddr = rec_daddr;
-		return 0;
+		return XFS_BTREE_QUERY_RANGE_CONTINUE;
 	}
 
 	/* Are we just counting mappings? */
 	if (info->head->fmh_count == 0) {
+		if (info->head->fmh_entries == UINT_MAX)
+			return -ECANCELED;
+
 		if (rec_daddr > info->next_daddr)
 			info->head->fmh_entries++;
 
 		if (info->last)
-			return 0;
+			return XFS_BTREE_QUERY_RANGE_CONTINUE;
 
 		info->head->fmh_entries++;
 
 		rec_daddr += XFS_FSB_TO_BB(mp, rec->rm_blockcount);
 		if (info->next_daddr < rec_daddr)
 			info->next_daddr = rec_daddr;
-		return 0;
+		return XFS_BTREE_QUERY_RANGE_CONTINUE;
 	}
 
 	/*
@@ -277,7 +283,7 @@ xfs_getfsmap_helper(
 	 */
 	if (rec_daddr > info->next_daddr) {
 		if (info->head->fmh_entries >= info->head->fmh_count)
-			return -ECANCELED;
+			return XFS_BTREE_QUERY_RANGE_ABORT;
 
 		fmr.fmr_device = info->dev;
 		fmr.fmr_physical = info->next_daddr;
@@ -296,7 +302,7 @@ xfs_getfsmap_helper(
 
 	/* Fill out the extent we found */
 	if (info->head->fmh_entries >= info->head->fmh_count)
-		return -ECANCELED;
+		return XFS_BTREE_QUERY_RANGE_ABORT;
 
 	trace_xfs_fsmap_mapping(mp, info->dev, info->agno, rec);
 
@@ -329,7 +335,7 @@ out:
 	rec_daddr += XFS_FSB_TO_BB(mp, rec->rm_blockcount);
 	if (info->next_daddr < rec_daddr)
 		info->next_daddr = rec_daddr;
-	return 0;
+	return XFS_BTREE_QUERY_RANGE_CONTINUE;
 }
 
 /* Transform a rmapbt irec into a fsmap */

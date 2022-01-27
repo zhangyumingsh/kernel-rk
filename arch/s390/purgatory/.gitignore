@@ -1,4 +1,2 @@
-purgatory
-purgatory.chk
-purgatory.lds
+kexec-purgatory.c
 purgatory.ro

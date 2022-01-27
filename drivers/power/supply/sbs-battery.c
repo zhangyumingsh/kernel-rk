@@ -1,11 +1,19 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Gas Gauge driver for SBS Compliant Batteries
  *
  * Copyright (c) 2010, NVIDIA Corporation.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
+ * more details.
  */
 
-#include <linux/bits.h>
 #include <linux/delay.h>
 #include <linux/err.h>
 #include <linux/gpio/consumer.h>
@@ -47,10 +55,10 @@ enum {
 
 /* Battery Mode defines */
 #define BATTERY_MODE_OFFSET		0x03
-#define BATTERY_MODE_CAPACITY_MASK	BIT(15)
-enum sbs_capacity_mode {
-	CAPACITY_MODE_AMPS = 0,
-	CAPACITY_MODE_WATTS = BATTERY_MODE_CAPACITY_MASK
+#define BATTERY_MODE_MASK		0x8000
+enum sbs_battery_mode {
+	BATTERY_MODE_AMPS = 0,
+	BATTERY_MODE_WATTS = 0x8000
 };
 
 /* manufacturer access defines */
@@ -519,8 +527,8 @@ static void  sbs_unit_adjustment(struct i2c_client *client,
 	}
 }
 
-static enum sbs_capacity_mode sbs_set_capacity_mode(struct i2c_client *client,
-	enum sbs_capacity_mode mode)
+static enum sbs_battery_mode sbs_set_battery_mode(struct i2c_client *client,
+	enum sbs_battery_mode mode)
 {
 	int ret, original_val;
 
@@ -528,13 +536,13 @@ static enum sbs_capacity_mode sbs_set_capacity_mode(struct i2c_client *client,
 	if (original_val < 0)
 		return original_val;
 
-	if ((original_val & BATTERY_MODE_CAPACITY_MASK) == mode)
+	if ((original_val & BATTERY_MODE_MASK) == mode)
 		return mode;
 
-	if (mode == CAPACITY_MODE_AMPS)
-		ret = original_val & ~BATTERY_MODE_CAPACITY_MASK;
+	if (mode == BATTERY_MODE_AMPS)
+		ret = original_val & ~BATTERY_MODE_MASK;
 	else
-		ret = original_val | BATTERY_MODE_CAPACITY_MASK;
+		ret = original_val | BATTERY_MODE_MASK;
 
 	ret = sbs_write_word_data(client, BATTERY_MODE_OFFSET, ret);
 	if (ret < 0)
@@ -542,7 +550,7 @@ static enum sbs_capacity_mode sbs_set_capacity_mode(struct i2c_client *client,
 
 	usleep_range(1000, 2000);
 
-	return original_val & BATTERY_MODE_CAPACITY_MASK;
+	return original_val & BATTERY_MODE_MASK;
 }
 
 static int sbs_get_battery_capacity(struct i2c_client *client,
@@ -550,13 +558,13 @@ static int sbs_get_battery_capacity(struct i2c_client *client,
 	union power_supply_propval *val)
 {
 	s32 ret;
-	enum sbs_capacity_mode mode = CAPACITY_MODE_WATTS;
+	enum sbs_battery_mode mode = BATTERY_MODE_WATTS;
 
 	if (power_supply_is_amp_property(psp))
-		mode = CAPACITY_MODE_AMPS;
+		mode = BATTERY_MODE_AMPS;
 
-	mode = sbs_set_capacity_mode(client, mode);
-	if ((int)mode < 0)
+	mode = sbs_set_battery_mode(client, mode);
+	if (mode < 0)
 		return mode;
 
 	ret = sbs_read_word_data(client, sbs_data[reg_offset].addr);
@@ -565,7 +573,7 @@ static int sbs_get_battery_capacity(struct i2c_client *client,
 
 	val->intval = ret;
 
-	ret = sbs_set_capacity_mode(client, mode);
+	ret = sbs_set_battery_mode(client, mode);
 	if (ret < 0)
 		return ret;
 
@@ -1002,6 +1010,6 @@ module_i2c_driver(sbs_battery_driver);
 MODULE_DESCRIPTION("SBS battery monitor driver");
 MODULE_LICENSE("GPL");
 
-module_param(force_load, bool, 0444);
+module_param(force_load, bool, S_IRUSR | S_IRGRP | S_IROTH);
 MODULE_PARM_DESC(force_load,
 		 "Attempt to load the driver even if no battery is connected");

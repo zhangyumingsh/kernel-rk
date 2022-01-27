@@ -1,9 +1,20 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Based on arch/arm/include/asm/cacheflush.h
  *
  * Copyright (C) 1999-2002 Russell King.
  * Copyright (C) 2012 ARM Ltd.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 #ifndef __ASM_CACHEFLUSH_H
 #define __ASM_CACHEFLUSH_H
@@ -29,6 +40,10 @@
  *	See Documentation/core-api/cachetlb.rst for more information. Please note that
  *	the implementation assumes non-aliasing VIPT D-cache and (aliasing)
  *	VIPT I-cache.
+ *
+ *	flush_cache_all()
+ *
+ *		Unconditionally clean and invalidate the entire cache.
  *
  *	flush_cache_mm(mm)
  *
@@ -61,6 +76,7 @@
  *		- kaddr  - page address
  *		- size   - region size
  */
+extern void flush_cache_all(void);
 extern void __flush_icache_range(unsigned long start, unsigned long end);
 extern int  invalidate_icache_range(unsigned long start, unsigned long end);
 extern void __flush_dcache_area(void *addr, size_t len);
@@ -79,7 +95,7 @@ static inline void flush_icache_range(unsigned long start, unsigned long end)
 	 * IPI all online CPUs so that they undergo a context synchronization
 	 * event and are forced to refetch the new instructions.
 	 */
-#ifdef CONFIG_KGDB
+
 	/*
 	 * KGDB performs cache maintenance with interrupts disabled, so we
 	 * will deadlock trying to IPI the secondary CPUs. In theory, we can
@@ -89,9 +105,9 @@ static inline void flush_icache_range(unsigned long start, unsigned long end)
 	 * the patching operation, so we don't need extra IPIs here anyway.
 	 * In which case, add a KGDB-specific bodge and return early.
 	 */
-	if (kgdb_connected && irqs_disabled())
+	if (in_dbg_master())
 		return;
-#endif
+
 	kick_all_cpus_sync();
 }
 
@@ -115,6 +131,15 @@ static inline void flush_cache_range(struct vm_area_struct *vma,
 extern void __dma_map_area(const void *, size_t, int);
 extern void __dma_unmap_area(const void *, size_t, int);
 extern void __dma_flush_area(const void *, size_t);
+extern void __dma_inv_area(const void *start, size_t size);
+extern void __dma_clean_area(const void *start, size_t size);
+
+#define dmac_flush_range(start, end) \
+	__dma_flush_area(start, (void *)(end) - (void *)(start))
+#define dmac_inv_range(start, end) \
+	__dma_inv_area(start, (void *)(end) - (void *)(start))
+#define dmac_clean_range(start, end) \
+	__dma_clean_area(start, (void *)(end) - (void *)(start))
 
 /*
  * Copy user data from/to a page which is mapped into a different
@@ -145,7 +170,7 @@ extern void copy_to_user_page(struct vm_area_struct *, struct page *,
 #define ARCH_IMPLEMENTS_FLUSH_DCACHE_PAGE 1
 extern void flush_dcache_page(struct page *);
 
-static __always_inline void __flush_icache_all(void)
+static inline void __flush_icache_all(void)
 {
 	if (cpus_have_const_cap(ARM64_HAS_CACHE_DIC))
 		return;
@@ -175,8 +200,5 @@ static inline void flush_cache_vunmap(unsigned long start, unsigned long end)
 }
 
 int set_memory_valid(unsigned long addr, int numpages, int enable);
-
-int set_direct_map_invalid_noflush(struct page *page);
-int set_direct_map_default_noflush(struct page *page);
 
 #endif

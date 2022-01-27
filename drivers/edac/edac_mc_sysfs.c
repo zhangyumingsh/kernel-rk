@@ -131,7 +131,7 @@ static const char * const edac_caps[] = {
 
 struct dev_ch_attribute {
 	struct device_attribute attr;
-	unsigned int channel;
+	int channel;
 };
 
 #define DEVICE_CHANNEL(_name, _mode, _show, _store, _var) \
@@ -200,7 +200,7 @@ static ssize_t channel_dimm_label_show(struct device *dev,
 				       char *data)
 {
 	struct csrow_info *csrow = to_csrow(dev);
-	unsigned int chan = to_channel(mattr);
+	unsigned chan = to_channel(mattr);
 	struct rank_info *rank = csrow->channels[chan];
 
 	/* if field has not been initialized, there is nothing to send */
@@ -216,7 +216,7 @@ static ssize_t channel_dimm_label_store(struct device *dev,
 					const char *data, size_t count)
 {
 	struct csrow_info *csrow = to_csrow(dev);
-	unsigned int chan = to_channel(mattr);
+	unsigned chan = to_channel(mattr);
 	struct rank_info *rank = csrow->channels[chan];
 	size_t copy_count = count;
 
@@ -240,7 +240,7 @@ static ssize_t channel_ce_count_show(struct device *dev,
 				     struct device_attribute *mattr, char *data)
 {
 	struct csrow_info *csrow = to_csrow(dev);
-	unsigned int chan = to_channel(mattr);
+	unsigned chan = to_channel(mattr);
 	struct rank_info *rank = csrow->channels[chan];
 
 	return sprintf(data, "%u\n", rank->ce_count);
@@ -276,7 +276,10 @@ static const struct attribute_group *csrow_attr_groups[] = {
 
 static void csrow_attr_release(struct device *dev)
 {
-	/* release device with _edac_mc_free() */
+	struct csrow_info *csrow = container_of(dev, struct csrow_info, dev);
+
+	edac_dbg(1, "Releasing csrow device %s\n", dev_name(dev));
+	kfree(csrow);
 }
 
 static const struct device_type csrow_attr_type = {
@@ -404,6 +407,7 @@ static int edac_create_csrow_object(struct mem_ctl_info *mci,
 	int err;
 
 	csrow->dev.type = &csrow_attr_type;
+	csrow->dev.bus = mci->bus;
 	csrow->dev.groups = csrow_dev_groups;
 	device_initialize(&csrow->dev);
 	csrow->dev.parent = &mci->dev;
@@ -411,16 +415,14 @@ static int edac_create_csrow_object(struct mem_ctl_info *mci,
 	dev_set_name(&csrow->dev, "csrow%d", index);
 	dev_set_drvdata(&csrow->dev, csrow);
 
+	edac_dbg(0, "creating (virtual) csrow node %s\n",
+		 dev_name(&csrow->dev));
+
 	err = device_add(&csrow->dev);
-	if (err) {
-		edac_dbg(1, "failure: create device %s\n", dev_name(&csrow->dev));
+	if (err)
 		put_device(&csrow->dev);
-		return err;
-	}
 
-	edac_dbg(0, "device %s created\n", dev_name(&csrow->dev));
-
-	return 0;
+	return err;
 }
 
 /* Create a CSROW object under specifed edac_mc_device */
@@ -434,8 +436,12 @@ static int edac_create_csrow_objects(struct mem_ctl_info *mci)
 		if (!nr_pages_per_csrow(csrow))
 			continue;
 		err = edac_create_csrow_object(mci, mci->csrows[i], i);
-		if (err < 0)
+		if (err < 0) {
+			edac_dbg(1,
+				 "failure: create csrow objects for csrow %d\n",
+				 i);
 			goto error;
+		}
 	}
 	return 0;
 
@@ -444,7 +450,7 @@ error:
 		csrow = mci->csrows[i];
 		if (!nr_pages_per_csrow(csrow))
 			continue;
-		device_unregister(&mci->csrows[i]->dev);
+		put_device(&mci->csrows[i]->dev);
 	}
 
 	return err;
@@ -553,8 +559,14 @@ static ssize_t dimmdev_ce_count_show(struct device *dev,
 {
 	struct dimm_info *dimm = to_dimm(dev);
 	u32 count;
+	int off;
 
-	count = dimm->mci->ce_per_layer[dimm->mci->n_layers-1][dimm->idx];
+	off = EDAC_DIMM_OFF(dimm->mci->layers,
+			    dimm->mci->n_layers,
+			    dimm->location[0],
+			    dimm->location[1],
+			    dimm->location[2]);
+	count = dimm->mci->ce_per_layer[dimm->mci->n_layers-1][off];
 	return sprintf(data, "%u\n", count);
 }
 
@@ -564,8 +576,14 @@ static ssize_t dimmdev_ue_count_show(struct device *dev,
 {
 	struct dimm_info *dimm = to_dimm(dev);
 	u32 count;
+	int off;
 
-	count = dimm->mci->ue_per_layer[dimm->mci->n_layers-1][dimm->idx];
+	off = EDAC_DIMM_OFF(dimm->mci->layers,
+			    dimm->mci->n_layers,
+			    dimm->location[0],
+			    dimm->location[1],
+			    dimm->location[2]);
+	count = dimm->mci->ue_per_layer[dimm->mci->n_layers-1][off];
 	return sprintf(data, "%u\n", count);
 }
 
@@ -604,7 +622,10 @@ static const struct attribute_group *dimm_attr_groups[] = {
 
 static void dimm_attr_release(struct device *dev)
 {
-	/* release device with _edac_mc_free() */
+	struct dimm_info *dimm = container_of(dev, struct dimm_info, dev);
+
+	edac_dbg(1, "Releasing dimm device %s\n", dev_name(dev));
+	kfree(dimm);
 }
 
 static const struct device_type dimm_attr_type = {
@@ -614,38 +635,29 @@ static const struct device_type dimm_attr_type = {
 
 /* Create a DIMM object under specifed memory controller device */
 static int edac_create_dimm_object(struct mem_ctl_info *mci,
-				   struct dimm_info *dimm)
+				   struct dimm_info *dimm,
+				   int index)
 {
 	int err;
 	dimm->mci = mci;
 
 	dimm->dev.type = &dimm_attr_type;
+	dimm->dev.bus = mci->bus;
 	device_initialize(&dimm->dev);
 
 	dimm->dev.parent = &mci->dev;
 	if (mci->csbased)
-		dev_set_name(&dimm->dev, "rank%d", dimm->idx);
+		dev_set_name(&dimm->dev, "rank%d", index);
 	else
-		dev_set_name(&dimm->dev, "dimm%d", dimm->idx);
+		dev_set_name(&dimm->dev, "dimm%d", index);
 	dev_set_drvdata(&dimm->dev, dimm);
 	pm_runtime_forbid(&mci->dev);
 
-	err = device_add(&dimm->dev);
-	if (err) {
-		edac_dbg(1, "failure: create device %s\n", dev_name(&dimm->dev));
-		put_device(&dimm->dev);
-		return err;
-	}
+	err =  device_add(&dimm->dev);
 
-	if (IS_ENABLED(CONFIG_EDAC_DEBUG)) {
-		char location[80];
+	edac_dbg(0, "creating rank/dimm device %s\n", dev_name(&dimm->dev));
 
-		edac_dimm_info_location(dimm, location, sizeof(location));
-		edac_dbg(0, "device %s created at location %s\n",
-			dev_name(&dimm->dev), location);
-	}
-
-	return 0;
+	return err;
 }
 
 /*
@@ -886,7 +898,10 @@ static const struct attribute_group *mci_attr_groups[] = {
 
 static void mci_attr_release(struct device *dev)
 {
-	/* release device with _edac_mc_free() */
+	struct mem_ctl_info *mci = container_of(dev, struct mem_ctl_info, dev);
+
+	edac_dbg(1, "Releasing csrow device %s\n", dev_name(dev));
+	kfree(mci);
 }
 
 static const struct device_type mci_attr_type = {
@@ -905,39 +920,70 @@ static const struct device_type mci_attr_type = {
 int edac_create_sysfs_mci_device(struct mem_ctl_info *mci,
 				 const struct attribute_group **groups)
 {
-	struct dimm_info *dimm;
-	int err;
+	char *name;
+	int i, err;
+
+	/*
+	 * The memory controller needs its own bus, in order to avoid
+	 * namespace conflicts at /sys/bus/edac.
+	 */
+	name = kasprintf(GFP_KERNEL, "mc%d", mci->mc_idx);
+	if (!name)
+		return -ENOMEM;
+
+	mci->bus->name = name;
+
+	edac_dbg(0, "creating bus %s\n", mci->bus->name);
+
+	err = bus_register(mci->bus);
+	if (err < 0) {
+		kfree(name);
+		return err;
+	}
 
 	/* get the /sys/devices/system/edac subsys reference */
 	mci->dev.type = &mci_attr_type;
 	device_initialize(&mci->dev);
 
 	mci->dev.parent = mci_pdev;
+	mci->dev.bus = mci->bus;
 	mci->dev.groups = groups;
 	dev_set_name(&mci->dev, "mc%d", mci->mc_idx);
 	dev_set_drvdata(&mci->dev, mci);
 	pm_runtime_forbid(&mci->dev);
 
+	edac_dbg(0, "creating device %s\n", dev_name(&mci->dev));
 	err = device_add(&mci->dev);
 	if (err < 0) {
 		edac_dbg(1, "failure: create device %s\n", dev_name(&mci->dev));
-		put_device(&mci->dev);
-		return err;
+		goto fail_unregister_bus;
 	}
-
-	edac_dbg(0, "device %s created\n", dev_name(&mci->dev));
 
 	/*
 	 * Create the dimm/rank devices
 	 */
-	mci_for_each_dimm(mci, dimm) {
+	for (i = 0; i < mci->tot_dimms; i++) {
+		struct dimm_info *dimm = mci->dimms[i];
 		/* Only expose populated DIMMs */
 		if (!dimm->nr_pages)
 			continue;
 
-		err = edac_create_dimm_object(mci, dimm);
-		if (err)
+#ifdef CONFIG_EDAC_DEBUG
+		edac_dbg(1, "creating dimm%d, located at ", i);
+		if (edac_debug_level >= 1) {
+			int lay;
+			for (lay = 0; lay < mci->n_layers; lay++)
+				printk(KERN_CONT "%s %d ",
+					edac_layer_name[mci->layers[lay].type],
+					dimm->location[lay]);
+			printk(KERN_CONT "\n");
+		}
+#endif
+		err = edac_create_dimm_object(mci, dimm, i);
+		if (err) {
+			edac_dbg(1, "failure: create dimm %d obj\n", i);
 			goto fail_unregister_dimm;
+		}
 	}
 
 #ifdef CONFIG_EDAC_LEGACY_SYSFS
@@ -950,11 +996,17 @@ int edac_create_sysfs_mci_device(struct mem_ctl_info *mci,
 	return 0;
 
 fail_unregister_dimm:
-	mci_for_each_dimm(mci, dimm) {
-		if (device_is_registered(&dimm->dev))
-			device_unregister(&dimm->dev);
+	for (i--; i >= 0; i--) {
+		struct dimm_info *dimm = mci->dimms[i];
+		if (!dimm->nr_pages)
+			continue;
+
+		device_unregister(&dimm->dev);
 	}
 	device_unregister(&mci->dev);
+fail_unregister_bus:
+	bus_unregister(mci->bus);
+	kfree(name);
 
 	return err;
 }
@@ -964,7 +1016,7 @@ fail_unregister_dimm:
  */
 void edac_remove_sysfs_mci_device(struct mem_ctl_info *mci)
 {
-	struct dimm_info *dimm;
+	int i;
 
 	edac_dbg(0, "\n");
 
@@ -975,18 +1027,24 @@ void edac_remove_sysfs_mci_device(struct mem_ctl_info *mci)
 	edac_delete_csrow_objects(mci);
 #endif
 
-	mci_for_each_dimm(mci, dimm) {
+	for (i = 0; i < mci->tot_dimms; i++) {
+		struct dimm_info *dimm = mci->dimms[i];
 		if (dimm->nr_pages == 0)
 			continue;
-		edac_dbg(1, "unregistering device %s\n", dev_name(&dimm->dev));
+		edac_dbg(0, "removing device %s\n", dev_name(&dimm->dev));
 		device_unregister(&dimm->dev);
 	}
 }
 
 void edac_unregister_sysfs(struct mem_ctl_info *mci)
 {
-	edac_dbg(1, "unregistering device %s\n", dev_name(&mci->dev));
+	struct bus_type *bus = mci->bus;
+	const char *name = mci->bus->name;
+
+	edac_dbg(1, "Unregistering device %s\n", dev_name(&mci->dev));
 	device_unregister(&mci->dev);
+	bus_unregister(bus);
+	kfree(name);
 }
 
 static void mc_attr_release(struct device *dev)
@@ -996,7 +1054,7 @@ static void mc_attr_release(struct device *dev)
 	 * parent device, used to create the /sys/devices/mc sysfs node.
 	 * So, there are no attributes on it.
 	 */
-	edac_dbg(1, "device %s released\n", dev_name(dev));
+	edac_dbg(1, "Releasing device %s\n", dev_name(dev));
 	kfree(dev);
 }
 
@@ -1011,8 +1069,10 @@ int __init edac_mc_sysfs_init(void)
 	int err;
 
 	mci_pdev = kzalloc(sizeof(*mci_pdev), GFP_KERNEL);
-	if (!mci_pdev)
-		return -ENOMEM;
+	if (!mci_pdev) {
+		err = -ENOMEM;
+		goto out;
+	}
 
 	mci_pdev->bus = edac_get_sysfs_subsys();
 	mci_pdev->type = &mc_attr_type;
@@ -1020,15 +1080,17 @@ int __init edac_mc_sysfs_init(void)
 	dev_set_name(mci_pdev, "mc");
 
 	err = device_add(mci_pdev);
-	if (err < 0) {
-		edac_dbg(1, "failure: create device %s\n", dev_name(mci_pdev));
-		put_device(mci_pdev);
-		return err;
-	}
+	if (err < 0)
+		goto out_put_device;
 
 	edac_dbg(0, "device %s created\n", dev_name(mci_pdev));
 
 	return 0;
+
+ out_put_device:
+	put_device(mci_pdev);
+ out:
+	return err;
 }
 
 void edac_mc_sysfs_exit(void)

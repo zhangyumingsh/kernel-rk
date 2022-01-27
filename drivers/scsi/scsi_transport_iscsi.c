@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * iSCSI transport class definitions
  *
@@ -6,6 +5,20 @@
  * Copyright (C) Mike Christie, 2004 - 2005
  * Copyright (C) Dmitry Yusupov, 2004 - 2005
  * Copyright (C) Alex Aizman, 2004 - 2005
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
  */
 #include <linux/module.h>
 #include <linux/mutex.h>
@@ -25,18 +38,6 @@
 #define ISCSI_TRANSPORT_VERSION "2.0-870"
 
 #define ISCSI_SEND_MAX_ALLOWED  10
-
-#define CREATE_TRACE_POINTS
-#include <trace/events/iscsi.h>
-
-/*
- * Export tracepoint symbols to be used by other modules.
- */
-EXPORT_TRACEPOINT_SYMBOL_GPL(iscsi_dbg_conn);
-EXPORT_TRACEPOINT_SYMBOL_GPL(iscsi_dbg_eh);
-EXPORT_TRACEPOINT_SYMBOL_GPL(iscsi_dbg_session);
-EXPORT_TRACEPOINT_SYMBOL_GPL(iscsi_dbg_tcp);
-EXPORT_TRACEPOINT_SYMBOL_GPL(iscsi_dbg_sw_tcp);
 
 static int dbg_session;
 module_param_named(debug_session, dbg_session, int,
@@ -60,9 +61,6 @@ MODULE_PARM_DESC(debug_conn,
 			iscsi_cls_session_printk(KERN_INFO, _session,	\
 						 "%s: " dbg_fmt,	\
 						 __func__, ##arg);	\
-		iscsi_dbg_trace(trace_iscsi_dbg_trans_session,		\
-				&(_session)->dev,			\
-				"%s " dbg_fmt, __func__, ##arg);	\
 	} while (0);
 
 #define ISCSI_DBG_TRANS_CONN(_conn, dbg_fmt, arg...)			\
@@ -70,10 +68,7 @@ MODULE_PARM_DESC(debug_conn,
 		if (dbg_conn)						\
 			iscsi_cls_conn_printk(KERN_INFO, _conn,		\
 					      "%s: " dbg_fmt,		\
-					      __func__, ##arg);		\
-		iscsi_dbg_trace(trace_iscsi_dbg_trans_conn,		\
-				&(_conn)->dev,				\
-				"%s " dbg_fmt, __func__, ##arg);	\
+					      __func__, ##arg);	\
 	} while (0);
 
 struct iscsi_internal {
@@ -124,7 +119,11 @@ show_transport_handle(struct device *dev, struct device_attribute *attr,
 		      char *buf)
 {
 	struct iscsi_internal *priv = dev_to_iscsi_internal(dev);
-	return sprintf(buf, "%llu\n", (unsigned long long)iscsi_handle(priv->iscsi_transport));
+
+	if (!capable(CAP_SYS_ADMIN))
+		return -EACCES;
+	return sysfs_emit(buf, "%llu\n",
+		  (unsigned long long)iscsi_handle(priv->iscsi_transport));
 }
 static DEVICE_ATTR(handle, S_IRUGO, show_transport_handle, NULL);
 
@@ -134,7 +133,7 @@ show_transport_##name(struct device *dev, 				\
 		      struct device_attribute *attr,char *buf)		\
 {									\
 	struct iscsi_internal *priv = dev_to_iscsi_internal(dev);	\
-	return sprintf(buf, format"\n", priv->iscsi_transport->name);	\
+	return sysfs_emit(buf, format"\n", priv->iscsi_transport->name);\
 }									\
 static DEVICE_ATTR(name, S_IRUGO, show_transport_##name, NULL);
 
@@ -175,7 +174,7 @@ static ssize_t
 show_ep_handle(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	struct iscsi_endpoint *ep = iscsi_dev_to_endpoint(dev);
-	return sprintf(buf, "%llu\n", (unsigned long long) ep->id);
+	return sysfs_emit(buf, "%llu\n", (unsigned long long) ep->id);
 }
 static ISCSI_ATTR(ep, handle, S_IRUGO, show_ep_handle, NULL);
 
@@ -1549,7 +1548,7 @@ iscsi_bsg_host_add(struct Scsi_Host *shost, struct iscsi_cls_host *ihost)
 		return -ENOTSUPP;
 
 	snprintf(bsg_name, sizeof(bsg_name), "iscsi_host%d", shost->host_no);
-	q = bsg_setup_queue(dev, bsg_name, iscsi_bsg_host_dispatch, NULL, 0);
+	q = bsg_setup_queue(dev, bsg_name, iscsi_bsg_host_dispatch, 0);
 	if (IS_ERR(q)) {
 		shost_printk(KERN_ERR, shost, "bsg interface failed to "
 			     "initialize - no request queue\n");
@@ -1583,7 +1582,10 @@ static int iscsi_remove_host(struct transport_container *tc,
 	struct Scsi_Host *shost = dev_to_shost(dev);
 	struct iscsi_cls_host *ihost = shost->shost_data;
 
-	bsg_remove_queue(ihost->bsg_q);
+	if (ihost->bsg_q) {
+		bsg_unregister_queue(ihost->bsg_q);
+		blk_cleanup_queue(ihost->bsg_q);
+	}
 	return 0;
 }
 
@@ -2012,7 +2014,7 @@ static void __iscsi_unbind_session(struct work_struct *work)
 	if (session->target_id == ISCSI_MAX_TARGET) {
 		spin_unlock_irqrestore(&session->lock, flags);
 		mutex_unlock(&ihost->mutex);
-		return;
+		goto unbind_session_exit;
 	}
 
 	target_id = session->target_id;
@@ -2024,6 +2026,8 @@ static void __iscsi_unbind_session(struct work_struct *work)
 		ida_simple_remove(&iscsi_sess_ida, target_id);
 
 	scsi_remove_target(&session->dev);
+
+unbind_session_exit:
 	iscsi_session_event(session, ISCSI_KEVENT_UNBIND_SESSION);
 	ISCSI_DBG_TRANS_SESSION(session, "Completed target removal\n");
 }
@@ -2093,12 +2097,7 @@ int iscsi_add_session(struct iscsi_cls_session *session, unsigned int target_id)
 					 "could not register session's dev\n");
 		goto release_ida;
 	}
-	err = transport_register_device(&session->dev);
-	if (err) {
-		iscsi_cls_session_printk(KERN_ERR, session,
-					 "could not register transport's dev\n");
-		goto release_dev;
-	}
+	transport_register_device(&session->dev);
 
 	spin_lock_irqsave(&sesslock, flags);
 	list_add(&session->sess_list, &sesslist);
@@ -2108,8 +2107,6 @@ int iscsi_add_session(struct iscsi_cls_session *session, unsigned int target_id)
 	ISCSI_DBG_TRANS_SESSION(session, "Completed session adding\n");
 	return 0;
 
-release_dev:
-	device_del(&session->dev);
 release_ida:
 	if (session->ida_used)
 		ida_simple_remove(&iscsi_sess_ida, session->target_id);
@@ -2270,12 +2267,7 @@ iscsi_create_conn(struct iscsi_cls_session *session, int dd_size, uint32_t cid)
 					 "register connection's dev\n");
 		goto release_parent_ref;
 	}
-	err = transport_register_device(&conn->dev);
-	if (err) {
-		iscsi_cls_session_printk(KERN_ERR, session, "could not "
-					 "register transport's dev\n");
-		goto release_conn_ref;
-	}
+	transport_register_device(&conn->dev);
 
 	spin_lock_irqsave(&connlock, flags);
 	list_add(&conn->conn_list, &connlist);
@@ -2284,8 +2276,6 @@ iscsi_create_conn(struct iscsi_cls_session *session, int dd_size, uint32_t cid)
 	ISCSI_DBG_TRANS_CONN(conn, "Completed conn creation\n");
 	return conn;
 
-release_conn_ref:
-	put_device(&conn->dev);
 release_parent_ref:
 	put_device(&session->dev);
 free_conn:
@@ -2777,6 +2767,9 @@ iscsi_set_param(struct iscsi_transport *transport, struct iscsi_uevent *ev)
 	struct iscsi_cls_session *session;
 	int err = 0, value = 0;
 
+	if (ev->u.set_param.len > PAGE_SIZE)
+		return -EINVAL;
+
 	session = iscsi_session_lookup(ev->u.set_param.sid);
 	conn = iscsi_conn_lookup(ev->u.set_param.sid, ev->u.set_param.cid);
 	if (!conn || !session)
@@ -2923,6 +2916,9 @@ iscsi_set_host_param(struct iscsi_transport *transport,
 
 	if (!transport->set_host_param)
 		return -ENOSYS;
+
+	if (ev->u.set_host_param.len > PAGE_SIZE)
+		return -EINVAL;
 
 	shost = scsi_host_lookup(ev->u.set_host_param.host_no);
 	if (!shost) {
@@ -3186,7 +3182,7 @@ static int iscsi_set_flashnode_param(struct iscsi_transport *transport,
 		pr_err("%s could not find host no %u\n",
 		       __func__, ev->u.set_flashnode.host_no);
 		err = -ENODEV;
-		goto put_host;
+		goto exit_set_fnode;
 	}
 
 	idx = ev->u.set_flashnode.flashnode_idx;
@@ -3511,12 +3507,16 @@ iscsi_if_recv_msg(struct sk_buff *skb, struct nlmsghdr *nlh, uint32_t *group)
 {
 	int err = 0;
 	u32 portid;
+	u32 pdu_len;
 	struct iscsi_uevent *ev = nlmsg_data(nlh);
 	struct iscsi_transport *transport = NULL;
 	struct iscsi_internal *priv;
 	struct iscsi_cls_session *session;
 	struct iscsi_cls_conn *conn;
 	struct iscsi_endpoint *ep = NULL;
+
+	if (!netlink_capable(skb, CAP_SYS_ADMIN))
+		return -EPERM;
 
 	if (nlh->nlmsg_type == ISCSI_UEVENT_PATH_UPDATE)
 		*group = ISCSI_NL_GRP_UIP;
@@ -3625,6 +3625,14 @@ iscsi_if_recv_msg(struct sk_buff *skb, struct nlmsghdr *nlh, uint32_t *group)
 			err = -EINVAL;
 		break;
 	case ISCSI_UEVENT_SEND_PDU:
+		pdu_len = nlh->nlmsg_len - sizeof(*nlh) - sizeof(*ev);
+
+		if ((ev->u.send_pdu.hdr_size > pdu_len) ||
+		    (ev->u.send_pdu.data_size > (pdu_len - ev->u.send_pdu.hdr_size))) {
+			err = -EINVAL;
+			break;
+		}
+
 		conn = iscsi_conn_lookup(ev->u.send_pdu.sid, ev->u.send_pdu.cid);
 		if (conn)
 			ev->r.retcode =	transport->send_pdu(conn,
@@ -4031,7 +4039,7 @@ show_priv_session_state(struct device *dev, struct device_attribute *attr,
 			char *buf)
 {
 	struct iscsi_cls_session *session = iscsi_dev_to_session(dev->parent);
-	return sprintf(buf, "%s\n", iscsi_session_state_name(session->state));
+	return sysfs_emit(buf, "%s\n", iscsi_session_state_name(session->state));
 }
 static ISCSI_CLASS_ATTR(priv_sess, state, S_IRUGO, show_priv_session_state,
 			NULL);
@@ -4040,7 +4048,7 @@ show_priv_session_creator(struct device *dev, struct device_attribute *attr,
 			char *buf)
 {
 	struct iscsi_cls_session *session = iscsi_dev_to_session(dev->parent);
-	return sprintf(buf, "%d\n", session->creator);
+	return sysfs_emit(buf, "%d\n", session->creator);
 }
 static ISCSI_CLASS_ATTR(priv_sess, creator, S_IRUGO, show_priv_session_creator,
 			NULL);
@@ -4049,7 +4057,7 @@ show_priv_session_target_id(struct device *dev, struct device_attribute *attr,
 			    char *buf)
 {
 	struct iscsi_cls_session *session = iscsi_dev_to_session(dev->parent);
-	return sprintf(buf, "%d\n", session->target_id);
+	return sysfs_emit(buf, "%d\n", session->target_id);
 }
 static ISCSI_CLASS_ATTR(priv_sess, target_id, S_IRUGO,
 			show_priv_session_target_id, NULL);
@@ -4062,8 +4070,8 @@ show_priv_session_##field(struct device *dev, 				\
 	struct iscsi_cls_session *session = 				\
 			iscsi_dev_to_session(dev->parent);		\
 	if (session->field == -1)					\
-		return sprintf(buf, "off\n");				\
-	return sprintf(buf, format"\n", session->field);		\
+		return sysfs_emit(buf, "off\n");			\
+	return sysfs_emit(buf, format"\n", session->field);		\
 }
 
 #define iscsi_priv_session_attr_store(field)				\
@@ -4541,20 +4549,6 @@ int iscsi_unregister_transport(struct iscsi_transport *tt)
 	return 0;
 }
 EXPORT_SYMBOL_GPL(iscsi_unregister_transport);
-
-void iscsi_dbg_trace(void (*trace)(struct device *dev, struct va_format *),
-		     struct device *dev, const char *fmt, ...)
-{
-	struct va_format vaf;
-	va_list args;
-
-	va_start(args, fmt);
-	vaf.fmt = fmt;
-	vaf.va = &args;
-	trace(dev, &vaf);
-	va_end(args);
-}
-EXPORT_SYMBOL_GPL(iscsi_dbg_trace);
 
 static __init int iscsi_transport_init(void)
 {

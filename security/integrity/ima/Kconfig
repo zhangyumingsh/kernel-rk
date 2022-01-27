@@ -1,4 +1,3 @@
-# SPDX-License-Identifier: GPL-2.0-only
 # IBM Integrity Measurement Architecture
 #
 config IMA
@@ -112,10 +111,6 @@ choice
 	config IMA_DEFAULT_HASH_WP512
 		bool "WP512"
 		depends on CRYPTO_WP512=y && !IMA_TEMPLATE
-
-	config IMA_DEFAULT_HASH_SM3
-		bool "SM3"
-		depends on CRYPTO_SM3=y && !IMA_TEMPLATE
 endchoice
 
 config IMA_DEFAULT_HASH
@@ -125,7 +120,6 @@ config IMA_DEFAULT_HASH
 	default "sha256" if IMA_DEFAULT_HASH_SHA256
 	default "sha512" if IMA_DEFAULT_HASH_SHA512
 	default "wp512" if IMA_DEFAULT_HASH_WP512
-	default "sm3" if IMA_DEFAULT_HASH_SM3
 
 config IMA_WRITE_POLICY
 	bool "Enable multiple writes to the IMA policy"
@@ -162,15 +156,6 @@ config IMA_APPRAISE
 	  For more information on integrity appraisal refer to:
 	  <http://linux-ima.sourceforge.net>
 	  If unsure, say N.
-
-config IMA_ARCH_POLICY
-        bool "Enable loading an IMA architecture specific policy"
-        depends on (KEXEC_SIG && IMA) || IMA_APPRAISE \
-		   && INTEGRITY_ASYMMETRIC_KEYS
-        default n
-        help
-          This option enables loading an IMA architecture specific policy
-          based on run time secure boot flags.
 
 config IMA_APPRAISE_BUILD_POLICY
 	bool "IMA build time configured policy rules"
@@ -232,24 +217,11 @@ config IMA_APPRAISE_REQUIRE_POLICY_SIGS
 
 config IMA_APPRAISE_BOOTPARAM
 	bool "ima_appraise boot parameter"
-	depends on IMA_APPRAISE && !IMA_ARCH_POLICY
+	depends on IMA_APPRAISE
 	default y
 	help
 	  This option enables the different "ima_appraise=" modes
 	  (eg. fix, log) from the boot command line.
-
-config IMA_APPRAISE_MODSIG
-	bool "Support module-style signatures for appraisal"
-	depends on IMA_APPRAISE
-	depends on INTEGRITY_ASYMMETRIC_KEYS
-	select PKCS7_MESSAGE_PARSER
-	select MODULE_SIG_FORMAT
-	default n
-	help
-	   Adds support for signatures appended to files. The format of the
-	   appended signature is the same used for signed kernel modules.
-	   The modsig keyword can be used in the IMA policy to allow a hook
-	   to accept such signatures.
 
 config IMA_TRUSTED_KEYRING
 	bool "Require all keys on the .ima keyring be signed (deprecated)"
@@ -315,15 +287,3 @@ config IMA_APPRAISE_SIGNED_INIT
 	default n
 	help
 	   This option requires user-space init to be signed.
-
-config IMA_MEASURE_ASYMMETRIC_KEYS
-	bool
-	depends on IMA
-	depends on ASYMMETRIC_PUBLIC_KEY_SUBTYPE=y
-	default y
-
-config IMA_QUEUE_EARLY_BOOT_KEYS
-	bool
-	depends on IMA_MEASURE_ASYMMETRIC_KEYS
-	depends on SYSTEM_TRUSTED_KEYRING
-	default y

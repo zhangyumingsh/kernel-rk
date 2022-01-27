@@ -1,8 +1,12 @@
-/* SPDX-License-Identifier: GPL-2.0-or-later */
 /* Internal procfs definitions
  *
  * Copyright (C) 2004 Red Hat, Inc. All Rights Reserved.
  * Written by David Howells (dhowells@redhat.com)
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version
+ * 2 of the License, or (at your option) any later version.
  */
 
 #include <linux/proc_fs.h>
@@ -39,10 +43,7 @@ struct proc_dir_entry {
 	spinlock_t pde_unload_lock;
 	struct completion *pde_unload_completion;
 	const struct inode_operations *proc_iops;
-	union {
-		const struct proc_ops *proc_ops;
-		const struct file_operations *proc_dir_ops;
-	};
+	const struct file_operations *proc_fops;
 	const struct dentry_operations *proc_dops;
 	union {
 		const struct seq_operations *seq_ops;
@@ -81,7 +82,6 @@ union proc_op {
 	int (*proc_show)(struct seq_file *m,
 		struct pid_namespace *ns, struct pid *pid,
 		struct task_struct *task);
-	const char *lsm;
 };
 
 struct proc_inode {
@@ -162,7 +162,7 @@ extern struct inode *proc_pid_make_inode(struct super_block *, struct task_struc
 extern void pid_update_inode(struct task_struct *, struct inode *);
 extern int pid_delete_dentry(const struct dentry *);
 extern int proc_pid_readdir(struct file *, struct dir_context *);
-struct dentry *proc_pid_lookup(struct dentry *, unsigned int);
+extern struct dentry *proc_pid_lookup(struct inode *, struct dentry *, unsigned int);
 extern loff_t mem_lseek(struct file *, loff_t, int);
 
 /* Lookups */
@@ -200,18 +200,19 @@ extern ssize_t proc_simple_write(struct file *, const char __user *, size_t, lof
  * inode.c
  */
 struct pde_opener {
-	struct list_head lh;
 	struct file *file;
+	struct list_head lh;
 	bool closing;
 	struct completion *c;
 } __randomize_layout;
 extern const struct inode_operations proc_link_inode_operations;
+
 extern const struct inode_operations proc_pid_link_inode_operations;
-extern const struct super_operations proc_sops;
 
 void proc_init_kmemcache(void);
 void set_proc_pid_nlink(void);
 extern struct inode *proc_get_inode(struct super_block *, struct proc_dir_entry *);
+extern int proc_fill_super(struct super_block *);
 extern void proc_entry_rundown(struct proc_dir_entry *);
 
 /*
@@ -257,6 +258,15 @@ static inline void proc_sys_evict_inode(struct  inode *inode,
 #endif
 
 /*
+ * uid.c
+ */
+#ifdef CONFIG_PROC_UID
+extern int proc_uid_init(void);
+#else
+static inline void proc_uid_init(void) { }
+#endif
+
+/*
  * proc_tty.c
  */
 #ifdef CONFIG_TTY
@@ -271,6 +281,7 @@ static inline void proc_tty_init(void) {}
 extern struct proc_dir_entry proc_root;
 
 extern void proc_self_init(void);
+extern int proc_remount(struct super_block *, int *, char *);
 
 /*
  * task_[no]mmu.c
@@ -302,3 +313,10 @@ extern unsigned long task_statm(struct mm_struct *,
 				unsigned long *, unsigned long *,
 				unsigned long *, unsigned long *);
 extern void task_mem(struct seq_file *, struct mm_struct *);
+
+extern const struct dentry_operations proc_net_dentry_ops;
+static inline void pde_force_lookup(struct proc_dir_entry *pde)
+{
+	/* /proc/net/ entries can be changed under us by setns(CLONE_NEWNET) */
+	pde->proc_dops = &proc_net_dentry_ops;
+}

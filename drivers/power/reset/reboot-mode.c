@@ -1,6 +1,10 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Copyright (c) 2016, Fuzhou Rockchip Electronics Co., Ltd
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  */
 
 #include <linux/device.h>
@@ -26,7 +30,7 @@ static unsigned int get_reboot_mode_magic(struct reboot_mode_driver *reboot,
 	int magic = 0;
 	struct mode_info *info;
 
-	if (!cmd || !cmd[0])
+	if (!cmd)
 		cmd = normal;
 
 	list_for_each_entry(info, &reboot->head, list) {
@@ -47,8 +51,6 @@ static int reboot_mode_notify(struct notifier_block *this,
 
 	reboot = container_of(this, struct reboot_mode_driver, reboot_notifier);
 	magic = get_reboot_mode_magic(reboot, cmd);
-	if (!magic)
-		magic = get_reboot_mode_magic(reboot, NULL);
 	if (magic)
 		reboot->write(reboot, magic);
 
@@ -192,6 +194,6 @@ void devm_reboot_mode_unregister(struct device *dev,
 }
 EXPORT_SYMBOL_GPL(devm_reboot_mode_unregister);
 
-MODULE_AUTHOR("Andy Yan <andy.yan@rock-chips.com>");
+MODULE_AUTHOR("Andy Yan <andy.yan@rock-chips.com");
 MODULE_DESCRIPTION("System reboot mode core library");
 MODULE_LICENSE("GPL v2");

@@ -1,10 +1,18 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  *  sst_mfld_platform.c - Intel MID Platform driver
  *
  *  Copyright (C) 2010-2014 Intel Corp
  *  Author: Vinod Koul <vinod.koul@intel.com>
  *  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ *
+ *  This program is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License as published by
+ *  the Free Software Foundation; version 2 of the License.
+ *
+ *  This program is distributed in the hope that it will be useful, but
+ *  WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ *  General Public License for more details.
  *
  * ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
  */
@@ -206,8 +214,8 @@ static int sst_platform_compr_pointer(struct snd_compr_stream *cstream,
 
 	stream  = cstream->runtime->private_data;
 	stream->compr_ops->tstamp(sst->dev, stream->id, tstamp);
-	tstamp->byte_offset = tstamp->copied_total %
-				 (u32)cstream->runtime->buffer_size;
+	div_u64_rem(tstamp->copied_total, (u32)cstream->runtime->buffer_size,
+				 &tstamp->byte_offset);
 	pr_debug("calc bytes offset/copied bytes as %d\n", tstamp->byte_offset);
 	return 0;
 }

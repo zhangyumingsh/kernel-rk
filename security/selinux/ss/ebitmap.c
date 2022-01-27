@@ -77,24 +77,6 @@ int ebitmap_cpy(struct ebitmap *dst, struct ebitmap *src)
 	return 0;
 }
 
-int ebitmap_and(struct ebitmap *dst, struct ebitmap *e1, struct ebitmap *e2)
-{
-	struct ebitmap_node *n;
-	int bit, rc;
-
-	ebitmap_init(dst);
-
-	ebitmap_for_each_positive_bit(e1, n, bit) {
-		if (ebitmap_get_bit(e2, bit)) {
-			rc = ebitmap_set_bit(dst, bit, 1);
-			if (rc < 0)
-				return rc;
-		}
-	}
-	return 0;
-}
-
-
 #ifdef CONFIG_NETLABEL
 /**
  * ebitmap_netlbl_export - Export an ebitmap into a NetLabel category bitmap
@@ -365,9 +347,7 @@ int ebitmap_read(struct ebitmap *e, void *fp)
 {
 	struct ebitmap_node *n = NULL;
 	u32 mapunit, count, startbit, index;
-	__le32 ebitmap_start;
 	u64 map;
-	__le64 mapbits;
 	__le32 buf[3];
 	int rc, i;
 
@@ -401,12 +381,12 @@ int ebitmap_read(struct ebitmap *e, void *fp)
 		goto bad;
 
 	for (i = 0; i < count; i++) {
-		rc = next_entry(&ebitmap_start, fp, sizeof(u32));
+		rc = next_entry(&startbit, fp, sizeof(u32));
 		if (rc < 0) {
 			pr_err("SELinux: ebitmap: truncated map\n");
 			goto bad;
 		}
-		startbit = le32_to_cpu(ebitmap_start);
+		startbit = le32_to_cpu(startbit);
 
 		if (startbit & (mapunit - 1)) {
 			pr_err("SELinux: ebitmap start bit (%d) is "
@@ -443,12 +423,12 @@ int ebitmap_read(struct ebitmap *e, void *fp)
 			goto bad;
 		}
 
-		rc = next_entry(&mapbits, fp, sizeof(u64));
+		rc = next_entry(&map, fp, sizeof(u64));
 		if (rc < 0) {
 			pr_err("SELinux: ebitmap: truncated map\n");
 			goto bad;
 		}
-		map = le64_to_cpu(mapbits);
+		map = le64_to_cpu(map);
 
 		index = (startbit - n->startbit) / EBITMAP_UNIT_SIZE;
 		while (map) {

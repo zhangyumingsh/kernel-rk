@@ -857,7 +857,6 @@ static void xgbe_phy_free_phy_device(struct xgbe_prv_data *pdata)
 
 static bool xgbe_phy_finisar_phy_quirks(struct xgbe_prv_data *pdata)
 {
-	__ETHTOOL_DECLARE_LINK_MODE_MASK(supported) = { 0, };
 	struct xgbe_phy_data *phy_data = pdata->phy_data;
 	unsigned int phy_id = phy_data->phydev->phy_id;
 
@@ -879,16 +878,9 @@ static bool xgbe_phy_finisar_phy_quirks(struct xgbe_prv_data *pdata)
 	phy_write(phy_data->phydev, 0x04, 0x0d01);
 	phy_write(phy_data->phydev, 0x00, 0x9140);
 
-	linkmode_set_bit_array(phy_10_100_features_array,
-			       ARRAY_SIZE(phy_10_100_features_array),
-			       supported);
-	linkmode_set_bit_array(phy_gbit_features_array,
-			       ARRAY_SIZE(phy_gbit_features_array),
-			       supported);
-
-	linkmode_copy(phy_data->phydev->supported, supported);
-
-	phy_support_asym_pause(phy_data->phydev);
+	phy_data->phydev->supported = PHY_GBIT_FEATURES;
+	phy_data->phydev->supported |= SUPPORTED_Pause | SUPPORTED_Asym_Pause;
+	phy_data->phydev->advertising = phy_data->phydev->supported;
 
 	netif_dbg(pdata, drv, pdata->netdev,
 		  "Finisar PHY quirk in place\n");
@@ -898,7 +890,6 @@ static bool xgbe_phy_finisar_phy_quirks(struct xgbe_prv_data *pdata)
 
 static bool xgbe_phy_belfuse_phy_quirks(struct xgbe_prv_data *pdata)
 {
-	__ETHTOOL_DECLARE_LINK_MODE_MASK(supported) = { 0, };
 	struct xgbe_phy_data *phy_data = pdata->phy_data;
 	struct xgbe_sfp_eeprom *sfp_eeprom = &phy_data->sfp_eeprom;
 	unsigned int phy_id = phy_data->phydev->phy_id;
@@ -920,6 +911,9 @@ static bool xgbe_phy_belfuse_phy_quirks(struct xgbe_prv_data *pdata)
 
 	if ((phy_id & 0xfffffff0) != 0x03625d10)
 		return false;
+
+	/* Reset PHY - wait for self-clearing reset bit to clear */
+	genphy_soft_reset(phy_data->phydev);
 
 	/* Disable RGMII mode */
 	phy_write(phy_data->phydev, 0x18, 0x7007);
@@ -959,14 +953,9 @@ static bool xgbe_phy_belfuse_phy_quirks(struct xgbe_prv_data *pdata)
 	reg = phy_read(phy_data->phydev, 0x00);
 	phy_write(phy_data->phydev, 0x00, reg & ~0x00800);
 
-	linkmode_set_bit_array(phy_10_100_features_array,
-			       ARRAY_SIZE(phy_10_100_features_array),
-			       supported);
-	linkmode_set_bit_array(phy_gbit_features_array,
-			       ARRAY_SIZE(phy_gbit_features_array),
-			       supported);
-	linkmode_copy(phy_data->phydev->supported, supported);
-	phy_support_asym_pause(phy_data->phydev);
+	phy_data->phydev->supported = PHY_GBIT_FEATURES;
+	phy_data->phydev->supported |= SUPPORTED_Pause | SUPPORTED_Asym_Pause;
+	phy_data->phydev->advertising = phy_data->phydev->supported;
 
 	netif_dbg(pdata, drv, pdata->netdev,
 		  "BelFuse PHY quirk in place\n");
@@ -988,6 +977,7 @@ static int xgbe_phy_find_phy_device(struct xgbe_prv_data *pdata)
 	struct ethtool_link_ksettings *lks = &pdata->phy.lks;
 	struct xgbe_phy_data *phy_data = pdata->phy_data;
 	struct phy_device *phydev;
+	u32 advertising;
 	int ret;
 
 	/* If we already have a PHY, just return */
@@ -1047,8 +1037,9 @@ static int xgbe_phy_find_phy_device(struct xgbe_prv_data *pdata)
 
 	xgbe_phy_external_phy_quirks(pdata);
 
-	linkmode_and(phydev->advertising, phydev->advertising,
-		     lks->link_modes.advertising);
+	ethtool_convert_link_mode_to_legacy_u32(&advertising,
+						lks->link_modes.advertising);
+	phydev->advertising &= advertising;
 
 	phy_start_aneg(phy_data->phydev);
 
@@ -1227,7 +1218,7 @@ static bool xgbe_phy_sfp_verify_eeprom(u8 cc_in, u8 *buf, unsigned int len)
 	for (cc = 0; len; buf++, len--)
 		cc += *buf;
 
-	return cc == cc_in;
+	return (cc == cc_in) ? true : false;
 }
 
 static int xgbe_phy_sfp_read_eeprom(struct xgbe_prv_data *pdata)
@@ -1507,7 +1498,10 @@ static void xgbe_phy_phydev_flowctrl(struct xgbe_prv_data *pdata)
 	if (!phy_data->phydev)
 		return;
 
-	lcl_adv = linkmode_adv_to_lcl_adv_t(phy_data->phydev->advertising);
+	if (phy_data->phydev->advertising & ADVERTISED_Pause)
+		lcl_adv |= ADVERTISE_PAUSE_CAP;
+	if (phy_data->phydev->advertising & ADVERTISED_Asym_Pause)
+		lcl_adv |= ADVERTISE_PAUSE_ASYM;
 
 	if (phy_data->phydev->pause) {
 		XGBE_SET_LP_ADV(lks, Pause);
@@ -1825,6 +1819,7 @@ static int xgbe_phy_an_config(struct xgbe_prv_data *pdata)
 {
 	struct ethtool_link_ksettings *lks = &pdata->phy.lks;
 	struct xgbe_phy_data *phy_data = pdata->phy_data;
+	u32 advertising;
 	int ret;
 
 	ret = xgbe_phy_find_phy_device(pdata);
@@ -1834,10 +1829,12 @@ static int xgbe_phy_an_config(struct xgbe_prv_data *pdata)
 	if (!phy_data->phydev)
 		return 0;
 
+	ethtool_convert_link_mode_to_legacy_u32(&advertising,
+						lks->link_modes.advertising);
+
 	phy_data->phydev->autoneg = pdata->phy.autoneg;
-	linkmode_and(phy_data->phydev->advertising,
-		     phy_data->phydev->supported,
-		     lks->link_modes.advertising);
+	phy_data->phydev->advertising = phy_data->phydev->supported &
+					advertising;
 
 	if (pdata->phy.autoneg != AUTONEG_ENABLE) {
 		phy_data->phydev->speed = pdata->phy.speed;
@@ -1948,6 +1945,27 @@ static void xgbe_phy_set_redrv_mode(struct xgbe_prv_data *pdata)
 	xgbe_phy_put_comm_ownership(pdata);
 }
 
+static void xgbe_phy_rx_reset(struct xgbe_prv_data *pdata)
+{
+	int reg;
+
+	reg = XMDIO_READ_BITS(pdata, MDIO_MMD_PCS, MDIO_PCS_DIGITAL_STAT,
+			      XGBE_PCS_PSEQ_STATE_MASK);
+	if (reg == XGBE_PCS_PSEQ_STATE_POWER_GOOD) {
+		/* Mailbox command timed out, reset of RX block is required.
+		 * This can be done by asseting the reset bit and wait for
+		 * its compeletion.
+		 */
+		XMDIO_WRITE_BITS(pdata, MDIO_MMD_PMAPMD, MDIO_PMA_RX_CTRL1,
+				 XGBE_PMA_RX_RST_0_MASK, XGBE_PMA_RX_RST_0_RESET_ON);
+		ndelay(20);
+		XMDIO_WRITE_BITS(pdata, MDIO_MMD_PMAPMD, MDIO_PMA_RX_CTRL1,
+				 XGBE_PMA_RX_RST_0_MASK, XGBE_PMA_RX_RST_0_RESET_OFF);
+		usleep_range(40, 50);
+		netif_err(pdata, link, pdata->netdev, "firmware mailbox reset performed\n");
+	}
+}
+
 static void xgbe_phy_perform_ratechange(struct xgbe_prv_data *pdata,
 					unsigned int cmd, unsigned int sub_cmd)
 {
@@ -1955,9 +1973,11 @@ static void xgbe_phy_perform_ratechange(struct xgbe_prv_data *pdata,
 	unsigned int wait;
 
 	/* Log if a previous command did not complete */
-	if (XP_IOREAD_BITS(pdata, XP_DRIVER_INT_RO, STATUS))
+	if (XP_IOREAD_BITS(pdata, XP_DRIVER_INT_RO, STATUS)) {
 		netif_dbg(pdata, link, pdata->netdev,
 			  "firmware mailbox not ready for command\n");
+		xgbe_phy_rx_reset(pdata);
+	}
 
 	/* Construct the command */
 	XP_SET_BITS(s0, XP_DRIVER_SCRATCH_0, COMMAND, cmd);
@@ -1979,6 +1999,9 @@ static void xgbe_phy_perform_ratechange(struct xgbe_prv_data *pdata,
 
 	netif_dbg(pdata, link, pdata->netdev,
 		  "firmware mailbox command did not complete\n");
+
+	/* Reset on error */
+	xgbe_phy_rx_reset(pdata);
 }
 
 static void xgbe_phy_rrc(struct xgbe_prv_data *pdata)
@@ -2574,6 +2597,14 @@ static int xgbe_phy_link_status(struct xgbe_prv_data *pdata, int *an_restart)
 	reg = XMDIO_READ(pdata, MDIO_MMD_PCS, MDIO_STAT1);
 	if (reg & MDIO_STAT1_LSTATUS)
 		return 1;
+
+	if (pdata->phy.autoneg == AUTONEG_ENABLE &&
+	    phy_data->port_mode == XGBE_PORT_MODE_BACKPLANE) {
+		if (!test_bit(XGBE_LINK_INIT, &pdata->dev_state)) {
+			netif_carrier_off(pdata->netdev);
+			*an_restart = 1;
+		}
+	}
 
 	/* No link, attempt a receiver reset cycle */
 	if (phy_data->rrc_count++ > XGBE_RRC_FREQUENCY) {

@@ -31,7 +31,6 @@
 #include <linux/of_device.h>
 #include <linux/of_irq.h>
 #include <linux/pm_runtime.h>
-#include <linux/regulator/consumer.h>
 
 #define MMA8452_STATUS				0x00
 #define  MMA8452_STATUS_DRDY			(BIT(2) | BIT(1) | BIT(0))
@@ -108,8 +107,12 @@ struct mma8452_data {
 	u8 data_cfg;
 	const struct mma_chip_info *chip_info;
 	int sleep_val;
-	struct regulator *vdd_reg;
-	struct regulator *vddio_reg;
+
+	/* Ensure correct alignment of time stamp when present */
+	struct {
+		__be16 channels[3];
+		s64 ts __aligned(8);
+	} buffer;
 };
 
  /**
@@ -1091,14 +1094,13 @@ static irqreturn_t mma8452_trigger_handler(int irq, void *p)
 	struct iio_poll_func *pf = p;
 	struct iio_dev *indio_dev = pf->indio_dev;
 	struct mma8452_data *data = iio_priv(indio_dev);
-	u8 buffer[16]; /* 3 16-bit channels + padding + ts */
 	int ret;
 
-	ret = mma8452_read(data, (__be16 *)buffer);
+	ret = mma8452_read(data, data->buffer.channels);
 	if (ret < 0)
 		goto done;
 
-	iio_push_to_buffers_with_timestamp(indio_dev, buffer,
+	iio_push_to_buffers_with_timestamp(indio_dev, &data->buffer,
 					   iio_get_time_ns(indio_dev));
 
 done:
@@ -1537,39 +1539,9 @@ static int mma8452_probe(struct i2c_client *client,
 	mutex_init(&data->lock);
 	data->chip_info = match->data;
 
-	data->vdd_reg = devm_regulator_get(&client->dev, "vdd");
-	if (IS_ERR(data->vdd_reg)) {
-		if (PTR_ERR(data->vdd_reg) == -EPROBE_DEFER)
-			return -EPROBE_DEFER;
-
-		dev_err(&client->dev, "failed to get VDD regulator!\n");
-		return PTR_ERR(data->vdd_reg);
-	}
-
-	data->vddio_reg = devm_regulator_get(&client->dev, "vddio");
-	if (IS_ERR(data->vddio_reg)) {
-		if (PTR_ERR(data->vddio_reg) == -EPROBE_DEFER)
-			return -EPROBE_DEFER;
-
-		dev_err(&client->dev, "failed to get VDDIO regulator!\n");
-		return PTR_ERR(data->vddio_reg);
-	}
-
-	ret = regulator_enable(data->vdd_reg);
-	if (ret) {
-		dev_err(&client->dev, "failed to enable VDD regulator!\n");
-		return ret;
-	}
-
-	ret = regulator_enable(data->vddio_reg);
-	if (ret) {
-		dev_err(&client->dev, "failed to enable VDDIO regulator!\n");
-		goto disable_regulator_vdd;
-	}
-
 	ret = i2c_smbus_read_byte_data(client, MMA8452_WHO_AM_I);
 	if (ret < 0)
-		goto disable_regulators;
+		return ret;
 
 	switch (ret) {
 	case MMA8451_DEVICE_ID:
@@ -1580,10 +1552,9 @@ static int mma8452_probe(struct i2c_client *client,
 	case FXLS8471_DEVICE_ID:
 		if (ret == data->chip_info->chip_id)
 			break;
-		/* fall through */
+		/* else: fall through */
 	default:
-		ret = -ENODEV;
-		goto disable_regulators;
+		return -ENODEV;
 	}
 
 	dev_info(&client->dev, "registering %s accelerometer; ID 0x%x\n",
@@ -1600,13 +1571,13 @@ static int mma8452_probe(struct i2c_client *client,
 
 	ret = mma8452_reset(client);
 	if (ret < 0)
-		goto disable_regulators;
+		return ret;
 
 	data->data_cfg = MMA8452_DATA_CFG_FS_2G;
 	ret = i2c_smbus_write_byte_data(client, MMA8452_DATA_CFG,
 					data->data_cfg);
 	if (ret < 0)
-		goto disable_regulators;
+		return ret;
 
 	/*
 	 * By default set transient threshold to max to avoid events if
@@ -1615,7 +1586,7 @@ static int mma8452_probe(struct i2c_client *client,
 	ret = i2c_smbus_write_byte_data(client, MMA8452_TRANSIENT_THS,
 					MMA8452_TRANSIENT_THS_MASK);
 	if (ret < 0)
-		goto disable_regulators;
+		return ret;
 
 	if (client->irq) {
 		int irq2;
@@ -1629,7 +1600,7 @@ static int mma8452_probe(struct i2c_client *client,
 						MMA8452_CTRL_REG5,
 						data->chip_info->all_events);
 			if (ret < 0)
-				goto disable_regulators;
+				return ret;
 
 			dev_dbg(&client->dev, "using interrupt line INT1\n");
 		}
@@ -1638,11 +1609,11 @@ static int mma8452_probe(struct i2c_client *client,
 					MMA8452_CTRL_REG4,
 					data->chip_info->enabled_events);
 		if (ret < 0)
-			goto disable_regulators;
+			return ret;
 
 		ret = mma8452_trigger_setup(indio_dev);
 		if (ret < 0)
-			goto disable_regulators;
+			return ret;
 	}
 
 	data->ctrl_reg1 = MMA8452_CTRL_ACTIVE |
@@ -1685,9 +1656,12 @@ static int mma8452_probe(struct i2c_client *client,
 
 	ret = mma8452_set_freefall_mode(data, false);
 	if (ret < 0)
-		goto buffer_cleanup;
+		goto unregister_device;
 
 	return 0;
+
+unregister_device:
+	iio_device_unregister(indio_dev);
 
 buffer_cleanup:
 	iio_triggered_buffer_cleanup(indio_dev);
@@ -1695,19 +1669,12 @@ buffer_cleanup:
 trigger_cleanup:
 	mma8452_trigger_cleanup(indio_dev);
 
-disable_regulators:
-	regulator_disable(data->vddio_reg);
-
-disable_regulator_vdd:
-	regulator_disable(data->vdd_reg);
-
 	return ret;
 }
 
 static int mma8452_remove(struct i2c_client *client)
 {
 	struct iio_dev *indio_dev = i2c_get_clientdata(client);
-	struct mma8452_data *data = iio_priv(indio_dev);
 
 	iio_device_unregister(indio_dev);
 
@@ -1718,9 +1685,6 @@ static int mma8452_remove(struct i2c_client *client)
 	iio_triggered_buffer_cleanup(indio_dev);
 	mma8452_trigger_cleanup(indio_dev);
 	mma8452_standby(iio_priv(indio_dev));
-
-	regulator_disable(data->vddio_reg);
-	regulator_disable(data->vdd_reg);
 
 	return 0;
 }
@@ -1740,18 +1704,6 @@ static int mma8452_runtime_suspend(struct device *dev)
 		return -EAGAIN;
 	}
 
-	ret = regulator_disable(data->vddio_reg);
-	if (ret) {
-		dev_err(dev, "failed to disable VDDIO regulator\n");
-		return ret;
-	}
-
-	ret = regulator_disable(data->vdd_reg);
-	if (ret) {
-		dev_err(dev, "failed to disable VDD regulator\n");
-		return ret;
-	}
-
 	return 0;
 }
 
@@ -1761,22 +1713,9 @@ static int mma8452_runtime_resume(struct device *dev)
 	struct mma8452_data *data = iio_priv(indio_dev);
 	int ret, sleep_val;
 
-	ret = regulator_enable(data->vdd_reg);
-	if (ret) {
-		dev_err(dev, "failed to enable VDD regulator\n");
-		return ret;
-	}
-
-	ret = regulator_enable(data->vddio_reg);
-	if (ret) {
-		dev_err(dev, "failed to enable VDDIO regulator\n");
-		regulator_disable(data->vdd_reg);
-		return ret;
-	}
-
 	ret = mma8452_active(data);
 	if (ret < 0)
-		goto runtime_resume_failed;
+		return ret;
 
 	ret = mma8452_get_odr_index(data);
 	sleep_val = 1000 / mma8452_samp_freq[ret][0];
@@ -1786,17 +1725,25 @@ static int mma8452_runtime_resume(struct device *dev)
 		msleep_interruptible(sleep_val);
 
 	return 0;
+}
+#endif
 
-runtime_resume_failed:
-	regulator_disable(data->vddio_reg);
-	regulator_disable(data->vdd_reg);
+#ifdef CONFIG_PM_SLEEP
+static int mma8452_suspend(struct device *dev)
+{
+	return mma8452_standby(iio_priv(i2c_get_clientdata(
+		to_i2c_client(dev))));
+}
 
-	return ret;
+static int mma8452_resume(struct device *dev)
+{
+	return mma8452_active(iio_priv(i2c_get_clientdata(
+		to_i2c_client(dev))));
 }
 #endif
 
 static const struct dev_pm_ops mma8452_pm_ops = {
-	SET_SYSTEM_SLEEP_PM_OPS(pm_runtime_force_suspend, pm_runtime_force_resume)
+	SET_SYSTEM_SLEEP_PM_OPS(mma8452_suspend, mma8452_resume)
 	SET_RUNTIME_PM_OPS(mma8452_runtime_suspend,
 			   mma8452_runtime_resume, NULL)
 };

@@ -9,6 +9,7 @@
 extern int
 xfs_ioc_space(
 	struct file		*filp,
+	unsigned int		cmd,
 	xfs_flock64_t		*bf);
 
 int
@@ -70,12 +71,10 @@ xfs_file_compat_ioctl(
 	unsigned int		cmd,
 	unsigned long		arg);
 
-struct xfs_ibulk;
-struct xfs_bstat;
-struct xfs_inogrp;
-
-int xfs_fsbulkstat_one_fmt(struct xfs_ibulk *breq,
-			   const struct xfs_bulkstat *bstat);
-int xfs_fsinumbers_fmt(struct xfs_ibulk *breq, const struct xfs_inumbers *igrp);
+extern int
+xfs_set_dmattrs(
+	struct xfs_inode	*ip,
+	uint			evmask,
+	uint16_t		state);
 
 #endif

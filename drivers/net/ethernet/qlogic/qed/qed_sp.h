@@ -120,7 +120,9 @@ union ramrod_data {
 	struct fcoe_conn_terminate_ramrod_params fcoe_conn_terminate;
 	struct fcoe_stat_ramrod_params fcoe_stat;
 
+	struct iscsi_slow_path_hdr iscsi_empty;
 	struct iscsi_init_ramrod_params iscsi_init;
+	struct iscsi_spe_func_dstry iscsi_destroy;
 	struct iscsi_spe_conn_offload iscsi_conn_offload;
 	struct iscsi_conn_update_ramrod_params iscsi_conn_update;
 	struct iscsi_spe_conn_mac_update iscsi_conn_mac_update;
@@ -225,9 +227,7 @@ struct qed_spq {
 	u32			comp_count;
 
 	u32			cid;
-	u32			db_addr_offset;
-	struct core_db_data	db_data;
-	qed_spq_async_comp_cb	async_comp_cb[MAX_PROTOCOL_TYPE];
+	qed_spq_async_comp_cb async_comp_cb[MAX_PROTOCOL_TYPE];
 };
 
 /**

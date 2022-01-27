@@ -1,8 +1,12 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * pseries Memory Hotplug infrastructure.
  *
  * Copyright (C) 2008 Badari Pulavarty, IBM Corporation
+ *
+ *      This program is free software; you can redistribute it and/or
+ *      modify it under the terms of the GNU General Public License
+ *      as published by the Free Software Foundation; either version
+ *      2 of the License, or (at your option) any later version.
  */
 
 #define pr_fmt(fmt)	"pseries-hotplug-mem: " fmt
@@ -27,7 +31,7 @@ static bool rtas_hp_event;
 unsigned long pseries_memory_block_size(void)
 {
 	struct device_node *np;
-	unsigned int memblock_size = MIN_MEMORY_BLOCK_SIZE;
+	u64 memblock_size = MIN_MEMORY_BLOCK_SIZE;
 	struct resource r;
 
 	np = of_find_node_by_path("/ibm,dynamic-reconfiguration-memory");
@@ -310,6 +314,7 @@ out:
 
 static int pseries_remove_mem_node(struct device_node *np)
 {
+	const char *type;
 	const __be32 *regs;
 	unsigned long base;
 	unsigned int lmb_size;
@@ -318,7 +323,8 @@ static int pseries_remove_mem_node(struct device_node *np)
 	/*
 	 * Check to see if we are actually removing memory
 	 */
-	if (!of_node_is_type(np, "memory"))
+	type = of_get_property(np, "device_type", NULL);
+	if (type == NULL || strcmp(type, "memory") != 0)
 		return 0;
 
 	/*
@@ -338,7 +344,7 @@ static int pseries_remove_mem_node(struct device_node *np)
 static bool lmb_is_removable(struct drmem_lmb *lmb)
 {
 	int i, scns_per_block;
-	bool rc = true;
+	int rc = 1;
 	unsigned long pfn, block_sz;
 	u64 phys_addr;
 
@@ -365,11 +371,11 @@ static bool lmb_is_removable(struct drmem_lmb *lmb)
 			continue;
 		}
 
-		rc = rc && is_mem_section_removable(pfn, PAGES_PER_SECTION);
+		rc &= is_mem_section_removable(pfn, PAGES_PER_SECTION);
 		phys_addr += MIN_MEMORY_BLOCK_SIZE;
 	}
 
-	return rc;
+	return rc ? true : false;
 }
 
 static int dlpar_add_lmb(struct drmem_lmb *);
@@ -377,7 +383,7 @@ static int dlpar_add_lmb(struct drmem_lmb *);
 static int dlpar_remove_lmb(struct drmem_lmb *lmb)
 {
 	unsigned long block_sz;
-	int rc;
+	int nid, rc;
 
 	if (!lmb_is_removable(lmb))
 		return -EINVAL;
@@ -387,14 +393,14 @@ static int dlpar_remove_lmb(struct drmem_lmb *lmb)
 		return rc;
 
 	block_sz = pseries_memory_block_size();
+	nid = memory_add_physaddr_to_nid(lmb->base_addr);
 
-	__remove_memory(lmb->nid, lmb->base_addr, block_sz);
+	__remove_memory(nid, lmb->base_addr, block_sz);
 
 	/* Update memory regions for memory remove */
 	memblock_remove(lmb->base_addr, block_sz);
 
 	invalidate_lmb_associativity_index(lmb);
-	lmb_clear_nid(lmb);
 	lmb->flags &= ~DRCONF_MEM_ASSIGNED;
 
 	return 0;
@@ -651,7 +657,7 @@ static int dlpar_memory_remove_by_ic(u32 lmbs_to_remove, u32 drc_index)
 static int dlpar_add_lmb(struct drmem_lmb *lmb)
 {
 	unsigned long block_sz;
-	int rc;
+	int nid, rc;
 
 	if (lmb->flags & DRCONF_MEM_ASSIGNED)
 		return -EINVAL;
@@ -662,11 +668,13 @@ static int dlpar_add_lmb(struct drmem_lmb *lmb)
 		return rc;
 	}
 
-	lmb_set_nid(lmb);
 	block_sz = memory_block_size_bytes();
 
+	/* Find the node id for this address */
+	nid = memory_add_physaddr_to_nid(lmb->base_addr);
+
 	/* Add the memory */
-	rc = __add_memory(lmb->nid, lmb->base_addr, block_sz);
+	rc = __add_memory(nid, lmb->base_addr, block_sz);
 	if (rc) {
 		invalidate_lmb_associativity_index(lmb);
 		return rc;
@@ -674,9 +682,8 @@ static int dlpar_add_lmb(struct drmem_lmb *lmb)
 
 	rc = dlpar_online_lmb(lmb);
 	if (rc) {
-		__remove_memory(lmb->nid, lmb->base_addr, block_sz);
+		__remove_memory(nid, lmb->base_addr, block_sz);
 		invalidate_lmb_associativity_index(lmb);
-		lmb_clear_nid(lmb);
 	} else {
 		lmb->flags |= DRCONF_MEM_ASSIGNED;
 	}
@@ -882,44 +889,34 @@ int dlpar_memory(struct pseries_hp_errorlog *hp_elog)
 
 	switch (hp_elog->action) {
 	case PSERIES_HP_ELOG_ACTION_ADD:
-		switch (hp_elog->id_type) {
-		case PSERIES_HP_ELOG_ID_DRC_COUNT:
+		if (hp_elog->id_type == PSERIES_HP_ELOG_ID_DRC_COUNT) {
 			count = hp_elog->_drc_u.drc_count;
 			rc = dlpar_memory_add_by_count(count);
-			break;
-		case PSERIES_HP_ELOG_ID_DRC_INDEX:
+		} else if (hp_elog->id_type == PSERIES_HP_ELOG_ID_DRC_INDEX) {
 			drc_index = hp_elog->_drc_u.drc_index;
 			rc = dlpar_memory_add_by_index(drc_index);
-			break;
-		case PSERIES_HP_ELOG_ID_DRC_IC:
+		} else if (hp_elog->id_type == PSERIES_HP_ELOG_ID_DRC_IC) {
 			count = hp_elog->_drc_u.ic.count;
 			drc_index = hp_elog->_drc_u.ic.index;
 			rc = dlpar_memory_add_by_ic(count, drc_index);
-			break;
-		default:
+		} else {
 			rc = -EINVAL;
-			break;
 		}
 
 		break;
 	case PSERIES_HP_ELOG_ACTION_REMOVE:
-		switch (hp_elog->id_type) {
-		case PSERIES_HP_ELOG_ID_DRC_COUNT:
+		if (hp_elog->id_type == PSERIES_HP_ELOG_ID_DRC_COUNT) {
 			count = hp_elog->_drc_u.drc_count;
 			rc = dlpar_memory_remove_by_count(count);
-			break;
-		case PSERIES_HP_ELOG_ID_DRC_INDEX:
+		} else if (hp_elog->id_type == PSERIES_HP_ELOG_ID_DRC_INDEX) {
 			drc_index = hp_elog->_drc_u.drc_index;
 			rc = dlpar_memory_remove_by_index(drc_index);
-			break;
-		case PSERIES_HP_ELOG_ID_DRC_IC:
+		} else if (hp_elog->id_type == PSERIES_HP_ELOG_ID_DRC_IC) {
 			count = hp_elog->_drc_u.ic.count;
 			drc_index = hp_elog->_drc_u.ic.index;
 			rc = dlpar_memory_remove_by_ic(count, drc_index);
-			break;
-		default:
+		} else {
 			rc = -EINVAL;
-			break;
 		}
 
 		break;
@@ -945,6 +942,7 @@ int dlpar_memory(struct pseries_hp_errorlog *hp_elog)
 
 static int pseries_add_mem_node(struct device_node *np)
 {
+	const char *type;
 	const __be32 *regs;
 	unsigned long base;
 	unsigned int lmb_size;
@@ -953,7 +951,8 @@ static int pseries_add_mem_node(struct device_node *np)
 	/*
 	 * Check to see if we are actually adding memory
 	 */
-	if (!of_node_is_type(np, "memory"))
+	type = of_get_property(np, "device_type", NULL);
+	if (type == NULL || strcmp(type, "memory") != 0)
 		return 0;
 
 	/*

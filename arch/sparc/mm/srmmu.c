@@ -11,7 +11,7 @@
 
 #include <linux/seq_file.h>
 #include <linux/spinlock.h>
-#include <linux/memblock.h>
+#include <linux/bootmem.h>
 #include <linux/pagemap.h>
 #include <linux/vmalloc.h>
 #include <linux/kdebug.h>
@@ -296,8 +296,6 @@ static void __init srmmu_nocache_init(void)
 	void *srmmu_nocache_bitmap;
 	unsigned int bitmap_bits;
 	pgd_t *pgd;
-	p4d_t *p4d;
-	pud_t *pud;
 	pmd_t *pmd;
 	pte_t *pte;
 	unsigned long paddr, vaddr;
@@ -305,19 +303,13 @@ static void __init srmmu_nocache_init(void)
 
 	bitmap_bits = srmmu_nocache_size >> SRMMU_NOCACHE_BITMAP_SHIFT;
 
-	srmmu_nocache_pool = memblock_alloc(srmmu_nocache_size,
-					    SRMMU_NOCACHE_ALIGN_MAX);
-	if (!srmmu_nocache_pool)
-		panic("%s: Failed to allocate %lu bytes align=0x%x\n",
-		      __func__, srmmu_nocache_size, SRMMU_NOCACHE_ALIGN_MAX);
+	srmmu_nocache_pool = __alloc_bootmem(srmmu_nocache_size,
+		SRMMU_NOCACHE_ALIGN_MAX, 0UL);
 	memset(srmmu_nocache_pool, 0, srmmu_nocache_size);
 
 	srmmu_nocache_bitmap =
-		memblock_alloc(BITS_TO_LONGS(bitmap_bits) * sizeof(long),
-			       SMP_CACHE_BYTES);
-	if (!srmmu_nocache_bitmap)
-		panic("%s: Failed to allocate %zu bytes\n", __func__,
-		      BITS_TO_LONGS(bitmap_bits) * sizeof(long));
+		__alloc_bootmem(BITS_TO_LONGS(bitmap_bits) * sizeof(long),
+				SMP_CACHE_BYTES, 0UL);
 	bit_map_init(&srmmu_nocache_map, srmmu_nocache_bitmap, bitmap_bits);
 
 	srmmu_swapper_pg_dir = __srmmu_get_nocache(SRMMU_PGD_TABLE_SIZE, SRMMU_PGD_TABLE_SIZE);
@@ -331,8 +323,6 @@ static void __init srmmu_nocache_init(void)
 
 	while (vaddr < srmmu_nocache_end) {
 		pgd = pgd_offset_k(vaddr);
-		p4d = p4d_offset(__nocache_fix(pgd), vaddr);
-		pud = pud_offset(__nocache_fix(p4d), vaddr);
 		pmd = pmd_offset(__nocache_fix(pgd), vaddr);
 		pte = pte_offset_kernel(__nocache_fix(pmd), vaddr);
 
@@ -374,15 +364,15 @@ pgd_t *get_pgd_fast(void)
  * Alignments up to the page size are the same for physical and virtual
  * addresses of the nocache area.
  */
-pgtable_t pte_alloc_one(struct mm_struct *mm)
+pgtable_t pte_alloc_one(struct mm_struct *mm, unsigned long address)
 {
 	unsigned long pte;
 	struct page *page;
 
-	if ((pte = (unsigned long)pte_alloc_one_kernel(mm)) == 0)
+	if ((pte = (unsigned long)pte_alloc_one_kernel(mm, address)) == 0)
 		return NULL;
 	page = pfn_to_page(__nocache_pa(pte) >> PAGE_SHIFT);
-	if (!pgtable_pte_page_ctor(page)) {
+	if (!pgtable_page_ctor(page)) {
 		__free_page(page);
 		return NULL;
 	}
@@ -393,7 +383,7 @@ void pte_free(struct mm_struct *mm, pgtable_t pte)
 {
 	unsigned long p;
 
-	pgtable_pte_page_dtor(pte);
+	pgtable_page_dtor(pte);
 	p = (unsigned long)page_address(pte);	/* Cached address (for test) */
 	if (p == 0)
 		BUG();
@@ -477,9 +467,7 @@ static void __init sparc_context_init(int numctx)
 	unsigned long size;
 
 	size = numctx * sizeof(struct ctx_list);
-	ctx_list_pool = memblock_alloc(size, SMP_CACHE_BYTES);
-	if (!ctx_list_pool)
-		panic("%s: Failed to allocate %lu bytes\n", __func__, size);
+	ctx_list_pool = __alloc_bootmem(size, SMP_CACHE_BYTES, 0UL);
 
 	for (ctx = 0; ctx < numctx; ctx++) {
 		struct ctx_list *clist;
@@ -520,17 +508,13 @@ static inline void srmmu_mapioaddr(unsigned long physaddr,
 				   unsigned long virt_addr, int bus_type)
 {
 	pgd_t *pgdp;
-	p4d_t *p4dp;
-	pud_t *pudp;
 	pmd_t *pmdp;
 	pte_t *ptep;
 	unsigned long tmp;
 
 	physaddr &= PAGE_MASK;
 	pgdp = pgd_offset_k(virt_addr);
-	p4dp = p4d_offset(pgdp, virt_addr);
-	pudp = pud_offset(p4dp, virt_addr);
-	pmdp = pmd_offset(pudp, virt_addr);
+	pmdp = pmd_offset(pgdp, virt_addr);
 	ptep = pte_offset_kernel(pmdp, virt_addr);
 	tmp = (physaddr >> 4) | SRMMU_ET_PTE;
 
@@ -559,16 +543,11 @@ void srmmu_mapiorange(unsigned int bus, unsigned long xpa,
 static inline void srmmu_unmapioaddr(unsigned long virt_addr)
 {
 	pgd_t *pgdp;
-	p4d_t *p4dp;
-	pud_t *pudp;
 	pmd_t *pmdp;
 	pte_t *ptep;
 
-
 	pgdp = pgd_offset_k(virt_addr);
-	p4dp = p4d_offset(pgdp, virt_addr);
-	pudp = pud_offset(p4dp, virt_addr);
-	pmdp = pmd_offset(pudp, virt_addr);
+	pmdp = pmd_offset(pgdp, virt_addr);
 	ptep = pte_offset_kernel(pmdp, virt_addr);
 
 	/* No need to flush uncacheable page. */
@@ -706,24 +685,20 @@ static void __init srmmu_early_allocate_ptable_skeleton(unsigned long start,
 							unsigned long end)
 {
 	pgd_t *pgdp;
-	p4d_t *p4dp;
-	pud_t *pudp;
 	pmd_t *pmdp;
 	pte_t *ptep;
 
 	while (start < end) {
 		pgdp = pgd_offset_k(start);
-		p4dp = p4d_offset(pgdp, start);
-		pudp = pud_offset(p4dp, start);
-		if (pud_none(*(pud_t *)__nocache_fix(pudp))) {
+		if (pgd_none(*(pgd_t *)__nocache_fix(pgdp))) {
 			pmdp = __srmmu_get_nocache(
 			    SRMMU_PMD_TABLE_SIZE, SRMMU_PMD_TABLE_SIZE);
 			if (pmdp == NULL)
 				early_pgtable_allocfail("pmd");
 			memset(__nocache_fix(pmdp), 0, SRMMU_PMD_TABLE_SIZE);
-			pud_set(__nocache_fix(pudp), pmdp);
+			pgd_set(__nocache_fix(pgdp), pmdp);
 		}
-		pmdp = pmd_offset(__nocache_fix(pudp), start);
+		pmdp = pmd_offset(__nocache_fix(pgdp), start);
 		if (srmmu_pmd_none(*(pmd_t *)__nocache_fix(pmdp))) {
 			ptep = __srmmu_get_nocache(PTE_SIZE, PTE_SIZE);
 			if (ptep == NULL)
@@ -741,23 +716,19 @@ static void __init srmmu_allocate_ptable_skeleton(unsigned long start,
 						  unsigned long end)
 {
 	pgd_t *pgdp;
-	p4d_t *p4dp;
-	pud_t *pudp;
 	pmd_t *pmdp;
 	pte_t *ptep;
 
 	while (start < end) {
 		pgdp = pgd_offset_k(start);
-		p4dp = p4d_offset(pgdp, start);
-		pudp = pud_offset(p4dp, start);
-		if (pud_none(*pudp)) {
+		if (pgd_none(*pgdp)) {
 			pmdp = __srmmu_get_nocache(SRMMU_PMD_TABLE_SIZE, SRMMU_PMD_TABLE_SIZE);
 			if (pmdp == NULL)
 				early_pgtable_allocfail("pmd");
 			memset(pmdp, 0, SRMMU_PMD_TABLE_SIZE);
-			pud_set((pud_t *)pgdp, pmdp);
+			pgd_set(pgdp, pmdp);
 		}
-		pmdp = pmd_offset(pudp, start);
+		pmdp = pmd_offset(pgdp, start);
 		if (srmmu_pmd_none(*pmdp)) {
 			ptep = __srmmu_get_nocache(PTE_SIZE,
 							     PTE_SIZE);
@@ -800,8 +771,6 @@ static void __init srmmu_inherit_prom_mappings(unsigned long start,
 	unsigned long probed;
 	unsigned long addr;
 	pgd_t *pgdp;
-	p4d_t *p4dp;
-	pud_t *pudp;
 	pmd_t *pmdp;
 	pte_t *ptep;
 	int what; /* 0 = normal-pte, 1 = pmd-level pte, 2 = pgd-level pte */
@@ -833,20 +802,18 @@ static void __init srmmu_inherit_prom_mappings(unsigned long start,
 		}
 
 		pgdp = pgd_offset_k(start);
-		p4dp = p4d_offset(pgdp, start);
-		pudp = pud_offset(p4dp, start);
 		if (what == 2) {
 			*(pgd_t *)__nocache_fix(pgdp) = __pgd(probed);
 			start += SRMMU_PGDIR_SIZE;
 			continue;
 		}
-		if (pud_none(*(pud_t *)__nocache_fix(pudp))) {
+		if (pgd_none(*(pgd_t *)__nocache_fix(pgdp))) {
 			pmdp = __srmmu_get_nocache(SRMMU_PMD_TABLE_SIZE,
 						   SRMMU_PMD_TABLE_SIZE);
 			if (pmdp == NULL)
 				early_pgtable_allocfail("pmd");
 			memset(__nocache_fix(pmdp), 0, SRMMU_PMD_TABLE_SIZE);
-			pud_set(__nocache_fix(pudp), pmdp);
+			pgd_set(__nocache_fix(pgdp), pmdp);
 		}
 		pmdp = pmd_offset(__nocache_fix(pgdp), start);
 		if (srmmu_pmd_none(*(pmd_t *)__nocache_fix(pmdp))) {
@@ -931,8 +898,6 @@ void __init srmmu_paging_init(void)
 	phandle cpunode;
 	char node_str[128];
 	pgd_t *pgd;
-	p4d_t *p4d;
-	pud_t *pud;
 	pmd_t *pmd;
 	pte_t *pte;
 	unsigned long pages_avail;
@@ -994,9 +959,7 @@ void __init srmmu_paging_init(void)
 	srmmu_allocate_ptable_skeleton(PKMAP_BASE, PKMAP_END);
 
 	pgd = pgd_offset_k(PKMAP_BASE);
-	p4d = p4d_offset(pgd, PKMAP_BASE);
-	pud = pud_offset(p4d, PKMAP_BASE);
-	pmd = pmd_offset(pud, PKMAP_BASE);
+	pmd = pmd_offset(pgd, PKMAP_BASE);
 	pte = pte_offset_kernel(pmd, PKMAP_BASE);
 	pkmap_page_table = pte;
 

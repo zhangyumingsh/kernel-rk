@@ -278,6 +278,9 @@ static int port_detect(struct device *dev, void *dev_drv)
 int __parport_register_driver(struct parport_driver *drv, struct module *owner,
 			      const char *mod_name)
 {
+	if (list_empty(&portlist))
+		get_lowlevel_driver();
+
 	if (drv->devmodel) {
 		/* using device model */
 		int ret;
@@ -310,8 +313,6 @@ int __parport_register_driver(struct parport_driver *drv, struct module *owner,
 
 		drv->devmodel = false;
 
-		if (list_empty(&portlist))
-			get_lowlevel_driver();
 		mutex_lock(&registration_lock);
 		list_for_each_entry(port, &portlist, list)
 			drv->attach(port);

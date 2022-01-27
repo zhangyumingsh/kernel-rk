@@ -382,9 +382,16 @@ static int fec_ptp_gettime(struct ptp_clock_info *ptp, struct timespec64 *ts)
 	u64 ns;
 	unsigned long flags;
 
+	mutex_lock(&adapter->ptp_clk_mutex);
+	/* Check the ptp clock */
+	if (!adapter->ptp_clk_on) {
+		mutex_unlock(&adapter->ptp_clk_mutex);
+		return -EINVAL;
+	}
 	spin_lock_irqsave(&adapter->tmreg_lock, flags);
 	ns = timecounter_read(&adapter->tc);
 	spin_unlock_irqrestore(&adapter->tmreg_lock, flags);
+	mutex_unlock(&adapter->ptp_clk_mutex);
 
 	*ts = ns_to_timespec64(ns);
 
@@ -600,9 +607,9 @@ void fec_ptp_init(struct platform_device *pdev, int irq_idx)
 
 	INIT_DELAYED_WORK(&fep->time_keep, fec_time_keep);
 
-	irq = platform_get_irq_byname_optional(pdev, "pps");
+	irq = platform_get_irq_byname(pdev, "pps");
 	if (irq < 0)
-		irq = platform_get_irq_optional(pdev, irq_idx);
+		irq = platform_get_irq(pdev, irq_idx);
 	/* Failure to get an irq is not fatal,
 	 * only the PTP_CLOCK_PPS clock events should stop
 	 */
@@ -617,7 +624,7 @@ void fec_ptp_init(struct platform_device *pdev, int irq_idx)
 	fep->ptp_clock = ptp_clock_register(&fep->ptp_caps, &pdev->dev);
 	if (IS_ERR(fep->ptp_clock)) {
 		fep->ptp_clock = NULL;
-		dev_err(&pdev->dev, "ptp_clock_register failed\n");
+		pr_err("ptp_clock_register failed\n");
 	}
 
 	schedule_delayed_work(&fep->time_keep, HZ);

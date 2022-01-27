@@ -16,8 +16,8 @@ struct etnaviv_pm_signal {
 	u32 data;
 
 	u32 (*sample)(struct etnaviv_gpu *gpu,
-		      const struct etnaviv_pm_domain *domain,
-		      const struct etnaviv_pm_signal *signal);
+	              const struct etnaviv_pm_domain *domain,
+	              const struct etnaviv_pm_signal *signal);
 };
 
 struct etnaviv_pm_domain {
@@ -453,7 +453,7 @@ static const struct etnaviv_pm_domain *pm_domain(const struct etnaviv_gpu *gpu,
 		if (!(gpu->identity.features & meta->feature))
 			continue;
 
-		if (meta->nr_domains < (index - offset)) {
+		if (index - offset >= meta->nr_domains) {
 			offset += meta->nr_domains;
 			continue;
 		}

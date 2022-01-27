@@ -18,6 +18,7 @@
 #include <linux/string.h>
 #include <linux/types.h>
 #include <linux/init.h>
+#include <linux/bootmem.h>
 #include <linux/memblock.h>
 #include <linux/gfp.h>
 
@@ -54,10 +55,7 @@ static pte_t * __init kernel_page_table(void)
 {
 	pte_t *ptablep;
 
-	ptablep = (pte_t *)memblock_alloc_low(PAGE_SIZE, PAGE_SIZE);
-	if (!ptablep)
-		panic("%s: Failed to allocate %lu bytes align=%lx\n",
-		      __func__, PAGE_SIZE, PAGE_SIZE);
+	ptablep = (pte_t *)alloc_bootmem_low_pages(PAGE_SIZE);
 
 	clear_page(ptablep);
 	__flush_page_to_ram(ptablep);
@@ -82,11 +80,9 @@ static pmd_t * __init kernel_ptr_table(void)
 		 */
 		last = (unsigned long)kernel_pg_dir;
 		for (i = 0; i < PTRS_PER_PGD; i++) {
-			pud_t *pud = (pud_t *)(&kernel_pg_dir[i]);
-
-			if (!pud_present(*pud))
+			if (!pgd_present(kernel_pg_dir[i]))
 				continue;
-			pmd = pgd_page_vaddr(kernel_pg_dir[i]);
+			pmd = __pgd_page(kernel_pg_dir[i]);
 			if (pmd > last)
 				last = pmd;
 		}
@@ -99,11 +95,7 @@ static pmd_t * __init kernel_ptr_table(void)
 
 	last_pgtable += PTRS_PER_PMD;
 	if (((unsigned long)last_pgtable & ~PAGE_MASK) == 0) {
-		last_pgtable = (pmd_t *)memblock_alloc_low(PAGE_SIZE,
-							   PAGE_SIZE);
-		if (!last_pgtable)
-			panic("%s: Failed to allocate %lu bytes align=%lx\n",
-			      __func__, PAGE_SIZE, PAGE_SIZE);
+		last_pgtable = (pmd_t *)alloc_bootmem_low_pages(PAGE_SIZE);
 
 		clear_page(last_pgtable);
 		__flush_page_to_ram(last_pgtable);
@@ -120,8 +112,6 @@ static void __init map_node(int node)
 #define ROOTTREESIZE (32*1024*1024)
 	unsigned long physaddr, virtaddr, size;
 	pgd_t *pgd_dir;
-	p4d_t *p4d_dir;
-	pud_t *pud_dir;
 	pmd_t *pmd_dir;
 	pte_t *pte_dir;
 
@@ -153,16 +143,14 @@ static void __init map_node(int node)
 				continue;
 			}
 		}
-		p4d_dir = p4d_offset(pgd_dir, virtaddr);
-		pud_dir = pud_offset(p4d_dir, virtaddr);
-		if (!pud_present(*pud_dir)) {
+		if (!pgd_present(*pgd_dir)) {
 			pmd_dir = kernel_ptr_table();
 #ifdef DEBUG
 			printk ("[new pointer %p]", pmd_dir);
 #endif
-			pud_set(pud_dir, pmd_dir);
+			pgd_set(pgd_dir, pmd_dir);
 		} else
-			pmd_dir = pmd_offset(pud_dir, virtaddr);
+			pmd_dir = pmd_offset(pgd_dir, virtaddr);
 
 		if (CPU_IS_020_OR_030) {
 			if (virtaddr) {
@@ -289,10 +277,7 @@ void __init paging_init(void)
 	 * initialize the bad page table and bad page to point
 	 * to a couple of allocated pages
 	 */
-	empty_zero_page = memblock_alloc(PAGE_SIZE, PAGE_SIZE);
-	if (!empty_zero_page)
-		panic("%s: Failed to allocate %lu bytes align=0x%lx\n",
-		      __func__, PAGE_SIZE, PAGE_SIZE);
+	empty_zero_page = alloc_bootmem_pages(PAGE_SIZE);
 
 	/*
 	 * Set up SFC/DFC registers
@@ -310,3 +295,4 @@ void __init paging_init(void)
 			node_set_state(i, N_NORMAL_MEMORY);
 	}
 }
+

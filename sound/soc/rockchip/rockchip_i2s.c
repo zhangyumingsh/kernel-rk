@@ -1,10 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /* sound/soc/rockchip/rockchip_i2s.c
  *
  * ALSA SoC Audio Layer - Rockchip I2S Controller driver
  *
  * Copyright (c) 2014 Rockchip Electronics Co. Ltd.
  * Author: Jianqun <jay.xu@rock-chips.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  */
 
 #include <linux/module.h>
@@ -279,13 +282,10 @@ static int rockchip_i2s_hw_params(struct snd_pcm_substream *substream,
 	if (i2s->is_master_mode) {
 		mclk_rate = clk_get_rate(i2s->mclk);
 		bclk_rate = 2 * 32 * params_rate(params);
-		if (!bclk_rate) {
-			dev_err(i2s->dev, "invalid bclk_rate: %d\n",
-				bclk_rate);
+		if (bclk_rate && mclk_rate % bclk_rate)
 			return -EINVAL;
-		}
 
-		div_bclk = DIV_ROUND_CLOSEST(mclk_rate, bclk_rate);
+		div_bclk = mclk_rate / bclk_rate;
 		div_lrck = bclk_rate / params_rate(params);
 		regmap_update_bits(i2s->regmap, I2S_CKR,
 				   I2S_CKR_MDIV_MASK,
@@ -315,8 +315,6 @@ static int rockchip_i2s_hw_params(struct snd_pcm_substream *substream,
 		val |= I2S_TXCR_VDW(32);
 		break;
 	default:
-		dev_err(i2s->dev, "invalid format: %d\n",
-			params_format(params));
 		return -EINVAL;
 	}
 
@@ -423,9 +421,6 @@ static int rockchip_i2s_set_sysclk(struct snd_soc_dai *cpu_dai, int clk_id,
 {
 	struct rk_i2s_dev *i2s = to_info(cpu_dai);
 	int ret;
-
-	if (freq == 0)
-		return 0;
 
 	ret = clk_set_rate(i2s->mclk, freq);
 	if (ret)

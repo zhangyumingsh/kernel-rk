@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * Samsung Exynos7 Espresso board device tree source
+ * SAMSUNG Exynos7 Espresso board device tree source
  *
  * Copyright (c) 2014 Samsung Electronics Co., Ltd.
  *		http://www.samsung.com
@@ -13,7 +13,7 @@
 #include <dt-bindings/gpio/gpio.h>
 
 / {
-	model = "Samsung Exynos7 Espresso board based on Exynos7";
+	model = "Samsung Exynos7 Espresso board based on EXYNOS7";
 	compatible = "samsung,exynos7-espresso", "samsung,exynos7";
 
 	aliases {
@@ -59,11 +59,6 @@
 	clock-frequency = <24000000>;
 };
 
-&gpu {
-	mali-supply = <&buck6_reg>;
-	status = "okay";
-};
-
 &serial_2 {
 	status = "okay";
 };
@@ -90,7 +85,7 @@
 	s2mps15_pmic@66 {
 		compatible = "samsung,s2mps15-pmic";
 		reg = <0x66>;
-		interrupts = <2 IRQ_TYPE_NONE>;
+		interrupts = <2 IRQ_TYPE_LEVEL_LOW>;
 		interrupt-parent = <&gpa0>;
 		pinctrl-names = "default";
 		pinctrl-0 = <&pmic_irq>;
@@ -157,6 +152,7 @@
 				regulator-min-microvolt = <700000>;
 				regulator-max-microvolt = <1150000>;
 				regulator-enable-ramp-delay = <125>;
+				regulator-always-on;
 			};
 
 			ldo8_reg: LDO8 {

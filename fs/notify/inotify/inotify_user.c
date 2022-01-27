@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * fs/inotify_user.c - inotify support for userspace
  *
@@ -11,6 +10,16 @@
  *
  * Copyright (C) 2009 Eric Paris <Red Hat Inc>
  * inotify was largely rewriten to make use of the fsnotify infrastructure
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the
+ * Free Software Foundation; either version 2, or (at your option) any
+ * later version.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * General Public License for more details.
  */
 
 #include <linux/file.h>
@@ -30,7 +39,6 @@
 #include <linux/poll.h>
 #include <linux/wait.h>
 #include <linux/memcontrol.h>
-#include <linux/security.h>
 
 #include "inotify.h"
 #include "../fdinfo.h"
@@ -46,6 +54,8 @@ struct kmem_cache *inotify_inode_mark_cachep __read_mostly;
 
 #include <linux/sysctl.h>
 
+static int zero;
+
 struct ctl_table inotify_table[] = {
 	{
 		.procname	= "max_user_instances",
@@ -53,7 +63,7 @@ struct ctl_table inotify_table[] = {
 		.maxlen		= sizeof(int),
 		.mode		= 0644,
 		.proc_handler	= proc_dointvec_minmax,
-		.extra1		= SYSCTL_ZERO,
+		.extra1		= &zero,
 	},
 	{
 		.procname	= "max_user_watches",
@@ -61,7 +71,7 @@ struct ctl_table inotify_table[] = {
 		.maxlen		= sizeof(int),
 		.mode		= 0644,
 		.proc_handler	= proc_dointvec_minmax,
-		.extra1		= SYSCTL_ZERO,
+		.extra1		= &zero,
 	},
 	{
 		.procname	= "max_queued_events",
@@ -69,7 +79,7 @@ struct ctl_table inotify_table[] = {
 		.maxlen		= sizeof(int),
 		.mode		= 0644,
 		.proc_handler	= proc_dointvec_minmax,
-		.extra1		= SYSCTL_ZERO
+		.extra1		= &zero
 	},
 	{ }
 };
@@ -179,7 +189,7 @@ static ssize_t copy_event_to_user(struct fsnotify_group *group,
 	 */
 	pad_name_len = round_event_name_len(fsn_event);
 	inotify_event.len = pad_name_len;
-	inotify_event.mask = inotify_mask_to_arg(event->mask);
+	inotify_event.mask = inotify_mask_to_arg(fsn_event->mask);
 	inotify_event.wd = event->wd;
 	inotify_event.cookie = event->sync_cookie;
 
@@ -332,8 +342,7 @@ static const struct file_operations inotify_fops = {
 /*
  * find_inode - resolve a user-given path to a specific inode
  */
-static int inotify_find_inode(const char __user *dirname, struct path *path,
-						unsigned int flags, __u64 mask)
+static int inotify_find_inode(const char __user *dirname, struct path *path, unsigned flags)
 {
 	int error;
 
@@ -342,15 +351,8 @@ static int inotify_find_inode(const char __user *dirname, struct path *path,
 		return error;
 	/* you can only watch an inode if you have read permissions on it */
 	error = inode_permission(path->dentry->d_inode, MAY_READ);
-	if (error) {
-		path_put(path);
-		return error;
-	}
-	error = security_path_notify(path, mask,
-				FSNOTIFY_OBJ_TYPE_INODE);
 	if (error)
 		path_put(path);
-
 	return error;
 }
 
@@ -635,8 +637,7 @@ static struct fsnotify_group *inotify_new_group(unsigned int max_events)
 		return ERR_PTR(-ENOMEM);
 	}
 	group->overflow_event = &oevent->fse;
-	fsnotify_init_event(group->overflow_event, NULL);
-	oevent->mask = FS_Q_OVERFLOW;
+	fsnotify_init_event(group->overflow_event, NULL, FS_Q_OVERFLOW);
 	oevent->wd = -1;
 	oevent->sync_cookie = 0;
 	oevent->name_len = 0;
@@ -701,6 +702,8 @@ SYSCALL_DEFINE3(inotify_add_watch, int, fd, const char __user *, pathname,
 	struct fsnotify_group *group;
 	struct inode *inode;
 	struct path path;
+	struct path alteredpath;
+	struct path *canonical_path = &path;
 	struct fd f;
 	int ret;
 	unsigned flags = 0;
@@ -742,18 +745,27 @@ SYSCALL_DEFINE3(inotify_add_watch, int, fd, const char __user *, pathname,
 	if (mask & IN_ONLYDIR)
 		flags |= LOOKUP_DIRECTORY;
 
-	ret = inotify_find_inode(pathname, &path, flags,
-			(mask & IN_ALL_EVENTS));
+	ret = inotify_find_inode(pathname, &path, flags);
 	if (ret)
 		goto fput_and_out;
 
+	/* support stacked filesystems */
+	if (path.dentry && path.dentry->d_op) {
+		if (path.dentry->d_op->d_canonical_path) {
+			path.dentry->d_op->d_canonical_path(&path,
+							    &alteredpath);
+			canonical_path = &alteredpath;
+			path_put(&path);
+		}
+	}
+
 	/* inode held in place by reference to path; group by fget on fd */
-	inode = path.dentry->d_inode;
+	inode = canonical_path->dentry->d_inode;
 	group = f.file->private_data;
 
 	/* create/update an inode mark */
 	ret = inotify_update_watch(group, inode, mask);
-	path_put(&path);
+	path_put(canonical_path);
 fput_and_out:
 	fdput(f);
 	return ret;
@@ -820,7 +832,7 @@ static int __init inotify_user_setup(void)
 	BUILD_BUG_ON(IN_ISDIR != FS_ISDIR);
 	BUILD_BUG_ON(IN_ONESHOT != FS_IN_ONESHOT);
 
-	BUILD_BUG_ON(HWEIGHT32(ALL_INOTIFY_BITS) != 22);
+	BUG_ON(hweight32(ALL_INOTIFY_BITS) != 22);
 
 	inotify_inode_mark_cachep = KMEM_CACHE(inotify_inode_mark,
 					       SLAB_PANIC|SLAB_ACCOUNT);

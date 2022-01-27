@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Test cases for the drm_mm range manager
  */
@@ -854,7 +853,7 @@ static bool assert_contiguous_in_range(struct drm_mm *mm,
 
 	if (start > 0) {
 		node = __drm_mm_interval_first(mm, 0, start - 1);
-		if (drm_mm_node_allocated(node)) {
+		if (node->allocated) {
 			pr_err("node before start: node=%llx+%llu, start=%llx\n",
 			       node->start, node->size, start);
 			return false;
@@ -863,7 +862,7 @@ static bool assert_contiguous_in_range(struct drm_mm *mm,
 
 	if (end < U64_MAX) {
 		node = __drm_mm_interval_first(mm, end, U64_MAX);
-		if (drm_mm_node_allocated(node)) {
+		if (node->allocated) {
 			pr_err("node after end: node=%llx+%llu, end=%llx\n",
 			       node->start, node->size, end);
 			return false;
@@ -1156,12 +1155,12 @@ static void show_holes(const struct drm_mm *mm, int count)
 		struct drm_mm_node *next = list_next_entry(hole, node_list);
 		const char *node1 = NULL, *node2 = NULL;
 
-		if (drm_mm_node_allocated(hole))
+		if (hole->allocated)
 			node1 = kasprintf(GFP_KERNEL,
 					  "[%llx + %lld, color=%ld], ",
 					  hole->start, hole->size, hole->color);
 
-		if (drm_mm_node_allocated(next))
+		if (next->allocated)
 			node2 = kasprintf(GFP_KERNEL,
 					  ", [%llx + %lld, color=%ld]",
 					  next->start, next->size, next->color);
@@ -1616,7 +1615,7 @@ static int igt_topdown(void *ignored)
 	DRM_RND_STATE(prng, random_seed);
 	const unsigned int count = 8192;
 	unsigned int size;
-	unsigned long *bitmap;
+	unsigned long *bitmap = NULL;
 	struct drm_mm mm;
 	struct drm_mm_node *nodes, *node, *next;
 	unsigned int *order, n, m, o = 0;
@@ -1632,7 +1631,8 @@ static int igt_topdown(void *ignored)
 	if (!nodes)
 		goto err;
 
-	bitmap = bitmap_zalloc(count, GFP_KERNEL);
+	bitmap = kcalloc(count / BITS_PER_LONG, sizeof(unsigned long),
+			 GFP_KERNEL);
 	if (!bitmap)
 		goto err_nodes;
 
@@ -1717,7 +1717,7 @@ out:
 	drm_mm_takedown(&mm);
 	kfree(order);
 err_bitmap:
-	bitmap_free(bitmap);
+	kfree(bitmap);
 err_nodes:
 	vfree(nodes);
 err:
@@ -1745,7 +1745,8 @@ static int igt_bottomup(void *ignored)
 	if (!nodes)
 		goto err;
 
-	bitmap = bitmap_zalloc(count, GFP_KERNEL);
+	bitmap = kcalloc(count / BITS_PER_LONG, sizeof(unsigned long),
+			 GFP_KERNEL);
 	if (!bitmap)
 		goto err_nodes;
 
@@ -1817,7 +1818,7 @@ out:
 	drm_mm_takedown(&mm);
 	kfree(order);
 err_bitmap:
-	bitmap_free(bitmap);
+	kfree(bitmap);
 err_nodes:
 	vfree(nodes);
 err:
@@ -1900,18 +1901,18 @@ static void separate_adjacent_colors(const struct drm_mm_node *node,
 				     u64 *start,
 				     u64 *end)
 {
-	if (drm_mm_node_allocated(node) && node->color != color)
+	if (node->allocated && node->color != color)
 		++*start;
 
 	node = list_next_entry(node, node_list);
-	if (drm_mm_node_allocated(node) && node->color != color)
+	if (node->allocated && node->color != color)
 		--*end;
 }
 
 static bool colors_abutt(const struct drm_mm_node *node)
 {
 	if (!drm_mm_hole_follows(node) &&
-	    drm_mm_node_allocated(list_next_entry(node, node_list))) {
+	    list_next_entry(node, node_list)->allocated) {
 		pr_err("colors abutt; %ld [%llx + %llx] is next to %ld [%llx + %llx]!\n",
 		       node->color, node->start, node->size,
 		       list_next_entry(node, node_list)->color,

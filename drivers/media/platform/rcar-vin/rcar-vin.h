@@ -126,7 +126,6 @@ struct rvin_group_route {
  * struct rvin_info - Information about the particular VIN implementation
  * @model:		VIN model
  * @use_mc:		use media controller instead of controlling subdevice
- * @nv12:		support outputing NV12 pixel format
  * @max_width:		max input width the VIN supports
  * @max_height:		max input height the VIN supports
  * @routes:		list of possible routes from the CSI-2 recivers to
@@ -135,7 +134,6 @@ struct rvin_group_route {
 struct rvin_info {
 	enum model_id model;
 	bool use_mc;
-	bool nv12;
 
 	unsigned int max_width;
 	unsigned int max_height;
@@ -178,10 +176,8 @@ struct rvin_info {
  *
  * @crop:		active cropping
  * @compose:		active composing
- * @src_rect:		active size of the video source
+ * @source:		active size of the video source
  * @std:		active video standard of the video source
- *
- * @alpha:		Alpha component to fill in for supported pixel formats
  */
 struct rvin_dev {
 	struct device *dev;
@@ -217,10 +213,8 @@ struct rvin_dev {
 
 	struct v4l2_rect crop;
 	struct v4l2_rect compose;
-	struct v4l2_rect src_rect;
+	struct v4l2_rect source;
 	v4l2_std_id std;
-
-	unsigned int alpha;
 };
 
 #define vin_to_source(vin)		((vin)->parallel->subdev)
@@ -266,14 +260,11 @@ void rvin_dma_unregister(struct rvin_dev *vin);
 int rvin_v4l2_register(struct rvin_dev *vin);
 void rvin_v4l2_unregister(struct rvin_dev *vin);
 
-const struct rvin_video_format *rvin_format_from_pixel(struct rvin_dev *vin,
-						       u32 pixelformat);
-
+const struct rvin_video_format *rvin_format_from_pixel(u32 pixelformat);
 
 /* Cropping, composing and scaling */
 void rvin_crop_scale_comp(struct rvin_dev *vin);
 
 int rvin_set_channel_routing(struct rvin_dev *vin, u8 chsel);
-void rvin_set_alpha(struct rvin_dev *vin, unsigned int alpha);
 
 #endif

@@ -1,8 +1,17 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * drivers/mmc/host/sdhci-msm.c - Qualcomm SDHCI Platform driver
  *
  * Copyright (c) 2013-2014, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
  */
 
 #include <linux/module.h>
@@ -15,7 +24,6 @@
 #include <linux/regulator/consumer.h>
 
 #include "sdhci-pltfm.h"
-#include "cqhci.h"
 
 #define CORE_MCI_VERSION		0x50
 #define CORE_VERSION_MAJOR_SHIFT	28
@@ -123,10 +131,6 @@
 #define msm_host_writel(msm_host, val, host, offset) \
 	msm_host->var_ops->msm_writel_relaxed(val, host, offset)
 
-/* CQHCI vendor specific registers */
-#define CQHCI_VENDOR_CFG1	0xA00
-#define CQHCI_VENDOR_DIS_RST_ON_CQ_EN	(0x3 << 13)
-
 struct sdhci_msm_offset {
 	u32 core_hc_mode;
 	u32 core_mci_data_cnt;
@@ -229,7 +233,6 @@ struct sdhci_msm_variant_ops {
  */
 struct sdhci_msm_variant_info {
 	bool mci_removed;
-	bool restore_dll_config;
 	const struct sdhci_msm_variant_ops *var_ops;
 	const struct sdhci_msm_offset *offset;
 };
@@ -254,7 +257,6 @@ struct sdhci_msm_host {
 	bool pwr_irq_flag;
 	u32 caps_0;
 	bool mci_removed;
-	bool restore_dll_config;
 	const struct sdhci_msm_variant_ops *var_ops;
 	const struct sdhci_msm_offset *offset;
 	bool use_cdr;
@@ -1035,48 +1037,6 @@ out:
 	return ret;
 }
 
-static bool sdhci_msm_is_tuning_needed(struct sdhci_host *host)
-{
-	struct mmc_ios *ios = &host->mmc->ios;
-
-	/*
-	 * Tuning is required for SDR104, HS200 and HS400 cards and
-	 * if clock frequency is greater than 100MHz in these modes.
-	 */
-	if (host->clock <= CORE_FREQ_100MHZ ||
-	    !(ios->timing == MMC_TIMING_MMC_HS400 ||
-	    ios->timing == MMC_TIMING_MMC_HS200 ||
-	    ios->timing == MMC_TIMING_UHS_SDR104) ||
-	    ios->enhanced_strobe)
-		return false;
-
-	return true;
-}
-
-static int sdhci_msm_restore_sdr_dll_config(struct sdhci_host *host)
-{
-	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
-	struct sdhci_msm_host *msm_host = sdhci_pltfm_priv(pltfm_host);
-	int ret;
-
-	/*
-	 * SDR DLL comes into picture only for timing modes which needs
-	 * tuning.
-	 */
-	if (!sdhci_msm_is_tuning_needed(host))
-		return 0;
-
-	/* Reset the tuning block */
-	ret = msm_init_cm_dll(host);
-	if (ret)
-		return ret;
-
-	/* Restore the tuning block */
-	ret = msm_config_cm_dll_phase(host, msm_host->saved_tuning_phase);
-
-	return ret;
-}
-
 static void sdhci_msm_set_cdr(struct sdhci_host *host, bool enable)
 {
 	const struct sdhci_msm_offset *msm_offset = sdhci_priv_msm_offset(host);
@@ -1092,23 +1052,29 @@ static void sdhci_msm_set_cdr(struct sdhci_host *host, bool enable)
 		config |= CORE_CDR_EXT_EN;
 	}
 
-	if (config != oldconfig) {
+	if (config != oldconfig)
 		writel_relaxed(config, host->ioaddr +
 			       msm_offset->core_dll_config);
-	}
 }
 
 static int sdhci_msm_execute_tuning(struct mmc_host *mmc, u32 opcode)
 {
 	struct sdhci_host *host = mmc_priv(mmc);
-	int tuning_seq_cnt = 3;
+	int tuning_seq_cnt = 10;
 	u8 phase, tuned_phases[16], tuned_phase_cnt = 0;
 	int rc;
 	struct mmc_ios ios = host->mmc->ios;
 	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
 	struct sdhci_msm_host *msm_host = sdhci_pltfm_priv(pltfm_host);
 
-	if (!sdhci_msm_is_tuning_needed(host)) {
+	/*
+	 * Tuning is required for SDR104, HS200 and HS400 cards and
+	 * if clock frequency is greater than 100MHz in these modes.
+	 */
+	if (host->clock <= CORE_FREQ_100MHZ ||
+	    !(ios.timing == MMC_TIMING_MMC_HS400 ||
+	    ios.timing == MMC_TIMING_MMC_HS200 ||
+	    ios.timing == MMC_TIMING_UHS_SDR104)) {
 		msm_host->use_cdr = false;
 		sdhci_msm_set_cdr(host, false);
 		return 0;
@@ -1116,6 +1082,12 @@ static int sdhci_msm_execute_tuning(struct mmc_host *mmc, u32 opcode)
 
 	/* Clock-Data-Recovery used to dynamically adjust RX sampling point */
 	msm_host->use_cdr = true;
+
+	/*
+	 * Clear tuning_done flag before tuning to ensure proper
+	 * HS400 settings.
+	 */
+	msm_host->tuning_done = 0;
 
 	/*
 	 * For HS400 tuning in HS200 timing requires:
@@ -1141,6 +1113,7 @@ retry:
 		if (rc)
 			return rc;
 
+		msm_host->saved_tuning_phase = phase;
 		rc = mmc_send_tuning(mmc, opcode, NULL);
 		if (!rc) {
 			/* Tuning is successful at this tuning point */
@@ -1151,6 +1124,22 @@ retry:
 	} while (++phase < ARRAY_SIZE(tuned_phases));
 
 	if (tuned_phase_cnt) {
+		if (tuned_phase_cnt == ARRAY_SIZE(tuned_phases)) {
+			/*
+			 * All phases valid is _almost_ as bad as no phases
+			 * valid.  Probably all phases are not really reliable
+			 * but we didn't detect where the unreliable place is.
+			 * That means we'll essentially be guessing and hoping
+			 * we get a good phase.  Better to try a few times.
+			 */
+			dev_dbg(mmc_dev(mmc), "%s: All phases valid; try again\n",
+				mmc_hostname(mmc));
+			if (--tuning_seq_cnt) {
+				tuned_phase_cnt = 0;
+				goto retry;
+			}
+		}
+
 		rc = msm_find_most_appropriate_phase(host, tuned_phases,
 						     tuned_phase_cnt);
 		if (rc < 0)
@@ -1165,7 +1154,6 @@ retry:
 		rc = msm_config_cm_dll_phase(host, phase);
 		if (rc)
 			return rc;
-		msm_host->saved_tuning_phase = phase;
 		dev_dbg(mmc_dev(mmc), "%s: Setting the tuning phase to %d\n",
 			 mmc_hostname(mmc), phase);
 	} else {
@@ -1572,127 +1560,6 @@ out:
 	__sdhci_msm_set_clock(host, clock);
 }
 
-/*****************************************************************************\
- *                                                                           *
- * MSM Command Queue Engine (CQE)                                            *
- *                                                                           *
-\*****************************************************************************/
-
-static u32 sdhci_msm_cqe_irq(struct sdhci_host *host, u32 intmask)
-{
-	int cmd_error = 0;
-	int data_error = 0;
-
-	if (!sdhci_cqe_irq(host, intmask, &cmd_error, &data_error))
-		return intmask;
-
-	cqhci_irq(host->mmc, intmask, cmd_error, data_error);
-	return 0;
-}
-
-static void sdhci_msm_cqe_disable(struct mmc_host *mmc, bool recovery)
-{
-	struct sdhci_host *host = mmc_priv(mmc);
-	unsigned long flags;
-	u32 ctrl;
-
-	/*
-	 * When CQE is halted, the legacy SDHCI path operates only
-	 * on 16-byte descriptors in 64bit mode.
-	 */
-	if (host->flags & SDHCI_USE_64_BIT_DMA)
-		host->desc_sz = 16;
-
-	spin_lock_irqsave(&host->lock, flags);
-
-	/*
-	 * During CQE command transfers, command complete bit gets latched.
-	 * So s/w should clear command complete interrupt status when CQE is
-	 * either halted or disabled. Otherwise unexpected SDCHI legacy
-	 * interrupt gets triggered when CQE is halted/disabled.
-	 */
-	ctrl = sdhci_readl(host, SDHCI_INT_ENABLE);
-	ctrl |= SDHCI_INT_RESPONSE;
-	sdhci_writel(host,  ctrl, SDHCI_INT_ENABLE);
-	sdhci_writel(host, SDHCI_INT_RESPONSE, SDHCI_INT_STATUS);
-
-	spin_unlock_irqrestore(&host->lock, flags);
-
-	sdhci_cqe_disable(mmc, recovery);
-}
-
-static const struct cqhci_host_ops sdhci_msm_cqhci_ops = {
-	.enable		= sdhci_cqe_enable,
-	.disable	= sdhci_msm_cqe_disable,
-};
-
-static int sdhci_msm_cqe_add_host(struct sdhci_host *host,
-				struct platform_device *pdev)
-{
-	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
-	struct sdhci_msm_host *msm_host = sdhci_pltfm_priv(pltfm_host);
-	struct cqhci_host *cq_host;
-	bool dma64;
-	u32 cqcfg;
-	int ret;
-
-	/*
-	 * When CQE is halted, SDHC operates only on 16byte ADMA descriptors.
-	 * So ensure ADMA table is allocated for 16byte descriptors.
-	 */
-	if (host->caps & SDHCI_CAN_64BIT)
-		host->alloc_desc_sz = 16;
-
-	ret = sdhci_setup_host(host);
-	if (ret)
-		return ret;
-
-	cq_host = cqhci_pltfm_init(pdev);
-	if (IS_ERR(cq_host)) {
-		ret = PTR_ERR(cq_host);
-		dev_err(&pdev->dev, "cqhci-pltfm init: failed: %d\n", ret);
-		goto cleanup;
-	}
-
-	msm_host->mmc->caps2 |= MMC_CAP2_CQE | MMC_CAP2_CQE_DCMD;
-	cq_host->ops = &sdhci_msm_cqhci_ops;
-
-	dma64 = host->flags & SDHCI_USE_64_BIT_DMA;
-
-	ret = cqhci_init(cq_host, host->mmc, dma64);
-	if (ret) {
-		dev_err(&pdev->dev, "%s: CQE init: failed (%d)\n",
-				mmc_hostname(host->mmc), ret);
-		goto cleanup;
-	}
-
-	/* Disable cqe reset due to cqe enable signal */
-	cqcfg = cqhci_readl(cq_host, CQHCI_VENDOR_CFG1);
-	cqcfg |= CQHCI_VENDOR_DIS_RST_ON_CQ_EN;
-	cqhci_writel(cq_host, cqcfg, CQHCI_VENDOR_CFG1);
-
-	/*
-	 * SDHC expects 12byte ADMA descriptors till CQE is enabled.
-	 * So limit desc_sz to 12 so that the data commands that are sent
-	 * during card initialization (before CQE gets enabled) would
-	 * get executed without any issues.
-	 */
-	if (host->flags & SDHCI_USE_64_BIT_DMA)
-		host->desc_sz = 12;
-
-	ret = __sdhci_add_host(host);
-	if (ret)
-		goto cleanup;
-
-	dev_info(&pdev->dev, "%s: CQE init: success\n",
-			mmc_hostname(host->mmc));
-	return ret;
-
-cleanup:
-	sdhci_cleanup_host(host);
-	return ret;
-}
-
 /*
  * Platform specific register write functions. This is so that, if any
  * register write needs to be followed up by platform specific actions,
@@ -1822,6 +1689,7 @@ static const struct sdhci_msm_variant_ops v5_var_ops = {
 };
 
 static const struct sdhci_msm_variant_info sdhci_msm_mci_var = {
+	.mci_removed = false,
 	.var_ops = &mci_var_ops,
 	.offset = &sdhci_msm_mci_offset,
 };
@@ -1832,17 +1700,9 @@ static const struct sdhci_msm_variant_info sdhci_msm_v5_var = {
 	.offset = &sdhci_msm_v5_offset,
 };
 
-static const struct sdhci_msm_variant_info sdm845_sdhci_var = {
-	.mci_removed = true,
-	.restore_dll_config = true,
-	.var_ops = &v5_var_ops,
-	.offset = &sdhci_msm_v5_offset,
-};
-
 static const struct of_device_id sdhci_msm_dt_match[] = {
 	{.compatible = "qcom,sdhci-msm-v4", .data = &sdhci_msm_mci_var},
 	{.compatible = "qcom,sdhci-msm-v5", .data = &sdhci_msm_v5_var},
-	{.compatible = "qcom,sdm845-sdhci", .data = &sdm845_sdhci_var},
 	{},
 };
 
@@ -1857,13 +1717,14 @@ static const struct sdhci_ops sdhci_msm_ops = {
 	.set_uhs_signaling = sdhci_msm_set_uhs_signaling,
 	.write_w = sdhci_msm_writew,
 	.write_b = sdhci_msm_writeb,
-	.irq	= sdhci_msm_cqe_irq,
 };
 
 static const struct sdhci_pltfm_data sdhci_msm_pdata = {
 	.quirks = SDHCI_QUIRK_BROKEN_CARD_DETECTION |
 		  SDHCI_QUIRK_SINGLE_POWER_WRITE |
-		  SDHCI_QUIRK_CAP_CLOCK_BASE_BROKEN,
+		  SDHCI_QUIRK_CAP_CLOCK_BASE_BROKEN |
+		  SDHCI_QUIRK_MULTIBLOCK_READ_ACMD12,
+
 	.quirks2 = SDHCI_QUIRK2_PRESET_VALUE_BROKEN,
 	.ops = &sdhci_msm_ops,
 };
@@ -1873,6 +1734,7 @@ static int sdhci_msm_probe(struct platform_device *pdev)
 	struct sdhci_host *host;
 	struct sdhci_pltfm_host *pltfm_host;
 	struct sdhci_msm_host *msm_host;
+	struct resource *core_memres;
 	struct clk *clk;
 	int ret;
 	u16 host_version, core_minor;
@@ -1880,7 +1742,6 @@ static int sdhci_msm_probe(struct platform_device *pdev)
 	u8 core_major;
 	const struct sdhci_msm_offset *msm_offset;
 	const struct sdhci_msm_variant_info *var_info;
-	struct device_node *node = pdev->dev.of_node;
 
 	host = sdhci_pltfm_init(pdev, &sdhci_msm_pdata, sizeof(*msm_host));
 	if (IS_ERR(host))
@@ -1903,7 +1764,6 @@ static int sdhci_msm_probe(struct platform_device *pdev)
 	var_info = of_device_get_match_data(&pdev->dev);
 
 	msm_host->mci_removed = var_info->mci_removed;
-	msm_host->restore_dll_config = var_info->restore_dll_config;
 	msm_host->var_ops = var_info->var_ops;
 	msm_host->offset = var_info->offset;
 
@@ -1974,7 +1834,10 @@ static int sdhci_msm_probe(struct platform_device *pdev)
 	}
 
 	if (!msm_host->mci_removed) {
-		msm_host->core_mem = devm_platform_ioremap_resource(pdev, 1);
+		core_memres = platform_get_resource(pdev, IORESOURCE_MEM, 1);
+		msm_host->core_mem = devm_ioremap_resource(&pdev->dev,
+				core_memres);
+
 		if (IS_ERR(msm_host->core_mem)) {
 			ret = PTR_ERR(msm_host->core_mem);
 			goto clk_disable;
@@ -2051,6 +1914,8 @@ static int sdhci_msm_probe(struct platform_device *pdev)
 	/* Setup IRQ for handling power/voltage tasks with PMIC */
 	msm_host->pwr_irq = platform_get_irq_byname(pdev, "pwr_irq");
 	if (msm_host->pwr_irq < 0) {
+		dev_err(&pdev->dev, "Get pwr_irq failed (%d)\n",
+			msm_host->pwr_irq);
 		ret = msm_host->pwr_irq;
 		goto clk_disable;
 	}
@@ -2068,6 +1933,8 @@ static int sdhci_msm_probe(struct platform_device *pdev)
 		goto clk_disable;
 	}
 
+	msm_host->mmc->caps |= MMC_CAP_WAIT_WHILE_BUSY | MMC_CAP_NEED_RSP_BUSY;
+
 	pm_runtime_get_noresume(&pdev->dev);
 	pm_runtime_set_active(&pdev->dev);
 	pm_runtime_enable(&pdev->dev);
@@ -2076,10 +1943,7 @@ static int sdhci_msm_probe(struct platform_device *pdev)
 	pm_runtime_use_autosuspend(&pdev->dev);
 
 	host->mmc_host_ops.execute_tuning = sdhci_msm_execute_tuning;
-	if (of_property_read_bool(node, "supports-cqe"))
-		ret = sdhci_msm_cqe_add_host(host, pdev);
-	else
-		ret = sdhci_add_host(host);
+	ret = sdhci_add_host(host);
 	if (ret)
 		goto pm_runtime_disable;
 	sdhci_msm_set_regulator_caps(msm_host);
@@ -2126,7 +1990,8 @@ static int sdhci_msm_remove(struct platform_device *pdev)
 	return 0;
 }
 
-static __maybe_unused int sdhci_msm_runtime_suspend(struct device *dev)
+#ifdef CONFIG_PM
+static int sdhci_msm_runtime_suspend(struct device *dev)
 {
 	struct sdhci_host *host = dev_get_drvdata(dev);
 	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
@@ -2138,26 +2003,16 @@ static __maybe_unused int sdhci_msm_runtime_suspend(struct device *dev)
 	return 0;
 }
 
-static __maybe_unused int sdhci_msm_runtime_resume(struct device *dev)
+static int sdhci_msm_runtime_resume(struct device *dev)
 {
 	struct sdhci_host *host = dev_get_drvdata(dev);
 	struct sdhci_pltfm_host *pltfm_host = sdhci_priv(host);
 	struct sdhci_msm_host *msm_host = sdhci_pltfm_priv(pltfm_host);
-	int ret;
 
-	ret = clk_bulk_prepare_enable(ARRAY_SIZE(msm_host->bulk_clks),
+	return clk_bulk_prepare_enable(ARRAY_SIZE(msm_host->bulk_clks),
 				       msm_host->bulk_clks);
-	if (ret)
-		return ret;
-	/*
-	 * Whenever core-clock is gated dynamically, it's needed to
-	 * restore the SDR DLL settings when the clock is ungated.
-	 */
-	if (msm_host->restore_dll_config && msm_host->clk_rate)
-		return sdhci_msm_restore_sdr_dll_config(host);
-
-	return 0;
 }
+#endif
 
 static const struct dev_pm_ops sdhci_msm_pm_ops = {
 	SET_SYSTEM_SLEEP_PM_OPS(pm_runtime_force_suspend,

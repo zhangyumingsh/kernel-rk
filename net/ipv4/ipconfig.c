@@ -85,6 +85,7 @@
 
 /* Define the friendly delay before and after opening net devices */
 #define CONF_POST_OPEN		10	/* After opening: 10 msecs */
+#define CONF_CARRIER_TIMEOUT	120000	/* Wait for carrier timeout */
 
 /* Define the timeout for waiting for a DHCP/BOOTP/RARP reply */
 #define CONF_OPEN_RETRIES 	2	/* (Re)open devices twice */
@@ -99,9 +100,6 @@
 
 #define NONE cpu_to_be32(INADDR_NONE)
 #define ANY cpu_to_be32(INADDR_ANY)
-
-/* Wait for carrier timeout default in seconds */
-static unsigned int carrier_timeout = 120;
 
 /*
  * Public IP configuration
@@ -222,7 +220,7 @@ static int __init ic_open_devs(void)
 	for_each_netdev(&init_net, dev) {
 		if (!(dev->flags & IFF_LOOPBACK) && !netdev_uses_dsa(dev))
 			continue;
-		if (dev_change_flags(dev, dev->flags | IFF_UP, NULL) < 0)
+		if (dev_change_flags(dev, dev->flags | IFF_UP) < 0)
 			pr_err("IP-Config: Failed to open %s\n", dev->name);
 	}
 
@@ -240,7 +238,7 @@ static int __init ic_open_devs(void)
 			if (ic_proto_enabled && !able)
 				continue;
 			oflags = dev->flags;
-			if (dev_change_flags(dev, oflags | IFF_UP, NULL) < 0) {
+			if (dev_change_flags(dev, oflags | IFF_UP) < 0) {
 				pr_err("IP-Config: Failed to open %s\n",
 				       dev->name);
 				continue;
@@ -270,9 +268,9 @@ static int __init ic_open_devs(void)
 
 	/* wait for a carrier on at least one device */
 	start = jiffies;
-	next_msg = start + msecs_to_jiffies(20000);
+	next_msg = start + msecs_to_jiffies(CONF_CARRIER_TIMEOUT/12);
 	while (time_before(jiffies, start +
-			   msecs_to_jiffies(carrier_timeout * 1000))) {
+			   msecs_to_jiffies(CONF_CARRIER_TIMEOUT))) {
 		int wait, elapsed;
 
 		for_each_netdev(&init_net, dev)
@@ -285,9 +283,9 @@ static int __init ic_open_devs(void)
 			continue;
 
 		elapsed = jiffies_to_msecs(jiffies - start);
-		wait = (carrier_timeout * 1000 - elapsed + 500) / 1000;
+		wait = (CONF_CARRIER_TIMEOUT - elapsed + 500)/1000;
 		pr_info("Waiting up to %d more seconds for network.\n", wait);
-		next_msg = jiffies + msecs_to_jiffies(20000);
+		next_msg = jiffies + msecs_to_jiffies(CONF_CARRIER_TIMEOUT/12);
 	}
 have_carrier:
 	rtnl_unlock();
@@ -317,7 +315,7 @@ static void __init ic_close_devs(void)
 		dev = d->dev;
 		if (d != ic_dev && !netdev_uses_dsa(dev)) {
 			pr_debug("IP-Config: Downing %s\n", dev->name);
-			dev_change_flags(dev, d->flags, NULL);
+			dev_change_flags(dev, d->flags);
 		}
 		kfree(d);
 	}
@@ -431,8 +429,6 @@ static int __init ic_defaults(void)
 			ic_netmask = htonl(IN_CLASSB_NET);
 		else if (IN_CLASSC(ntohl(ic_myaddr)))
 			ic_netmask = htonl(IN_CLASSC_NET);
-		else if (IN_CLASSE(ntohl(ic_myaddr)))
-			ic_netmask = htonl(IN_CLASSE_NET);
 		else {
 			pr_err("IP-Config: Unable to guess netmask for address %pI4\n",
 			       &ic_myaddr);
@@ -1334,7 +1330,7 @@ static int __init ipconfig_proc_net_init(void)
 
 /* Create a new file under /proc/net/ipconfig */
 static int ipconfig_proc_net_create(const char *name,
-				    const struct proc_ops *proc_ops)
+				    const struct file_operations *fops)
 {
 	char *pname;
 	struct proc_dir_entry *p;
@@ -1346,7 +1342,7 @@ static int ipconfig_proc_net_create(const char *name,
 	if (!pname)
 		return -ENOMEM;
 
-	p = proc_create(pname, 0444, init_net.proc_net, proc_ops);
+	p = proc_create(pname, 0444, init_net.proc_net, fops);
 	kfree(pname);
 	if (!p)
 		return -ENOMEM;
@@ -1355,7 +1351,7 @@ static int ipconfig_proc_net_create(const char *name,
 }
 
 /* Write NTP server IP addresses to /proc/net/ipconfig/ntp_servers */
-static int ntp_servers_show(struct seq_file *seq, void *v)
+static int ntp_servers_seq_show(struct seq_file *seq, void *v)
 {
 	int i;
 
@@ -1365,7 +1361,18 @@ static int ntp_servers_show(struct seq_file *seq, void *v)
 	}
 	return 0;
 }
-DEFINE_PROC_SHOW_ATTRIBUTE(ntp_servers);
+
+static int ntp_servers_seq_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, ntp_servers_seq_show, NULL);
+}
+
+static const struct file_operations ntp_servers_seq_fops = {
+	.open		= ntp_servers_seq_open,
+	.read		= seq_read,
+	.llseek		= seq_lseek,
+	.release	= single_release,
+};
 #endif /* CONFIG_PROC_FS */
 
 /*
@@ -1412,9 +1419,6 @@ static int __init wait_for_devices(void)
 		struct net_device *dev;
 		int found = 0;
 
-		/* make sure deferred device probes are finished */
-		wait_for_device_probe();
-
 		rtnl_lock();
 		for_each_netdev(&init_net, dev) {
 			if (ic_is_init_dev(dev)) {
@@ -1456,7 +1460,7 @@ static int __init ip_auto_config(void)
 	proc_create_single("pnp", 0444, init_net.proc_net, pnp_seq_show);
 
 	if (ipconfig_proc_net_init() == 0)
-		ipconfig_proc_net_create("ntp_servers", &ntp_servers_proc_ops);
+		ipconfig_proc_net_create("ntp_servers", &ntp_servers_seq_fops);
 #endif /* CONFIG_PROC_FS */
 
 	if (!ic_enable)
@@ -1486,10 +1490,10 @@ static int __init ip_auto_config(void)
 	 * missing values.
 	 */
 	if (ic_myaddr == NONE ||
-#if defined(CONFIG_ROOT_NFS) || defined(CONFIG_CIFS_ROOT)
+#ifdef CONFIG_ROOT_NFS
 	    (root_server_addr == NONE &&
 	     ic_servaddr == NONE &&
-	     (ROOT_DEV == Root_NFS || ROOT_DEV == Root_CIFS)) ||
+	     ROOT_DEV == Root_NFS) ||
 #endif
 	    ic_first_dev->next) {
 #ifdef IPCONFIG_DYNAMIC
@@ -1513,12 +1517,6 @@ static int __init ip_auto_config(void)
 #ifdef CONFIG_ROOT_NFS
 			if (ROOT_DEV ==  Root_NFS) {
 				pr_err("IP-Config: Retrying forever (NFS root)...\n");
-				goto try_try_again;
-			}
-#endif
-#ifdef CONFIG_CIFS_ROOT
-			if (ROOT_DEV == Root_CIFS) {
-				pr_err("IP-Config: Retrying forever (CIFS root)...\n");
 				goto try_try_again;
 			}
 #endif
@@ -1791,18 +1789,3 @@ static int __init vendor_class_identifier_setup(char *addrs)
 	return 1;
 }
 __setup("dhcpclass=", vendor_class_identifier_setup);
-
-static int __init set_carrier_timeout(char *str)
-{
-	ssize_t ret;
-
-	if (!str)
-		return 0;
-
-	ret = kstrtouint(str, 0, &carrier_timeout);
-	if (ret)
-		return 0;
-
-	return 1;
-}
-__setup("carrier_timeout=", set_carrier_timeout);

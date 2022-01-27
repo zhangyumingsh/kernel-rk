@@ -148,8 +148,13 @@ static int nilfs_ioctl_setflags(struct inode *inode, struct file *filp,
 
 	oldflags = NILFS_I(inode)->i_flags;
 
-	ret = vfs_ioc_setflags_prepare(inode, oldflags, flags);
-	if (ret)
+	/*
+	 * The IMMUTABLE and APPEND_ONLY flags can only be changed by the
+	 * relevant capability.
+	 */
+	ret = -EPERM;
+	if (((flags ^ oldflags) & (FS_APPEND_FL | FS_IMMUTABLE_FL)) &&
+	    !capable(CAP_LINUX_IMMUTABLE))
 		goto out;
 
 	ret = nilfs_transaction_begin(inode->i_sb, &ti, 0);
@@ -1354,7 +1359,6 @@ long nilfs_compat_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 	case NILFS_IOCTL_SYNC:
 	case NILFS_IOCTL_RESIZE:
 	case NILFS_IOCTL_SET_ALLOC_RANGE:
-	case FITRIM:
 		break;
 	default:
 		return -ENOIOCTLCMD;

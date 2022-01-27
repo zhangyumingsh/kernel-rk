@@ -137,7 +137,7 @@ static char *fixregex(char *s)
 		return s;
 
 	/* allocate space for a new string */
-	fixed = (char *) malloc(len + 1);
+	fixed = (char *) malloc(len + esc_count + 1);
 	if (!fixed)
 		return NULL;
 
@@ -235,11 +235,6 @@ static struct map {
 	{ "iMPH-U", "uncore_arb" },
 	{ "CPU-M-CF", "cpum_cf" },
 	{ "CPU-M-SF", "cpum_sf" },
-	{ "UPI LL", "uncore_upi" },
-	{ "hisi_sccl,ddrc", "hisi_sccl,ddrc" },
-	{ "hisi_sccl,hha", "hisi_sccl,hha" },
-	{ "hisi_sccl,l3c", "hisi_sccl,l3c" },
-	{ "L3PMC", "amd_l3" },
 	{}
 };
 
@@ -322,8 +317,7 @@ static int print_events_table_entry(void *data, char *name, char *event,
 				    char *desc, char *long_desc,
 				    char *pmu, char *unit, char *perpkg,
 				    char *metric_expr,
-				    char *metric_name, char *metric_group,
-				    char *deprecated)
+				    char *metric_name, char *metric_group)
 {
 	struct perf_entry_data *pd = data;
 	FILE *outfp = pd->outfp;
@@ -355,8 +349,6 @@ static int print_events_table_entry(void *data, char *name, char *event,
 		fprintf(outfp, "\t.metric_name = \"%s\",\n", metric_name);
 	if (metric_group)
 		fprintf(outfp, "\t.metric_group = \"%s\",\n", metric_group);
-	if (deprecated)
-		fprintf(outfp, "\t.deprecated = \"%s\",\n", deprecated);
 	fprintf(outfp, "},\n");
 
 	return 0;
@@ -374,7 +366,6 @@ struct event_struct {
 	char *metric_expr;
 	char *metric_name;
 	char *metric_group;
-	char *deprecated;
 };
 
 #define ADD_EVENT_FIELD(field) do { if (field) {		\
@@ -402,7 +393,6 @@ struct event_struct {
 	op(metric_expr);					\
 	op(metric_name);					\
 	op(metric_group);					\
-	op(deprecated);						\
 } while (0)
 
 static LIST_HEAD(arch_std_events);
@@ -413,7 +403,7 @@ static void free_arch_std_events(void)
 
 	list_for_each_entry_safe(es, next, &arch_std_events, list) {
 		FOR_ALL_EVENT_STRUCT_FIELDS(FREE_EVENT_FIELD);
-		list_del_init(&es->list);
+		list_del(&es->list);
 		free(es);
 	}
 }
@@ -421,10 +411,10 @@ static void free_arch_std_events(void)
 static int save_arch_std_events(void *data, char *name, char *event,
 				char *desc, char *long_desc, char *pmu,
 				char *unit, char *perpkg, char *metric_expr,
-				char *metric_name, char *metric_group,
-				char *deprecated)
+				char *metric_name, char *metric_group)
 {
 	struct event_struct *es;
+	struct stat *sb = data;
 
 	es = malloc(sizeof(*es));
 	if (!es)
@@ -485,8 +475,7 @@ static int
 try_fixup(const char *fn, char *arch_std, char **event, char **desc,
 	  char **name, char **long_desc, char **pmu, char **filter,
 	  char **perpkg, char **unit, char **metric_expr, char **metric_name,
-	  char **metric_group, unsigned long long eventcode,
-	  char **deprecated)
+	  char **metric_group, unsigned long long eventcode)
 {
 	/* try to find matching event from arch standard values */
 	struct event_struct *es;
@@ -514,8 +503,7 @@ int json_events(const char *fn,
 		      char *long_desc,
 		      char *pmu, char *unit, char *perpkg,
 		      char *metric_expr,
-		      char *metric_name, char *metric_group,
-		      char *deprecated),
+		      char *metric_name, char *metric_group),
 	  void *data)
 {
 	int err;
@@ -544,7 +532,6 @@ int json_events(const char *fn,
 		char *metric_expr = NULL;
 		char *metric_name = NULL;
 		char *metric_group = NULL;
-		char *deprecated = NULL;
 		char *arch_std = NULL;
 		unsigned long long eventcode = 0;
 		struct msrmap *msr = NULL;
@@ -623,8 +610,6 @@ int json_events(const char *fn,
 				addfield(map, &unit, "", "", val);
 			} else if (json_streq(map, field, "PerPkg")) {
 				addfield(map, &perpkg, "", "", val);
-			} else if (json_streq(map, field, "Deprecated")) {
-				addfield(map, &deprecated, "", "", val);
 			} else if (json_streq(map, field, "MetricName")) {
 				addfield(map, &metric_name, "", "", val);
 			} else if (json_streq(map, field, "MetricGroup")) {
@@ -669,14 +654,12 @@ int json_events(const char *fn,
 			err = try_fixup(fn, arch_std, &event, &desc, &name,
 					&long_desc, &pmu, &filter, &perpkg,
 					&unit, &metric_expr, &metric_name,
-					&metric_group, eventcode,
-					&deprecated);
+					&metric_group, eventcode);
 			if (err)
 				goto free_strings;
 		}
 		err = func(data, name, real_event(name, event), desc, long_desc,
-			   pmu, unit, perpkg, metric_expr, metric_name,
-			   metric_group, deprecated);
+			   pmu, unit, perpkg, metric_expr, metric_name, metric_group);
 free_strings:
 		free(event);
 		free(desc);
@@ -686,7 +669,6 @@ free_strings:
 		free(pmu);
 		free(filter);
 		free(perpkg);
-		free(deprecated);
 		free(unit);
 		free(metric_expr);
 		free(metric_name);
@@ -865,7 +847,7 @@ static void create_empty_mapping(const char *output_file)
 		_Exit(1);
 	}
 
-	fprintf(outfp, "#include \"pmu-events/pmu-events.h\"\n");
+	fprintf(outfp, "#include \"../../pmu-events/pmu-events.h\"\n");
 	print_mapping_table_prefix(outfp);
 	print_mapping_table_suffix(outfp);
 	fclose(outfp);
@@ -876,7 +858,7 @@ static int get_maxfds(void)
 	struct rlimit rlim;
 
 	if (getrlimit(RLIMIT_NOFILE, &rlim) == 0)
-		return min((int)rlim.rlim_max / 2, 512);
+		return min(rlim.rlim_max / 2, (rlim_t)512);
 
 	return 512;
 }
@@ -1119,7 +1101,7 @@ int main(int argc, char *argv[])
 	}
 
 	/* Include pmu-events.h first */
-	fprintf(eventsfp, "#include \"pmu-events/pmu-events.h\"\n");
+	fprintf(eventsfp, "#include \"../../pmu-events/pmu-events.h\"\n");
 
 	/*
 	 * The mapfile allows multiple CPUids to point to the same JSON file,

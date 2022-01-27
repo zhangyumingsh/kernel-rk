@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /**
  * IBM Accelerator Family 'GenWQE'
  *
@@ -8,6 +7,15 @@
  * Author: Joerg-Stephan Vogt <jsvogt@de.ibm.com>
  * Author: Michael Jung <mijung@gmx.net>
  * Author: Michael Ruettger <michael@ibmra.de>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License (version 2 only)
+ * as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
  */
 
 /*
@@ -1215,13 +1223,34 @@ static long genwqe_ioctl(struct file *filp, unsigned int cmd,
 	return rc;
 }
 
+#if defined(CONFIG_COMPAT)
+/**
+ * genwqe_compat_ioctl() - Compatibility ioctl
+ *
+ * Called whenever a 32-bit process running under a 64-bit kernel
+ * performs an ioctl on /dev/genwqe<n>_card.
+ *
+ * @filp:        file pointer.
+ * @cmd:         command.
+ * @arg:         user argument.
+ * Return:       zero on success or negative number on failure.
+ */
+static long genwqe_compat_ioctl(struct file *filp, unsigned int cmd,
+				unsigned long arg)
+{
+	return genwqe_ioctl(filp, cmd, arg);
+}
+#endif /* defined(CONFIG_COMPAT) */
+
 static const struct file_operations genwqe_fops = {
 	.owner		= THIS_MODULE,
 	.open		= genwqe_open,
 	.fasync		= genwqe_fasync,
 	.mmap		= genwqe_mmap,
 	.unlocked_ioctl	= genwqe_ioctl,
-	.compat_ioctl   = compat_ptr_ioctl,
+#if defined(CONFIG_COMPAT)
+	.compat_ioctl   = genwqe_compat_ioctl,
+#endif
 	.release	= genwqe_release,
 };
 
@@ -1280,10 +1309,14 @@ int genwqe_device_create(struct genwqe_dev *cd)
 		goto err_cdev;
 	}
 
-	genwqe_init_debugfs(cd);
+	rc = genwqe_init_debugfs(cd);
+	if (rc != 0)
+		goto err_debugfs;
 
 	return 0;
 
+ err_debugfs:
+	device_destroy(cd->class_genwqe, cd->devnum_genwqe);
  err_cdev:
 	cdev_del(&cd->cdev_genwqe);
  err_add:

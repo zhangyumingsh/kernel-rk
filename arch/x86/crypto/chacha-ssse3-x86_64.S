@@ -1,8 +1,12 @@
-/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * ChaCha 256-bit cipher algorithm, x64 SSSE3 functions
  *
  * Copyright (C) 2015 Martin Willi
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  */
 
 #include <linux/linkage.h>
@@ -33,7 +37,7 @@ CTRINC:	.octa 0x00000003000000020000000100000000
  *
  * Clobbers: %r8d, %xmm4-%xmm7
  */
-SYM_FUNC_START_LOCAL(chacha_permute)
+chacha_permute:
 
 	movdqa		ROT8(%rip),%xmm4
 	movdqa		ROT16(%rip),%xmm5
@@ -109,9 +113,9 @@ SYM_FUNC_START_LOCAL(chacha_permute)
 	jnz		.Ldoubleround
 
 	ret
-SYM_FUNC_END(chacha_permute)
+ENDPROC(chacha_permute)
 
-SYM_FUNC_START(chacha_block_xor_ssse3)
+ENTRY(chacha_block_xor_ssse3)
 	# %rdi: Input state matrix, s
 	# %rsi: up to 1 data block output, o
 	# %rdx: up to 1 data block input, i
@@ -120,10 +124,10 @@ SYM_FUNC_START(chacha_block_xor_ssse3)
 	FRAME_BEGIN
 
 	# x0..3 = s0..3
-	movdqa		0x00(%rdi),%xmm0
-	movdqa		0x10(%rdi),%xmm1
-	movdqa		0x20(%rdi),%xmm2
-	movdqa		0x30(%rdi),%xmm3
+	movdqu		0x00(%rdi),%xmm0
+	movdqu		0x10(%rdi),%xmm1
+	movdqu		0x20(%rdi),%xmm2
+	movdqu		0x30(%rdi),%xmm3
 	movdqa		%xmm0,%xmm8
 	movdqa		%xmm1,%xmm9
 	movdqa		%xmm2,%xmm10
@@ -197,18 +201,18 @@ SYM_FUNC_START(chacha_block_xor_ssse3)
 	lea		-8(%r10),%rsp
 	jmp		.Ldone
 
-SYM_FUNC_END(chacha_block_xor_ssse3)
+ENDPROC(chacha_block_xor_ssse3)
 
-SYM_FUNC_START(hchacha_block_ssse3)
+ENTRY(hchacha_block_ssse3)
 	# %rdi: Input state matrix, s
 	# %rsi: output (8 32-bit words)
 	# %edx: nrounds
 	FRAME_BEGIN
 
-	movdqa		0x00(%rdi),%xmm0
-	movdqa		0x10(%rdi),%xmm1
-	movdqa		0x20(%rdi),%xmm2
-	movdqa		0x30(%rdi),%xmm3
+	movdqu		0x00(%rdi),%xmm0
+	movdqu		0x10(%rdi),%xmm1
+	movdqu		0x20(%rdi),%xmm2
+	movdqu		0x30(%rdi),%xmm3
 
 	mov		%edx,%r8d
 	call		chacha_permute
@@ -218,9 +222,9 @@ SYM_FUNC_START(hchacha_block_ssse3)
 
 	FRAME_END
 	ret
-SYM_FUNC_END(hchacha_block_ssse3)
+ENDPROC(hchacha_block_ssse3)
 
-SYM_FUNC_START(chacha_4block_xor_ssse3)
+ENTRY(chacha_4block_xor_ssse3)
 	# %rdi: Input state matrix, s
 	# %rsi: up to 4 data blocks output, o
 	# %rdx: up to 4 data blocks input, i
@@ -788,4 +792,4 @@ SYM_FUNC_START(chacha_4block_xor_ssse3)
 
 	jmp		.Ldone4
 
-SYM_FUNC_END(chacha_4block_xor_ssse3)
+ENDPROC(chacha_4block_xor_ssse3)

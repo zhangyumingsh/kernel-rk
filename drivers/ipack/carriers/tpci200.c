@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /**
  * tpci200.c
  *
@@ -7,6 +6,10 @@
  * Copyright (C) 2009-2012 CERN (www.cern.ch)
  * Author: Nicolas Serafini, EIC2 SA
  * Author: Samuel Iglesias Gonsalvez <siglesias@igalia.com>
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the Free
+ * Software Foundation; version 2 of the License.
  */
 
 #include <linux/module.h>
@@ -298,7 +301,7 @@ static int tpci200_register(struct tpci200_board *tpci200)
 
 	/* Map internal tpci200 driver user space */
 	tpci200->info->interface_regs =
-		ioremap(pci_resource_start(tpci200->info->pdev,
+		ioremap_nocache(pci_resource_start(tpci200->info->pdev,
 					   TPCI200_IP_INTERFACE_BAR),
 			TPCI200_IFACE_SIZE);
 	if (!tpci200->info->interface_regs) {
@@ -306,6 +309,7 @@ static int tpci200_register(struct tpci200_board *tpci200)
 			"(bn 0x%X, sn 0x%X) failed to map driver user space!",
 			tpci200->info->pdev->bus->number,
 			tpci200->info->pdev->devfn);
+		res = -ENOMEM;
 		goto out_release_mem8_space;
 	}
 
@@ -541,7 +545,7 @@ static int tpci200_pci_probe(struct pci_dev *pdev,
 		ret = -EBUSY;
 		goto out_err_pci_request;
 	}
-	tpci200->info->cfg_regs = ioremap(
+	tpci200->info->cfg_regs = ioremap_nocache(
 			pci_resource_start(pdev, TPCI200_CFG_MEM_BAR),
 			pci_resource_len(pdev, TPCI200_CFG_MEM_BAR));
 	if (!tpci200->info->cfg_regs) {

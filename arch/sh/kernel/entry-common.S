@@ -1,7 +1,11 @@
-/* SPDX-License-Identifier: GPL-2.0
- *
+/* 
  *  Copyright (C) 1999, 2000, 2002  Niibe Yutaka
  *  Copyright (C) 2003 - 2008  Paul Mundt
+ *
+ * This file is subject to the terms and conditions of the GNU General Public
+ * License.  See the file "COPYING" in the main directory of this archive
+ * for more details.
+ *
  */
 
 ! NOTE:
@@ -41,7 +45,7 @@
  */
 #include <asm/dwarf.h>
 
-#if defined(CONFIG_PREEMPTION)
+#if defined(CONFIG_PREEMPT)
 #  define preempt_stop()	cli ; TRACE_IRQS_OFF
 #else
 #  define preempt_stop()
@@ -84,7 +88,7 @@ ENTRY(ret_from_irq)
 	get_current_thread_info r8, r0
 	bt	resume_kernel	! Yes, it's from kernel, go back soon
 
-#ifdef CONFIG_PREEMPTION
+#ifdef CONFIG_PREEMPT
 	bra	resume_userspace
 	 nop
 ENTRY(resume_kernel)
@@ -199,7 +203,7 @@ syscall_trace_entry:
 	mov.l	@(OFF_R7,r15), r7   ! arg3
 	mov.l	@(OFF_R3,r15), r3   ! syscall_nr
 	!
-	mov.l	2f, r10			! Number of syscalls
+	mov.l	6f, r10			! Number of syscalls
 	cmp/hs	r10, r3
 	bf	syscall_call
 	mov	#-ENOSYS, r0
@@ -353,7 +357,7 @@ ENTRY(system_call)
 	tst	r9, r8
 	bf	syscall_trace_entry
 	!
-	mov.l	2f, r8			! Number of syscalls
+	mov.l	6f, r8			! Number of syscalls
 	cmp/hs	r8, r3
 	bt	syscall_badsys
 	!
@@ -392,7 +396,7 @@ syscall_exit:
 #if !defined(CONFIG_CPU_SH2)
 1:	.long	TRA
 #endif
-2:	.long	NR_syscalls
+6:	.long	NR_syscalls
 3:	.long	sys_call_table
 7:	.long	do_syscall_trace_enter
 8:	.long	do_syscall_trace_leave

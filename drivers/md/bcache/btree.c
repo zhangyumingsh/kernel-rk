@@ -207,11 +207,6 @@ void bch_btree_node_read_done(struct btree *b)
 	struct bset *i = btree_bset_first(b);
 	struct btree_iter *iter;
 
-	/*
-	 * c->fill_iter can allocate an iterator with more memory space
-	 * than static MAX_BSETS.
-	 * See the comment arount cache_set->fill_iter.
-	 */
 	iter = mempool_alloc(&b->c->fill_iter, GFP_NOIO);
 	iter->size = b->c->sb.bucket_size / b->c->sb.block_size;
 	iter->used = 0;
@@ -429,14 +424,13 @@ static void do_btree_node_write(struct btree *b)
 		       bset_sector_offset(&b->keys, i));
 
 	if (!bch_bio_alloc_pages(b->bio, __GFP_NOWARN|GFP_NOWAIT)) {
+		int j;
 		struct bio_vec *bv;
-		void *addr = (void *) ((unsigned long) i & ~(PAGE_SIZE - 1));
-		struct bvec_iter_all iter_all;
+		void *base = (void *) ((unsigned long) i & ~(PAGE_SIZE - 1));
 
-		bio_for_each_segment_all(bv, b->bio, iter_all) {
-			memcpy(page_address(bv->bv_page), addr, PAGE_SIZE);
-			addr += PAGE_SIZE;
-		}
+		bio_for_each_segment_all(bv, b->bio, j)
+			memcpy(page_address(bv->bv_page),
+			       base + j * PAGE_SIZE, PAGE_SIZE);
 
 		bch_submit_bbio(b->bio, b->c, &k.key, 0);
 
@@ -543,11 +537,6 @@ static void bch_btree_leaf_dirty(struct btree *b, atomic_t *journal_ref)
 
 	set_btree_node_dirty(b);
 
-	/*
-	 * w->journal is always the oldest journal pin of all bkeys
-	 * in the leaf node, to make sure the oldest jset seq won't
-	 * be increased before this btree node is flushed.
-	 */
 	if (journal_ref) {
 		if (w->journal &&
 		    journal_pin_cmp(b->c, w->journal, journal_ref)) {
@@ -618,10 +607,6 @@ static void mca_data_alloc(struct btree *b, struct bkey *k, gfp_t gfp)
 static struct btree *mca_bucket_alloc(struct cache_set *c,
 				      struct bkey *k, gfp_t gfp)
 {
-	/*
-	 * kzalloc() is necessary here for initialization,
-	 * see code comments in bch_btree_keys_init().
-	 */
 	struct btree *b = kzalloc(sizeof(struct btree), gfp);
 
 	if (!b)
@@ -734,32 +719,34 @@ static unsigned long bch_mca_scan(struct shrinker *shrink,
 
 	i = 0;
 	btree_cache_used = c->btree_cache_used;
-	list_for_each_entry_safe_reverse(b, t, &c->btree_cache_freeable, list) {
+	list_for_each_entry_safe(b, t, &c->btree_cache_freeable, list) {
 		if (nr <= 0)
 			goto out;
 
-		if (!mca_reap(b, 0, false)) {
+		if (++i > 3 &&
+		    !mca_reap(b, 0, false)) {
 			mca_data_free(b);
 			rw_unlock(true, b);
 			freed++;
 		}
 		nr--;
-		i++;
 	}
 
-	list_for_each_entry_safe_reverse(b, t, &c->btree_cache, list) {
-		if (nr <= 0 || i >= btree_cache_used)
+	for (;  (nr--) && i < btree_cache_used; i++) {
+		if (list_empty(&c->btree_cache))
 			goto out;
 
-		if (!mca_reap(b, 0, false)) {
+		b = list_first_entry(&c->btree_cache, struct btree, list);
+		list_rotate_left(&c->btree_cache);
+
+		if (!b->accessed &&
+		    !mca_reap(b, 0, false)) {
 			mca_bucket_free(b);
 			mca_data_free(b);
 			rw_unlock(true, b);
 			freed++;
-		}
-
-		nr--;
-		i++;
+		} else
+			b->accessed = 0;
 	}
 out:
 	mutex_unlock(&c->bucket_lock);
@@ -843,7 +830,7 @@ int bch_btree_cache_alloc(struct cache_set *c)
 	mutex_init(&c->verify_lock);
 
 	c->verify_ondisk = (void *)
-		__get_free_pages(GFP_KERNEL, ilog2(bucket_pages(c)));
+		__get_free_pages(GFP_KERNEL|__GFP_COMP, ilog2(bucket_pages(c)));
 
 	c->verify_data = mca_bucket_alloc(c, &ZERO_KEY, GFP_KERNEL);
 
@@ -1067,6 +1054,7 @@ retry:
 	BUG_ON(!b->written);
 
 	b->parent = parent;
+	b->accessed = 1;
 
 	for (; i <= b->keys.nsets && b->keys.set[i].size; i++) {
 		prefetch(b->keys.set[i].tree);
@@ -1157,6 +1145,7 @@ retry:
 		goto retry;
 	}
 
+	b->accessed = 1;
 	b->parent = parent;
 	bch_bset_init_next(&b->keys, b->keys.set->data, bset_magic(&b->c->sb));
 
@@ -1447,7 +1436,7 @@ static int btree_gc_coalesce(struct btree *b, struct btree_op *op,
 			if (__set_blocks(n1, n1->keys + n2->keys,
 					 block_bytes(b->c)) >
 			    btree_blocks(new_nodes[i]))
-				goto out_nocoalesce;
+				goto out_unlock_nocoalesce;
 
 			keys = n2->keys;
 			/* Take the key of the node we're getting rid of */
@@ -1476,7 +1465,7 @@ static int btree_gc_coalesce(struct btree *b, struct btree_op *op,
 
 		if (__bch_keylist_realloc(&keylist,
 					  bkey_u64s(&new_nodes[i]->key)))
-			goto out_nocoalesce;
+			goto out_unlock_nocoalesce;
 
 		bch_btree_node_write(new_nodes[i], &cl);
 		bch_keylist_add(&keylist, &new_nodes[i]->key);
@@ -1522,13 +1511,17 @@ static int btree_gc_coalesce(struct btree *b, struct btree_op *op,
 	/* Invalidated our iterator */
 	return -EINTR;
 
+out_unlock_nocoalesce:
+	for (i = 0; i < nodes; i++)
+		mutex_unlock(&new_nodes[i]->write_lock);
+
 out_nocoalesce:
 	closure_sync(&cl);
+	bch_keylist_free(&keylist);
 
 	while ((k = bch_keylist_pop(&keylist)))
 		if (!bkey_cmp(k, &ZERO_KEY))
 			atomic_dec(&b->c->prio_blocked);
-	bch_keylist_free(&keylist);
 
 	for (i = 0; i < nodes; i++)
 		if (!IS_ERR_OR_NULL(new_nodes[i])) {

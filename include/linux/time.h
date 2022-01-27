@@ -35,11 +35,10 @@ extern time64_t mktime64(const unsigned int year, const unsigned int mon,
 extern u32 (*arch_gettimeoffset)(void);
 #endif
 
-#ifdef CONFIG_POSIX_TIMERS
-extern void clear_itimer(void);
-#else
-static inline void clear_itimer(void) {}
-#endif
+struct itimerval;
+extern int do_setitimer(int which, struct itimerval *value,
+			struct itimerval *ovalue);
+extern int do_getitimer(int which, struct itimerval *value);
 
 extern long do_utimes(int dfd, const char __user *filename, struct timespec64 *times, int flags);
 
@@ -111,9 +110,6 @@ static inline bool itimerspec64_valid(const struct itimerspec64 *its)
  */
 #define time_between32(t, l, h) ((u32)(h) - (u32)(l) >= (u32)(t) - (u32)(l))
 
-struct timens_offset {
-	s64	sec;
-	u64	nsec;
-};
+# include <vdso/time.h>
 
 #endif

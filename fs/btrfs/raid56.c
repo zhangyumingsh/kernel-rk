@@ -35,22 +35,6 @@
 
 #define RBIO_CACHE_SIZE 1024
 
-#define BTRFS_STRIPE_HASH_TABLE_BITS				11
-
-/* Used by the raid56 code to lock stripes for read/modify/write */
-struct btrfs_stripe_hash {
-	struct list_head hash_list;
-	spinlock_t lock;
-};
-
-/* Used by the raid56 code to lock stripes for read/modify/write */
-struct btrfs_stripe_hash_table {
-	struct list_head stripe_cache;
-	spinlock_t cache_lock;
-	int cache_size;
-	struct btrfs_stripe_hash table[];
-};
-
 enum btrfs_rbio_ops {
 	BTRFS_RBIO_WRITE,
 	BTRFS_RBIO_READ_REBUILD,
@@ -190,7 +174,7 @@ static void scrub_parity_work(struct btrfs_work *work);
 
 static void start_async_work(struct btrfs_raid_bio *rbio, btrfs_func_t work_func)
 {
-	btrfs_init_work(&rbio->work, work_func, NULL, NULL);
+	btrfs_init_work(&rbio->work, btrfs_rmw_helper, work_func, NULL, NULL);
 	btrfs_queue_work(rbio->fs_info->rmw_workers, &rbio->work);
 }
 
@@ -671,7 +655,8 @@ static struct page *rbio_qstripe_page(struct btrfs_raid_bio *rbio, int index)
  */
 static noinline int lock_stripe_add(struct btrfs_raid_bio *rbio)
 {
-	struct btrfs_stripe_hash *h;
+	int bucket = rbio_bucket(rbio);
+	struct btrfs_stripe_hash *h = rbio->fs_info->stripe_hash_table->table + bucket;
 	struct btrfs_raid_bio *cur;
 	struct btrfs_raid_bio *pending;
 	unsigned long flags;
@@ -679,63 +664,64 @@ static noinline int lock_stripe_add(struct btrfs_raid_bio *rbio)
 	struct btrfs_raid_bio *cache_drop = NULL;
 	int ret = 0;
 
-	h = rbio->fs_info->stripe_hash_table->table + rbio_bucket(rbio);
-
 	spin_lock_irqsave(&h->lock, flags);
 	list_for_each_entry(cur, &h->hash_list, hash_list) {
-		if (cur->bbio->raid_map[0] != rbio->bbio->raid_map[0])
-			continue;
+		if (cur->bbio->raid_map[0] == rbio->bbio->raid_map[0]) {
+			spin_lock(&cur->bio_list_lock);
 
-		spin_lock(&cur->bio_list_lock);
+			/* can we steal this cached rbio's pages? */
+			if (bio_list_empty(&cur->bio_list) &&
+			    list_empty(&cur->plug_list) &&
+			    test_bit(RBIO_CACHE_BIT, &cur->flags) &&
+			    !test_bit(RBIO_RMW_LOCKED_BIT, &cur->flags)) {
+				list_del_init(&cur->hash_list);
+				refcount_dec(&cur->refs);
 
-		/* Can we steal this cached rbio's pages? */
-		if (bio_list_empty(&cur->bio_list) &&
-		    list_empty(&cur->plug_list) &&
-		    test_bit(RBIO_CACHE_BIT, &cur->flags) &&
-		    !test_bit(RBIO_RMW_LOCKED_BIT, &cur->flags)) {
-			list_del_init(&cur->hash_list);
-			refcount_dec(&cur->refs);
+				steal_rbio(cur, rbio);
+				cache_drop = cur;
+				spin_unlock(&cur->bio_list_lock);
 
-			steal_rbio(cur, rbio);
-			cache_drop = cur;
-			spin_unlock(&cur->bio_list_lock);
+				goto lockit;
+			}
 
-			goto lockit;
-		}
-
-		/* Can we merge into the lock owner? */
-		if (rbio_can_merge(cur, rbio)) {
-			merge_rbio(cur, rbio);
-			spin_unlock(&cur->bio_list_lock);
-			freeit = rbio;
-			ret = 1;
-			goto out;
-		}
-
-
-		/*
-		 * We couldn't merge with the running rbio, see if we can merge
-		 * with the pending ones.  We don't have to check for rmw_locked
-		 * because there is no way they are inside finish_rmw right now
-		 */
-		list_for_each_entry(pending, &cur->plug_list, plug_list) {
-			if (rbio_can_merge(pending, rbio)) {
-				merge_rbio(pending, rbio);
+			/* can we merge into the lock owner? */
+			if (rbio_can_merge(cur, rbio)) {
+				merge_rbio(cur, rbio);
 				spin_unlock(&cur->bio_list_lock);
 				freeit = rbio;
 				ret = 1;
 				goto out;
 			}
-		}
 
-		/*
-		 * No merging, put us on the tail of the plug list, our rbio
-		 * will be started with the currently running rbio unlocks
-		 */
-		list_add_tail(&rbio->plug_list, &cur->plug_list);
-		spin_unlock(&cur->bio_list_lock);
-		ret = 1;
-		goto out;
+
+			/*
+			 * we couldn't merge with the running
+			 * rbio, see if we can merge with the
+			 * pending ones.  We don't have to
+			 * check for rmw_locked because there
+			 * is no way they are inside finish_rmw
+			 * right now
+			 */
+			list_for_each_entry(pending, &cur->plug_list,
+					    plug_list) {
+				if (rbio_can_merge(pending, rbio)) {
+					merge_rbio(pending, rbio);
+					spin_unlock(&cur->bio_list_lock);
+					freeit = rbio;
+					ret = 1;
+					goto out;
+				}
+			}
+
+			/* no merging, put us on the tail of the plug list,
+			 * our rbio will be started with the currently
+			 * running rbio unlocks
+			 */
+			list_add_tail(&rbio->plug_list, &cur->plug_list);
+			spin_unlock(&cur->bio_list_lock);
+			ret = 1;
+			goto out;
+		}
 	}
 lockit:
 	refcount_inc(&rbio->refs);
@@ -1196,22 +1182,19 @@ static noinline void finish_rmw(struct btrfs_raid_bio *rbio)
 	int nr_data = rbio->nr_data;
 	int stripe;
 	int pagenr;
-	int p_stripe = -1;
-	int q_stripe = -1;
+	bool has_qstripe;
 	struct bio_list bio_list;
 	struct bio *bio;
 	int ret;
 
 	bio_list_init(&bio_list);
 
-	if (rbio->real_stripes - rbio->nr_data == 1) {
-		p_stripe = rbio->real_stripes - 1;
-	} else if (rbio->real_stripes - rbio->nr_data == 2) {
-		p_stripe = rbio->real_stripes - 2;
-		q_stripe = rbio->real_stripes - 1;
-	} else {
+	if (rbio->real_stripes - rbio->nr_data == 1)
+		has_qstripe = false;
+	else if (rbio->real_stripes - rbio->nr_data == 2)
+		has_qstripe = true;
+	else
 		BUG();
-	}
 
 	/* at this point we either have a full stripe,
 	 * or we've read the full stripe from the drive.
@@ -1255,7 +1238,7 @@ static noinline void finish_rmw(struct btrfs_raid_bio *rbio)
 		SetPageUptodate(p);
 		pointers[stripe++] = kmap(p);
 
-		if (q_stripe != -1) {
+		if (has_qstripe) {
 
 			/*
 			 * raid6, add the qstripe and call the
@@ -1456,11 +1439,11 @@ static int fail_bio_stripe(struct btrfs_raid_bio *rbio,
 static void set_bio_pages_uptodate(struct bio *bio)
 {
 	struct bio_vec *bvec;
-	struct bvec_iter_all iter_all;
+	int i;
 
 	ASSERT(!bio_flagged(bio, BIO_CLONED));
 
-	bio_for_each_segment_all(bvec, bio, iter_all)
+	bio_for_each_segment_all(bvec, bio, i)
 		SetPageUptodate(bvec->bv_page);
 }
 
@@ -1741,7 +1724,8 @@ static void btrfs_raid_unplug(struct blk_plug_cb *cb, bool from_schedule)
 	plug = container_of(cb, struct btrfs_plug_cb, cb);
 
 	if (from_schedule) {
-		btrfs_init_work(&plug->work, unplug_work, NULL, NULL);
+		btrfs_init_work(&plug->work, btrfs_rmw_helper,
+				unplug_work, NULL, NULL);
 		btrfs_queue_work(plug->info->rmw_workers,
 				 &plug->work);
 		return;
@@ -1993,7 +1977,7 @@ cleanup_io:
 		 * - In case of single failure, where rbio->failb == -1:
 		 *
 		 *   Cache this rbio iff the above read reconstruction is
-		 *   executed without problems.
+		 *   excuted without problems.
 		 */
 		if (err == BLK_STS_OK && rbio->failb < 0)
 			cache_rbio_pages(rbio);
@@ -2353,8 +2337,7 @@ static noinline void finish_parity_scrub(struct btrfs_raid_bio *rbio,
 	int nr_data = rbio->nr_data;
 	int stripe;
 	int pagenr;
-	int p_stripe = -1;
-	int q_stripe = -1;
+	bool has_qstripe;
 	struct page *p_page = NULL;
 	struct page *q_page = NULL;
 	struct bio_list bio_list;
@@ -2364,14 +2347,12 @@ static noinline void finish_parity_scrub(struct btrfs_raid_bio *rbio,
 
 	bio_list_init(&bio_list);
 
-	if (rbio->real_stripes - rbio->nr_data == 1) {
-		p_stripe = rbio->real_stripes - 1;
-	} else if (rbio->real_stripes - rbio->nr_data == 2) {
-		p_stripe = rbio->real_stripes - 2;
-		q_stripe = rbio->real_stripes - 1;
-	} else {
+	if (rbio->real_stripes - rbio->nr_data == 1)
+		has_qstripe = false;
+	else if (rbio->real_stripes - rbio->nr_data == 2)
+		has_qstripe = true;
+	else
 		BUG();
-	}
 
 	if (bbio->num_tgtdevs && bbio->tgtdev_map[rbio->scrubp]) {
 		is_replace = 1;
@@ -2393,16 +2374,21 @@ static noinline void finish_parity_scrub(struct btrfs_raid_bio *rbio,
 		goto cleanup;
 	SetPageUptodate(p_page);
 
-	if (q_stripe != -1) {
+	if (has_qstripe) {
+		/* RAID6, allocate and map temp space for the Q stripe */
 		q_page = alloc_page(GFP_NOFS | __GFP_HIGHMEM);
 		if (!q_page) {
 			__free_page(p_page);
 			goto cleanup;
 		}
 		SetPageUptodate(q_page);
+		pointers[rbio->real_stripes - 1] = kmap(q_page);
 	}
 
 	atomic_set(&rbio->error, 0);
+
+	/* Map the parity stripe just once */
+	pointers[nr_data] = kmap(p_page);
 
 	for_each_set_bit(pagenr, rbio->dbitmap, rbio->stripe_npages) {
 		struct page *p;
@@ -2413,17 +2399,8 @@ static noinline void finish_parity_scrub(struct btrfs_raid_bio *rbio,
 			pointers[stripe] = kmap(p);
 		}
 
-		/* then add the parity stripe */
-		pointers[stripe++] = kmap(p_page);
-
-		if (q_stripe != -1) {
-
-			/*
-			 * raid6, add the qstripe and call the
-			 * library function to fill in our p/q
-			 */
-			pointers[stripe++] = kmap(q_page);
-
+		if (has_qstripe) {
+			/* RAID6, call the library function to fill in our P/Q */
 			raid6_call.gen_syndrome(rbio->real_stripes, PAGE_SIZE,
 						pointers);
 		} else {
@@ -2444,12 +2421,14 @@ static noinline void finish_parity_scrub(struct btrfs_raid_bio *rbio,
 
 		for (stripe = 0; stripe < nr_data; stripe++)
 			kunmap(page_in_rbio(rbio, stripe, pagenr, 0));
-		kunmap(p_page);
 	}
 
+	kunmap(p_page);
 	__free_page(p_page);
-	if (q_page)
+	if (q_page) {
+		kunmap(q_page);
 		__free_page(q_page);
+	}
 
 writeback:
 	/*

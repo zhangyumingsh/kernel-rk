@@ -30,31 +30,10 @@
 	leds {
 		compatible = "gpio-leds";
 
-		fan {
-			gpios = <&gpio0 RK_PC2 GPIO_ACTIVE_HIGH>;
-			label = "miqi:green:fan";
-			linux,default-trigger = "heartbeat";
-		};
-
 		work {
 			gpios = <&gpio7 RK_PA2 GPIO_ACTIVE_HIGH>;
 			label = "miqi:green:user";
 			linux,default-trigger = "timer";
-		};
-	};
-
-	sound {
-		compatible = "simple-audio-card";
-		simple-audio-card,format = "i2s";
-		simple-audio-card,name = "HDMI";
-		simple-audio-card,mclk-fs = <512>;
-
-		simple-audio-card,codec {
-			sound-dai = <&hdmi>;
-		};
-
-		simple-audio-card,cpu {
-			sound-dai = <&i2s>;
 		};
 	};
 
@@ -81,7 +60,7 @@
 
 	vcc_sd: sdmmc-regulator {
 		compatible = "regulator-fixed";
-		gpio = <&gpio7 RK_PB3 GPIO_ACTIVE_HIGH>;
+		gpio = <&gpio7 RK_PB3 GPIO_ACTIVE_LOW>;
 		pinctrl-names = "default";
 		pinctrl-0 = <&sdmmc_pwr>;
 		regulator-name = "vcc_sd";
@@ -108,6 +87,7 @@
 &emmc {
 	bus-width = <8>;
 	cap-mmc-highspeed;
+	disable-wp;
 	non-removable;
 	pinctrl-names = "default";
 	pinctrl-0 = <&emmc_clk>, <&emmc_cmd>, <&emmc_pwr>, <&emmc_bus8>;
@@ -132,15 +112,8 @@
 	status = "ok";
 };
 
-&gpu {
-	mali-supply = <&vdd_gpu>;
-	status = "okay";
-};
-
 &hdmi {
 	ddc-i2c-bus = <&i2c5>;
-	pinctrl-names = "default";
-	pinctrl-0 = <&hdmi_cec_c0>;
 	status = "okay";
 };
 
@@ -225,7 +198,7 @@
 
 			vccio_sd: REG5 {
 				regulator-name = "vccio_sd";
-				regulator-min-microvolt = <1800000>;
+				regulator-min-microvolt = <3300000>;
 				regulator-max-microvolt = <3300000>;
 				regulator-always-on;
 			};
@@ -295,10 +268,6 @@
 	status = "okay";
 };
 
-&i2s {
-	status = "okay";
-};
-
 &io_domains {
 	status = "okay";
 
@@ -328,29 +297,29 @@
 
 	act8846 {
 		pmic_int: pmic-int {
-			rockchip,pins = <0 RK_PA4 RK_FUNC_GPIO &pcfg_pull_up>;
+			rockchip,pins = <0 4 RK_FUNC_GPIO &pcfg_pull_up>;
 		};
 
 		pmic_sleep: pmic-sleep {
-			rockchip,pins = <0 RK_PA0 RK_FUNC_GPIO &pcfg_output_low>;
+			rockchip,pins = <0 0 RK_FUNC_GPIO &pcfg_output_low>;
 		};
 
 		pmic_vsel: pmic-vsel {
-			rockchip,pins = <7 RK_PA1 RK_FUNC_GPIO &pcfg_output_low>;
+			rockchip,pins = <7 1 RK_FUNC_GPIO &pcfg_output_low>;
 		};
 	};
 
 	gmac {
 		phy_int: phy-int {
-			rockchip,pins = <0 RK_PB1 RK_FUNC_GPIO &pcfg_pull_up>;
+			rockchip,pins = <0 9 RK_FUNC_GPIO &pcfg_pull_up>;
 		};
 
 		phy_pmeb: phy-pmeb {
-			rockchip,pins = <0 RK_PB0 RK_FUNC_GPIO &pcfg_pull_up>;
+			rockchip,pins = <0 8 RK_FUNC_GPIO &pcfg_pull_up>;
 		};
 
 		phy_rst: phy-rst {
-			rockchip,pins = <4 RK_PB0 RK_FUNC_GPIO &pcfg_output_high>;
+			rockchip,pins = <4 8 RK_FUNC_GPIO &pcfg_output_high>;
 		};
 	};
 
@@ -360,28 +329,28 @@
 		 * high-speed mode on firefly board so bump up to 12ma.
 		 */
 		sdmmc_bus4: sdmmc-bus4 {
-			rockchip,pins = <6 RK_PC0 1 &pcfg_pull_up_drv_12ma>,
-					<6 RK_PC1 1 &pcfg_pull_up_drv_12ma>,
-					<6 RK_PC2 1 &pcfg_pull_up_drv_12ma>,
-					<6 RK_PC3 1 &pcfg_pull_up_drv_12ma>;
+			rockchip,pins = <6 16 RK_FUNC_1 &pcfg_pull_up_drv_12ma>,
+					<6 17 RK_FUNC_1 &pcfg_pull_up_drv_12ma>,
+					<6 18 RK_FUNC_1 &pcfg_pull_up_drv_12ma>,
+					<6 19 RK_FUNC_1 &pcfg_pull_up_drv_12ma>;
 		};
 
 		sdmmc_clk: sdmmc-clk {
-			rockchip,pins = <6 RK_PC4 1 &pcfg_pull_none_12ma>;
+			rockchip,pins = <6 20 RK_FUNC_1 &pcfg_pull_none_12ma>;
 		};
 
 		sdmmc_cmd: sdmmc-cmd {
-			rockchip,pins = <6 RK_PC5 1 &pcfg_pull_up_drv_12ma>;
+			rockchip,pins = <6 21 RK_FUNC_1 &pcfg_pull_up_drv_12ma>;
 		};
 
 		sdmmc_pwr: sdmmc-pwr {
-			rockchip,pins = <7 RK_PB3 RK_FUNC_GPIO &pcfg_pull_none>;
+			rockchip,pins = <7 11 RK_FUNC_GPIO &pcfg_pull_none>;
 		};
 	};
 
 	usb_host {
 		host_vbus_drv: host-vbus-drv {
-			rockchip,pins = <0 RK_PB6 RK_FUNC_GPIO &pcfg_pull_none>;
+			rockchip,pins = <0 14 RK_FUNC_GPIO &pcfg_pull_none>;
 		};
 	};
 };
@@ -399,7 +368,6 @@
 	disable-wp;
 	pinctrl-names = "default";
 	pinctrl-0 = <&sdmmc_clk>, <&sdmmc_cmd>, <&sdmmc_cd>, <&sdmmc_bus4>;
-	sd-uhs-sdr104;
 	vmmc-supply = <&vcc_sd>;
 	vqmmc-supply = <&vccio_sd>;
 	status = "okay";
@@ -441,6 +409,14 @@
 };
 
 &vopb_mmu {
+	status = "okay";
+};
+
+&vopl {
+	status = "okay";
+};
+
+&vopl_mmu {
 	status = "okay";
 };
 

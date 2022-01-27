@@ -1,4 +1,3 @@
-# SPDX-License-Identifier: GPL-2.0-only
 menu "CPU Frequency scaling"
 
 config CPU_FREQ
@@ -27,12 +26,23 @@ config CPU_FREQ_GOV_COMMON
 	select IRQ_WORK
 	bool
 
+config CPU_FREQ_BOOST_SW
+	bool
+	depends on THERMAL
+
 config CPU_FREQ_STAT
 	bool "CPU frequency transition statistics"
 	help
 	  Export CPU frequency statistics information through sysfs.
 
 	  If in doubt, say N.
+
+config CPU_FREQ_TIMES
+       bool "CPU frequency time-in-state statistics"
+       help
+         Export CPU time-in-state information through procfs.
+
+         If in doubt, say N.
 
 choice
 	prompt "Default CPUFreq governor"
@@ -204,6 +214,8 @@ comment "CPU frequency scaling drivers"
 config CPUFREQ_DT
 	tristate "Generic DT based cpufreq driver"
 	depends on HAVE_CLK && OF
+	# if CPU_THERMAL is on and THERMAL=m, CPUFREQ_DT cannot be =y:
+	depends on !CPU_THERMAL || THERMAL
 	select CPUFREQ_DT_PLATDEV
 	select PM_OPP
 	help
@@ -221,6 +233,15 @@ config CPUFREQ_DT_PLATDEV
 	  supported platforms.
 
 	  If in doubt, say N.
+
+config CPUFREQ_DUMMY
+	tristate "Dummy CPU frequency driver"
+	help
+	  This option adds a generic dummy CPUfreq driver, which sets a fake
+	  2-frequency table when initializing each policy and otherwise does
+	  nothing.
+
+	  If in doubt, say N
 
 if X86
 source "drivers/cpufreq/Kconfig.x86"
@@ -322,6 +343,7 @@ endif
 config QORIQ_CPUFREQ
 	tristate "CPU frequency scaling driver for Freescale QorIQ SoCs"
 	depends on OF && COMMON_CLK && (PPC_E500MC || ARM || ARM64)
+	depends on !CPU_THERMAL || THERMAL
 	select CLK_QORIQ
 	help
 	  This adds the CPUFreq driver support for Freescale QorIQ SoCs

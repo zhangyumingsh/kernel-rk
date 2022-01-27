@@ -519,7 +519,11 @@ static int stm32_rtc_set_alarm(struct device *dev, struct rtc_wkalrm *alrm)
 	/* Write to Alarm register */
 	writel_relaxed(alrmar, rtc->base + regs->alrmar);
 
-	stm32_rtc_alarm_irq_enable(dev, alrm->enabled);
+	if (alrm->enabled)
+		stm32_rtc_alarm_irq_enable(dev, 1);
+	else
+		stm32_rtc_alarm_irq_enable(dev, 0);
+
 end:
 	stm32_rtc_wpr_lock(rtc);
 
@@ -693,13 +697,15 @@ static int stm32_rtc_probe(struct platform_device *pdev)
 {
 	struct stm32_rtc *rtc;
 	const struct stm32_rtc_registers *regs;
+	struct resource *res;
 	int ret;
 
 	rtc = devm_kzalloc(&pdev->dev, sizeof(*rtc), GFP_KERNEL);
 	if (!rtc)
 		return -ENOMEM;
 
-	rtc->base = devm_platform_ioremap_resource(pdev, 0);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	rtc->base = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(rtc->base))
 		return PTR_ERR(rtc->base);
 
@@ -774,6 +780,7 @@ static int stm32_rtc_probe(struct platform_device *pdev)
 
 	rtc->irq_alarm = platform_get_irq(pdev, 0);
 	if (rtc->irq_alarm <= 0) {
+		dev_err(&pdev->dev, "no alarm irq\n");
 		ret = rtc->irq_alarm;
 		goto err;
 	}
@@ -897,11 +904,8 @@ static int stm32_rtc_resume(struct device *dev)
 	}
 
 	ret = stm32_rtc_wait_sync(rtc);
-	if (ret < 0) {
-		if (rtc->data->has_pclk)
-			clk_disable_unprepare(rtc->pclk);
+	if (ret < 0)
 		return ret;
-	}
 
 	if (device_may_wakeup(dev))
 		return disable_irq_wake(rtc->irq_alarm);

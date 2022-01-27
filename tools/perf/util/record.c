@@ -1,39 +1,35 @@
 // SPDX-License-Identifier: GPL-2.0
-#include "debug.h"
 #include "evlist.h"
 #include "evsel.h"
+#include "cpumap.h"
 #include "parse-events.h"
 #include <errno.h>
-#include <limits.h>
-#include <stdlib.h>
 #include <api/fs/fs.h>
 #include <subcmd/parse-options.h>
-#include <perf/cpumap.h>
+#include "util.h"
 #include "cloexec.h"
-#include "record.h"
-#include "../perf-sys.h"
 
-typedef void (*setup_probe_fn_t)(struct evsel *evsel);
+typedef void (*setup_probe_fn_t)(struct perf_evsel *evsel);
 
 static int perf_do_probe_api(setup_probe_fn_t fn, int cpu, const char *str)
 {
-	struct evlist *evlist;
-	struct evsel *evsel;
+	struct perf_evlist *evlist;
+	struct perf_evsel *evsel;
 	unsigned long flags = perf_event_open_cloexec_flag();
 	int err = -EAGAIN, fd;
 	static pid_t pid = -1;
 
-	evlist = evlist__new();
+	evlist = perf_evlist__new();
 	if (!evlist)
 		return -ENOMEM;
 
 	if (parse_events(evlist, str, NULL))
 		goto out_delete;
 
-	evsel = evlist__first(evlist);
+	evsel = perf_evlist__first(evlist);
 
 	while (1) {
-		fd = sys_perf_event_open(&evsel->core.attr, pid, cpu, -1, flags);
+		fd = sys_perf_event_open(&evsel->attr, pid, cpu, -1, flags);
 		if (fd < 0) {
 			if (pid == -1 && errno == EACCES) {
 				pid = 0;
@@ -47,7 +43,7 @@ static int perf_do_probe_api(setup_probe_fn_t fn, int cpu, const char *str)
 
 	fn(evsel);
 
-	fd = sys_perf_event_open(&evsel->core.attr, pid, cpu, -1, flags);
+	fd = sys_perf_event_open(&evsel->attr, pid, cpu, -1, flags);
 	if (fd < 0) {
 		if (errno == EINVAL)
 			err = -EINVAL;
@@ -57,21 +53,21 @@ static int perf_do_probe_api(setup_probe_fn_t fn, int cpu, const char *str)
 	err = 0;
 
 out_delete:
-	evlist__delete(evlist);
+	perf_evlist__delete(evlist);
 	return err;
 }
 
 static bool perf_probe_api(setup_probe_fn_t fn)
 {
 	const char *try[] = {"cycles:u", "instructions:u", "cpu-clock:u", NULL};
-	struct perf_cpu_map *cpus;
+	struct cpu_map *cpus;
 	int cpu, ret, i = 0;
 
-	cpus = perf_cpu_map__new(NULL);
+	cpus = cpu_map__new(NULL);
 	if (!cpus)
 		return false;
 	cpu = cpus->map[0];
-	perf_cpu_map__put(cpus);
+	cpu_map__put(cpus);
 
 	do {
 		ret = perf_do_probe_api(fn, cpu, try[i++]);
@@ -82,19 +78,19 @@ static bool perf_probe_api(setup_probe_fn_t fn)
 	return false;
 }
 
-static void perf_probe_sample_identifier(struct evsel *evsel)
+static void perf_probe_sample_identifier(struct perf_evsel *evsel)
 {
-	evsel->core.attr.sample_type |= PERF_SAMPLE_IDENTIFIER;
+	evsel->attr.sample_type |= PERF_SAMPLE_IDENTIFIER;
 }
 
-static void perf_probe_comm_exec(struct evsel *evsel)
+static void perf_probe_comm_exec(struct perf_evsel *evsel)
 {
-	evsel->core.attr.comm_exec = 1;
+	evsel->attr.comm_exec = 1;
 }
 
-static void perf_probe_context_switch(struct evsel *evsel)
+static void perf_probe_context_switch(struct perf_evsel *evsel)
 {
-	evsel->core.attr.context_switch = 1;
+	evsel->attr.context_switch = 1;
 }
 
 bool perf_can_sample_identifier(void)
@@ -119,14 +115,14 @@ bool perf_can_record_cpu_wide(void)
 		.config = PERF_COUNT_SW_CPU_CLOCK,
 		.exclude_kernel = 1,
 	};
-	struct perf_cpu_map *cpus;
+	struct cpu_map *cpus;
 	int cpu, fd;
 
-	cpus = perf_cpu_map__new(NULL);
+	cpus = cpu_map__new(NULL);
 	if (!cpus)
 		return false;
 	cpu = cpus->map[0];
-	perf_cpu_map__put(cpus);
+	cpu_map__put(cpus);
 
 	fd = sys_perf_event_open(&attr, -1, cpu, -1, 0);
 	if (fd < 0)
@@ -136,41 +132,10 @@ bool perf_can_record_cpu_wide(void)
 	return true;
 }
 
-/*
- * Architectures are expected to know if AUX area sampling is supported by the
- * hardware. Here we check for kernel support.
- */
-bool perf_can_aux_sample(void)
-{
-	struct perf_event_attr attr = {
-		.size = sizeof(struct perf_event_attr),
-		.exclude_kernel = 1,
-		/*
-		 * Non-zero value causes the kernel to calculate the effective
-		 * attribute size up to that byte.
-		 */
-		.aux_sample_size = 1,
-	};
-	int fd;
-
-	fd = sys_perf_event_open(&attr, -1, 0, -1, 0);
-	/*
-	 * If the kernel attribute is big enough to contain aux_sample_size
-	 * then we assume that it is supported. We are relying on the kernel to
-	 * validate the attribute size before anything else that could be wrong.
-	 */
-	if (fd < 0 && errno == E2BIG)
-		return false;
-	if (fd >= 0)
-		close(fd);
-
-	return true;
-}
-
-void perf_evlist__config(struct evlist *evlist, struct record_opts *opts,
+void perf_evlist__config(struct perf_evlist *evlist, struct record_opts *opts,
 			 struct callchain_param *callchain)
 {
-	struct evsel *evsel;
+	struct perf_evsel *evsel;
 	bool use_sample_identifier = false;
 	bool use_comm_exec;
 	bool sample_id = opts->sample_id;
@@ -182,7 +147,7 @@ void perf_evlist__config(struct evlist *evlist, struct record_opts *opts,
 	if (opts->group)
 		perf_evlist__set_leader(evlist);
 
-	if (evlist->core.cpus->map[0] < 0)
+	if (evlist->cpus->map[0] < 0)
 		opts->no_inherit = true;
 
 	use_comm_exec = perf_can_comm_exec();
@@ -190,7 +155,7 @@ void perf_evlist__config(struct evlist *evlist, struct record_opts *opts,
 	evlist__for_each_entry(evlist, evsel) {
 		perf_evsel__config(evsel, opts, callchain);
 		if (evsel->tracking && use_comm_exec)
-			evsel->core.attr.comm_exec = 1;
+			evsel->attr.comm_exec = 1;
 	}
 
 	if (opts->full_auxtrace) {
@@ -201,11 +166,11 @@ void perf_evlist__config(struct evlist *evlist, struct record_opts *opts,
 		 */
 		use_sample_identifier = perf_can_sample_identifier();
 		sample_id = true;
-	} else if (evlist->core.nr_entries > 1) {
-		struct evsel *first = evlist__first(evlist);
+	} else if (evlist->nr_entries > 1) {
+		struct perf_evsel *first = perf_evlist__first(evlist);
 
 		evlist__for_each_entry(evlist, evsel) {
-			if (evsel->core.attr.sample_type == first->core.attr.sample_type)
+			if (evsel->attr.sample_type == first->attr.sample_type)
 				continue;
 			use_sample_identifier = perf_can_sample_identifier();
 			break;
@@ -291,15 +256,15 @@ int record_opts__config(struct record_opts *opts)
 	return record_opts__config_freq(opts);
 }
 
-bool perf_evlist__can_select_event(struct evlist *evlist, const char *str)
+bool perf_evlist__can_select_event(struct perf_evlist *evlist, const char *str)
 {
-	struct evlist *temp_evlist;
-	struct evsel *evsel;
+	struct perf_evlist *temp_evlist;
+	struct perf_evsel *evsel;
 	int err, fd, cpu;
 	bool ret = false;
 	pid_t pid = -1;
 
-	temp_evlist = evlist__new();
+	temp_evlist = perf_evlist__new();
 	if (!temp_evlist)
 		return false;
 
@@ -307,19 +272,19 @@ bool perf_evlist__can_select_event(struct evlist *evlist, const char *str)
 	if (err)
 		goto out_delete;
 
-	evsel = evlist__last(temp_evlist);
+	evsel = perf_evlist__last(temp_evlist);
 
-	if (!evlist || perf_cpu_map__empty(evlist->core.cpus)) {
-		struct perf_cpu_map *cpus = perf_cpu_map__new(NULL);
+	if (!evlist || cpu_map__empty(evlist->cpus)) {
+		struct cpu_map *cpus = cpu_map__new(NULL);
 
 		cpu =  cpus ? cpus->map[0] : 0;
-		perf_cpu_map__put(cpus);
+		cpu_map__put(cpus);
 	} else {
-		cpu = evlist->core.cpus->map[0];
+		cpu = evlist->cpus->map[0];
 	}
 
 	while (1) {
-		fd = sys_perf_event_open(&evsel->core.attr, pid, cpu, -1,
+		fd = sys_perf_event_open(&evsel->attr, pid, cpu, -1,
 					 perf_event_open_cloexec_flag());
 		if (fd < 0) {
 			if (pid == -1 && errno == EACCES) {
@@ -334,7 +299,7 @@ bool perf_evlist__can_select_event(struct evlist *evlist, const char *str)
 	ret = true;
 
 out_delete:
-	evlist__delete(temp_evlist);
+	perf_evlist__delete(temp_evlist);
 	return ret;
 }
 

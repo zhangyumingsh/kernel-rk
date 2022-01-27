@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Minimal file system backend for holding eBPF maps and programs,
  * used by bpf(2) object pinning.
@@ -6,6 +5,10 @@
  * Authors:
  *
  *	Daniel Borkmann <daniel@iogearbox.net>
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * version 2 as published by the Free Software Foundation.
  */
 
 #include <linux/init.h>
@@ -14,9 +17,8 @@
 #include <linux/mount.h>
 #include <linux/namei.h>
 #include <linux/fs.h>
-#include <linux/fs_context.h>
-#include <linux/fs_parser.h>
 #include <linux/kdev_t.h>
+#include <linux/parser.h>
 #include <linux/filter.h>
 #include <linux/bpf.h>
 #include <linux/bpf_trace.h>
@@ -31,10 +33,10 @@ static void *bpf_any_get(void *raw, enum bpf_type type)
 {
 	switch (type) {
 	case BPF_TYPE_PROG:
-		bpf_prog_inc(raw);
+		raw = bpf_prog_inc(raw);
 		break;
 	case BPF_TYPE_MAP:
-		bpf_map_inc_with_uref(raw);
+		raw = bpf_map_inc(raw, true);
 		break;
 	default:
 		WARN_ON_ONCE(1);
@@ -205,10 +207,12 @@ static void *map_seq_next(struct seq_file *m, void *v, loff_t *pos)
 	else
 		prev_key = key;
 
+	rcu_read_lock();
 	if (map->ops->map_get_next_key(map, prev_key, key)) {
 		map_iter(m)->done = true;
-		return NULL;
+		key = NULL;
 	}
+	rcu_read_unlock();
 	return key;
 }
 
@@ -379,7 +383,7 @@ static const struct inode_operations bpf_dir_iops = {
 	.unlink		= simple_unlink,
 };
 
-static int bpf_obj_do_pin(const char __user *pathname, void *raw,
+static int bpf_obj_do_pin(const struct filename *pathname, void *raw,
 			  enum bpf_type type)
 {
 	struct dentry *dentry;
@@ -388,7 +392,7 @@ static int bpf_obj_do_pin(const char __user *pathname, void *raw,
 	umode_t mode;
 	int ret;
 
-	dentry = user_path_create(AT_FDCWD, pathname, &path, 0);
+	dentry = kern_path_create(AT_FDCWD, pathname->name, &path, 0);
 	if (IS_ERR(dentry))
 		return PTR_ERR(dentry);
 
@@ -421,22 +425,30 @@ out:
 
 int bpf_obj_pin_user(u32 ufd, const char __user *pathname)
 {
+	struct filename *pname;
 	enum bpf_type type;
 	void *raw;
 	int ret;
 
-	raw = bpf_fd_probe_obj(ufd, &type);
-	if (IS_ERR(raw))
-		return PTR_ERR(raw);
+	pname = getname(pathname);
+	if (IS_ERR(pname))
+		return PTR_ERR(pname);
 
-	ret = bpf_obj_do_pin(pathname, raw, type);
+	raw = bpf_fd_probe_obj(ufd, &type);
+	if (IS_ERR(raw)) {
+		ret = PTR_ERR(raw);
+		goto out;
+	}
+
+	ret = bpf_obj_do_pin(pname, raw, type);
 	if (ret != 0)
 		bpf_any_put(raw, type);
-
+out:
+	putname(pname);
 	return ret;
 }
 
-static void *bpf_obj_do_get(const char __user *pathname,
+static void *bpf_obj_do_get(const struct filename *pathname,
 			    enum bpf_type *type, int flags)
 {
 	struct inode *inode;
@@ -444,7 +456,7 @@ static void *bpf_obj_do_get(const char __user *pathname,
 	void *raw;
 	int ret;
 
-	ret = user_path_at(AT_FDCWD, pathname, LOOKUP_FOLLOW, &path);
+	ret = kern_path(pathname->name, LOOKUP_FOLLOW, &path);
 	if (ret)
 		return ERR_PTR(ret);
 
@@ -471,27 +483,36 @@ out:
 int bpf_obj_get_user(const char __user *pathname, int flags)
 {
 	enum bpf_type type = BPF_TYPE_UNSPEC;
+	struct filename *pname;
+	int ret = -ENOENT;
 	int f_flags;
 	void *raw;
-	int ret;
 
 	f_flags = bpf_get_file_flag(flags);
 	if (f_flags < 0)
 		return f_flags;
 
-	raw = bpf_obj_do_get(pathname, &type, f_flags);
-	if (IS_ERR(raw))
-		return PTR_ERR(raw);
+	pname = getname(pathname);
+	if (IS_ERR(pname))
+		return PTR_ERR(pname);
+
+	raw = bpf_obj_do_get(pname, &type, f_flags);
+	if (IS_ERR(raw)) {
+		ret = PTR_ERR(raw);
+		goto out;
+	}
 
 	if (type == BPF_TYPE_PROG)
 		ret = bpf_prog_new_fd(raw);
 	else if (type == BPF_TYPE_MAP)
 		ret = bpf_map_new_fd(raw, f_flags);
 	else
-		return -ENOENT;
+		goto out;
 
 	if (ret < 0)
 		bpf_any_put(raw, type);
+out:
+	putname(pname);
 	return ret;
 }
 
@@ -516,8 +537,7 @@ static struct bpf_prog *__get_prog_inode(struct inode *inode, enum bpf_prog_type
 	if (!bpf_prog_get_ok(prog, &type, false))
 		return ERR_PTR(-EINVAL);
 
-	bpf_prog_inc(prog);
-	return prog;
+	return bpf_prog_inc(prog);
 }
 
 struct bpf_prog *bpf_prog_get_type_path(const char *name, enum bpf_prog_type type)
@@ -547,8 +567,9 @@ static int bpf_show_options(struct seq_file *m, struct dentry *root)
 	return 0;
 }
 
-static void bpf_free_inode(struct inode *inode)
+static void bpf_destroy_inode_deferred(struct rcu_head *head)
 {
+	struct inode *inode = container_of(head, struct inode, i_rcu);
 	enum bpf_type type;
 
 	if (S_ISLNK(inode->i_mode))
@@ -558,55 +579,71 @@ static void bpf_free_inode(struct inode *inode)
 	free_inode_nonrcu(inode);
 }
 
+static void bpf_destroy_inode(struct inode *inode)
+{
+	call_rcu(&inode->i_rcu, bpf_destroy_inode_deferred);
+}
+
 static const struct super_operations bpf_super_ops = {
 	.statfs		= simple_statfs,
 	.drop_inode	= generic_delete_inode,
 	.show_options	= bpf_show_options,
-	.free_inode	= bpf_free_inode,
+	.destroy_inode	= bpf_destroy_inode,
 };
 
 enum {
 	OPT_MODE,
+	OPT_ERR,
 };
 
-static const struct fs_parameter_spec bpf_fs_parameters[] = {
-	fsparam_u32oct	("mode",			OPT_MODE),
-	{}
+static const match_table_t bpf_mount_tokens = {
+	{ OPT_MODE, "mode=%o" },
+	{ OPT_ERR, NULL },
 };
 
 struct bpf_mount_opts {
 	umode_t mode;
 };
 
-static int bpf_parse_param(struct fs_context *fc, struct fs_parameter *param)
+static int bpf_parse_options(char *data, struct bpf_mount_opts *opts)
 {
-	struct bpf_mount_opts *opts = fc->fs_private;
-	struct fs_parse_result result;
-	int opt;
+	substring_t args[MAX_OPT_ARGS];
+	int option, token;
+	char *ptr;
 
-	opt = fs_parse(fc, bpf_fs_parameters, param, &result);
-	if (opt < 0)
+	opts->mode = S_IRWXUGO;
+
+	while ((ptr = strsep(&data, ",")) != NULL) {
+		if (!*ptr)
+			continue;
+
+		token = match_token(ptr, bpf_mount_tokens, args);
+		switch (token) {
+		case OPT_MODE:
+			if (match_octal(&args[0], &option))
+				return -EINVAL;
+			opts->mode = option & S_IALLUGO;
+			break;
 		/* We might like to report bad mount options here, but
 		 * traditionally we've ignored all mount options, so we'd
 		 * better continue to ignore non-existing options for bpf.
 		 */
-		return opt == -ENOPARAM ? 0 : opt;
-
-	switch (opt) {
-	case OPT_MODE:
-		opts->mode = result.uint_32 & S_IALLUGO;
-		break;
+		}
 	}
 
 	return 0;
 }
 
-static int bpf_fill_super(struct super_block *sb, struct fs_context *fc)
+static int bpf_fill_super(struct super_block *sb, void *data, int silent)
 {
 	static const struct tree_descr bpf_rfiles[] = { { "" } };
-	struct bpf_mount_opts *opts = fc->fs_private;
+	struct bpf_mount_opts opts;
 	struct inode *inode;
 	int ret;
+
+	ret = bpf_parse_options(data, &opts);
+	if (ret)
+		return ret;
 
 	ret = simple_fill_super(sb, BPF_FS_MAGIC, bpf_rfiles);
 	if (ret)
@@ -617,50 +654,21 @@ static int bpf_fill_super(struct super_block *sb, struct fs_context *fc)
 	inode = sb->s_root->d_inode;
 	inode->i_op = &bpf_dir_iops;
 	inode->i_mode &= ~S_IALLUGO;
-	inode->i_mode |= S_ISVTX | opts->mode;
+	inode->i_mode |= S_ISVTX | opts.mode;
 
 	return 0;
 }
 
-static int bpf_get_tree(struct fs_context *fc)
+static struct dentry *bpf_mount(struct file_system_type *type, int flags,
+				const char *dev_name, void *data)
 {
-	return get_tree_nodev(fc, bpf_fill_super);
-}
-
-static void bpf_free_fc(struct fs_context *fc)
-{
-	kfree(fc->fs_private);
-}
-
-static const struct fs_context_operations bpf_context_ops = {
-	.free		= bpf_free_fc,
-	.parse_param	= bpf_parse_param,
-	.get_tree	= bpf_get_tree,
-};
-
-/*
- * Set up the filesystem mount context.
- */
-static int bpf_init_fs_context(struct fs_context *fc)
-{
-	struct bpf_mount_opts *opts;
-
-	opts = kzalloc(sizeof(struct bpf_mount_opts), GFP_KERNEL);
-	if (!opts)
-		return -ENOMEM;
-
-	opts->mode = S_IRWXUGO;
-
-	fc->fs_private = opts;
-	fc->ops = &bpf_context_ops;
-	return 0;
+	return mount_nodev(type, flags, data, bpf_fill_super);
 }
 
 static struct file_system_type bpf_fs_type = {
 	.owner		= THIS_MODULE,
 	.name		= "bpf",
-	.init_fs_context = bpf_init_fs_context,
-	.parameters	= bpf_fs_parameters,
+	.mount		= bpf_mount,
 	.kill_sb	= kill_litter_super,
 };
 

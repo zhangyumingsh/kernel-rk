@@ -1,9 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2007 Casey Schaufler <casey@schaufler-ca.com>
  *
+ *      This program is free software; you can redistribute it and/or modify
+ *      it under the terms of the GNU General Public License as published by
+ *      the Free Software Foundation, version 2.
+ *
  * Author:
  *      Casey Schaufler <casey@schaufler-ca.com>
+ *
  */
 
 #include <linux/types.h>
@@ -271,7 +275,7 @@ out_audit:
 int smk_curacc(struct smack_known *obj_known,
 	       u32 mode, struct smk_audit_info *a)
 {
-	struct task_smack *tsp = smack_cred(current_cred());
+	struct task_smack *tsp = current_security();
 
 	return smk_tskacc(tsp, obj_known, mode, a);
 }
@@ -631,7 +635,7 @@ DEFINE_MUTEX(smack_onlycap_lock);
  */
 bool smack_privileged_cred(int cap, const struct cred *cred)
 {
-	struct task_smack *tsp = smack_cred(cred);
+	struct task_smack *tsp = cred->security;
 	struct smack_known *skp = tsp->smk_task;
 	struct smack_known_list_elem *sklep;
 	int rc;

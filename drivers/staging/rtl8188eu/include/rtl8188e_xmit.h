@@ -148,9 +148,9 @@ void rtl8188e_fill_fake_txdesc(struct adapter *padapter, u8 *pDesc,
 s32 rtl8188eu_init_xmit_priv(struct adapter *padapter);
 s32 rtl8188eu_xmit_buf_handler(struct adapter *padapter);
 #define hal_xmit_handler rtl8188eu_xmit_buf_handler
-void rtl8188eu_xmit_tasklet(unsigned long priv);
-bool rtl8188eu_xmitframe_complete(struct adapter *padapter,
-				  struct xmit_priv *pxmitpriv);
+void rtl8188eu_xmit_tasklet(void *priv);
+s32 rtl8188eu_xmitframe_complete(struct adapter *padapter,
+				 struct xmit_priv *pxmitpriv);
 
 void handle_txrpt_ccx_88e(struct adapter *adapter, u8 *buf);
 

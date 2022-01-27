@@ -1,34 +1,35 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2015 MediaTek Inc.
  * Author: YT SHEN <yt.shen@mediatek.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
+#include <drm/drmP.h>
+#include <drm/drm_atomic.h>
+#include <drm/drm_atomic_helper.h>
+#include <drm/drm_crtc_helper.h>
+#include <drm/drm_gem.h>
+#include <drm/drm_gem_cma_helper.h>
+#include <drm/drm_of.h>
 #include <linux/component.h>
 #include <linux/iommu.h>
-#include <linux/module.h>
 #include <linux/of_address.h>
 #include <linux/of_platform.h>
 #include <linux/pm_runtime.h>
-#include <linux/dma-mapping.h>
-
-#include <drm/drm_atomic.h>
-#include <drm/drm_atomic_helper.h>
-#include <drm/drm_drv.h>
-#include <drm/drm_fb_helper.h>
-#include <drm/drm_fourcc.h>
-#include <drm/drm_gem.h>
-#include <drm/drm_gem_cma_helper.h>
-#include <drm/drm_gem_framebuffer_helper.h>
-#include <drm/drm_of.h>
-#include <drm/drm_probe_helper.h>
-#include <drm/drm_vblank.h>
 
 #include "mtk_drm_crtc.h"
 #include "mtk_drm_ddp.h"
-#include "mtk_drm_ddp.h"
 #include "mtk_drm_ddp_comp.h"
 #include "mtk_drm_drv.h"
+#include "mtk_drm_fb.h"
 #include "mtk_drm_gem.h"
 
 #define DRIVER_NAME "mediatek"
@@ -37,27 +38,99 @@
 #define DRIVER_MAJOR 1
 #define DRIVER_MINOR 0
 
-static const struct drm_mode_config_helper_funcs mtk_drm_mode_config_helpers = {
-	.atomic_commit_tail = drm_atomic_helper_commit_tail_rpm,
-};
-
-static struct drm_framebuffer *
-mtk_drm_mode_fb_create(struct drm_device *dev,
-		       struct drm_file *file,
-		       const struct drm_mode_fb_cmd2 *cmd)
+static void mtk_atomic_schedule(struct mtk_drm_private *private,
+				struct drm_atomic_state *state)
 {
-	const struct drm_format_info *info = drm_get_format_info(dev, cmd);
+	private->commit.state = state;
+	schedule_work(&private->commit.work);
+}
 
-	if (info->num_planes != 1)
-		return ERR_PTR(-EINVAL);
+static void mtk_atomic_wait_for_fences(struct drm_atomic_state *state)
+{
+	struct drm_plane *plane;
+	struct drm_plane_state *new_plane_state;
+	int i;
 
-	return drm_gem_fb_create(dev, file, cmd);
+	for_each_new_plane_in_state(state, plane, new_plane_state, i)
+		mtk_fb_wait(new_plane_state->fb);
+}
+
+static void mtk_atomic_complete(struct mtk_drm_private *private,
+				struct drm_atomic_state *state)
+{
+	struct drm_device *drm = private->drm;
+
+	mtk_atomic_wait_for_fences(state);
+
+	/*
+	 * Mediatek drm supports runtime PM, so plane registers cannot be
+	 * written when their crtc is disabled.
+	 *
+	 * The comment for drm_atomic_helper_commit states:
+	 *     For drivers supporting runtime PM the recommended sequence is
+	 *
+	 *     drm_atomic_helper_commit_modeset_disables(dev, state);
+	 *     drm_atomic_helper_commit_modeset_enables(dev, state);
+	 *     drm_atomic_helper_commit_planes(dev, state,
+	 *                                     DRM_PLANE_COMMIT_ACTIVE_ONLY);
+	 *
+	 * See the kerneldoc entries for these three functions for more details.
+	 */
+	drm_atomic_helper_commit_modeset_disables(drm, state);
+	drm_atomic_helper_commit_modeset_enables(drm, state);
+	drm_atomic_helper_commit_planes(drm, state,
+					DRM_PLANE_COMMIT_ACTIVE_ONLY);
+
+	drm_atomic_helper_wait_for_vblanks(drm, state);
+
+	drm_atomic_helper_cleanup_planes(drm, state);
+	drm_atomic_state_put(state);
+}
+
+static void mtk_atomic_work(struct work_struct *work)
+{
+	struct mtk_drm_private *private = container_of(work,
+			struct mtk_drm_private, commit.work);
+
+	mtk_atomic_complete(private, private->commit.state);
+}
+
+static int mtk_atomic_commit(struct drm_device *drm,
+			     struct drm_atomic_state *state,
+			     bool async)
+{
+	struct mtk_drm_private *private = drm->dev_private;
+	int ret;
+
+	ret = drm_atomic_helper_prepare_planes(drm, state);
+	if (ret)
+		return ret;
+
+	mutex_lock(&private->commit.lock);
+	flush_work(&private->commit.work);
+
+	ret = drm_atomic_helper_swap_state(state, true);
+	if (ret) {
+		mutex_unlock(&private->commit.lock);
+		drm_atomic_helper_cleanup_planes(drm, state);
+		return ret;
+	}
+
+	drm_atomic_state_get(state);
+	if (async)
+		mtk_atomic_schedule(private, state);
+	else
+		mtk_atomic_complete(private, state);
+
+	mutex_unlock(&private->commit.lock);
+
+	return 0;
 }
 
 static const struct drm_mode_config_funcs mtk_drm_mode_config_funcs = {
 	.fb_create = mtk_drm_mode_fb_create,
 	.atomic_check = drm_atomic_helper_check,
-	.atomic_commit = drm_atomic_helper_commit,
+	.atomic_commit = mtk_atomic_commit,
 };
 
 static const enum mtk_ddp_comp_id mt2701_mtk_ddp_main[] = {
@@ -175,7 +248,6 @@ static int mtk_drm_kms_init(struct drm_device *drm)
 	drm->mode_config.max_width = 4096;
 	drm->mode_config.max_height = 4096;
 	drm->mode_config.funcs = &mtk_drm_mode_config_funcs;
-	drm->mode_config.helper_private = &mtk_drm_mode_config_helpers;
 
 	ret = component_bind_all(drm->dev, drm);
 	if (ret)
@@ -299,7 +371,8 @@ struct drm_gem_object *mtk_drm_gem_prime_import(struct drm_device *dev,
 }
 
 static struct drm_driver mtk_drm_driver = {
-	.driver_features = DRIVER_MODESET | DRIVER_GEM | DRIVER_ATOMIC,
+	.driver_features = DRIVER_MODESET | DRIVER_GEM | DRIVER_PRIME |
+			   DRIVER_ATOMIC,
 
 	.gem_free_object_unlocked = mtk_drm_gem_free_object,
 	.gem_vm_ops = &drm_gem_cma_vm_ops,
@@ -307,12 +380,11 @@ static struct drm_driver mtk_drm_driver = {
 
 	.prime_handle_to_fd = drm_gem_prime_handle_to_fd,
 	.prime_fd_to_handle = drm_gem_prime_fd_to_handle,
+	.gem_prime_export = drm_gem_prime_export,
 	.gem_prime_import = mtk_drm_gem_prime_import,
 	.gem_prime_get_sg_table = mtk_gem_prime_get_sg_table,
 	.gem_prime_import_sg_table = mtk_gem_prime_import_sg_table,
 	.gem_prime_mmap = mtk_drm_gem_mmap_buf,
-	.gem_prime_vmap = mtk_drm_gem_prime_vmap,
-	.gem_prime_vunmap = mtk_drm_gem_prime_vunmap,
 	.fops = &mtk_drm_fops,
 
 	.name = DRIVER_NAME,
@@ -347,10 +419,6 @@ static int mtk_drm_bind(struct device *dev)
 	ret = drm_dev_register(drm, 0);
 	if (ret < 0)
 		goto err_deinit;
-
-	ret = drm_fbdev_generic_setup(drm, 32);
-	if (ret)
-		DRM_ERROR("Failed to initialize fbdev: %d\n", ret);
 
 	return 0;
 
@@ -402,8 +470,6 @@ static const struct of_device_id mtk_ddp_comp_dt_ids[] = {
 	  .data = (void *)MTK_DSI },
 	{ .compatible = "mediatek,mt8173-dsi",
 	  .data = (void *)MTK_DSI },
-	{ .compatible = "mediatek,mt2701-dpi",
-	  .data = (void *)MTK_DPI },
 	{ .compatible = "mediatek,mt8173-dpi",
 	  .data = (void *)MTK_DPI },
 	{ .compatible = "mediatek,mt2701-disp-mutex",
@@ -435,6 +501,8 @@ static int mtk_drm_probe(struct platform_device *pdev)
 	if (!private)
 		return -ENOMEM;
 
+	mutex_init(&private->commit.lock);
+	INIT_WORK(&private->commit.work, mtk_atomic_work);
 	private->data = of_device_get_match_data(dev);
 
 	mem = platform_get_resource(pdev, IORESOURCE_MEM, 0);
@@ -485,7 +553,6 @@ static int mtk_drm_probe(struct platform_device *pdev)
 		 */
 		if (comp_type == MTK_DISP_COLOR ||
 		    comp_type == MTK_DISP_OVL ||
-		    comp_type == MTK_DISP_OVL_2L ||
 		    comp_type == MTK_DISP_RDMA ||
 		    comp_type == MTK_DSI ||
 		    comp_type == MTK_DPI) {
@@ -533,8 +600,13 @@ err_pm:
 	pm_runtime_disable(dev);
 err_node:
 	of_node_put(private->mutex_node);
-	for (i = 0; i < DDP_COMPONENT_ID_MAX; i++)
+	for (i = 0; i < DDP_COMPONENT_ID_MAX; i++) {
 		of_node_put(private->comp_node[i]);
+		if (private->ddp_comp[i]) {
+			put_device(private->ddp_comp[i]->larb_dev);
+			private->ddp_comp[i] = NULL;
+		}
+	}
 	return ret;
 }
 
@@ -608,8 +680,8 @@ static struct platform_driver * const mtk_drm_drivers[] = {
 	&mtk_disp_rdma_driver,
 	&mtk_dpi_driver,
 	&mtk_drm_platform_driver,
-	&mtk_mipi_tx_driver,
 	&mtk_dsi_driver,
+	&mtk_mipi_tx_driver,
 };
 
 static int __init mtk_drm_init(void)

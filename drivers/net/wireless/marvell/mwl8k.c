@@ -1469,6 +1469,7 @@ static int mwl8k_txq_init(struct ieee80211_hw *hw, int index)
 	txq->skb = kcalloc(MWL8K_TX_DESCS, sizeof(*txq->skb), GFP_KERNEL);
 	if (txq->skb == NULL) {
 		pci_free_consistent(priv->pdev, size, txq->txd, txq->txd_dma);
+		txq->txd = NULL;
 		return -ENOMEM;
 	}
 
@@ -2239,10 +2240,8 @@ static int mwl8k_post_cmd(struct ieee80211_hw *hw, struct mwl8k_cmd_pkt *cmd)
 	dma_size = le16_to_cpu(cmd->length);
 	dma_addr = pci_map_single(priv->pdev, cmd, dma_size,
 				  PCI_DMA_BIDIRECTIONAL);
-	if (pci_dma_mapping_error(priv->pdev, dma_addr)) {
-		rc = -ENOMEM;
-		goto exit;
-	}
+	if (pci_dma_mapping_error(priv->pdev, dma_addr))
+		return -ENOMEM;
 
 	priv->hostcmd_wait = &cmd_wait;
 	iowrite32(dma_addr, regs + MWL8K_HIU_GEN_PTR);
@@ -2282,7 +2281,6 @@ static int mwl8k_post_cmd(struct ieee80211_hw *hw, struct mwl8k_cmd_pkt *cmd)
 				     ms);
 	}
 
-exit:
 	if (bitmap)
 		mwl8k_enable_bsses(hw, true, bitmap);
 
@@ -4639,7 +4637,7 @@ static void mwl8k_tx_poll(unsigned long data)
 
 	limit = 32;
 
-	spin_lock(&priv->tx_lock);
+	spin_lock_bh(&priv->tx_lock);
 
 	for (i = 0; i < mwl8k_tx_queues(priv); i++)
 		limit -= mwl8k_txq_reclaim(hw, i, limit, 0);
@@ -4649,7 +4647,7 @@ static void mwl8k_tx_poll(unsigned long data)
 		priv->tx_wait = NULL;
 	}
 
-	spin_unlock(&priv->tx_lock);
+	spin_unlock_bh(&priv->tx_lock);
 
 	if (limit) {
 		writel(~MWL8K_A2H_INT_TX_DONE,
@@ -5520,7 +5518,7 @@ mwl8k_ampdu_action(struct ieee80211_hw *hw, struct ieee80211_vif *vif,
 			rc = -EBUSY;
 			break;
 		}
-		rc = IEEE80211_AMPDU_TX_START_IMMEDIATE;
+		ieee80211_start_tx_ba_cb_irqsafe(vif, addr, tid);
 		break;
 	case IEEE80211_AMPDU_TX_STOP_CONT:
 	case IEEE80211_AMPDU_TX_STOP_FLUSH:

@@ -10,6 +10,11 @@
 #include "xfs_trans_resv.h"
 #include "xfs_mount.h"
 #include "xfs_btree.h"
+#include "scrub/xfs_scrub.h"
+#include "scrub/scrub.h"
+#include "scrub/common.h"
+#include "scrub/trace.h"
+#include "scrub/repair.h"
 #include "scrub/bitmap.h"
 
 /*
@@ -294,6 +299,5 @@ xfs_bitmap_set_btblocks(
 	struct xfs_bitmap	*bitmap,
 	struct xfs_btree_cur	*cur)
 {
-	return xfs_btree_visit_blocks(cur, xfs_bitmap_collect_btblock,
-			XFS_BTREE_VISIT_ALL, bitmap);
+	return xfs_btree_visit_blocks(cur, xfs_bitmap_collect_btblock, bitmap);
 }

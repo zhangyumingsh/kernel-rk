@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Xilinx SPI controller driver (master mode only)
  *
@@ -9,6 +8,9 @@
  * Copyright (c) 2009 Intel Corporation
  * 2002-2007 (c) MontaVista Software, Inc.
 
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  */
 
 #include <linux/module.h>
@@ -391,7 +393,7 @@ static int xilinx_spi_probe(struct platform_device *pdev)
 	struct xilinx_spi *xspi;
 	struct xspi_platform_data *pdata;
 	struct resource *res;
-	int ret, num_cs = 0, bits_per_word;
+	int ret, num_cs = 0, bits_per_word = 8;
 	struct spi_master *master;
 	u32 tmp;
 	u8 i;
@@ -403,11 +405,6 @@ static int xilinx_spi_probe(struct platform_device *pdev)
 	} else {
 		of_property_read_u32(pdev->dev.of_node, "xlnx,num-ss-bits",
 					  &num_cs);
-		ret = of_property_read_u32(pdev->dev.of_node,
-					   "xlnx,num-transfer-bits",
-					   &bits_per_word);
-		if (ret)
-			bits_per_word = 8;
 	}
 
 	if (!num_cs) {

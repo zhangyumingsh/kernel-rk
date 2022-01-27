@@ -1,5 +1,27 @@
-// SPDX-License-Identifier: GPL-2.0
-/* Copyright(c) 2009-2012  Realtek Corporation.*/
+/******************************************************************************
+ *
+ * Copyright(c) 2009-2012  Realtek Corporation.
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of version 2 of the GNU General Public License as
+ * published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
+ * more details.
+ *
+ * The full GNU General Public License is included in this distribution in the
+ * file called LICENSE.
+ *
+ * Contact Information:
+ * wlanfae <wlanfae@realtek.com>
+ * Realtek Corporation, No. 2, Innovation Road II, Hsinchu Science Park,
+ * Hsinchu 300, Taiwan.
+ *
+ * Larry Finger <Larry.Finger@lwfinger.net>
+ *
+ *****************************************************************************/
 
 #include "../wifi.h"
 #include "../pci.h"
@@ -136,6 +158,7 @@ static bool _rtl92s_firmware_downloadcode(struct ieee80211_hw *hw,
 	struct rtl_priv *rtlpriv = rtl_priv(hw);
 	struct sk_buff *skb;
 	struct rtl_tcb_desc *tcb_desc;
+	unsigned char *seg_ptr;
 	u16 frag_threshold = MAX_FIRMWARE_CODE_SIZE;
 	u16 frag_length, frag_offset = 0;
 	u16 extra_descoffset = 0;
@@ -165,8 +188,9 @@ static bool _rtl92s_firmware_downloadcode(struct ieee80211_hw *hw,
 		if (!skb)
 			return false;
 		skb_reserve(skb, extra_descoffset);
-		skb_put_data(skb, code_virtual_address + frag_offset,
-			     (u32)(frag_length - extra_descoffset));
+		seg_ptr = skb_put_data(skb,
+				       code_virtual_address + frag_offset,
+				       (u32)(frag_length - extra_descoffset));
 
 		tcb_desc = (struct rtl_tcb_desc *)(skb->cb);
 		tcb_desc->queue_index = TXCMD_QUEUE;
@@ -442,20 +466,17 @@ static u32 _rtl92s_fill_h2c_cmd(struct sk_buff *skb, u32 h2cbufferlen,
 		memset((ph2c_buffer + totallen + tx_desclen), 0, len);
 
 		/* CMD len */
-		le32p_replace_bits((__le32 *)(ph2c_buffer + totallen +
-					      tx_desclen), pcmd_len[i],
-				   GENMASK(15, 0));
+		SET_BITS_TO_LE_4BYTE((ph2c_buffer + totallen + tx_desclen),
+				      0, 16, pcmd_len[i]);
 
 		/* CMD ID */
-		le32p_replace_bits((__le32 *)(ph2c_buffer + totallen +
-					      tx_desclen), pelement_id[i],
-				   GENMASK(23, 16));
+		SET_BITS_TO_LE_4BYTE((ph2c_buffer + totallen + tx_desclen),
+				      16, 8, pelement_id[i]);
 
 		/* CMD Sequence */
 		*cmd_start_seq = *cmd_start_seq % 0x80;
-		le32p_replace_bits((__le32 *)(ph2c_buffer + totallen +
-					      tx_desclen), *cmd_start_seq,
-				   GENMASK(30, 24));
+		SET_BITS_TO_LE_4BYTE((ph2c_buffer + totallen + tx_desclen),
+				      24, 7, *cmd_start_seq);
 		++*cmd_start_seq;
 
 		/* Copy memory */
@@ -465,9 +486,8 @@ static u32 _rtl92s_fill_h2c_cmd(struct sk_buff *skb, u32 h2cbufferlen,
 		/* CMD continue */
 		/* set the continue in prevoius cmd. */
 		if (i < cmd_num - 1)
-			le32p_replace_bits((__le32 *)(ph2c_buffer +
-						      pre_continueoffset),
-					   1, BIT(31));
+			SET_BITS_TO_LE_4BYTE((ph2c_buffer + pre_continueoffset),
+					      31, 1, 1);
 
 		pre_continueoffset = totallen;
 
@@ -549,22 +569,22 @@ static bool _rtl92s_firmware_set_h2c_cmd(struct ieee80211_hw *hw, u8 h2c_cmd,
 	return true;
 }
 
-void rtl92s_set_fw_pwrmode_cmd(struct ieee80211_hw *hw, u8 mode)
+void rtl92s_set_fw_pwrmode_cmd(struct ieee80211_hw *hw, u8 Mode)
 {
 	struct rtl_mac *mac = rtl_mac(rtl_priv(hw));
 	struct rtl_ps_ctl *ppsc = rtl_psc(rtl_priv(hw));
 	struct h2c_set_pwrmode_parm	pwrmode;
 	u16 max_wakeup_period = 0;
 
-	pwrmode.mode = mode;
+	pwrmode.mode = Mode;
 	pwrmode.flag_low_traffic_en = 0;
 	pwrmode.flag_lpnav_en = 0;
 	pwrmode.flag_rf_low_snr_en = 0;
 	pwrmode.flag_dps_en = 0;
 	pwrmode.bcn_rx_en = 0;
 	pwrmode.bcn_to = 0;
-	le16p_replace_bits((__le16 *)(((u8 *)(&pwrmode) + 8)),
-			   mac->vif->bss_conf.beacon_int, GENMASK(15, 0));
+	SET_BITS_TO_LE_2BYTE((u8 *)(&pwrmode) + 8, 0, 16,
+			mac->vif->bss_conf.beacon_int);
 	pwrmode.app_itv = 0;
 	pwrmode.awake_bcn_itvl = ppsc->reg_max_lps_awakeintvl;
 	pwrmode.smart_ps = 1;
@@ -606,10 +626,9 @@ void rtl92s_set_fw_joinbss_report_cmd(struct ieee80211_hw *hw,
 	joinbss_rpt.bssid[3] = mac->bssid[3];
 	joinbss_rpt.bssid[4] = mac->bssid[4];
 	joinbss_rpt.bssid[5] = mac->bssid[5];
-	le16p_replace_bits((__le16 *)(((u8 *)(&joinbss_rpt) + 8)),
-			   mac->vif->bss_conf.beacon_int, GENMASK(15, 0));
-	le16p_replace_bits((__le16 *)(((u8 *)(&joinbss_rpt) + 10)),
-			   mac->assoc_id, GENMASK(15, 0));
+	SET_BITS_TO_LE_2BYTE((u8 *)(&joinbss_rpt) + 8, 0, 16,
+			mac->vif->bss_conf.beacon_int);
+	SET_BITS_TO_LE_2BYTE((u8 *)(&joinbss_rpt) + 10, 0, 16, mac->assoc_id);
 
 	_rtl92s_firmware_set_h2c_cmd(hw, FW_H2C_JOINBSSRPT, (u8 *)&joinbss_rpt);
 }

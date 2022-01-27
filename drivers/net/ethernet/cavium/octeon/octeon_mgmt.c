@@ -235,6 +235,11 @@ static void octeon_mgmt_rx_fill_ring(struct net_device *netdev)
 
 		/* Put it in the ring.  */
 		p->rx_ring[p->rx_next_fill] = re.d64;
+		/* Make sure there is no reorder of filling the ring and ringing
+		 * the bell
+		 */
+		wmb();
+
 		dma_sync_single_for_device(p->dev, p->rx_ring_handle,
 					   ring_size_to_bytes(OCTEON_MGMT_RX_RING_SIZE),
 					   DMA_BIDIRECTIONAL);
@@ -790,7 +795,9 @@ static int octeon_mgmt_ioctl(struct net_device *netdev,
 	case SIOCSHWTSTAMP:
 		return octeon_mgmt_ioctl_hwtstamp(netdev, rq, cmd);
 	default:
-		return phy_do_ioctl(netdev, rq, cmd);
+		if (netdev->phydev)
+			return phy_mii_ioctl(netdev->phydev, rq, cmd);
+		return -EINVAL;
 	}
 }
 
@@ -1078,11 +1085,8 @@ static int octeon_mgmt_open(struct net_device *netdev)
 	/* Set the mode of the interface, RGMII/MII. */
 	if (OCTEON_IS_MODEL(OCTEON_CN6XXX) && netdev->phydev) {
 		union cvmx_agl_prtx_ctl agl_prtx_ctl;
-		int rgmii_mode =
-			(linkmode_test_bit(ETHTOOL_LINK_MODE_1000baseT_Half_BIT,
-					   netdev->phydev->supported) |
-			 linkmode_test_bit(ETHTOOL_LINK_MODE_1000baseT_Full_BIT,
-					   netdev->phydev->supported)) != 0;
+		int rgmii_mode = (netdev->phydev->supported &
+				  (SUPPORTED_1000baseT_Half | SUPPORTED_1000baseT_Full)) != 0;
 
 		agl_prtx_ctl.u64 = cvmx_read_csr(p->agl_prt_ctl);
 		agl_prtx_ctl.s.mode = rgmii_mode ? 0 : 1;
@@ -1501,8 +1505,8 @@ static int octeon_mgmt_probe(struct platform_device *pdev)
 
 	mac = of_get_mac_address(pdev->dev.of_node);
 
-	if (!IS_ERR(mac))
-		ether_addr_copy(netdev->dev_addr, mac);
+	if (mac)
+		memcpy(netdev->dev_addr, mac, ETH_ALEN);
 	else
 		eth_hw_addr_random(netdev);
 

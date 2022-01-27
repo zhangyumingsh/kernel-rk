@@ -5,20 +5,22 @@
  * All Rights Reserved.
  */
 #include "xfs.h"
-#include "xfs_shared.h"
 #include "xfs_format.h"
 #include "xfs_log_format.h"
 #include "xfs_trans_resv.h"
 #include "xfs_sb.h"
 #include "xfs_mount.h"
+#include "xfs_defer.h"
 #include "xfs_inode.h"
 #include "xfs_bmap.h"
+#include "xfs_bmap_util.h"
 #include "xfs_alloc.h"
 #include "xfs_mru_cache.h"
+#include "xfs_filestream.h"
 #include "xfs_trace.h"
 #include "xfs_ag_resv.h"
 #include "xfs_trans.h"
-#include "xfs_filestream.h"
+#include "xfs_shared.h"
 
 struct xfs_fstrm_item {
 	struct xfs_mru_cache_elem	mru;
@@ -159,14 +161,15 @@ xfs_filestream_pick_ag(
 
 		if (!pag->pagf_init) {
 			err = xfs_alloc_pagf_init(mp, NULL, ag, trylock);
-			if (err) {
+			if (err && !trylock) {
 				xfs_perag_put(pag);
-				if (err != -EAGAIN)
-					return err;
-				/* Couldn't lock the AGF, skip this AG. */
-				continue;
+				return err;
 			}
 		}
+
+		/* Might fail sometimes during the 1st pass with trylock set. */
+		if (!pag->pagf_init)
+			goto next_ag;
 
 		/* Keep track of the AG with the most free blocks. */
 		if (pag->pagf_freeblks > maxfree) {
@@ -374,7 +377,7 @@ xfs_filestream_new_ag(
 		startag = (item->ag + 1) % mp->m_sb.sb_agcount;
 	}
 
-	if (ap->datatype & XFS_ALLOC_USERDATA)
+	if (xfs_alloc_is_userdata(ap->datatype))
 		flags |= XFS_PICK_USERDATA;
 	if (ap->tp->t_flags & XFS_TRANS_LOWMODE)
 		flags |= XFS_PICK_LOWSPACE;

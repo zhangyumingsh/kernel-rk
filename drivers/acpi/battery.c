@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *  battery.c - ACPI Battery Driver (Revision: 2.0)
  *
@@ -6,6 +5,20 @@
  *  Copyright (C) 2004-2007 Vladimir Lebedev <vladimir.p.lebedev@intel.com>
  *  Copyright (C) 2001, 2002 Andy Grover <andrew.grover@intel.com>
  *  Copyright (C) 2001, 2002 Paul Diefenbaugh <paul.s.diefenbaugh@intel.com>
+ *
+ * ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+ *
+ *  This program is free software; you can redistribute it and/or modify
+ *  it under the terms of the GNU General Public License as published by
+ *  the Free Software Foundation; either version 2 of the License, or (at
+ *  your option) any later version.
+ *
+ *  This program is distributed in the hope that it will be useful, but
+ *  WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ *  General Public License for more details.
+ *
+ * ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -1202,17 +1215,18 @@ static int acpi_battery_alarm_proc_open(struct inode *inode, struct file *file)
 	return single_open(file, acpi_battery_alarm_proc_show, PDE_DATA(inode));
 }
 
-static const struct proc_ops acpi_battery_alarm_proc_ops = {
-	.proc_open	= acpi_battery_alarm_proc_open,
-	.proc_read	= seq_read,
-	.proc_write	= acpi_battery_write_alarm,
-	.proc_lseek	= seq_lseek,
-	.proc_release	= single_release,
+static const struct file_operations acpi_battery_alarm_fops = {
+	.owner		= THIS_MODULE,
+	.open		= acpi_battery_alarm_proc_open,
+	.read		= seq_read,
+	.write		= acpi_battery_write_alarm,
+	.llseek		= seq_lseek,
+	.release	= single_release,
 };
 
 static int acpi_battery_add_fs(struct acpi_device *device)
 {
-	pr_warn(PREFIX "Deprecated procfs I/F for battery is loaded, please retry with CONFIG_ACPI_PROCFS_POWER cleared\n");
+	pr_warning(PREFIX "Deprecated procfs I/F for battery is loaded, please retry with CONFIG_ACPI_PROCFS_POWER cleared\n");
 	if (!acpi_device_dir(device)) {
 		acpi_device_dir(device) = proc_mkdir(acpi_device_bid(device),
 						     acpi_battery_dir);
@@ -1227,7 +1241,7 @@ static int acpi_battery_add_fs(struct acpi_device *device)
 			acpi_battery_state_proc_show, acpi_driver_data(device)))
 		return -ENODEV;
 	if (!proc_create_data("alarm", S_IFREG | S_IRUGO | S_IWUSR,
-			acpi_device_dir(device), &acpi_battery_alarm_proc_ops,
+			acpi_device_dir(device), &acpi_battery_alarm_fops,
 			acpi_driver_data(device)))
 		return -ENODEV;
 	return 0;

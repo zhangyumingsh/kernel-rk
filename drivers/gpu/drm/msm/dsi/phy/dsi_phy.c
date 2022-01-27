@@ -1,6 +1,14 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2015, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/platform_device.h>
@@ -145,7 +153,7 @@ int msm_dsi_dphy_timing_calc_v2(struct msm_dsi_dphy_timing *timing,
 {
 	const unsigned long bit_rate = clk_req->bitclk_rate;
 	const unsigned long esc_rate = clk_req->escclk_rate;
-	s32 ui, ui_x8;
+	s32 ui, ui_x8, lpx;
 	s32 tmax, tmin;
 	s32 pcnt0 = 50;
 	s32 pcnt1 = 50;
@@ -175,6 +183,7 @@ int msm_dsi_dphy_timing_calc_v2(struct msm_dsi_dphy_timing *timing,
 
 	ui = mult_frac(NSEC_PER_MSEC, coeff, bit_rate / 1000);
 	ui_x8 = ui << 3;
+	lpx = mult_frac(NSEC_PER_MSEC, coeff, esc_rate / 1000);
 
 	temp = S_DIV_ROUND_UP(38 * coeff - val_ckln * ui, ui_x8);
 	tmin = max_t(s32, temp, 0);
@@ -261,7 +270,7 @@ int msm_dsi_dphy_timing_calc_v3(struct msm_dsi_dphy_timing *timing,
 {
 	const unsigned long bit_rate = clk_req->bitclk_rate;
 	const unsigned long esc_rate = clk_req->escclk_rate;
-	s32 ui, ui_x8;
+	s32 ui, ui_x8, lpx;
 	s32 tmax, tmin;
 	s32 pcnt0 = 50;
 	s32 pcnt1 = 50;
@@ -283,6 +292,7 @@ int msm_dsi_dphy_timing_calc_v3(struct msm_dsi_dphy_timing *timing,
 
 	ui = mult_frac(NSEC_PER_MSEC, coeff, bit_rate / 1000);
 	ui_x8 = ui << 3;
+	lpx = mult_frac(NSEC_PER_MSEC, coeff, esc_rate / 1000);
 
 	temp = S_DIV_ROUND_UP(38 * coeff, ui_x8);
 	tmin = max_t(s32, temp, 0);
@@ -394,12 +404,8 @@ static int dsi_phy_regulator_init(struct msm_dsi_phy *phy)
 
 	ret = devm_regulator_bulk_get(dev, num, s);
 	if (ret < 0) {
-		if (ret != -EPROBE_DEFER) {
-			DRM_DEV_ERROR(dev,
-				      "%s: failed to init regulator, ret=%d\n",
-				      __func__, ret);
-		}
-
+		dev_err(dev, "%s: failed to init regulator, ret=%d\n",
+						__func__, ret);
 		return ret;
 	}
 
@@ -435,7 +441,7 @@ static int dsi_phy_regulator_enable(struct msm_dsi_phy *phy)
 			ret = regulator_set_load(s[i].consumer,
 							regs[i].enable_load);
 			if (ret < 0) {
-				DRM_DEV_ERROR(dev,
+				dev_err(dev,
 					"regulator %d set op mode failed, %d\n",
 					i, ret);
 				goto fail;
@@ -445,7 +451,7 @@ static int dsi_phy_regulator_enable(struct msm_dsi_phy *phy)
 
 	ret = regulator_bulk_enable(num, s);
 	if (ret < 0) {
-		DRM_DEV_ERROR(dev, "regulator enable failed, %d\n", ret);
+		dev_err(dev, "regulator enable failed, %d\n", ret);
 		goto fail;
 	}
 
@@ -466,7 +472,7 @@ static int dsi_phy_enable_resource(struct msm_dsi_phy *phy)
 
 	ret = clk_prepare_enable(phy->ahb_clk);
 	if (ret) {
-		DRM_DEV_ERROR(dev, "%s: can't enable ahb clk, %d\n", __func__, ret);
+		dev_err(dev, "%s: can't enable ahb clk, %d\n", __func__, ret);
 		pm_runtime_put_sync(dev);
 	}
 
@@ -483,8 +489,6 @@ static const struct of_device_id dsi_phy_dt_match[] = {
 #ifdef CONFIG_DRM_MSM_DSI_28NM_PHY
 	{ .compatible = "qcom,dsi-phy-28nm-hpm",
 	  .data = &dsi_phy_28nm_hpm_cfgs },
-	{ .compatible = "qcom,dsi-phy-28nm-hpm-fam-b",
-	  .data = &dsi_phy_28nm_hpm_famb_cfgs },
 	{ .compatible = "qcom,dsi-phy-28nm-lp",
 	  .data = &dsi_phy_28nm_lp_cfgs },
 #endif
@@ -503,8 +507,6 @@ static const struct of_device_id dsi_phy_dt_match[] = {
 #ifdef CONFIG_DRM_MSM_DSI_10NM_PHY
 	{ .compatible = "qcom,dsi-phy-10nm",
 	  .data = &dsi_phy_10nm_cfgs },
-	{ .compatible = "qcom,dsi-phy-10nm-8998",
-	  .data = &dsi_phy_10nm_8998_cfgs },
 #endif
 	{}
 };
@@ -541,7 +543,7 @@ int msm_dsi_phy_init_common(struct msm_dsi_phy *phy)
 	phy->reg_base = msm_ioremap(pdev, "dsi_phy_regulator",
 				"DSI_PHY_REG");
 	if (IS_ERR(phy->reg_base)) {
-		DRM_DEV_ERROR(&pdev->dev, "%s: failed to map phy regulator base\n",
+		dev_err(&pdev->dev, "%s: failed to map phy regulator base\n",
 			__func__);
 		ret = -ENOMEM;
 		goto fail;
@@ -572,7 +574,7 @@ static int dsi_phy_driver_probe(struct platform_device *pdev)
 	phy->id = dsi_phy_get_id(phy);
 	if (phy->id < 0) {
 		ret = phy->id;
-		DRM_DEV_ERROR(dev, "%s: couldn't identify PHY index, %d\n",
+		dev_err(dev, "%s: couldn't identify PHY index, %d\n",
 			__func__, ret);
 		goto fail;
 	}
@@ -582,18 +584,20 @@ static int dsi_phy_driver_probe(struct platform_device *pdev)
 
 	phy->base = msm_ioremap(pdev, "dsi_phy", "DSI_PHY");
 	if (IS_ERR(phy->base)) {
-		DRM_DEV_ERROR(dev, "%s: failed to map phy base\n", __func__);
+		dev_err(dev, "%s: failed to map phy base\n", __func__);
 		ret = -ENOMEM;
 		goto fail;
 	}
 
 	ret = dsi_phy_regulator_init(phy);
-	if (ret)
+	if (ret) {
+		dev_err(dev, "%s: failed to init regulator\n", __func__);
 		goto fail;
+	}
 
 	phy->ahb_clk = msm_clk_get(pdev, "iface");
 	if (IS_ERR(phy->ahb_clk)) {
-		DRM_DEV_ERROR(dev, "%s: Unable to get ahb clk\n", __func__);
+		dev_err(dev, "%s: Unable to get ahb clk\n", __func__);
 		ret = PTR_ERR(phy->ahb_clk);
 		goto fail;
 	}
@@ -612,12 +616,10 @@ static int dsi_phy_driver_probe(struct platform_device *pdev)
 		goto fail;
 
 	phy->pll = msm_dsi_pll_init(pdev, phy->cfg->type, phy->id);
-	if (IS_ERR_OR_NULL(phy->pll)) {
-		DRM_DEV_INFO(dev,
+	if (IS_ERR_OR_NULL(phy->pll))
+		dev_info(dev,
 			"%s: pll init failed: %ld, need separate pll clk driver\n",
 			__func__, PTR_ERR(phy->pll));
-		phy->pll = NULL;
-	}
 
 	dsi_phy_disable_resource(phy);
 
@@ -673,21 +675,21 @@ int msm_dsi_phy_enable(struct msm_dsi_phy *phy, int src_pll_id,
 
 	ret = dsi_phy_enable_resource(phy);
 	if (ret) {
-		DRM_DEV_ERROR(dev, "%s: resource enable failed, %d\n",
+		dev_err(dev, "%s: resource enable failed, %d\n",
 			__func__, ret);
 		goto res_en_fail;
 	}
 
 	ret = dsi_phy_regulator_enable(phy);
 	if (ret) {
-		DRM_DEV_ERROR(dev, "%s: regulator enable failed, %d\n",
+		dev_err(dev, "%s: regulator enable failed, %d\n",
 			__func__, ret);
 		goto reg_en_fail;
 	}
 
 	ret = phy->cfg->ops.enable(phy, src_pll_id, clk_req);
 	if (ret) {
-		DRM_DEV_ERROR(dev, "%s: phy enable failed, %d\n", __func__, ret);
+		dev_err(dev, "%s: phy enable failed, %d\n", __func__, ret);
 		goto phy_en_fail;
 	}
 
@@ -700,7 +702,7 @@ int msm_dsi_phy_enable(struct msm_dsi_phy *phy, int src_pll_id,
 	if (phy->usecase != MSM_DSI_PHY_SLAVE) {
 		ret = msm_dsi_pll_restore_state(phy->pll);
 		if (ret) {
-			DRM_DEV_ERROR(dev, "%s: failed to restore pll state, %d\n",
+			dev_err(dev, "%s: failed to restore pll state, %d\n",
 				__func__, ret);
 			goto pll_restor_fail;
 		}

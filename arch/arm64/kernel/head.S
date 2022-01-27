@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Low-level CPU initialisation
  * Based on arch/arm/kernel/head.S
@@ -7,6 +6,18 @@
  * Copyright (C) 2003-2012 ARM Ltd.
  * Authors:	Catalin Marinas <catalin.marinas@arm.com>
  *		Will Deacon <will.deacon@arm.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <linux/linkage.h>
@@ -20,13 +31,13 @@
 #include <asm/cache.h>
 #include <asm/cputype.h>
 #include <asm/elf.h>
-#include <asm/image.h>
 #include <asm/kernel-pgtable.h>
 #include <asm/kvm_arm.h>
 #include <asm/memory.h>
 #include <asm/pgtable-hwdef.h>
 #include <asm/pgtable.h>
 #include <asm/page.h>
+#include <asm/scs.h>
 #include <asm/smp.h>
 #include <asm/sysreg.h>
 #include <asm/thread_info.h>
@@ -81,7 +92,7 @@ _head:
 	.quad	0				// reserved
 	.quad	0				// reserved
 	.quad	0				// reserved
-	.ascii	ARM64_IMAGE_MAGIC		// Magic number
+	.ascii	"ARM\x64"			// Magic number
 #ifdef CONFIG_EFI
 	.long	pe_header - _head		// Offset to the PE header.
 
@@ -279,21 +290,19 @@ __create_page_tables:
 	mov	x28, lr
 
 	/*
-	 * Invalidate the init page tables to avoid potential dirty cache lines
-	 * being evicted. Other page tables are allocated in rodata as part of
-	 * the kernel image, and thus are clean to the PoC per the boot
-	 * protocol.
+	 * Invalidate the idmap and swapper page tables to avoid potential
+	 * dirty cache lines being evicted.
 	 */
-	adrp	x0, init_pg_dir
-	adrp	x1, init_pg_end
+	adrp	x0, idmap_pg_dir
+	adrp	x1, swapper_pg_end
 	sub	x1, x1, x0
 	bl	__inval_dcache_area
 
 	/*
-	 * Clear the init page tables.
+	 * Clear the idmap and swapper page tables.
 	 */
-	adrp	x0, init_pg_dir
-	adrp	x1, init_pg_end
+	adrp	x0, idmap_pg_dir
+	adrp	x1, swapper_pg_end
 	sub	x1, x1, x0
 1:	stp	xzr, xzr, [x0], #16
 	stp	xzr, xzr, [x0], #16
@@ -309,19 +318,6 @@ __create_page_tables:
 	 */
 	adrp	x0, idmap_pg_dir
 	adrp	x3, __idmap_text_start		// __pa(__idmap_text_start)
-
-#ifdef CONFIG_ARM64_VA_BITS_52
-	mrs_s	x6, SYS_ID_AA64MMFR2_EL1
-	and	x6, x6, #(0xf << ID_AA64MMFR2_LVA_SHIFT)
-	mov	x5, #52
-	cbnz	x6, 1f
-#endif
-	mov	x5, #VA_BITS_MIN
-1:
-	adr_l	x6, vabits_actual
-	str	x5, [x6]
-	dmb	sy
-	dc	ivac, x6		// Invalidate potentially stale cache line
 
 	/*
 	 * VA_BITS may be too small to allow for an ID mapping to be created
@@ -380,7 +376,7 @@ __create_page_tables:
 	/*
 	 * Map the kernel image (starting with PHYS_OFFSET).
 	 */
-	adrp	x0, init_pg_dir
+	adrp	x0, swapper_pg_dir
 	mov_q	x5, KIMAGE_VADDR + TEXT_OFFSET	// compile time __va(_text)
 	add	x5, x5, x23			// add KASLR displacement
 	mov	x4, PTRS_PER_PGD
@@ -397,7 +393,7 @@ __create_page_tables:
 	 * tables again to remove any speculatively loaded cache lines.
 	 */
 	adrp	x0, idmap_pg_dir
-	adrp	x1, init_pg_end
+	adrp	x1, swapper_pg_end
 	sub	x1, x1, x0
 	dmb	sy
 	bl	__inval_dcache_area
@@ -423,6 +419,10 @@ __primary_switched:
 
 	stp	xzr, x30, [sp, #-16]!
 	mov	x29, sp
+
+#ifdef CONFIG_SHADOW_CALL_STACK
+	adr_l	x18, init_shadow_call_stack	// Set shadow call stack
+#endif
 
 	str_l	x21, __fdt_pointer, x5		// Save FDT pointer
 
@@ -466,7 +466,6 @@ ENDPROC(__primary_switched)
 
 ENTRY(kimage_vaddr)
 	.quad		_text - TEXT_OFFSET
-EXPORT_SYMBOL(kimage_vaddr)
 
 /*
  * If we're fortunate enough to boot at EL2, ensure that the world is
@@ -496,7 +495,7 @@ ENTRY(el2_setup)
 	 * kernel is intended to run at EL2.
 	 */
 	mrs	x2, id_aa64mmfr1_el1
-	ubfx	x2, x2, #ID_AA64MMFR1_VHE_SHIFT, #4
+	ubfx	x2, x2, #8, #4
 #else
 	mov	x2, xzr
 #endif
@@ -529,7 +528,7 @@ set_hcr:
 #ifdef CONFIG_ARM_GIC_V3
 	/* GICv3 system register access */
 	mrs	x0, id_aa64pfr0_el1
-	ubfx	x0, x0, #ID_AA64PFR0_GIC_SHIFT, #4
+	ubfx	x0, x0, #24, #4
 	cbz	x0, 3f
 
 	mrs_s	x0, SYS_ICC_SRE_EL2
@@ -555,8 +554,8 @@ set_hcr:
 #endif
 
 	/* EL2 debug */
-	mrs	x1, id_aa64dfr0_el1
-	sbfx	x0, x1, #ID_AA64DFR0_PMUVER_SHIFT, #4
+	mrs	x1, id_aa64dfr0_el1		// Check ID_AA64DFR0_EL1 PMUVer
+	sbfx	x0, x1, #8, #4
 	cmp	x0, #1
 	b.lt	4f				// Skip if no PMU present
 	mrs	x0, pmcr_el0			// Disable debug access traps
@@ -565,7 +564,7 @@ set_hcr:
 	csel	x3, xzr, x0, lt			// all PMU counters from EL1
 
 	/* Statistical profiling */
-	ubfx	x0, x1, #ID_AA64DFR0_PMSVER_SHIFT, #4
+	ubfx	x0, x1, #32, #4			// Check ID_AA64DFR0_EL1 PMSVer
 	cbz	x0, 7f				// Skip if SPE not present
 	cbnz	x2, 6f				// VHE?
 	mrs_s	x4, SYS_PMBIDR_EL1		// If SPE available at EL2,
@@ -713,7 +712,6 @@ secondary_startup:
 	 */
 	bl	__cpu_secondary_check52bitva
 	bl	__cpu_setup			// initialise processor
-	adrp	x1, swapper_pg_dir
 	bl	__enable_mmu
 	ldr	x8, =__secondary_switched
 	br	x8
@@ -726,21 +724,17 @@ __secondary_switched:
 
 	adr_l	x0, secondary_data
 	ldr	x1, [x0, #CPU_BOOT_STACK]	// get secondary_data.stack
-	cbz	x1, __secondary_too_slow
 	mov	sp, x1
 	ldr	x2, [x0, #CPU_BOOT_TASK]
-	cbz	x2, __secondary_too_slow
 	msr	sp_el0, x2
+#ifdef CONFIG_SHADOW_CALL_STACK
+	ldr	x18, [x2, #TSK_TI_SCS]		// set shadow call stack
+	str	xzr, [x2, #TSK_TI_SCS]		// limit visibility of saved SCS
+#endif
 	mov	x29, #0
 	mov	x30, #0
 	b	secondary_start_kernel
 ENDPROC(__secondary_switched)
-
-__secondary_too_slow:
-	wfe
-	wfi
-	b	__secondary_too_slow
-ENDPROC(__secondary_too_slow)
 
 /*
  * The booting CPU updates the failed status @__early_cpu_boot_status,
@@ -764,7 +758,6 @@ ENDPROC(__secondary_too_slow)
  * Enable the MMU.
  *
  *  x0  = SCTLR_EL1 value for turning on the MMU.
- *  x1  = TTBR1_EL1 value
  *
  * Returns to the caller via x30/lr. This requires the caller to be covered
  * by the .idmap.text section.
@@ -773,17 +766,17 @@ ENDPROC(__secondary_too_slow)
  * If it isn't, park the CPU
  */
 ENTRY(__enable_mmu)
-	mrs	x2, ID_AA64MMFR0_EL1
-	ubfx	x2, x2, #ID_AA64MMFR0_TGRAN_SHIFT, 4
+	mrs	x1, ID_AA64MMFR0_EL1
+	ubfx	x2, x1, #ID_AA64MMFR0_TGRAN_SHIFT, 4
 	cmp	x2, #ID_AA64MMFR0_TGRAN_SUPPORTED
 	b.ne	__no_granule_support
-	update_early_cpu_boot_status 0, x2, x3
-	adrp	x2, idmap_pg_dir
-	phys_to_ttbr x1, x1
-	phys_to_ttbr x2, x2
-	msr	ttbr0_el1, x2			// load TTBR0
-	offset_ttbr1 x1, x3
-	msr	ttbr1_el1, x1			// load TTBR1
+	update_early_cpu_boot_status 0, x1, x2
+	adrp	x1, idmap_pg_dir
+	adrp	x2, swapper_pg_dir
+	phys_to_ttbr x3, x1
+	phys_to_ttbr x4, x2
+	msr	ttbr0_el1, x3			// load TTBR0
+	msr	ttbr1_el1, x4			// load TTBR1
 	isb
 	msr	sctlr_el1, x0
 	isb
@@ -799,8 +792,8 @@ ENTRY(__enable_mmu)
 ENDPROC(__enable_mmu)
 
 ENTRY(__cpu_secondary_check52bitva)
-#ifdef CONFIG_ARM64_VA_BITS_52
-	ldr_l	x0, vabits_actual
+#ifdef CONFIG_ARM64_52BIT_VA
+	ldr_l	x0, vabits_user
 	cmp	x0, #52
 	b.ne	2f
 
@@ -808,8 +801,13 @@ ENTRY(__cpu_secondary_check52bitva)
 	and	x0, x0, #(0xf << ID_AA64MMFR2_LVA_SHIFT)
 	cbnz	x0, 2f
 
-	update_early_cpu_boot_status \
-		CPU_STUCK_IN_KERNEL | CPU_STUCK_REASON_52_BIT_VA, x0, x1
+	adr_l	x0, va52mismatch
+	mov	w1, #1
+	strb	w1, [x0]
+	dmb	sy
+	dc	ivac, x0	// Invalidate potentially stale cache line
+
+	update_early_cpu_boot_status CPU_STUCK_IN_KERNEL, x0, x1
 1:	wfe
 	wfi
 	b	1b
@@ -820,8 +818,7 @@ ENDPROC(__cpu_secondary_check52bitva)
 
 __no_granule_support:
 	/* Indicate that this CPU can't boot and is stuck in the kernel */
-	update_early_cpu_boot_status \
-		CPU_STUCK_IN_KERNEL | CPU_STUCK_REASON_NO_GRAN, x1, x2
+	update_early_cpu_boot_status CPU_STUCK_IN_KERNEL, x1, x2
 1:
 	wfe
 	wfi
@@ -940,7 +937,6 @@ __primary_switch:
 	mrs	x20, sctlr_el1			// preserve old SCTLR_EL1 value
 #endif
 
-	adrp	x1, init_pg_dir
 	bl	__enable_mmu
 #ifdef CONFIG_RELOCATABLE
 #ifdef CONFIG_RELR
@@ -964,6 +960,7 @@ __primary_switch:
 
 	tlbi	vmalle1				// Remove any stale TLB entries
 	dsb	nsh
+	isb
 
 	msr	sctlr_el1, x19			// re-enable the MMU
 	isb

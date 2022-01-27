@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0+
 /*
  * Generic LVDS panel driver
  *
@@ -6,8 +5,14 @@
  * Copyright (C) 2016 Renesas Electronics Corporation
  *
  * Contact: Laurent Pinchart (laurent.pinchart@ideasonboard.com)
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  */
 
+#include <linux/backlight.h>
 #include <linux/gpio/consumer.h>
 #include <linux/module.h>
 #include <linux/of_platform.h>
@@ -15,12 +20,13 @@
 #include <linux/regulator/consumer.h>
 #include <linux/slab.h>
 
+#include <drm/drmP.h>
+#include <drm/drm_crtc.h>
+#include <drm/drm_panel.h>
+
 #include <video/display_timing.h>
 #include <video/of_display_timing.h>
 #include <video/videomode.h>
-
-#include <drm/drm_crtc.h>
-#include <drm/drm_panel.h>
 
 struct panel_lvds {
 	struct drm_panel panel;
@@ -33,6 +39,7 @@ struct panel_lvds {
 	unsigned int bus_format;
 	bool data_mirror;
 
+	struct backlight_device *backlight;
 	struct regulator *supply;
 
 	struct gpio_desc *enable_gpio;
@@ -42,6 +49,19 @@ struct panel_lvds {
 static inline struct panel_lvds *to_panel_lvds(struct drm_panel *panel)
 {
 	return container_of(panel, struct panel_lvds, panel);
+}
+
+static int panel_lvds_disable(struct drm_panel *panel)
+{
+	struct panel_lvds *lvds = to_panel_lvds(panel);
+
+	if (lvds->backlight) {
+		lvds->backlight->props.power = FB_BLANK_POWERDOWN;
+		lvds->backlight->props.state |= BL_CORE_FBBLANK;
+		backlight_update_status(lvds->backlight);
+	}
+
+	return 0;
 }
 
 static int panel_lvds_unprepare(struct drm_panel *panel)
@@ -78,13 +98,26 @@ static int panel_lvds_prepare(struct drm_panel *panel)
 	return 0;
 }
 
-static int panel_lvds_get_modes(struct drm_panel *panel,
-				struct drm_connector *connector)
+static int panel_lvds_enable(struct drm_panel *panel)
 {
 	struct panel_lvds *lvds = to_panel_lvds(panel);
+
+	if (lvds->backlight) {
+		lvds->backlight->props.state &= ~BL_CORE_FBBLANK;
+		lvds->backlight->props.power = FB_BLANK_UNBLANK;
+		backlight_update_status(lvds->backlight);
+	}
+
+	return 0;
+}
+
+static int panel_lvds_get_modes(struct drm_panel *panel)
+{
+	struct panel_lvds *lvds = to_panel_lvds(panel);
+	struct drm_connector *connector = lvds->panel.connector;
 	struct drm_display_mode *mode;
 
-	mode = drm_mode_create(connector->dev);
+	mode = drm_mode_create(lvds->panel.drm);
 	if (!mode)
 		return 0;
 
@@ -104,8 +137,10 @@ static int panel_lvds_get_modes(struct drm_panel *panel,
 }
 
 static const struct drm_panel_funcs panel_lvds_funcs = {
+	.disable = panel_lvds_disable,
 	.unprepare = panel_lvds_unprepare,
 	.prepare = panel_lvds_prepare,
+	.enable = panel_lvds_enable,
 	.get_modes = panel_lvds_get_modes,
 };
 
@@ -117,11 +152,8 @@ static int panel_lvds_parse_dt(struct panel_lvds *lvds)
 	int ret;
 
 	ret = of_get_display_timing(np, "panel-timing", &timing);
-	if (ret < 0) {
-		dev_err(lvds->dev, "%pOF: problems parsing panel-timing (%d)\n",
-			np, ret);
+	if (ret < 0)
 		return ret;
-	}
 
 	videomode_from_timing(&timing, &lvds->video_mode);
 
@@ -212,6 +244,10 @@ static int panel_lvds_probe(struct platform_device *pdev)
 		return ret;
 	}
 
+	lvds->backlight = devm_of_find_backlight(lvds->dev);
+	if (IS_ERR(lvds->backlight))
+		return PTR_ERR(lvds->backlight);
+
 	/*
 	 * TODO: Handle all power supplies specified in the DT node in a generic
 	 * way for panels that don't care about power supply ordering. LVDS
@@ -220,12 +256,9 @@ static int panel_lvds_probe(struct platform_device *pdev)
 	 */
 
 	/* Register the panel. */
-	drm_panel_init(&lvds->panel, lvds->dev, &panel_lvds_funcs,
-		       DRM_MODE_CONNECTOR_LVDS);
-
-	ret = drm_panel_of_backlight(&lvds->panel);
-	if (ret)
-		return ret;
+	drm_panel_init(&lvds->panel);
+	lvds->panel.dev = lvds->dev;
+	lvds->panel.funcs = &panel_lvds_funcs;
 
 	ret = drm_panel_add(&lvds->panel);
 	if (ret < 0)
@@ -241,7 +274,7 @@ static int panel_lvds_remove(struct platform_device *pdev)
 
 	drm_panel_remove(&lvds->panel);
 
-	drm_panel_disable(&lvds->panel);
+	panel_lvds_disable(&lvds->panel);
 
 	return 0;
 }

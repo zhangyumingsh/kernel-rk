@@ -1,13 +1,17 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  *  linux/arch/arm/mm/init.c
  *
  *  Copyright (C) 1995-2005 Russell King
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  */
 #include <linux/kernel.h>
 #include <linux/errno.h>
 #include <linux/swap.h>
 #include <linux/init.h>
+#include <linux/bootmem.h>
 #include <linux/mman.h>
 #include <linux/sched/signal.h>
 #include <linux/sched/task.h>
@@ -21,7 +25,6 @@
 #include <linux/dma-contiguous.h>
 #include <linux/sizes.h>
 #include <linux/stop_machine.h>
-#include <linux/swiotlb.h>
 
 #include <asm/cp15.h>
 #include <asm/mach-types.h>
@@ -30,7 +33,6 @@
 #include <asm/prom.h>
 #include <asm/sections.h>
 #include <asm/setup.h>
-#include <asm/set_memory.h>
 #include <asm/system_info.h>
 #include <asm/tlb.h>
 #include <asm/fixmap.h>
@@ -49,7 +51,26 @@ unsigned long __init __clear_cr(unsigned long mask)
 }
 #endif
 
-#ifdef CONFIG_BLK_DEV_INITRD
+static phys_addr_t phys_initrd_start __initdata = 0;
+static unsigned long phys_initrd_size __initdata = 0;
+
+static int __init early_initrd(char *p)
+{
+	phys_addr_t start;
+	unsigned long size;
+	char *endp;
+
+	start = memparse(p, &endp);
+	if (*endp == ',') {
+		size = memparse(endp + 1, NULL);
+
+		phys_initrd_start = start;
+		phys_initrd_size = size;
+	}
+	return 0;
+}
+early_param("initrd", early_initrd);
+
 static int __init parse_tag_initrd(const struct tag *tag)
 {
 	pr_warn("ATAG_INITRD is deprecated; "
@@ -69,7 +90,6 @@ static int __init parse_tag_initrd2(const struct tag *tag)
 }
 
 __tagtable(ATAG_INITRD2, parse_tag_initrd2);
-#endif
 
 static void __init find_limits(unsigned long *min, unsigned long *max_low,
 			       unsigned long *max_high)
@@ -181,9 +201,24 @@ int pfn_valid(unsigned long pfn)
 	if (__phys_to_pfn(addr) != pfn)
 		return 0;
 
-	return memblock_is_map_memory(addr);
+	return memblock_is_map_memory(__pfn_to_phys(pfn));
 }
 EXPORT_SYMBOL(pfn_valid);
+#endif
+
+#ifndef CONFIG_SPARSEMEM
+static void __init arm_memory_present(void)
+{
+}
+#else
+static void __init arm_memory_present(void)
+{
+	struct memblock_region *reg;
+
+	for_each_memblock(memory, reg)
+		memory_present(0, memblock_region_memory_base_pfn(reg),
+			       memblock_region_memory_end_pfn(reg));
+}
 #endif
 
 static bool arm_memblock_steal_permitted = true;
@@ -194,11 +229,7 @@ phys_addr_t __init arm_memblock_steal(phys_addr_t size, phys_addr_t align)
 
 	BUG_ON(!arm_memblock_steal_permitted);
 
-	phys = memblock_phys_alloc(size, align);
-	if (!phys)
-		panic("Failed to steal %pa bytes at %pS\n",
-		      &size, (void *)_RET_IP_);
-
+	phys = memblock_alloc_base(size, align, MEMBLOCK_ALLOC_ANYWHERE);
 	memblock_free(phys, size);
 	memblock_remove(phys, size);
 
@@ -210,6 +241,12 @@ static void __init arm_initrd_init(void)
 #ifdef CONFIG_BLK_DEV_INITRD
 	phys_addr_t start;
 	unsigned long size;
+
+	/* FDT scan will populate initrd_start */
+	if (initrd_start && !phys_initrd_size) {
+		phys_initrd_start = __virt_to_phys(initrd_start);
+		phys_initrd_size = initrd_end - initrd_start;
+	}
 
 	initrd_start = initrd_end = 0;
 
@@ -246,22 +283,6 @@ static void __init arm_initrd_init(void)
 #endif
 }
 
-#ifdef CONFIG_CPU_ICACHE_MISMATCH_WORKAROUND
-void check_cpu_icache_size(int cpuid)
-{
-	u32 size, ctr;
-
-	asm("mrc p15, 0, %0, c0, c0, 1" : "=r" (ctr));
-
-	size = 1 << ((ctr & 0xf) + 2);
-	if (cpuid != 0 && icache_size != size)
-		pr_info("CPU%u: detected I-Cache line size mismatch, workaround enabled\n",
-			cpuid);
-	if (icache_size > size)
-		icache_size = size;
-}
-#endif
-
 void __init arm_memblock_init(const struct machine_desc *mdesc)
 {
 	/* Register the kernel text, kernel data and initrd with memblock. */
@@ -287,18 +308,21 @@ void __init arm_memblock_init(const struct machine_desc *mdesc)
 
 void __init bootmem_init(void)
 {
+	unsigned long min, max_low, max_high;
+
 	memblock_allow_resize();
+	max_low = max_high = 0;
 
-	find_limits(&min_low_pfn, &max_low_pfn, &max_pfn);
+	find_limits(&min, &max_low, &max_high);
 
-	early_memtest((phys_addr_t)min_low_pfn << PAGE_SHIFT,
-		      (phys_addr_t)max_low_pfn << PAGE_SHIFT);
+	early_memtest((phys_addr_t)min << PAGE_SHIFT,
+		      (phys_addr_t)max_low << PAGE_SHIFT);
 
 	/*
 	 * Sparsemem tries to allocate bootmem in memory_present(),
 	 * so must be done after the fixed reservations
 	 */
-	memblocks_present();
+	arm_memory_present();
 
 	/*
 	 * sparse_init() needs the bootmem allocator up and running.
@@ -310,7 +334,16 @@ void __init bootmem_init(void)
 	 * the sparse mem_map arrays initialized by sparse_init()
 	 * for memmap_init_zone(), otherwise all PFNs are invalid.
 	 */
-	zone_sizes_init(min_low_pfn, max_low_pfn, max_pfn);
+	zone_sizes_init(min, max_low, max_high);
+
+	/*
+	 * This doesn't seem to be used by the Linux memory manager any
+	 * more, but is used by ll_rw_block.  If we can get rid of it, we
+	 * also get rid of some of the stuff above as well.
+	 */
+	min_low_pfn = min;
+	max_low_pfn = max_low;
+	max_pfn = max_high;
 }
 
 /*
@@ -470,15 +503,17 @@ static void __init free_highpages(void)
  */
 void __init mem_init(void)
 {
-#ifdef CONFIG_ARM_LPAE
-	swiotlb_init(1);
+#ifdef CONFIG_HAVE_TCM
+	/* These pointers are filled in on TCM detection */
+	extern u32 dtcm_end;
+	extern u32 itcm_end;
 #endif
 
 	set_max_mapnr(pfn_to_page(max_pfn) - mem_map);
 
 	/* this will put all unused low memory onto the freelists */
 	free_unused_memmap();
-	memblock_free_all();
+	free_all_bootmem();
 
 #ifdef CONFIG_SA1111
 	/* now that our DMA memory is actually so designated, we can free it */
@@ -488,6 +523,55 @@ void __init mem_init(void)
 	free_highpages();
 
 	mem_init_print_info(NULL);
+
+#define MLK(b, t) b, t, ((t) - (b)) >> 10
+#define MLM(b, t) b, t, ((t) - (b)) >> 20
+#define MLK_ROUNDUP(b, t) b, t, DIV_ROUND_UP(((t) - (b)), SZ_1K)
+
+	pr_notice("Virtual kernel memory layout:\n"
+			"    vector  : 0x%08lx - 0x%08lx   (%4ld kB)\n"
+#ifdef CONFIG_HAVE_TCM
+			"    DTCM    : 0x%08lx - 0x%08lx   (%4ld kB)\n"
+			"    ITCM    : 0x%08lx - 0x%08lx   (%4ld kB)\n"
+#endif
+			"    fixmap  : 0x%08lx - 0x%08lx   (%4ld kB)\n"
+			"    vmalloc : 0x%08lx - 0x%08lx   (%4ld MB)\n"
+			"    lowmem  : 0x%08lx - 0x%08lx   (%4ld MB)\n"
+#ifdef CONFIG_HIGHMEM
+			"    pkmap   : 0x%08lx - 0x%08lx   (%4ld MB)\n"
+#endif
+#ifdef CONFIG_MODULES
+			"    modules : 0x%08lx - 0x%08lx   (%4ld MB)\n"
+#endif
+			"      .text : 0x%p" " - 0x%p" "   (%4td kB)\n"
+			"      .init : 0x%p" " - 0x%p" "   (%4td kB)\n"
+			"      .data : 0x%p" " - 0x%p" "   (%4td kB)\n"
+			"       .bss : 0x%p" " - 0x%p" "   (%4td kB)\n",
+
+			MLK(VECTORS_BASE, VECTORS_BASE + PAGE_SIZE),
+#ifdef CONFIG_HAVE_TCM
+			MLK(DTCM_OFFSET, (unsigned long) dtcm_end),
+			MLK(ITCM_OFFSET, (unsigned long) itcm_end),
+#endif
+			MLK(FIXADDR_START, FIXADDR_END),
+			MLM(VMALLOC_START, VMALLOC_END),
+			MLM(PAGE_OFFSET, (unsigned long)high_memory),
+#ifdef CONFIG_HIGHMEM
+			MLM(PKMAP_BASE, (PKMAP_BASE) + (LAST_PKMAP) *
+				(PAGE_SIZE)),
+#endif
+#ifdef CONFIG_MODULES
+			MLM(MODULES_VADDR, MODULES_END),
+#endif
+
+			MLK_ROUNDUP(_text, _etext),
+			MLK_ROUNDUP(__init_begin, __init_end),
+			MLK_ROUNDUP(_sdata, _edata),
+			MLK_ROUNDUP(__bss_start, __bss_stop));
+
+#undef MLK
+#undef MLM
+#undef MLK_ROUNDUP
 
 	/*
 	 * Check boundaries twice: Some fundamental inconsistencies can
@@ -594,8 +678,8 @@ static inline bool arch_has_strict_perms(void)
 	return !!(get_cr() & CR_XP);
 }
 
-static void set_section_perms(struct section_perm *perms, int n, bool set,
-			      struct mm_struct *mm)
+void set_section_perms(struct section_perm *perms, int n, bool set,
+			struct mm_struct *mm)
 {
 	size_t i;
 	unsigned long addr;
@@ -699,14 +783,27 @@ void free_initmem(void)
 }
 
 #ifdef CONFIG_BLK_DEV_INITRD
+
+static int keep_initrd;
+
 void free_initrd_mem(unsigned long start, unsigned long end)
 {
-	if (start == initrd_start)
-		start = round_down(start, PAGE_SIZE);
-	if (end == initrd_end)
-		end = round_up(end, PAGE_SIZE);
+	if (!keep_initrd) {
+		if (start == initrd_start)
+			start = round_down(start, PAGE_SIZE);
+		if (end == initrd_end)
+			end = round_up(end, PAGE_SIZE);
 
-	poison_init_mem((void *)start, PAGE_ALIGN(end) - start);
-	free_reserved_area((void *)start, (void *)end, -1, "initrd");
+		poison_init_mem((void *)start, PAGE_ALIGN(end) - start);
+		free_reserved_area((void *)start, (void *)end, -1, "initrd");
+	}
 }
+
+static int __init keepinitrd_setup(char *__unused)
+{
+	keep_initrd = 1;
+	return 1;
+}
+
+__setup("keepinitrd", keepinitrd_setup);
 #endif

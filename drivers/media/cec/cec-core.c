@@ -24,14 +24,6 @@ int cec_debug;
 module_param_named(debug, cec_debug, int, 0644);
 MODULE_PARM_DESC(debug, "debug level (0-2)");
 
-static bool debug_phys_addr;
-module_param(debug_phys_addr, bool, 0644);
-MODULE_PARM_DESC(debug_phys_addr, "add CEC_CAP_PHYS_ADDR if set");
-
-int cec_debounce_ms;
-module_param_named(debounce_ms, cec_debounce_ms, int, 0644);
-MODULE_PARM_DESC(debounce_ms, "invalid physical address debounce time in ms");
-
 static dev_t cec_dev_t;
 
 /* Active devices */
@@ -130,16 +122,14 @@ static int __must_check cec_devnode_register(struct cec_devnode *devnode,
 	/* Part 2: Initialize and register the character device */
 	cdev_init(&devnode->cdev, &cec_devnode_fops);
 	devnode->cdev.owner = owner;
-	kobject_set_name(&devnode->cdev.kobj, "cec%d", devnode->minor);
 
-	devnode->registered = true;
 	ret = cdev_device_add(&devnode->cdev, &devnode->dev);
 	if (ret) {
-		devnode->registered = false;
 		pr_err("%s: cdev_device_add failed\n", __func__);
 		goto clr_bit;
 	}
 
+	devnode->registered = true;
 	return 0;
 
 clr_bit:
@@ -178,8 +168,6 @@ static void cec_devnode_unregister(struct cec_adapter *adap)
 	devnode->unregistered = true;
 	mutex_unlock(&devnode->lock);
 
-	cancel_delayed_work_sync(&adap->debounce_work);
-
 	mutex_lock(&adap->lock);
 	__cec_s_phys_addr(adap, CEC_PHYS_ADDR_INVALID, false);
 	__cec_s_log_addrs(adap, NULL, false);
@@ -188,6 +176,24 @@ static void cec_devnode_unregister(struct cec_adapter *adap)
 	cdev_device_del(&devnode->cdev, &devnode->dev);
 	put_device(&devnode->dev);
 }
+
+#ifdef CONFIG_CEC_NOTIFIER
+static void cec_cec_notify(struct cec_adapter *adap, u16 pa)
+{
+	cec_s_phys_addr(adap, pa, false);
+}
+
+void cec_register_cec_notifier(struct cec_adapter *adap,
+			       struct cec_notifier *notifier)
+{
+	if (WARN_ON(!cec_is_registered(adap)))
+		return;
+
+	adap->notifier = notifier;
+	cec_notifier_register(adap->notifier, adap, cec_cec_notify);
+}
+EXPORT_SYMBOL_GPL(cec_register_cec_notifier);
+#endif
 
 #ifdef CONFIG_DEBUG_FS
 static ssize_t cec_error_inj_write(struct file *file,
@@ -238,17 +244,6 @@ static const struct file_operations cec_error_inj_fops = {
 };
 #endif
 
-static void cec_s_phys_addr_debounce(struct work_struct *work)
-{
-	struct delayed_work *delayed_work = to_delayed_work(work);
-	struct cec_adapter *adap =
-		container_of(delayed_work, struct cec_adapter, debounce_work);
-
-	mutex_lock(&adap->lock);
-	__cec_s_phys_addr(adap, CEC_PHYS_ADDR_INVALID, false);
-	mutex_unlock(&adap->lock);
-}
-
 struct cec_adapter *cec_allocate_adapter(const struct cec_adap_ops *ops,
 					 void *priv, const char *name, u32 caps,
 					 u8 available_las)
@@ -269,14 +264,12 @@ struct cec_adapter *cec_allocate_adapter(const struct cec_adap_ops *ops,
 	adap = kzalloc(sizeof(*adap), GFP_KERNEL);
 	if (!adap)
 		return ERR_PTR(-ENOMEM);
-	strscpy(adap->name, name, sizeof(adap->name));
+	strlcpy(adap->name, name, sizeof(adap->name));
 	adap->phys_addr = CEC_PHYS_ADDR_INVALID;
 	adap->cec_pin_is_high = true;
 	adap->log_addrs.cec_version = CEC_OP_CEC_VERSION_2_0;
 	adap->log_addrs.vendor_id = CEC_VENDOR_ID_NONE;
 	adap->capabilities = caps;
-	if (debug_phys_addr)
-		adap->capabilities |= CEC_CAP_PHYS_ADDR;
 	adap->needs_hpd = caps & CEC_CAP_NEEDS_HPD;
 	adap->available_log_addrs = available_las;
 	adap->sequence = 0;
@@ -287,7 +280,6 @@ struct cec_adapter *cec_allocate_adapter(const struct cec_adap_ops *ops,
 	INIT_LIST_HEAD(&adap->transmit_queue);
 	INIT_LIST_HEAD(&adap->wait_queue);
 	init_waitqueue_head(&adap->kthread_waitq);
-	INIT_DELAYED_WORK(&adap->debounce_work, cec_s_phys_addr_debounce);
 
 	/* adap->devnode initialization */
 	INIT_LIST_HEAD(&adap->devnode.fhs);
@@ -315,10 +307,12 @@ struct cec_adapter *cec_allocate_adapter(const struct cec_adap_ops *ops,
 		return ERR_PTR(-ENOMEM);
 	}
 
+	snprintf(adap->device_name, sizeof(adap->device_name),
+		 "RC for %s", name);
 	snprintf(adap->input_phys, sizeof(adap->input_phys),
-		 "%s/input0", adap->name);
+		 "%s/input0", name);
 
-	adap->rc->device_name = adap->name;
+	adap->rc->device_name = adap->device_name;
 	adap->rc->input_phys = adap->input_phys;
 	adap->rc->input_id.bustype = BUS_CEC;
 	adap->rc->input_id.vendor = 0;
@@ -416,7 +410,8 @@ void cec_unregister_adapter(struct cec_adapter *adap)
 #endif
 	debugfs_remove_recursive(adap->cec_dir);
 #ifdef CONFIG_CEC_NOTIFIER
-	cec_notifier_cec_adap_unregister(adap->notifier, adap);
+	if (adap->notifier)
+		cec_notifier_unregister(adap->notifier);
 #endif
 	cec_devnode_unregister(adap);
 }

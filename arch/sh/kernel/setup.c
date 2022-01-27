@@ -32,7 +32,6 @@
 #include <linux/of.h>
 #include <linux/of_fdt.h>
 #include <linux/uaccess.h>
-#include <uapi/linux/mount.h>
 #include <asm/io.h>
 #include <asm/page.h>
 #include <asm/elf.h>
@@ -44,7 +43,6 @@
 #include <asm/mmu_context.h>
 #include <asm/mmzone.h>
 #include <asm/sparsemem.h>
-#include <asm/platform_early.h>
 
 /*
  * Initialize loops_per_jiffy as 10000000 (1000MIPS).
@@ -329,7 +327,7 @@ void __init setup_arch(char **cmdline_p)
 	sh_mv_setup();
 
 	/* Let earlyprintk output early console messages */
-	sh_early_platform_driver_probe("earlyprintk", 1, 1);
+	early_platform_driver_probe("earlyprintk", 1, 1);
 
 #ifdef CONFIG_OF_FLATTREE
 #ifdef CONFIG_USE_BUILTIN_DTB
@@ -341,6 +339,10 @@ void __init setup_arch(char **cmdline_p)
 
 	paging_init();
 
+#ifdef CONFIG_DUMMY_CONSOLE
+	conswitchp = &dummy_con;
+#endif
+
 	/* Perform the machine specific initialisation */
 	if (likely(sh_mv.mv_setup))
 		sh_mv.mv_setup(cmdline_p);
@@ -351,7 +353,7 @@ void __init setup_arch(char **cmdline_p)
 /* processor boot mode configuration */
 int generic_mode_pins(void)
 {
-	pr_warn("generic_mode_pins(): missing mode pin configuration\n");
+	pr_warning("generic_mode_pins(): missing mode pin configuration\n");
 	return 0;
 }
 

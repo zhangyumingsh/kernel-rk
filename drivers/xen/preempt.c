@@ -1,14 +1,18 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Preemptible hypercalls
  *
  * Copyright (C) 2014 Citrix Systems R&D ltd.
+ *
+ * This source code is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License as
+ * published by the Free Software Foundation; either version 2 of the
+ * License, or (at your option) any later version.
  */
 
 #include <linux/sched.h>
 #include <xen/xen-ops.h>
 
-#ifndef CONFIG_PREEMPTION
+#ifndef CONFIG_PREEMPT
 
 /*
  * Some hypercalls issued by the toolstack can take many 10s of
@@ -27,7 +31,7 @@ EXPORT_SYMBOL_GPL(xen_in_preemptible_hcall);
 asmlinkage __visible void xen_maybe_preempt_hcall(void)
 {
 	if (unlikely(__this_cpu_read(xen_in_preemptible_hcall)
-		     && need_resched())) {
+		     && need_resched() && !preempt_count())) {
 		/*
 		 * Clear flag as we may be rescheduled on a different
 		 * cpu.
@@ -39,4 +43,4 @@ asmlinkage __visible void xen_maybe_preempt_hcall(void)
 		__this_cpu_write(xen_in_preemptible_hcall, true);
 	}
 }
-#endif /* CONFIG_PREEMPTION */
+#endif /* CONFIG_PREEMPT */

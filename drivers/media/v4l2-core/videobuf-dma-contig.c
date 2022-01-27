@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * helper functions for physically contiguous capture buffers
  *
@@ -9,6 +8,10 @@
  *
  * Based on videobuf-vmalloc.c,
  * (c) 2007 Mauro Carvalho Chehab, <mchehab@kernel.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2
  */
 
 #include <linux/init.h>
@@ -246,7 +249,7 @@ static int __videobuf_iolock(struct videobuf_queue *q,
 
 		/* All handling should be done by __videobuf_mmap_mapper() */
 		if (!mem->vaddr) {
-			dev_err(q->dev, "memory is not allocated/mmapped.\n");
+			dev_err(q->dev, "memory is not alloced/mmapped.\n");
 			return -EINVAL;
 		}
 		break;
@@ -278,6 +281,7 @@ static int __videobuf_mmap_mapper(struct videobuf_queue *q,
 	struct videobuf_dma_contig_memory *mem;
 	struct videobuf_mapping *map;
 	int retval;
+	unsigned long size;
 
 	dev_dbg(q->dev, "%s\n", __func__);
 
@@ -300,6 +304,7 @@ static int __videobuf_mmap_mapper(struct videobuf_queue *q,
 		goto error;
 
 	/* Try to remap memory */
+	size = vma->vm_end - vma->vm_start;
 	vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
 
 	/* the "vm_pgoff" is just used in v4l2 to find the
@@ -310,7 +315,7 @@ static int __videobuf_mmap_mapper(struct videobuf_queue *q,
 	 */
 	vma->vm_pgoff = 0;
 
-	retval = vm_iomap_memory(vma, mem->dma_handle, mem->size);
+	retval = vm_iomap_memory(vma, mem->dma_handle, size);
 	if (retval) {
 		dev_err(q->dev, "mmap: remap failed with error %d. ",
 			retval);

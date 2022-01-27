@@ -1,8 +1,24 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Copyright (C) 2003 - 2009 NetXen, Inc.
  * Copyright (C) 2009 - QLogic Corporation.
  * All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version 2
+ * of the License, or (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, see <http://www.gnu.org/licenses/>.
+ *
+ * The full GNU General Public License is included in this distribution
+ * in the file called "COPYING".
+ *
  */
 
 #include <linux/slab.h>
@@ -49,7 +65,7 @@ static int netxen_nic_open(struct net_device *netdev);
 static int netxen_nic_close(struct net_device *netdev);
 static netdev_tx_t netxen_nic_xmit_frame(struct sk_buff *,
 					       struct net_device *);
-static void netxen_tx_timeout(struct net_device *netdev, unsigned int txqueue);
+static void netxen_tx_timeout(struct net_device *netdev);
 static void netxen_tx_timeout_task(struct work_struct *work);
 static void netxen_fw_poll_work(struct work_struct *work);
 static void netxen_schedule_work(struct netxen_adapter *adapter,
@@ -564,11 +580,6 @@ static const struct net_device_ops netxen_netdev_ops = {
 	.ndo_set_features = netxen_set_features,
 };
 
-static inline bool netxen_function_zero(struct pci_dev *pdev)
-{
-	return (PCI_FUNC(pdev->devfn) == 0) ? true : false;
-}
-
 static inline void netxen_set_interrupt_mode(struct netxen_adapter *adapter,
 					     u32 mode)
 {
@@ -664,7 +675,7 @@ static int netxen_setup_intr(struct netxen_adapter *adapter)
 	netxen_initialize_interrupt_registers(adapter);
 	netxen_set_msix_bit(pdev, 0);
 
-	if (netxen_function_zero(pdev)) {
+	if (adapter->portnum == 0) {
 		if (!netxen_setup_msi_interrupts(adapter, num_msix))
 			netxen_set_interrupt_mode(adapter, NETXEN_MSI_MODE);
 		else
@@ -1768,6 +1779,11 @@ static pci_ers_result_t netxen_io_slot_reset(struct pci_dev *pdev)
 	return err ? PCI_ERS_RESULT_DISCONNECT : PCI_ERS_RESULT_RECOVERED;
 }
 
+static void netxen_io_resume(struct pci_dev *pdev)
+{
+	pci_cleanup_aer_uncorrect_error_status(pdev);
+}
+
 static void netxen_nic_shutdown(struct pci_dev *pdev)
 {
 	struct netxen_adapter *adapter = pci_get_drvdata(pdev);
@@ -1980,7 +1996,7 @@ netxen_map_tx_skb(struct pci_dev *pdev,
 		struct sk_buff *skb, struct netxen_cmd_buffer *pbuf)
 {
 	struct netxen_skb_frag *nf;
-	skb_frag_t *frag;
+	struct skb_frag_struct *frag;
 	int i, nr_frags;
 	dma_addr_t map;
 
@@ -2043,7 +2059,7 @@ netxen_nic_xmit_frame(struct sk_buff *skb, struct net_device *netdev)
 	struct pci_dev *pdev;
 	int i, k;
 	int delta = 0;
-	skb_frag_t *frag;
+	struct skb_frag_struct *frag;
 
 	u32 producer;
 	int frag_count;
@@ -2222,7 +2238,7 @@ static void netxen_nic_handle_phy_intr(struct netxen_adapter *adapter)
 	netxen_advert_link_change(adapter, linkup);
 }
 
-static void netxen_tx_timeout(struct net_device *netdev, unsigned int txqueue)
+static void netxen_tx_timeout(struct net_device *netdev)
 {
 	struct netxen_adapter *adapter = netdev_priv(netdev);
 
@@ -3248,7 +3264,6 @@ netxen_config_indev_addr(struct netxen_adapter *adapter,
 		struct net_device *dev, unsigned long event)
 {
 	struct in_device *indev;
-	struct in_ifaddr *ifa;
 
 	if (!netxen_destip_supported(adapter))
 		return;
@@ -3257,8 +3272,7 @@ netxen_config_indev_addr(struct netxen_adapter *adapter,
 	if (!indev)
 		return;
 
-	rcu_read_lock();
-	in_dev_for_each_ifa_rcu(ifa, indev) {
+	for_ifa(indev) {
 		switch (event) {
 		case NETDEV_UP:
 			netxen_list_config_ip(adapter, ifa, NX_IP_UP);
@@ -3269,8 +3283,8 @@ netxen_config_indev_addr(struct netxen_adapter *adapter,
 		default:
 			break;
 		}
-	}
-	rcu_read_unlock();
+	} endfor_ifa(indev);
+
 	in_dev_put(indev);
 }
 
@@ -3446,6 +3460,7 @@ netxen_free_ip_list(struct netxen_adapter *adapter, bool master)
 static const struct pci_error_handlers netxen_err_handler = {
 	.error_detected = netxen_io_error_detected,
 	.slot_reset = netxen_io_slot_reset,
+	.resume = netxen_io_resume,
 };
 
 static struct pci_driver netxen_driver = {

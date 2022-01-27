@@ -1898,7 +1898,7 @@ static inline void cas_tx_ringN(struct cas *cp, int ring, int limit)
 		cp->net_stats[ring].tx_packets++;
 		cp->net_stats[ring].tx_bytes += skb->len;
 		spin_unlock(&cp->stat_lock[ring]);
-		dev_consume_skb_irq(skb);
+		dev_kfree_skb_irq(skb);
 	}
 	cp->tx_old[ring] = entry;
 
@@ -2034,7 +2034,7 @@ static int cas_rx_process_pkt(struct cas *cp, struct cas_rx_comp *rxc,
 
 		__skb_frag_set_page(frag, page->buffer);
 		__skb_frag_ref(frag);
-		skb_frag_off_set(frag, off);
+		frag->page_offset = off;
 		skb_frag_size_set(frag, hlen - swivel);
 
 		/* any more data? */
@@ -2058,7 +2058,7 @@ static int cas_rx_process_pkt(struct cas *cp, struct cas_rx_comp *rxc,
 
 			__skb_frag_set_page(frag, page->buffer);
 			__skb_frag_ref(frag);
-			skb_frag_off_set(frag, 0);
+			frag->page_offset = 0;
 			skb_frag_size_set(frag, hlen);
 			RX_USED_ADD(page, hlen + cp->crc_size);
 		}
@@ -2666,7 +2666,7 @@ static void cas_netpoll(struct net_device *dev)
 }
 #endif
 
-static void cas_tx_timeout(struct net_device *dev, unsigned int txqueue)
+static void cas_tx_timeout(struct net_device *dev)
 {
 	struct cas *cp = netdev_priv(dev);
 
@@ -2816,7 +2816,7 @@ static inline int cas_xmit_tx_ringN(struct cas *cp, int ring,
 		mapping = skb_frag_dma_map(&cp->pdev->dev, fragp, 0, len,
 					   DMA_TO_DEVICE);
 
-		tabort = cas_calc_tabort(cp, skb_frag_off(fragp), len);
+		tabort = cas_calc_tabort(cp, fragp->page_offset, len);
 		if (unlikely(tabort)) {
 			void *addr;
 
@@ -2827,7 +2827,7 @@ static inline int cas_xmit_tx_ringN(struct cas *cp, int ring,
 
 			addr = cas_page_map(skb_frag_page(fragp));
 			memcpy(tx_tiny_buf(cp, ring, entry),
-			       addr + skb_frag_off(fragp) + len - tabort,
+			       addr + fragp->page_offset + len - tabort,
 			       tabort);
 			cas_page_unmap(addr);
 			mapping = tx_tiny_map(cp, ring, entry, tentry);
@@ -4971,7 +4971,7 @@ static int cas_init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
 					  cas_cacheline_size)) {
 			dev_err(&pdev->dev, "Could not set PCI cache "
 			       "line size\n");
-			goto err_write_cacheline;
+			goto err_out_free_res;
 		}
 	}
 #endif
@@ -5144,7 +5144,6 @@ err_out_iounmap:
 err_out_free_res:
 	pci_release_regions(pdev);
 
-err_write_cacheline:
 	/* Try to restore it in case the error occurred after we
 	 * set it.
 	 */

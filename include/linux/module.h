@@ -1,14 +1,11 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
+#ifndef _LINUX_MODULE_H
+#define _LINUX_MODULE_H
 /*
  * Dynamic loading of modules into the kernel.
  *
  * Rewritten by Richard Henderson <rth@tamu.edu> Dec 1996
  * Rewritten again by Rusty Russell, 2002
  */
-
-#ifndef _LINUX_MODULE_H
-#define _LINUX_MODULE_H
-
 #include <linux/list.h>
 #include <linux/stat.h>
 #include <linux/compiler.h>
@@ -24,10 +21,14 @@
 #include <linux/rbtree_latch.h>
 #include <linux/error-injection.h>
 #include <linux/tracepoint-defs.h>
-#include <linux/srcu.h>
+#include <linux/cfi.h>
+#include <linux/android_kabi.h>
 
 #include <linux/percpu.h>
 #include <asm/module.h>
+
+/* In stripped ARM and x86-64 modules, ~ is surprisingly rare. */
+#define MODULE_SIG_STRING "~Module signature appended~\n"
 
 /* Not Yet Implemented */
 #define MODULE_SUPPORTED_DEVICE(name)
@@ -125,6 +126,7 @@ extern void cleanup_module(void);
 #define late_initcall_sync(fn)		module_init(fn)
 
 #define console_initcall(fn)		module_init(fn)
+#define security_initcall(fn)		module_init(fn)
 
 /* Each module must use one module_init(). */
 #define module_init(initfn)					\
@@ -170,20 +172,10 @@ extern void cleanup_module(void);
 #define MODULE_SOFTDEP(_softdep) MODULE_INFO(softdep, _softdep)
 
 /*
- * MODULE_FILE is used for generating modules.builtin
- * So, make it no-op when this is being built as a module
- */
-#ifdef MODULE
-#define MODULE_FILE
-#else
-#define MODULE_FILE	MODULE_INFO(file, KBUILD_MODFILE);
-#endif
-
-/*
  * The following license idents are currently accepted as indicating free
  * software modules
  *
- *	"GPL"				[GNU Public License v2]
+ *	"GPL"				[GNU Public License v2 or later]
  *	"GPL v2"			[GNU Public License v2]
  *	"GPL and additional rights"	[GNU Public License v2 rights and more]
  *	"Dual BSD/GPL"			[GNU Public License v2
@@ -197,22 +189,6 @@ extern void cleanup_module(void);
  *
  *	"Proprietary"			[Non free products]
  *
- * Both "GPL v2" and "GPL" (the latter also in dual licensed strings) are
- * merely stating that the module is licensed under the GPL v2, but are not
- * telling whether "GPL v2 only" or "GPL v2 or later". The reason why there
- * are two variants is a historic and failed attempt to convey more
- * information in the MODULE_LICENSE string. For module loading the
- * "only/or later" distinction is completely irrelevant and does neither
- * replace the proper license identifiers in the corresponding source file
- * nor amends them in any way. The sole purpose is to make the
- * 'Proprietary' flagging work and to refuse to bind symbols which are
- * exported with EXPORT_SYMBOL_GPL when a non free module is loaded.
- *
- * In the same way "BSD" is not a clear license information. It merely
- * states, that the module is licensed under one of the compatible BSD
- * license variants. The detailed and correct license information is again
- * to be found in the corresponding source files.
- *
  * There are dual licensed components, but when running with Linux it is the
  * GPL that is relevant so this is a non issue. Similarly LGPL linked with GPL
  * is a GPL combined work.
@@ -223,7 +199,7 @@ extern void cleanup_module(void);
  * 2.	So the community can ignore bug reports including proprietary modules
  * 3.	So vendors can do likewise based on their own policies
  */
-#define MODULE_LICENSE(_license) MODULE_FILE MODULE_INFO(license, _license)
+#define MODULE_LICENSE(_license) MODULE_INFO(license, _license)
 
 /*
  * Author(s), use "Name <email>" or just "Name", for multiple
@@ -264,7 +240,6 @@ extern typeof(name) __mod_##type##__##name##_device_table		\
 #define MODULE_VERSION(_version) MODULE_INFO(version, _version)
 #else
 #define MODULE_VERSION(_version)					\
-	MODULE_INFO(version, _version);					\
 	static struct module_version_attribute ___modver_attr = {	\
 		.mattr	= {						\
 			.attr	= {					\
@@ -285,8 +260,6 @@ extern typeof(name) __mod_##type##__##name##_device_table		\
  * format is simply firmware file name.  Multiple firmware
  * files require multiple MODULE_FIRMWARE() specifiers */
 #define MODULE_FIRMWARE(_firmware) MODULE_INFO(firmware, _firmware)
-
-#define MODULE_IMPORT_NS(ns) MODULE_INFO(import_ns, #ns)
 
 struct notifier_block;
 
@@ -345,7 +318,6 @@ struct mod_kallsyms {
 	Elf_Sym *symtab;
 	unsigned int num_symtab;
 	char *strtab;
-	char *typetab;
 };
 
 #ifdef CONFIG_LIVEPATCH
@@ -378,6 +350,10 @@ struct module {
 	const s32 *crcs;
 	unsigned int num_syms;
 
+#ifdef CONFIG_CFI_CLANG
+	cfi_check_fn cfi_check;
+#endif
+
 	/* Kernel parameters. */
 #ifdef CONFIG_SYSFS
 	struct mutex param_lock;
@@ -402,10 +378,12 @@ struct module {
 	const s32 *unused_gpl_crcs;
 #endif
 
-#ifdef CONFIG_MODULE_SIG
-	/* Signature was verified. */
+	/*
+	 * Signature was verified. Unconditionally compiled in Android to
+	 * preserve ABI compatibility between kernels without module
+	 * signing enabled and signed modules.
+	 */
 	bool sig_ok;
-#endif
 
 	bool async_probe_requested;
 
@@ -439,7 +417,7 @@ struct module {
 
 #ifdef CONFIG_KALLSYMS
 	/* Protected by RCU and/or module_mutex: use rcu_dereference() */
-	struct mod_kallsyms __rcu *kallsyms;
+	struct mod_kallsyms *kallsyms;
 	struct mod_kallsyms core_kallsyms;
 
 	/* Section attributes */
@@ -462,14 +440,6 @@ struct module {
 #ifdef CONFIG_TRACEPOINTS
 	unsigned int num_tracepoints;
 	tracepoint_ptr_t *tracepoints_ptrs;
-#endif
-#ifdef CONFIG_TREE_SRCU
-	unsigned int num_srcu_structs;
-	struct srcu_struct **srcu_struct_ptrs;
-#endif
-#ifdef CONFIG_BPF_EVENTS
-	unsigned int num_bpf_raw_events;
-	struct bpf_raw_event_map *bpf_raw_events;
 #endif
 #ifdef CONFIG_JUMP_LABEL
 	struct jump_entry *jump_entries;
@@ -520,16 +490,13 @@ struct module {
 	struct error_injection_entry *ei_funcs;
 	unsigned int num_ei_funcs;
 #endif
+	ANDROID_KABI_RESERVE(1);
+	ANDROID_KABI_RESERVE(2);
+	ANDROID_KABI_RESERVE(3);
+	ANDROID_KABI_RESERVE(4);
 } ____cacheline_aligned __randomize_layout;
 #ifndef MODULE_ARCH_INIT
 #define MODULE_ARCH_INIT {}
-#endif
-
-#ifndef HAVE_ARCH_KALLSYMS_SYMBOL_VALUE
-static inline unsigned long kallsyms_symbol_value(const Elf_Sym *sym)
-{
-	return sym->st_value;
-}
 #endif
 
 extern struct mutex module_mutex;
@@ -574,33 +541,13 @@ struct module *find_module(const char *name);
 struct symsearch {
 	const struct kernel_symbol *start, *stop;
 	const s32 *crcs;
-	enum {
+	enum mod_license {
 		NOT_GPL_ONLY,
 		GPL_ONLY,
 		WILL_BE_GPL_ONLY,
-	} licence;
+	} license;
 	bool unused;
 };
-
-/*
- * Search for an exported symbol by name.
- *
- * Must be called with module_mutex held or preemption disabled.
- */
-const struct kernel_symbol *find_symbol(const char *name,
-					struct module **owner,
-					const s32 **crc,
-					bool gplok,
-					bool warn);
-
-/*
- * Walk the exported symbol table
- *
- * Must be called with module_mutex held or preemption disabled.
- */
-bool each_symbol_section(bool (*fn)(const struct symsearch *arr,
-				    struct module *owner,
-				    void *data), void *data);
 
 /* Returns 0 and fills in value, defined and namebuf, or -ERANGE if
    symnum out of range. */
@@ -649,7 +596,6 @@ static inline void __module_get(struct module *module)
 #define symbol_put_addr(p) do { } while (0)
 
 #endif /* CONFIG_MODULE_UNLOAD */
-int ref_module(struct module *a, struct module *b);
 
 /* This is a #define so the string doesn't get put in every .o file */
 #define module_name(mod)			\
@@ -695,7 +641,6 @@ static inline bool is_livepatch_module(struct module *mod)
 #endif /* CONFIG_LIVEPATCH */
 
 bool is_module_sig_enforced(void);
-void set_module_sig_enforced(void);
 
 #else /* !CONFIG_MODULES... */
 
@@ -833,10 +778,6 @@ static inline bool is_module_sig_enforced(void)
 	return false;
 }
 
-static inline void set_module_sig_enforced(void)
-{
-}
-
 /* Dereference module function descriptor */
 static inline
 void *dereference_module_function_descriptor(struct module *mod, void *ptr)
@@ -859,9 +800,13 @@ extern int module_sysfs_initialized;
 #define __MODULE_STRING(x) __stringify(x)
 
 #ifdef CONFIG_STRICT_MODULE_RWX
+extern void set_all_modules_text_rw(void);
+extern void set_all_modules_text_ro(void);
 extern void module_enable_ro(const struct module *mod, bool after_init);
 extern void module_disable_ro(const struct module *mod);
 #else
+static inline void set_all_modules_text_rw(void) { }
+static inline void set_all_modules_text_ro(void) { }
 static inline void module_enable_ro(const struct module *mod, bool after_init) { }
 static inline void module_disable_ro(const struct module *mod) { }
 #endif

@@ -1,6 +1,9 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2004, 2007-2010, 2011-2012 Synopsys, Inc. (www.synopsys.com)
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  *
  * Amit Bhor, Kanika Nema: Codito Technologies 2004
  */
@@ -19,8 +22,6 @@
 #include <linux/syscalls.h>
 #include <linux/elf.h>
 #include <linux/tick.h>
-
-#include <asm/fpu.h>
 
 SYSCALL_DEFINE1(arc_settls, void *, user_tls_data_ptr)
 {
@@ -60,7 +61,7 @@ SYSCALL_DEFINE3(arc_usr_cmpxchg, int *, uaddr, int, expected, int, new)
 	/* Z indicates to userspace if operation succeded */
 	regs->status32 &= ~STATUS_Z_MASK;
 
-	ret = access_ok(uaddr, sizeof(*uaddr));
+	ret = access_ok(VERIFY_WRITE, uaddr, sizeof(*uaddr));
 	if (!ret)
 		 goto fail;
 
@@ -99,7 +100,7 @@ fault:
 		 goto again;
 
 fail:
-	force_sig(SIGSEGV);
+	force_sig(SIGSEGV, current);
 	return ret;
 }
 
@@ -173,8 +174,9 @@ asmlinkage void ret_from_fork(void);
  * |    user_r25    |
  * ------------------  <===== END of PAGE
  */
-int copy_thread_tls(unsigned long clone_flags, unsigned long usp,
-	unsigned long kthread_arg, struct task_struct *p, unsigned long tls)
+int copy_thread(unsigned long clone_flags,
+		unsigned long usp, unsigned long kthread_arg,
+		struct task_struct *p)
 {
 	struct pt_regs *c_regs;        /* child's pt_regs */
 	unsigned long *childksp;       /* to unwind out of __switch_to() */
@@ -232,7 +234,7 @@ int copy_thread_tls(unsigned long clone_flags, unsigned long usp,
 		 * set task's userland tls data ptr from 4th arg
 		 * clone C-lib call is difft from clone sys-call
 		 */
-		task_thread_info(p)->thr_ptr = tls;
+		task_thread_info(p)->thr_ptr = regs->r3;
 	} else {
 		/* Normal fork case: set parent's TLS ptr in child */
 		task_thread_info(p)->thr_ptr =
@@ -265,7 +267,7 @@ int copy_thread_tls(unsigned long clone_flags, unsigned long usp,
 /*
  * Do necessary setup to start up a new user task
  */
-void start_thread(struct pt_regs *regs, unsigned long pc, unsigned long usp)
+void start_thread(struct pt_regs * regs, unsigned long pc, unsigned long usp)
 {
 	regs->sp = usp;
 	regs->ret = pc;
@@ -280,8 +282,6 @@ void start_thread(struct pt_regs *regs, unsigned long pc, unsigned long usp)
 #ifdef CONFIG_EZNPS_MTM_EXT
 	regs->eflags = 0;
 #endif
-
-	fpu_init_task(regs);
 
 	/* bogus seed values for debugging */
 	regs->lp_start = 0x10;
@@ -313,7 +313,7 @@ int elf_check_arch(const struct elf32_hdr *x)
 	eflags = x->e_flags;
 	if ((eflags & EF_ARC_OSABI_MSK) != EF_ARC_OSABI_CURRENT) {
 		pr_err("ABI mismatch - you need newer toolchain\n");
-		force_sigsegv(SIGSEGV);
+		force_sigsegv(SIGSEGV, current);
 		return 0;
 	}
 

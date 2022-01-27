@@ -16,10 +16,7 @@
 #include <linux/string.h>
 #include <linux/types.h>
 
-#include <drm/drm_connector.h>
-#include <drm/drm_device.h>
 #include <drm/drm_edid.h>
-#include <drm/drm_file.h>
 
 #include "cec-priv.h"
 
@@ -77,16 +74,6 @@ u16 cec_get_edid_phys_addr(const u8 *edid, unsigned int size,
 	return (edid[loc] << 8) | edid[loc + 1];
 }
 EXPORT_SYMBOL_GPL(cec_get_edid_phys_addr);
-
-void cec_fill_conn_info_from_drm(struct cec_connector_info *conn_info,
-				 const struct drm_connector *connector)
-{
-	memset(conn_info, 0, sizeof(*conn_info));
-	conn_info->type = CEC_CONNECTOR_TYPE_DRM;
-	conn_info->drm.card_no = connector->dev->primary->index;
-	conn_info->drm.connector_id = connector->base.id;
-}
-EXPORT_SYMBOL_GPL(cec_fill_conn_info_from_drm);
 
 /*
  * Queue a new event for this filehandle. If ts == 0, then set it
@@ -319,8 +306,6 @@ static void cec_post_state_event(struct cec_adapter *adap)
 
 	ev.state_change.phys_addr = adap->phys_addr;
 	ev.state_change.log_addr_mask = adap->log_addrs.log_addr_mask;
-	ev.state_change.have_conn_info =
-		adap->conn_info.type != CEC_CONNECTOR_TYPE_NO_CONNECTOR;
 	cec_queue_event(adap, &ev);
 }
 
@@ -749,7 +734,6 @@ int cec_transmit_msg_fh(struct cec_adapter *adap, struct cec_msg *msg,
 			struct cec_fh *fh, bool block)
 {
 	struct cec_data *data;
-	bool is_raw = msg_is_raw(msg);
 
 	msg->rx_ts = 0;
 	msg->tx_ts = 0;
@@ -765,10 +749,15 @@ int cec_transmit_msg_fh(struct cec_adapter *adap, struct cec_msg *msg,
 		/* Make sure the timeout isn't 0. */
 		msg->timeout = 1000;
 	}
-	msg->flags &= CEC_MSG_FL_REPLY_TO_FOLLOWERS | CEC_MSG_FL_RAW;
+	if (msg->timeout)
+		msg->flags &= CEC_MSG_FL_REPLY_TO_FOLLOWERS;
+	else
+		msg->flags = 0;
 
-	if (!msg->timeout)
-		msg->flags &= ~CEC_MSG_FL_REPLY_TO_FOLLOWERS;
+	if (msg->len > 1 && msg->msg[1] == CEC_MSG_CDC_MESSAGE) {
+		msg->msg[2] = adap->phys_addr >> 8;
+		msg->msg[3] = adap->phys_addr & 0xff;
+	}
 
 	/* Sanity checks */
 	if (msg->len == 0 || msg->len > CEC_MAX_MSG_SIZE) {
@@ -790,80 +779,44 @@ int cec_transmit_msg_fh(struct cec_adapter *adap, struct cec_msg *msg,
 		dprintk(1, "%s: can't reply to poll msg\n", __func__);
 		return -EINVAL;
 	}
-
-	if (is_raw) {
-		if (!capable(CAP_SYS_RAWIO))
-			return -EPERM;
-	} else {
-		/* A CDC-Only device can only send CDC messages */
-		if ((adap->log_addrs.flags & CEC_LOG_ADDRS_FL_CDC_ONLY) &&
-		    (msg->len == 1 || msg->msg[1] != CEC_MSG_CDC_MESSAGE)) {
-			dprintk(1, "%s: not a CDC message\n", __func__);
+	if (msg->len == 1) {
+		if (cec_msg_destination(msg) == 0xf) {
+			dprintk(1, "%s: invalid poll message\n", __func__);
 			return -EINVAL;
 		}
-
-		if (msg->len >= 4 && msg->msg[1] == CEC_MSG_CDC_MESSAGE) {
-			msg->msg[2] = adap->phys_addr >> 8;
-			msg->msg[3] = adap->phys_addr & 0xff;
-		}
-
-		if (msg->len == 1) {
-			if (cec_msg_destination(msg) == 0xf) {
-				dprintk(1, "%s: invalid poll message\n",
-					__func__);
-				return -EINVAL;
-			}
-			if (cec_has_log_addr(adap, cec_msg_destination(msg))) {
-				/*
-				 * If the destination is a logical address our
-				 * adapter has already claimed, then just NACK
-				 * this. It depends on the hardware what it will
-				 * do with a POLL to itself (some OK this), so
-				 * it is just as easy to handle it here so the
-				 * behavior will be consistent.
-				 */
-				msg->tx_ts = ktime_get_ns();
-				msg->tx_status = CEC_TX_STATUS_NACK |
-					CEC_TX_STATUS_MAX_RETRIES;
-				msg->tx_nack_cnt = 1;
+		if (cec_has_log_addr(adap, cec_msg_destination(msg))) {
+			/*
+			 * If the destination is a logical address our adapter
+			 * has already claimed, then just NACK this.
+			 * It depends on the hardware what it will do with a
+			 * POLL to itself (some OK this), so it is just as
+			 * easy to handle it here so the behavior will be
+			 * consistent.
+			 */
+			msg->tx_ts = ktime_get_ns();
+			msg->tx_status = CEC_TX_STATUS_NACK |
+					 CEC_TX_STATUS_MAX_RETRIES;
+			msg->tx_nack_cnt = 1;
+			msg->sequence = ++adap->sequence;
+			if (!msg->sequence)
 				msg->sequence = ++adap->sequence;
-				if (!msg->sequence)
-					msg->sequence = ++adap->sequence;
-				return 0;
-			}
-		}
-		if (msg->len > 1 && !cec_msg_is_broadcast(msg) &&
-		    cec_has_log_addr(adap, cec_msg_destination(msg))) {
-			dprintk(1, "%s: destination is the adapter itself\n",
-				__func__);
-			return -EINVAL;
-		}
-		if (msg->len > 1 && adap->is_configured &&
-		    !cec_has_log_addr(adap, cec_msg_initiator(msg))) {
-			dprintk(1, "%s: initiator has unknown logical address %d\n",
-				__func__, cec_msg_initiator(msg));
-			return -EINVAL;
-		}
-		/*
-		 * Special case: allow Ping and IMAGE/TEXT_VIEW_ON to be
-		 * transmitted to a TV, even if the adapter is unconfigured.
-		 * This makes it possible to detect or wake up displays that
-		 * pull down the HPD when in standby.
-		 */
-		if (!adap->is_configured && !adap->is_configuring &&
-		    (msg->len > 2 ||
-		     cec_msg_destination(msg) != CEC_LOG_ADDR_TV ||
-		     (msg->len == 2 && msg->msg[1] != CEC_MSG_IMAGE_VIEW_ON &&
-		      msg->msg[1] != CEC_MSG_TEXT_VIEW_ON))) {
-			dprintk(1, "%s: adapter is unconfigured\n", __func__);
-			return -ENONET;
+			return 0;
 		}
 	}
-
+	if (msg->len > 1 && !cec_msg_is_broadcast(msg) &&
+	    cec_has_log_addr(adap, cec_msg_destination(msg))) {
+		dprintk(1, "%s: destination is the adapter itself\n", __func__);
+		return -EINVAL;
+	}
+	if (msg->len > 1 && adap->is_configured &&
+	    !cec_has_log_addr(adap, cec_msg_initiator(msg))) {
+		dprintk(1, "%s: initiator has unknown logical address %d\n",
+			__func__, cec_msg_initiator(msg));
+		return -EINVAL;
+	}
 	if (!adap->is_configured && !adap->is_configuring) {
-		if (adap->needs_hpd) {
-			dprintk(1, "%s: adapter is unconfigured and needs HPD\n",
-				__func__);
+		if (adap->needs_hpd || msg->msg[0] != 0xf0) {
+			dprintk(1, "%s: adapter is unconfigured\n", __func__);
 			return -ENONET;
 		}
 		if (msg->reply) {
@@ -873,7 +826,7 @@ int cec_transmit_msg_fh(struct cec_adapter *adap, struct cec_msg *msg,
 	}
 
 	if (adap->transmit_queue_sz >= CEC_MAX_MSG_TX_QUEUE_SZ) {
-		dprintk(2, "%s: transmit queue full\n", __func__);
+		dprintk(1, "%s: transmit queue full\n", __func__);
 		return -EBUSY;
 	}
 
@@ -1609,15 +1562,8 @@ void cec_s_phys_addr(struct cec_adapter *adap, u16 phys_addr, bool block)
 	if (IS_ERR_OR_NULL(adap))
 		return;
 
-	cancel_delayed_work_sync(&adap->debounce_work);
-
 	mutex_lock(&adap->lock);
-	if (cec_debounce_ms > 0 && !block &&
-	    phys_addr == CEC_PHYS_ADDR_INVALID && adap->phys_addr != phys_addr)
-		schedule_delayed_work(&adap->debounce_work,
-				      msecs_to_jiffies(cec_debounce_ms));
-	else
-		__cec_s_phys_addr(adap, phys_addr, block);
+	__cec_s_phys_addr(adap, phys_addr, block);
 	mutex_unlock(&adap->lock);
 }
 EXPORT_SYMBOL_GPL(cec_s_phys_addr);
@@ -1633,25 +1579,6 @@ void cec_s_phys_addr_from_edid(struct cec_adapter *adap,
 	cec_s_phys_addr(adap, pa, false);
 }
 EXPORT_SYMBOL_GPL(cec_s_phys_addr_from_edid);
-
-void cec_s_conn_info(struct cec_adapter *adap,
-		     const struct cec_connector_info *conn_info)
-{
-	if (IS_ERR_OR_NULL(adap))
-		return;
-
-	if (!(adap->capabilities & CEC_CAP_CONNECTOR_INFO))
-		return;
-
-	mutex_lock(&adap->lock);
-	if (conn_info)
-		adap->conn_info = *conn_info;
-	else
-		memset(&adap->conn_info, 0, sizeof(adap->conn_info));
-	cec_post_state_event(adap);
-	mutex_unlock(&adap->lock);
-}
-EXPORT_SYMBOL_GPL(cec_s_conn_info);
 
 /*
  * Called from either the ioctl or a driver to set the logical addresses.
@@ -1741,6 +1668,10 @@ int __cec_s_log_addrs(struct cec_adapter *adap,
 		unsigned j;
 
 		log_addrs->log_addr[i] = CEC_LOG_ADDR_INVALID;
+		if (log_addrs->log_addr_type[i] > CEC_LOG_ADDR_TYPE_UNREGISTERED) {
+			dprintk(1, "unknown logical address type\n");
+			return -EINVAL;
+		}
 		if (type_mask & (1 << log_addrs->log_addr_type[i])) {
 			dprintk(1, "duplicate logical address type\n");
 			return -EINVAL;
@@ -1759,10 +1690,6 @@ int __cec_s_log_addrs(struct cec_adapter *adap,
 		}
 		if (log_addrs->primary_device_type[i] == 2) {
 			dprintk(1, "invalid primary device type\n");
-			return -EINVAL;
-		}
-		if (log_addrs->log_addr_type[i] > CEC_LOG_ADDR_TYPE_UNREGISTERED) {
-			dprintk(1, "unknown logical address type\n");
 			return -EINVAL;
 		}
 		for (j = 0; j < feature_sz; j++) {
@@ -1999,7 +1926,7 @@ static int cec_receive_notify(struct cec_adapter *adap, struct cec_msg *msg,
 		 * Play function, this message can have variable length
 		 * depending on the specific play function that is used.
 		 */
-		case CEC_OP_UI_CMD_PLAY_FUNCTION:
+		case 0x60:
 			if (msg->len == 2)
 				rc_keydown(adap->rc, RC_PROTO_CEC,
 					   msg->msg[2], 0);
@@ -2016,12 +1943,8 @@ static int cec_receive_notify(struct cec_adapter *adap, struct cec_msg *msg,
 		 * For the time being these messages are not processed by the
 		 * framework and are simply forwarded to the user space.
 		 */
-		case CEC_OP_UI_CMD_SELECT_BROADCAST_TYPE:
-		case CEC_OP_UI_CMD_SELECT_SOUND_PRESENTATION:
-		case CEC_OP_UI_CMD_TUNE_FUNCTION:
-		case CEC_OP_UI_CMD_SELECT_MEDIA_FUNCTION:
-		case CEC_OP_UI_CMD_SELECT_AV_INPUT_FUNCTION:
-		case CEC_OP_UI_CMD_SELECT_AUDIO_INPUT_FUNCTION:
+		case 0x56: case 0x57:
+		case 0x67: case 0x68: case 0x69: case 0x6a:
 			break;
 		default:
 			rc_keydown(adap->rc, RC_PROTO_CEC, msg->msg[2], 0);

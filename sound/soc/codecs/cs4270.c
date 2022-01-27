@@ -29,8 +29,8 @@
 #include <linux/i2c.h>
 #include <linux/delay.h>
 #include <linux/regulator/consumer.h>
-#include <linux/gpio/consumer.h>
 #include <linux/of_device.h>
+#include <linux/of_gpio.h>
 
 /*
  * The codec isn't really big-endian or little-endian, since the I2S
@@ -137,9 +137,6 @@ struct cs4270_private {
 
 	/* power domain regulators */
 	struct regulator_bulk_data supplies[ARRAY_SIZE(supply_names)];
-
-	/* reset gpio */
-	struct gpio_desc *reset_gpio;
 };
 
 static const struct snd_soc_dapm_widget cs4270_dapm_widgets[] = {
@@ -652,22 +649,6 @@ static const struct regmap_config cs4270_regmap = {
 };
 
 /**
- * cs4270_i2c_remove - deinitialize the I2C interface of the CS4270
- * @i2c_client: the I2C client object
- *
- * This function puts the chip into low power mode when the i2c device
- * is removed.
- */
-static int cs4270_i2c_remove(struct i2c_client *i2c_client)
-{
-	struct cs4270_private *cs4270 = i2c_get_clientdata(i2c_client);
-
-	gpiod_set_value_cansleep(cs4270->reset_gpio, 0);
-
-	return 0;
-}
-
-/**
  * cs4270_i2c_probe - initialize the I2C interface of the CS4270
  * @i2c_client: the I2C client object
  * @id: the I2C device ID (ignored)
@@ -678,6 +659,7 @@ static int cs4270_i2c_remove(struct i2c_client *i2c_client)
 static int cs4270_i2c_probe(struct i2c_client *i2c_client,
 	const struct i2c_device_id *id)
 {
+	struct device_node *np = i2c_client->dev.of_node;
 	struct cs4270_private *cs4270;
 	unsigned int val;
 	int ret, i;
@@ -697,21 +679,20 @@ static int cs4270_i2c_probe(struct i2c_client *i2c_client,
 	if (ret < 0)
 		return ret;
 
-	/* reset the device */
-	cs4270->reset_gpio = devm_gpiod_get_optional(&i2c_client->dev, "reset",
-						     GPIOD_OUT_LOW);
-	if (IS_ERR(cs4270->reset_gpio)) {
-		dev_dbg(&i2c_client->dev, "Error getting CS4270 reset GPIO\n");
-		return PTR_ERR(cs4270->reset_gpio);
-	}
+	/* See if we have a way to bring the codec out of reset */
+	if (np) {
+		enum of_gpio_flags flags;
+		int gpio = of_get_named_gpio_flags(np, "reset-gpio", 0, &flags);
 
-	if (cs4270->reset_gpio) {
-		dev_dbg(&i2c_client->dev, "Found reset GPIO\n");
-		gpiod_set_value_cansleep(cs4270->reset_gpio, 1);
+		if (gpio_is_valid(gpio)) {
+			ret = devm_gpio_request_one(&i2c_client->dev, gpio,
+				     flags & OF_GPIO_ACTIVE_LOW ?
+					GPIOF_OUT_INIT_LOW : GPIOF_OUT_INIT_HIGH,
+				     "cs4270 reset");
+			if (ret < 0)
+				return ret;
+		}
 	}
-
-	/* Sleep 500ns before i2c communications */
-	ndelay(500);
 
 	cs4270->regmap = devm_regmap_init_i2c(i2c_client, &cs4270_regmap);
 	if (IS_ERR(cs4270->regmap))
@@ -764,7 +745,6 @@ static struct i2c_driver cs4270_i2c_driver = {
 	},
 	.id_table = cs4270_id,
 	.probe = cs4270_i2c_probe,
-	.remove = cs4270_i2c_remove,
 };
 
 module_i2c_driver(cs4270_i2c_driver);

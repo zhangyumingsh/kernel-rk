@@ -1,10 +1,12 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  *  fs/userfaultfd.c
  *
  *  Copyright (C) 2007  Davide Libenzi <davidel@xmailserver.org>
  *  Copyright (C) 2008-2009 Red Hat, Inc.
  *  Copyright (C) 2015  Red Hat, Inc.
+ *
+ *  This work is licensed under the terms of the GNU GPL, version 2. See
+ *  the COPYING file in the top-level directory.
  *
  *  Some part derived from fs/eventfd.c (anon inode setup) and
  *  mm/ksm.c (mm hashing).
@@ -27,8 +29,6 @@
 #include <linux/ioctl.h>
 #include <linux/security.h>
 #include <linux/hugetlb.h>
-
-int sysctl_unprivileged_userfaultfd __read_mostly = 1;
 
 static struct kmem_cache *userfaultfd_ctx_cachep __read_mostly;
 
@@ -63,7 +63,7 @@ struct userfaultfd_ctx {
 	/* a refile sequence protected by fault_pending_wqh lock */
 	struct seqcount refile_seq;
 	/* pseudo fd refcounting */
-	refcount_t refcount;
+	atomic_t refcount;
 	/* userfaultfd syscall flags */
 	unsigned int flags;
 	/* features requested from the userspace */
@@ -150,7 +150,8 @@ out:
  */
 static void userfaultfd_ctx_get(struct userfaultfd_ctx *ctx)
 {
-	refcount_inc(&ctx->refcount);
+	if (!atomic_inc_not_zero(&ctx->refcount))
+		BUG();
 }
 
 /**
@@ -163,7 +164,7 @@ static void userfaultfd_ctx_get(struct userfaultfd_ctx *ctx)
  */
 static void userfaultfd_ctx_put(struct userfaultfd_ctx *ctx)
 {
-	if (refcount_dec_and_test(&ctx->refcount)) {
+	if (atomic_dec_and_test(&ctx->refcount)) {
 		VM_BUG_ON(spin_is_locked(&ctx->fault_pending_wqh.lock));
 		VM_BUG_ON(waitqueue_active(&ctx->fault_pending_wqh));
 		VM_BUG_ON(spin_is_locked(&ctx->fault_wqh.lock));
@@ -697,7 +698,7 @@ int dup_userfaultfd(struct vm_area_struct *vma, struct list_head *fcs)
 			return -ENOMEM;
 		}
 
-		refcount_set(&ctx->refcount, 1);
+		atomic_set(&ctx->refcount, 1);
 		ctx->flags = octx->flags;
 		ctx->state = UFFD_STATE_RUNNING;
 		ctx->features = octx->features;
@@ -912,7 +913,8 @@ static int userfaultfd_release(struct inode *inode, struct file *file)
 					 new_flags, vma->anon_vma,
 					 vma->vm_file, vma->vm_pgoff,
 					 vma_policy(vma),
-					 NULL_VM_UFFD_CTX);
+					 NULL_VM_UFFD_CTX,
+					 vma_get_anon_name(vma));
 			if (prev)
 				vma = prev;
 			else
@@ -949,7 +951,7 @@ static inline struct userfaultfd_wait_queue *find_userfault_in(
 	wait_queue_entry_t *wq;
 	struct userfaultfd_wait_queue *uwq;
 
-	lockdep_assert_held(&wqh->lock);
+	VM_BUG_ON(!spin_is_locked(&wqh->lock));
 
 	uwq = NULL;
 	if (!waitqueue_active(wqh))
@@ -1460,12 +1462,12 @@ static int userfaultfd_register(struct userfaultfd_ctx *ctx,
 			start = vma->vm_start;
 		vma_end = min(end, vma->vm_end);
 
-		new_flags = (vma->vm_flags &
-			     ~(VM_UFFD_MISSING|VM_UFFD_WP)) | vm_flags;
+		new_flags = (vma->vm_flags & ~vm_flags) | vm_flags;
 		prev = vma_merge(mm, prev, start, vma_end, new_flags,
 				 vma->anon_vma, vma->vm_file, vma->vm_pgoff,
 				 vma_policy(vma),
-				 ((struct vm_userfaultfd_ctx){ ctx }));
+				 ((struct vm_userfaultfd_ctx){ ctx }),
+				 vma_get_anon_name(vma));
 		if (prev) {
 			vma = prev;
 			goto next;
@@ -1627,7 +1629,8 @@ static int userfaultfd_unregister(struct userfaultfd_ctx *ctx,
 		prev = vma_merge(mm, prev, start, vma_end, new_flags,
 				 vma->anon_vma, vma->vm_file, vma->vm_pgoff,
 				 vma_policy(vma),
-				 NULL_VM_UFFD_CTX);
+				 NULL_VM_UFFD_CTX,
+				 vma_get_anon_name(vma));
 		if (prev) {
 			vma = prev;
 			goto next;
@@ -1928,7 +1931,7 @@ static const struct file_operations userfaultfd_fops = {
 	.poll		= userfaultfd_poll,
 	.read		= userfaultfd_read,
 	.unlocked_ioctl = userfaultfd_ioctl,
-	.compat_ioctl	= compat_ptr_ioctl,
+	.compat_ioctl	= userfaultfd_ioctl,
 	.llseek		= noop_llseek,
 };
 
@@ -1948,9 +1951,6 @@ SYSCALL_DEFINE1(userfaultfd, int, flags)
 	struct userfaultfd_ctx *ctx;
 	int fd;
 
-	if (!sysctl_unprivileged_userfaultfd && !capable(CAP_SYS_PTRACE))
-		return -EPERM;
-
 	BUG_ON(!current->mm);
 
 	/* Check the UFFD_* constants for consistency.  */
@@ -1964,7 +1964,7 @@ SYSCALL_DEFINE1(userfaultfd, int, flags)
 	if (!ctx)
 		return -ENOMEM;
 
-	refcount_set(&ctx->refcount, 1);
+	atomic_set(&ctx->refcount, 1);
 	ctx->flags = flags;
 	ctx->features = 0;
 	ctx->state = UFFD_STATE_WAIT_API;

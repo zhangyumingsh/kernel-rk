@@ -10,21 +10,30 @@
 #include "xfs_log_format.h"
 #include "xfs_trans_resv.h"
 #include "xfs_mount.h"
+#include "xfs_da_format.h"
 #include "xfs_inode.h"
+#include "xfs_bmap.h"
+#include "xfs_bmap_util.h"
 #include "xfs_acl.h"
 #include "xfs_quota.h"
+#include "xfs_error.h"
 #include "xfs_attr.h"
 #include "xfs_trans.h"
 #include "xfs_trace.h"
 #include "xfs_icache.h"
 #include "xfs_symlink.h"
+#include "xfs_da_btree.h"
 #include "xfs_dir2.h"
+#include "xfs_trans_space.h"
 #include "xfs_iomap.h"
-#include "xfs_error.h"
+#include "xfs_defer.h"
 
+#include <linux/capability.h>
 #include <linux/xattr.h>
 #include <linux/posix_acl.h>
 #include <linux/security.h>
+#include <linux/iomap.h>
+#include <linux/slab.h>
 #include <linux/iversion.h>
 
 /*
@@ -50,10 +59,8 @@ xfs_initxattrs(
 	int			error = 0;
 
 	for (xattr = xattr_array; xattr->name != NULL; xattr++) {
-		error = xfs_attr_set(ip, xattr->name,
-				     strlen(xattr->name),
-				     xattr->value, xattr->value_len,
-				     ATTR_SECURE);
+		error = xfs_attr_set(ip, xattr->name, xattr->value,
+				      xattr->value_len, ATTR_SECURE);
 		if (error < 0)
 			break;
 	}
@@ -473,55 +480,18 @@ xfs_vn_get_link_inline(
 	struct inode		*inode,
 	struct delayed_call	*done)
 {
-	struct xfs_inode	*ip = XFS_I(inode);
 	char			*link;
 
-	ASSERT(ip->i_df.if_flags & XFS_IFINLINE);
+	ASSERT(XFS_I(inode)->i_df.if_flags & XFS_IFINLINE);
 
 	/*
 	 * The VFS crashes on a NULL pointer, so return -EFSCORRUPTED if
 	 * if_data is junk.
 	 */
-	link = ip->i_df.if_u1.if_data;
-	if (XFS_IS_CORRUPT(ip->i_mount, !link))
+	link = XFS_I(inode)->i_df.if_u1.if_data;
+	if (!link)
 		return ERR_PTR(-EFSCORRUPTED);
 	return link;
-}
-
-static uint32_t
-xfs_stat_blksize(
-	struct xfs_inode	*ip)
-{
-	struct xfs_mount	*mp = ip->i_mount;
-
-	/*
-	 * If the file blocks are being allocated from a realtime volume, then
-	 * always return the realtime extent size.
-	 */
-	if (XFS_IS_REALTIME_INODE(ip))
-		return xfs_get_extsz_hint(ip) << mp->m_sb.sb_blocklog;
-
-	/*
-	 * Allow large block sizes to be reported to userspace programs if the
-	 * "largeio" mount option is used.
-	 *
-	 * If compatibility mode is specified, simply return the basic unit of
-	 * caching so that we don't get inefficient read/modify/write I/O from
-	 * user apps. Otherwise....
-	 *
-	 * If the underlying volume is a stripe, then return the stripe width in
-	 * bytes as the recommended I/O size. It is not a stripe and we've set a
-	 * default buffered I/O size, return that, otherwise return the compat
-	 * default.
-	 */
-	if (mp->m_flags & XFS_MOUNT_LARGEIO) {
-		if (mp->m_swidth)
-			return mp->m_swidth << mp->m_sb.sb_blocklog;
-		if (mp->m_flags & XFS_MOUNT_ALLOCSIZE)
-			return 1U << mp->m_allocsize_log;
-	}
-
-	return PAGE_SIZE;
 }
 
 STATIC int
@@ -556,7 +526,8 @@ xfs_vn_getattr(
 	if (ip->i_d.di_version == 3) {
 		if (request_mask & STATX_BTIME) {
 			stat->result_mask |= STATX_BTIME;
-			stat->btime = ip->i_d.di_crtime;
+			stat->btime.tv_sec = ip->i_d.di_crtime.t_sec;
+			stat->btime.tv_nsec = ip->i_d.di_crtime.t_nsec;
 		}
 	}
 
@@ -582,7 +553,16 @@ xfs_vn_getattr(
 		stat->rdev = inode->i_rdev;
 		break;
 	default:
-		stat->blksize = xfs_stat_blksize(ip);
+		if (XFS_IS_REALTIME_INODE(ip)) {
+			/*
+			 * If the file blocks are being allocated from a
+			 * realtime volume, then return the inode's realtime
+			 * extent size or the realtime volume's extent size.
+			 */
+			stat->blksize =
+				xfs_get_extsz_hint(ip) << mp->m_sb.sb_blocklog;
+		} else
+			stat->blksize = xfs_preferred_iosize(mp);
 		stat->rdev = 0;
 		break;
 	}
@@ -694,7 +674,7 @@ xfs_setattr_nonsize(
 		ASSERT(gdqp == NULL);
 		error = xfs_qm_vop_dqalloc(ip, xfs_kuid_to_uid(uid),
 					   xfs_kgid_to_gid(gid),
-					   ip->i_d.di_projid,
+					   xfs_get_projid(ip),
 					   qflags, &udqp, &gdqp, NULL);
 		if (error)
 			return error;
@@ -869,7 +849,7 @@ xfs_setattr_size(
 	ASSERT(xfs_isilocked(ip, XFS_MMAPLOCK_EXCL));
 	ASSERT(S_ISREG(inode->i_mode));
 	ASSERT((iattr->ia_valid & (ATTR_UID|ATTR_GID|ATTR_ATIME|ATTR_ATIME_SET|
-		ATTR_MTIME_SET|ATTR_KILL_PRIV|ATTR_TIMES_SET)) == 0);
+		ATTR_MTIME_SET|ATTR_TIMES_SET)) == 0);
 
 	oldsize = inode->i_size;
 	newsize = iattr->ia_size;
@@ -913,10 +893,20 @@ xfs_setattr_size(
 	if (newsize > oldsize) {
 		trace_xfs_zero_eof(ip, oldsize, newsize - oldsize);
 		error = iomap_zero_range(inode, oldsize, newsize - oldsize,
-				&did_zeroing, &xfs_buffered_write_iomap_ops);
+				&did_zeroing, &xfs_iomap_ops);
 	} else {
+		/*
+		 * iomap won't detect a dirty page over an unwritten block (or a
+		 * cow block over a hole) and subsequently skips zeroing the
+		 * newly post-EOF portion of the page. Flush the new EOF to
+		 * convert the block before the pagecache truncate.
+		 */
+		error = filemap_write_and_wait_range(inode->i_mapping, newsize,
+						     newsize);
+		if (error)
+			return error;
 		error = iomap_truncate_page(inode, newsize, &did_zeroing,
-				&xfs_buffered_write_iomap_ops);
+				&xfs_iomap_ops);
 	}
 
 	if (error)
@@ -1144,7 +1134,7 @@ xfs_vn_fiemap(
 				&xfs_xattr_iomap_ops);
 	} else {
 		error = iomap_fiemap(inode, fieinfo, start, length,
-				&xfs_read_iomap_ops);
+				&xfs_iomap_ops);
 	}
 	xfs_iunlock(XFS_I(inode), XFS_IOLOCK_SHARED);
 
@@ -1257,7 +1247,7 @@ xfs_inode_supports_dax(
 		return false;
 
 	/* Device has to support DAX too. */
-	return xfs_inode_buftarg(ip)->bt_daxdev != NULL;
+	return xfs_find_daxdev_for_inode(VFS_I(ip)) != NULL;
 }
 
 STATIC void
@@ -1320,7 +1310,9 @@ xfs_setup_inode(
 		lockdep_set_class(&inode->i_rwsem,
 				  &inode->i_sb->s_type->i_mutex_dir_key);
 		lockdep_set_class(&ip->i_lock.mr_lock, &xfs_dir_ilock_class);
+		ip->d_ops = ip->i_mount->m_dir_inode_ops;
 	} else {
+		ip->d_ops = ip->i_mount->m_nondir_inode_ops;
 		lockdep_set_class(&ip->i_lock.mr_lock, &xfs_nondir_ilock_class);
 	}
 

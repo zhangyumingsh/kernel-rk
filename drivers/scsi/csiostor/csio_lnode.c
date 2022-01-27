@@ -1848,8 +1848,8 @@ csio_ln_fdmi_init(struct csio_lnode *ln)
 	/* Allocate Dma buffers for FDMI response Payload */
 	dma_buf = &ln->mgmt_req->dma_buf;
 	dma_buf->len = 2048;
-	dma_buf->vaddr = dma_alloc_coherent(&hw->pdev->dev, dma_buf->len,
-						&dma_buf->paddr, GFP_KERNEL);
+	dma_buf->vaddr = pci_alloc_consistent(hw->pdev, dma_buf->len,
+						&dma_buf->paddr);
 	if (!dma_buf->vaddr) {
 		csio_err(hw, "Failed to alloc DMA buffer for FDMI!\n");
 		kfree(ln->mgmt_req);
@@ -1876,7 +1876,7 @@ csio_ln_fdmi_exit(struct csio_lnode *ln)
 
 	dma_buf = &ln->mgmt_req->dma_buf;
 	if (dma_buf->vaddr)
-		dma_free_coherent(&hw->pdev->dev, dma_buf->len, dma_buf->vaddr,
+		pci_free_consistent(hw->pdev, dma_buf->len, dma_buf->vaddr,
 				    dma_buf->paddr);
 
 	kfree(ln->mgmt_req);
@@ -1992,7 +1992,7 @@ static int
 csio_ln_init(struct csio_lnode *ln)
 {
 	int rv = -EINVAL;
-	struct csio_lnode *pln;
+	struct csio_lnode *rln, *pln;
 	struct csio_hw *hw = csio_lnode_to_hw(ln);
 
 	csio_init_state(&ln->sm, csio_lns_uninit);
@@ -2022,6 +2022,7 @@ csio_ln_init(struct csio_lnode *ln)
 		 * THe rest is common for non-root physical and NPIV lnodes.
 		 * Just get references to all other modules
 		 */
+		rln = csio_root_lnode(ln);
 
 		if (csio_is_npiv_ln(ln)) {
 			/* NPIV */

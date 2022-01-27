@@ -1,8 +1,15 @@
-/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
    md.h : kernel internal structure of the Linux MD driver
           Copyright (C) 1996-98 Ingo Molnar, Gadi Oxman
 
+   This program is free software; you can redistribute it and/or modify
+   it under the terms of the GNU General Public License as published by
+   the Free Software Foundation; either version 2, or (at your option)
+   any later version.
+
+   You should have received a copy of the GNU General Public License
+   (for example /usr/src/linux/COPYING); if not, write to the Free
+   Software Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
 */
 
 #ifndef _MD_MD_H
@@ -32,16 +39,6 @@
  * be retried.
  */
 #define	MD_FAILFAST	(REQ_FAILFAST_DEV | REQ_FAILFAST_TRANSPORT)
-
-/*
- * The struct embedded in rdev is used to serialize IO.
- */
-struct serial_in_rdev {
-	struct rb_root_cached serial_rb;
-	spinlock_t serial_lock;
-	wait_queue_head_t serial_io_wait;
-};
-
 /*
  * MD's 'extended' device
  */
@@ -119,9 +116,6 @@ struct md_rdev {
 					   * for reporting to userspace and storing
 					   * in superblock.
 					   */
-
-	struct serial_in_rdev *serial;  /* used for raid1 io serialization */
-
 	struct work_struct del_work;	/* used for delayed sysfs removal */
 
 	struct kernfs_node *sysfs_state; /* handle for 'state'
@@ -206,10 +200,6 @@ enum flag_bits {
 				 * it didn't fail, so don't use FailFast
 				 * any more for metadata
 				 */
-	CollisionCheck,		/*
-				 * check if there is collision between raid1
-				 * serial bios.
-				 */
 };
 
 static inline int is_badblock(struct md_rdev *rdev, sector_t s, int sectors,
@@ -256,9 +246,6 @@ enum mddev_flags {
 	MD_NOT_READY,		/* do_md_run() is active, so 'array_state'
 				 * must not report that array is ready yet
 				 */
-	MD_BROKEN,              /* This is used in RAID-0/LINEAR only, to stop
-				 * I/O in case an array member is gone/failed.
-				 */
 };
 
 enum mddev_sb_flags {
@@ -266,15 +253,6 @@ enum mddev_sb_flags {
 	MD_SB_CHANGE_CLEAN,	/* transition to or from 'clean' */
 	MD_SB_CHANGE_PENDING,	/* switch from 'clean' to 'active' in progress */
 	MD_SB_NEED_REWRITE,	/* metadata write needs to be repeated */
-};
-
-#define NR_SERIAL_INFOS		8
-/* record current range of serialize IOs */
-struct serial_info {
-	struct rb_node node;
-	sector_t start;		/* start sector of rb node */
-	sector_t last;		/* end sector of rb node */
-	sector_t _subtree_last; /* highest sector in subtree of rb node */
 };
 
 struct mddev {
@@ -493,14 +471,11 @@ struct mddev {
 					  */
 	struct work_struct flush_work;
 	struct work_struct event_work;	/* used by dm to report failure event */
-	mempool_t *serial_info_pool;
 	void (*sync_super)(struct mddev *mddev, struct md_rdev *rdev);
 	struct md_cluster_info		*cluster_info;
 	unsigned int			good_device_nr;	/* good device num within cluster raid */
 
 	bool	has_superblocks:1;
-	bool	fail_last_dev:1;
-	bool	serialize_policy:1;
 };
 
 enum recovery_flags {
@@ -580,7 +555,6 @@ struct md_personality
 	int (*check_reshape) (struct mddev *mddev);
 	int (*start_reshape) (struct mddev *mddev);
 	void (*finish_reshape) (struct mddev *mddev);
-	void (*update_reshape_pos) (struct mddev *mddev);
 	/* quiesce suspends or resumes internal processing.
 	 * 1 - stop new actions and wait for action io to complete
 	 * 0 - return to normal behaviour
@@ -744,25 +718,8 @@ extern struct bio *bio_alloc_mddev(gfp_t gfp_mask, int nr_iovecs,
 extern void md_reload_sb(struct mddev *mddev, int raid_disk);
 extern void md_update_sb(struct mddev *mddev, int force);
 extern void md_kick_rdev_from_array(struct md_rdev * rdev);
-extern void mddev_create_serial_pool(struct mddev *mddev, struct md_rdev *rdev,
-				     bool is_suspend);
-extern void mddev_destroy_serial_pool(struct mddev *mddev, struct md_rdev *rdev,
-				      bool is_suspend);
 struct md_rdev *md_find_rdev_nr_rcu(struct mddev *mddev, int nr);
 struct md_rdev *md_find_rdev_rcu(struct mddev *mddev, dev_t dev);
-
-static inline bool is_mddev_broken(struct md_rdev *rdev, const char *md_type)
-{
-	int flags = rdev->bdev->bd_disk->flags;
-
-	if (!(flags & GENHD_FL_UP)) {
-		if (!test_and_set_bit(MD_BROKEN, &rdev->mddev->flags))
-			pr_warn("md: %s: %s array has a missing/failed member\n",
-				mdname(rdev->mddev), md_type);
-		return true;
-	}
-	return false;
-}
 
 static inline void rdev_dec_pending(struct md_rdev *rdev, struct mddev *mddev)
 {

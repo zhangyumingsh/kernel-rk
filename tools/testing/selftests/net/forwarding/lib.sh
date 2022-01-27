@@ -15,11 +15,6 @@ PAUSE_ON_FAIL=${PAUSE_ON_FAIL:=no}
 PAUSE_ON_CLEANUP=${PAUSE_ON_CLEANUP:=no}
 NETIF_TYPE=${NETIF_TYPE:=veth}
 NETIF_CREATE=${NETIF_CREATE:=yes}
-MCD=${MCD:=smcrouted}
-MC_CLI=${MC_CLI:=smcroutectl}
-PING_TIMEOUT=${PING_TIMEOUT:=5}
-WAIT_TIMEOUT=${WAIT_TIMEOUT:=20}
-INTERFACE_TIMEOUT=${INTERFACE_TIMEOUT:=600}
 
 relative_path="${BASH_SOURCE%/*}"
 if [[ "$relative_path" == "${BASH_SOURCE}" ]]; then
@@ -109,7 +104,7 @@ create_netif_veth()
 {
 	local i
 
-	for ((i = 1; i <= NUM_NETIFS; ++i)); do
+	for i in $(eval echo {1..$NUM_NETIFS}); do
 		local j=$((i+1))
 
 		ip link show dev ${NETIFS[p$i]} &> /dev/null
@@ -140,7 +135,7 @@ if [[ "$NETIF_CREATE" = "yes" ]]; then
 	create_netif
 fi
 
-for ((i = 1; i <= NUM_NETIFS; ++i)); do
+for i in $(eval echo {1..$NUM_NETIFS}); do
 	ip link show dev ${NETIFS[p$i]} &> /dev/null
 	if [[ $? -ne 0 ]]; then
 		echo "SKIP: could not find all required interfaces"
@@ -214,7 +209,7 @@ log_test()
 		return 1
 	fi
 
-	printf "TEST: %-60s  [ OK ]\n" "$test_name $opt_str"
+	printf "TEST: %-60s  [PASS]\n" "$test_name $opt_str"
 	return 0
 }
 
@@ -225,117 +220,31 @@ log_info()
 	echo "INFO: $msg"
 }
 
-busywait()
-{
-	local timeout=$1; shift
-
-	local start_time="$(date -u +%s%3N)"
-	while true
-	do
-		local out
-		out=$("$@")
-		local ret=$?
-		if ((!ret)); then
-			echo -n "$out"
-			return 0
-		fi
-
-		local current_time="$(date -u +%s%3N)"
-		if ((current_time - start_time > timeout)); then
-			echo -n "$out"
-			return 1
-		fi
-	done
-}
-
-until_counter_is()
-{
-	local value=$1; shift
-	local current=$("$@")
-
-	echo $((current))
-	((current >= value))
-}
-
-busywait_for_counter()
-{
-	local timeout=$1; shift
-	local delta=$1; shift
-
-	local base=$("$@")
-	busywait "$timeout" until_counter_is $((base + delta)) "$@"
-}
-
 setup_wait_dev()
 {
 	local dev=$1; shift
-	local wait_time=${1:-$WAIT_TIME}; shift
 
-	setup_wait_dev_with_timeout "$dev" $INTERFACE_TIMEOUT $wait_time
-
-	if (($?)); then
-		check_err 1
-		log_test setup_wait_dev ": Interface $dev does not come up."
-		exit 1
-	fi
-}
-
-setup_wait_dev_with_timeout()
-{
-	local dev=$1; shift
-	local max_iterations=${1:-$WAIT_TIMEOUT}; shift
-	local wait_time=${1:-$WAIT_TIME}; shift
-	local i
-
-	for ((i = 1; i <= $max_iterations; ++i)); do
+	while true; do
 		ip link show dev $dev up \
 			| grep 'state UP' &> /dev/null
 		if [[ $? -ne 0 ]]; then
 			sleep 1
 		else
-			sleep $wait_time
-			return 0
+			break
 		fi
 	done
-
-	return 1
 }
 
 setup_wait()
 {
 	local num_netifs=${1:-$NUM_NETIFS}
-	local i
 
 	for ((i = 1; i <= num_netifs; ++i)); do
-		setup_wait_dev ${NETIFS[p$i]} 0
+		setup_wait_dev ${NETIFS[p$i]}
 	done
 
 	# Make sure links are ready.
 	sleep $WAIT_TIME
-}
-
-cmd_jq()
-{
-	local cmd=$1
-	local jq_exp=$2
-	local jq_opts=$3
-	local ret
-	local output
-
-	output="$($cmd)"
-	# it the command fails, return error right away
-	ret=$?
-	if [[ $ret -ne 0 ]]; then
-		return $ret
-	fi
-	output=$(echo $output | jq -r $jq_opts "$jq_exp")
-	ret=$?
-	if [[ $ret -ne 0 ]]; then
-		return $ret
-	fi
-	echo $output
-	# return success only in case of non-empty output
-	[ ! -z "$output" ]
 }
 
 lldpad_app_wait_set()
@@ -568,24 +477,11 @@ master_name_get()
 	ip -j link show dev $if_name | jq -r '.[]["master"]'
 }
 
-link_stats_get()
-{
-	local if_name=$1; shift
-	local dir=$1; shift
-	local stat=$1; shift
-
-	ip -j -s link show dev $if_name \
-		| jq '.[]["stats64"]["'$dir'"]["'$stat'"]'
-}
-
 link_stats_tx_packets_get()
 {
-	link_stats_get $1 tx packets
-}
+       local if_name=$1
 
-link_stats_rx_errors_get()
-{
-	link_stats_get $1 rx errors
+       ip -j -s link show dev $if_name | jq '.[]["stats64"]["tx"]["packets"]'
 }
 
 tc_rule_stats_get()
@@ -593,42 +489,9 @@ tc_rule_stats_get()
 	local dev=$1; shift
 	local pref=$1; shift
 	local dir=$1; shift
-	local selector=${1:-.packets}; shift
 
 	tc -j -s filter show dev $dev ${dir:-ingress} pref $pref \
-	    | jq ".[1].options.actions[].stats$selector"
-}
-
-ethtool_stats_get()
-{
-	local dev=$1; shift
-	local stat=$1; shift
-
-	ethtool -S $dev | grep "^ *$stat:" | head -n 1 | cut -d: -f2
-}
-
-humanize()
-{
-	local speed=$1; shift
-
-	for unit in bps Kbps Mbps Gbps; do
-		if (($(echo "$speed < 1024" | bc))); then
-			break
-		fi
-
-		speed=$(echo "scale=1; $speed / 1024" | bc)
-	done
-
-	echo "$speed${unit}"
-}
-
-rate()
-{
-	local t0=$1; shift
-	local t1=$1; shift
-	local interval=$1; shift
-
-	echo $((8 * (t1 - t0) / interval))
+	    | jq '.[1].options.actions[].stats.packets'
 }
 
 mac_get()
@@ -676,23 +539,6 @@ forwarding_restore()
 {
 	sysctl_restore net.ipv6.conf.all.forwarding
 	sysctl_restore net.ipv4.conf.all.forwarding
-}
-
-declare -A MTU_ORIG
-mtu_set()
-{
-	local dev=$1; shift
-	local mtu=$1; shift
-
-	MTU_ORIG["$dev"]=$(ip -j link show dev $dev | jq -e '.[].mtu')
-	ip link set dev $dev mtu $mtu
-}
-
-mtu_restore()
-{
-	local dev=$1; shift
-
-	ip link set dev $dev mtu ${MTU_ORIG["$dev"]}
 }
 
 tc_offload_check()
@@ -912,17 +758,6 @@ multipath_eval()
 	log_info "Expected ratio $weights_ratio Measured ratio $packets_ratio"
 }
 
-in_ns()
-{
-	local name=$1; shift
-
-	ip netns exec $name bash <<-EOF
-		NUM_NETIFS=0
-		source lib.sh
-		$(for a in "$@"; do printf "%q${IFS:0:1}" "$a"; done)
-	EOF
-}
-
 ##############################################################################
 # Tests
 
@@ -930,12 +765,10 @@ ping_do()
 {
 	local if_name=$1
 	local dip=$2
-	local args=$3
 	local vrf_name
 
 	vrf_name=$(master_name_get $if_name)
-	ip vrf exec $vrf_name \
-		$PING $args $dip -c 10 -i 0.1 -w $PING_TIMEOUT &> /dev/null
+	ip vrf exec $vrf_name $PING $dip -c 10 -i 0.1 -w 2 &> /dev/null
 }
 
 ping_test()
@@ -944,19 +777,17 @@ ping_test()
 
 	ping_do $1 $2
 	check_err $?
-	log_test "ping$3"
+	log_test "ping"
 }
 
 ping6_do()
 {
 	local if_name=$1
 	local dip=$2
-	local args=$3
 	local vrf_name
 
 	vrf_name=$(master_name_get $if_name)
-	ip vrf exec $vrf_name \
-		$PING6 $args $dip -c 10 -i 0.1 -w $PING_TIMEOUT &> /dev/null
+	ip vrf exec $vrf_name $PING6 $dip -c 10 -i 0.1 -w 2 &> /dev/null
 }
 
 ping6_test()
@@ -965,7 +796,7 @@ ping6_test()
 
 	ping6_do $1 $2
 	check_err $?
-	log_test "ping6$3"
+	log_test "ping6"
 }
 
 learning_test()
@@ -1130,22 +961,4 @@ flood_test()
 
 	flood_unicast_test $br_port $host1_if $host2_if
 	flood_multicast_test $br_port $host1_if $host2_if
-}
-
-start_traffic()
-{
-	local h_in=$1; shift    # Where the traffic egresses the host
-	local sip=$1; shift
-	local dip=$1; shift
-	local dmac=$1; shift
-
-	$MZ $h_in -p 8000 -A $sip -B $dip -c 0 \
-		-a own -b $dmac -t udp -q &
-	sleep 1
-}
-
-stop_traffic()
-{
-	# Suppress noise from killing mausezahn.
-	{ kill %% && wait %%; } 2>/dev/null
 }

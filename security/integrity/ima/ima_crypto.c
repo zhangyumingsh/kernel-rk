@@ -1,10 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2005,2006,2007,2008 IBM Corporation
  *
  * Authors:
  * Mimi Zohar <zohar@us.ibm.com>
  * Kylene Hall <kjhall@us.ibm.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, version 2 of the License.
  *
  * File: ima_crypto.c
  *	Calculates md5/sha1 file hash, template hash, boot-aggreate hash
@@ -338,6 +341,7 @@ static int ima_calc_file_hash_tfm(struct file *file,
 	SHASH_DESC_ON_STACK(shash, tfm);
 
 	shash->tfm = tfm;
+	shash->flags = 0;
 
 	hash->length = crypto_shash_digestsize(tfm);
 
@@ -362,10 +366,8 @@ static int ima_calc_file_hash_tfm(struct file *file,
 			rc = rbuf_len;
 			break;
 		}
-		if (rbuf_len == 0) {	/* unexpected EOF */
-			rc = -EINVAL;
+		if (rbuf_len == 0)
 			break;
-		}
 		offset += rbuf_len;
 
 		rc = crypto_shash_update(shash, rbuf, rbuf_len);
@@ -413,7 +415,7 @@ int ima_calc_file_hash(struct file *file, struct ima_digest_data *hash)
 	loff_t i_size;
 	int rc;
 	struct file *f = file;
-	bool new_file_instance = false, modified_flags = false;
+	bool new_file_instance = false;
 
 	/*
 	 * For consistency, fail file's opened with the O_DIRECT flag on
@@ -431,18 +433,10 @@ int ima_calc_file_hash(struct file *file, struct ima_digest_data *hash)
 				O_TRUNC | O_CREAT | O_NOCTTY | O_EXCL);
 		flags |= O_RDONLY;
 		f = dentry_open(&file->f_path, flags, file->f_cred);
-		if (IS_ERR(f)) {
-			/*
-			 * Cannot open the file again, lets modify f_flags
-			 * of original and continue
-			 */
-			pr_info_ratelimited("Unable to reopen file for reading.\n");
-			f = file;
-			f->f_flags |= FMODE_READ;
-			modified_flags = true;
-		} else {
-			new_file_instance = true;
-		}
+		if (IS_ERR(f))
+			return PTR_ERR(f);
+
+		new_file_instance = true;
 	}
 
 	i_size = i_size_read(file_inode(f));
@@ -457,8 +451,6 @@ int ima_calc_file_hash(struct file *file, struct ima_digest_data *hash)
 out:
 	if (new_file_instance)
 		fput(f);
-	else if (modified_flags)
-		f->f_flags &= ~FMODE_READ;
 	return rc;
 }
 
@@ -475,6 +467,7 @@ static int ima_calc_field_array_hash_tfm(struct ima_field_data *field_data,
 	int rc, i;
 
 	shash->tfm = tfm;
+	shash->flags = 0;
 
 	hash->length = crypto_shash_digestsize(tfm);
 
@@ -596,6 +589,7 @@ static int calc_buffer_shash_tfm(const void *buf, loff_t size,
 	int rc;
 
 	shash->tfm = tfm;
+	shash->flags = 0;
 
 	hash->length = crypto_shash_digestsize(tfm);
 
@@ -647,27 +641,27 @@ int ima_calc_buffer_hash(const void *buf, loff_t len,
 	return calc_buffer_shash(buf, len, hash);
 }
 
-static void __init ima_pcrread(u32 idx, struct tpm_digest *d)
+static void ima_pcrread(int idx, u8 *pcr)
 {
 	if (!ima_tpm_chip)
 		return;
 
-	if (tpm_pcr_read(ima_tpm_chip, idx, d) != 0)
+	if (tpm_pcr_read(ima_tpm_chip, idx, pcr) != 0)
 		pr_err("Error Communicating to TPM chip\n");
 }
 
 /*
  * Calculate the boot aggregate hash
  */
-static int __init ima_calc_boot_aggregate_tfm(char *digest,
-					      struct crypto_shash *tfm)
+static int ima_calc_boot_aggregate_tfm(char *digest,
+				       struct crypto_shash *tfm)
 {
-	struct tpm_digest d = { .alg_id = TPM_ALG_SHA1, .digest = {0} };
-	int rc;
-	u32 i;
+	u8 pcr_i[TPM_DIGEST_SIZE];
+	int rc, i;
 	SHASH_DESC_ON_STACK(shash, tfm);
 
 	shash->tfm = tfm;
+	shash->flags = 0;
 
 	rc = crypto_shash_init(shash);
 	if (rc != 0)
@@ -675,16 +669,18 @@ static int __init ima_calc_boot_aggregate_tfm(char *digest,
 
 	/* cumulative sha1 over tpm registers 0-7 */
 	for (i = TPM_PCR0; i < TPM_PCR8; i++) {
-		ima_pcrread(i, &d);
+		ima_pcrread(i, pcr_i);
 		/* now accumulate with current aggregate */
-		rc = crypto_shash_update(shash, d.digest, TPM_DIGEST_SIZE);
+		rc = crypto_shash_update(shash, pcr_i, TPM_DIGEST_SIZE);
+		if (rc != 0)
+			return rc;
 	}
 	if (!rc)
 		crypto_shash_final(shash, digest);
 	return rc;
 }
 
-int __init ima_calc_boot_aggregate(struct ima_digest_data *hash)
+int ima_calc_boot_aggregate(struct ima_digest_data *hash)
 {
 	struct crypto_shash *tfm;
 	int rc;

@@ -5,7 +5,7 @@
 
 /**
  * ice_aq_read_nvm
- * @hw: pointer to the HW struct
+ * @hw: pointer to the hw struct
  * @module_typeid: module pointer location in words from the NVM beginning
  * @offset: byte offset from the module beginning
  * @length: length of the section to be read (in bytes from the offset)
@@ -119,65 +119,8 @@ ice_read_sr_word_aq(struct ice_hw *hw, u16 offset, u16 *data)
 
 	status = ice_read_sr_aq(hw, offset, 1, data, true);
 	if (!status)
-		*data = le16_to_cpu(*(__force __le16 *)data);
+		*data = le16_to_cpu(*(__le16 *)data);
 
-	return status;
-}
-
-/**
- * ice_read_sr_buf_aq - Reads Shadow RAM buf via AQ
- * @hw: pointer to the HW structure
- * @offset: offset of the Shadow RAM word to read (0x000000 - 0x001FFF)
- * @words: (in) number of words to read; (out) number of words actually read
- * @data: words read from the Shadow RAM
- *
- * Reads 16 bit words (data buf) from the SR using the ice_read_sr_aq
- * method. Ownership of the NVM is taken before reading the buffer and later
- * released.
- */
-static enum ice_status
-ice_read_sr_buf_aq(struct ice_hw *hw, u16 offset, u16 *words, u16 *data)
-{
-	enum ice_status status;
-	bool last_cmd = false;
-	u16 words_read = 0;
-	u16 i = 0;
-
-	do {
-		u16 read_size, off_w;
-
-		/* Calculate number of bytes we should read in this step.
-		 * It's not allowed to read more than one page at a time or
-		 * to cross page boundaries.
-		 */
-		off_w = offset % ICE_SR_SECTOR_SIZE_IN_WORDS;
-		read_size = off_w ?
-			min_t(u16, *words,
-			      (ICE_SR_SECTOR_SIZE_IN_WORDS - off_w)) :
-			min_t(u16, (*words - words_read),
-			      ICE_SR_SECTOR_SIZE_IN_WORDS);
-
-		/* Check if this is last command, if so set proper flag */
-		if ((words_read + read_size) >= *words)
-			last_cmd = true;
-
-		status = ice_read_sr_aq(hw, offset, read_size,
-					data + words_read, last_cmd);
-		if (status)
-			goto read_nvm_buf_aq_exit;
-
-		/* Increment counter for words already read and move offset to
-		 * new read location
-		 */
-		words_read += read_size;
-		offset += read_size;
-	} while (words_read < *words);
-
-	for (i = 0; i < *words; i++)
-		data[i] = le16_to_cpu(((__force __le16 *)data)[i]);
-
-read_nvm_buf_aq_exit:
-	*words = words_read;
 	return status;
 }
 
@@ -219,7 +162,8 @@ static void ice_release_nvm(struct ice_hw *hw)
  *
  * Reads one 16 bit word from the Shadow RAM using the ice_read_sr_word_aq.
  */
-enum ice_status ice_read_sr_word(struct ice_hw *hw, u16 offset, u16 *data)
+static enum ice_status
+ice_read_sr_word(struct ice_hw *hw, u16 offset, u16 *data)
 {
 	enum ice_status status;
 
@@ -234,21 +178,20 @@ enum ice_status ice_read_sr_word(struct ice_hw *hw, u16 offset, u16 *data)
 
 /**
  * ice_init_nvm - initializes NVM setting
- * @hw: pointer to the HW struct
+ * @hw: pointer to the hw struct
  *
  * This function reads and populates NVM settings such as Shadow RAM size,
  * max_timeout, and blank_nvm_mode
  */
 enum ice_status ice_init_nvm(struct ice_hw *hw)
 {
-	u16 oem_hi, oem_lo, boot_cfg_tlv, boot_cfg_tlv_len;
 	struct ice_nvm_info *nvm = &hw->nvm;
 	u16 eetrack_lo, eetrack_hi;
-	enum ice_status status;
+	enum ice_status status = 0;
 	u32 fla, gens_stat;
 	u8 sr_size;
 
-	/* The SR size is stored regardless of the NVM programming mode
+	/* The SR size is stored regardless of the nvm programming mode
 	 * as the blank mode may be used in the factory line.
 	 */
 	gens_stat = rd32(hw, GLNVM_GENS);
@@ -261,15 +204,15 @@ enum ice_status ice_init_nvm(struct ice_hw *hw)
 	fla = rd32(hw, GLNVM_FLA);
 	if (fla & GLNVM_FLA_LOCKED_M) { /* Normal programming mode */
 		nvm->blank_nvm_mode = false;
-	} else {
-		/* Blank programming mode */
+	} else { /* Blank programming mode */
 		nvm->blank_nvm_mode = true;
+		status = ICE_ERR_NVM_BLANK_MODE;
 		ice_debug(hw, ICE_DBG_NVM,
 			  "NVM init error: unsupported blank mode.\n");
-		return ICE_ERR_NVM_BLANK_MODE;
+		return status;
 	}
 
-	status = ice_read_sr_word(hw, ICE_SR_NVM_DEV_STARTER_VER, &nvm->ver);
+	status = ice_read_sr_word(hw, ICE_SR_NVM_DEV_STARTER_VER, &hw->nvm.ver);
 	if (status) {
 		ice_debug(hw, ICE_DBG_INIT,
 			  "Failed to read DEV starter version.\n");
@@ -287,108 +230,7 @@ enum ice_status ice_init_nvm(struct ice_hw *hw)
 		return status;
 	}
 
-	nvm->eetrack = (eetrack_hi << 16) | eetrack_lo;
-
-	/* the following devices do not have boot_cfg_tlv yet */
-	if (hw->device_id == ICE_DEV_ID_E822C_BACKPLANE ||
-	    hw->device_id == ICE_DEV_ID_E822C_QSFP ||
-	    hw->device_id == ICE_DEV_ID_E822C_10G_BASE_T ||
-	    hw->device_id == ICE_DEV_ID_E822C_SGMII ||
-	    hw->device_id == ICE_DEV_ID_E822C_SFP ||
-	    hw->device_id == ICE_DEV_ID_E822X_BACKPLANE ||
-	    hw->device_id == ICE_DEV_ID_E822L_SFP ||
-	    hw->device_id == ICE_DEV_ID_E822L_10G_BASE_T ||
-	    hw->device_id == ICE_DEV_ID_E822L_SGMII)
-		return status;
-
-	status = ice_get_pfa_module_tlv(hw, &boot_cfg_tlv, &boot_cfg_tlv_len,
-					ICE_SR_BOOT_CFG_PTR);
-	if (status) {
-		ice_debug(hw, ICE_DBG_INIT,
-			  "Failed to read Boot Configuration Block TLV.\n");
-		return status;
-	}
-
-	/* Boot Configuration Block must have length at least 2 words
-	 * (Combo Image Version High and Combo Image Version Low)
-	 */
-	if (boot_cfg_tlv_len < 2) {
-		ice_debug(hw, ICE_DBG_INIT,
-			  "Invalid Boot Configuration Block TLV size.\n");
-		return ICE_ERR_INVAL_SIZE;
-	}
-
-	status = ice_read_sr_word(hw, (boot_cfg_tlv + ICE_NVM_OEM_VER_OFF),
-				  &oem_hi);
-	if (status) {
-		ice_debug(hw, ICE_DBG_INIT, "Failed to read OEM_VER hi.\n");
-		return status;
-	}
-
-	status = ice_read_sr_word(hw, (boot_cfg_tlv + ICE_NVM_OEM_VER_OFF + 1),
-				  &oem_lo);
-	if (status) {
-		ice_debug(hw, ICE_DBG_INIT, "Failed to read OEM_VER lo.\n");
-		return status;
-	}
-
-	nvm->oem_ver = ((u32)oem_hi << 16) | oem_lo;
-
-	return 0;
-}
-
-/**
- * ice_read_sr_buf - Reads Shadow RAM buf and acquire lock if necessary
- * @hw: pointer to the HW structure
- * @offset: offset of the Shadow RAM word to read (0x000000 - 0x001FFF)
- * @words: (in) number of words to read; (out) number of words actually read
- * @data: words read from the Shadow RAM
- *
- * Reads 16 bit words (data buf) from the SR using the ice_read_nvm_buf_aq
- * method. The buf read is preceded by the NVM ownership take
- * and followed by the release.
- */
-enum ice_status
-ice_read_sr_buf(struct ice_hw *hw, u16 offset, u16 *words, u16 *data)
-{
-	enum ice_status status;
-
-	status = ice_acquire_nvm(hw, ICE_RES_READ);
-	if (!status) {
-		status = ice_read_sr_buf_aq(hw, offset, words, data);
-		ice_release_nvm(hw);
-	}
-
-	return status;
-}
-
-/**
- * ice_nvm_validate_checksum
- * @hw: pointer to the HW struct
- *
- * Verify NVM PFA checksum validity (0x0706)
- */
-enum ice_status ice_nvm_validate_checksum(struct ice_hw *hw)
-{
-	struct ice_aqc_nvm_checksum *cmd;
-	struct ice_aq_desc desc;
-	enum ice_status status;
-
-	status = ice_acquire_nvm(hw, ICE_RES_READ);
-	if (status)
-		return status;
-
-	cmd = &desc.params.nvm_checksum;
-
-	ice_fill_dflt_direct_cmd_desc(&desc, ice_aqc_opc_nvm_checksum);
-	cmd->flags = ICE_AQC_NVM_CHECKSUM_VERIFY;
-
-	status = ice_aq_send_cmd(hw, &desc, NULL, 0, NULL);
-	ice_release_nvm(hw);
-
-	if (!status)
-		if (le16_to_cpu(cmd->checksum) != ICE_AQC_NVM_CHECKSUM_CORRECT)
-			status = ICE_ERR_NVM_CHECKSUM;
+	hw->nvm.eetrack = (eetrack_hi << 16) | eetrack_lo;
 
 	return status;
 }

@@ -1,10 +1,14 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  *  i8042 keyboard and mouse controller driver for Linux
  *
  *  Copyright (c) 1999-2004 Vojtech Pavlik
  */
 
+/*
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License version 2 as published by
+ * the Free Software Foundation.
+ */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
@@ -121,6 +125,7 @@ module_param_named(unmask_kbd_data, i8042_unmask_kbd_data, bool, 0600);
 MODULE_PARM_DESC(unmask_kbd_data, "Unconditional enable (may reveal sensitive data) of normally sanitize-filtered kbd data traffic debug log [pre-condition: i8042.debug=1 enabled]");
 #endif
 
+static bool i8042_present;
 static bool i8042_bypass_aux_irq_test;
 static char i8042_kbd_firmware_id[128];
 static char i8042_aux_firmware_id[128];
@@ -341,6 +346,9 @@ int i8042_command(unsigned char *param, int command)
 	unsigned long flags;
 	int retval;
 
+	if (!i8042_present)
+		return -1;
+
 	spin_lock_irqsave(&i8042_lock, flags);
 	retval = __i8042_command(param, command);
 	spin_unlock_irqrestore(&i8042_lock, flags);
@@ -431,20 +439,6 @@ static void i8042_port_close(struct serio *serio)
 static int i8042_start(struct serio *serio)
 {
 	struct i8042_port *port = serio->port_data;
-
-	device_set_wakeup_capable(&serio->dev, true);
-
-	/*
-	 * On platforms using suspend-to-idle, allow the keyboard to
-	 * wake up the system from sleep by enabling keyboard wakeups
-	 * by default.  This is consistent with keyboard wakeup
-	 * behavior on many platforms using suspend-to-RAM (ACPI S3)
-	 * by default.
-	 */
-	if (pm_suspend_default_s2idle() &&
-	    serio == i8042_ports[I8042_KBD_PORT_NO].serio) {
-		device_set_wakeup_enable(&serio->dev, true);
-	}
 
 	spin_lock_irq(&i8042_lock);
 	port->exists = true;
@@ -582,6 +576,9 @@ static irqreturn_t i8042_interrupt(int irq, void *dev_id)
 
 	port = &i8042_ports[port_no];
 	serio = port->exists ? port->serio : NULL;
+
+	if (irq && serio)
+		pm_wakeup_event(&serio->dev, 0);
 
 	filter_dbg(port->driver_bound, data, "<- i8042 (interrupt, %d, %d%s%s)\n",
 		   port_no, irq,
@@ -1411,6 +1408,17 @@ static void __init i8042_register_ports(void)
 			(unsigned long) I8042_COMMAND_REG,
 			i8042_ports[i].irq);
 		serio_register_port(serio);
+		device_set_wakeup_capable(&serio->dev, true);
+
+		/*
+		 * On platforms using suspend-to-idle, allow the keyboard to
+		 * wake up the system from sleep by enabling keyboard wakeups
+		 * by default.  This is consistent with keyboard wakeup
+		 * behavior on many platforms using suspend-to-RAM (ACPI S3)
+		 * by default.
+		 */
+		if (pm_suspend_via_s2idle() && i == I8042_KBD_PORT_NO)
+			device_set_wakeup_enable(&serio->dev, true);
 	}
 }
 
@@ -1464,7 +1472,8 @@ static int __init i8042_setup_aux(void)
 	if (error)
 		goto err_free_ports;
 
-	if (aux_enable())
+	error = aux_enable();
+	if (error)
 		goto err_free_irq;
 
 	i8042_aux_irq_registered = true;
@@ -1609,11 +1618,14 @@ static int __init i8042_init(void)
 
 	err = i8042_platform_init();
 	if (err)
-		return err;
+		return (err == -ENODEV) ? 0 : err;
 
 	err = i8042_controller_check();
 	if (err)
 		goto err_platform_exit;
+
+	/* Set this before creating the dev to allow i8042_command to work right away */
+	i8042_present = true;
 
 	pdev = platform_create_bundle(&i8042_driver, i8042_probe, NULL, 0, NULL, 0);
 	if (IS_ERR(pdev)) {
@@ -1633,6 +1645,9 @@ static int __init i8042_init(void)
 
 static void __exit i8042_exit(void)
 {
+	if (!i8042_present)
+		return;
+
 	platform_device_unregister(i8042_platform_device);
 	platform_driver_unregister(&i8042_driver);
 	i8042_platform_exit();

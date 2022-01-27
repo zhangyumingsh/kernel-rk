@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * sata_mv.c - Marvell SATA support
  *
@@ -10,6 +9,20 @@
  * Extensive overhaul and enhancement by Mark Lord <mlord@pobox.com>.
  *
  * Please ALWAYS copy linux-ide@vger.kernel.org on emails.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; version 2 of the License.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ *
  */
 
 /*
@@ -4097,6 +4110,10 @@ static int mv_platform_probe(struct platform_device *pdev)
 		n_ports = mv_platform_data->n_ports;
 		irq = platform_get_irq(pdev, 0);
 	}
+	if (irq < 0)
+		return irq;
+	if (!irq)
+		return -EINVAL;
 
 	host = ata_host_alloc_pinfo(&pdev->dev, ppi, n_ports);
 	hpriv = devm_kzalloc(&pdev->dev, sizeof(*hpriv), GFP_KERNEL);
@@ -4316,6 +4333,38 @@ static struct pci_driver mv_pci_driver = {
 
 };
 
+/* move to PCI layer or libata core? */
+static int pci_go_64(struct pci_dev *pdev)
+{
+	int rc;
+
+	if (!dma_set_mask(&pdev->dev, DMA_BIT_MASK(64))) {
+		rc = dma_set_coherent_mask(&pdev->dev, DMA_BIT_MASK(64));
+		if (rc) {
+			rc = dma_set_coherent_mask(&pdev->dev, DMA_BIT_MASK(32));
+			if (rc) {
+				dev_err(&pdev->dev,
+					"64-bit DMA enable failed\n");
+				return rc;
+			}
+		}
+	} else {
+		rc = dma_set_mask(&pdev->dev, DMA_BIT_MASK(32));
+		if (rc) {
+			dev_err(&pdev->dev, "32-bit DMA enable failed\n");
+			return rc;
+		}
+		rc = dma_set_coherent_mask(&pdev->dev, DMA_BIT_MASK(32));
+		if (rc) {
+			dev_err(&pdev->dev,
+				"32-bit consistent DMA enable failed\n");
+			return rc;
+		}
+	}
+
+	return rc;
+}
+
 /**
  *      mv_print_info - Dump key info to kernel log for perusal.
  *      @host: ATA host to print info about
@@ -4400,11 +4449,9 @@ static int mv_pci_init_one(struct pci_dev *pdev,
 	host->iomap = pcim_iomap_table(pdev);
 	hpriv->base = host->iomap[MV_PRIMARY_BAR];
 
-	rc = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(64));
-	if (rc) {
-		dev_err(&pdev->dev, "DMA enable failed\n");
+	rc = pci_go_64(pdev);
+	if (rc)
 		return rc;
-	}
 
 	rc = mv_create_dma_pools(hpriv, &pdev->dev);
 	if (rc)

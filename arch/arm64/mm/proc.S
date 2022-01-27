@@ -1,10 +1,21 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Based on arch/arm/mm/proc.S
  *
  * Copyright (C) 2001 Deep Blue Solutions Ltd.
  * Copyright (C) 2012 ARM Ltd.
  * Author: Catalin Marinas <catalin.marinas@arm.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <linux/init.h>
@@ -42,22 +53,59 @@
 #define TCR_KASAN_FLAGS 0
 #endif
 
-/* Default MAIR_EL1 */
-#define MAIR_EL1_SET							\
-	(MAIR_ATTRIDX(MAIR_ATTR_DEVICE_nGnRnE, MT_DEVICE_nGnRnE) |	\
-	 MAIR_ATTRIDX(MAIR_ATTR_DEVICE_nGnRE, MT_DEVICE_nGnRE) |	\
-	 MAIR_ATTRIDX(MAIR_ATTR_DEVICE_GRE, MT_DEVICE_GRE) |		\
-	 MAIR_ATTRIDX(MAIR_ATTR_NORMAL_NC, MT_NORMAL_NC) |		\
-	 MAIR_ATTRIDX(MAIR_ATTR_NORMAL, MT_NORMAL) |			\
-	 MAIR_ATTRIDX(MAIR_ATTR_NORMAL_WT, MT_NORMAL_WT))
+#define MAIR(attr, mt)	((attr) << ((mt) * 8))
+
+/*
+ *	cpu_cache_off()
+ *
+ *	Turn the CPU D-cache off.
+ */
+ENTRY(cpu_cache_off)
+	mrs	x0, sctlr_el1
+	bic	x0, x0, #1 << 2			// clear SCTLR.C
+	msr	sctlr_el1, x0
+	isb
+	ret
+ENDPROC(cpu_cache_off)
+
+/*
+ *	cpu_reset(loc)
+ *
+ *	Perform a soft reset of the system.  Put the CPU into the same state
+ *	as it would be if it had been reset, and branch to what would be the
+ *	reset vector. It must be executed with the flat identity mapping.
+ *
+ *	- loc   - location to jump to for soft reset
+ */
+	.align	5
+ENTRY(cpu_reset)
+	mrs	x1, sctlr_el1
+	bic	x1, x1, #1
+	msr	sctlr_el1, x1			// disable the MMU
+	isb
+	ret	x0
+ENDPROC(cpu_reset)
+
+/*
+ *	cpu_do_idle()
+ *
+ *	Idle the processor (wait for interrupt).
+ */
+ENTRY(cpu_do_idle)
+	dsb	sy				// WFI may enter a low-power mode
+	wfi
+	ret
+ENDPROC(cpu_do_idle)
 
 #ifdef CONFIG_CPU_PM
 /**
  * cpu_do_suspend - save CPU registers context
  *
  * x0: virtual address of context pointer
+ *
+ * This must be kept in sync with struct cpu_suspend_ctx in <asm/suspend.h>.
  */
-SYM_FUNC_START(cpu_do_suspend)
+ENTRY(cpu_do_suspend)
 	mrs	x2, tpidr_el0
 	mrs	x3, tpidrro_el0
 	mrs	x4, contextidr_el1
@@ -80,8 +128,13 @@ alternative_endif
 	stp	x8, x9, [x0, #48]
 	stp	x10, x11, [x0, #64]
 	stp	x12, x13, [x0, #80]
+	/*
+	 * Save x18 as it may be used as a platform register, e.g. by shadow
+	 * call stack.
+	 */
+	str	x18, [x0, #96]
 	ret
-SYM_FUNC_END(cpu_do_suspend)
+ENDPROC(cpu_do_suspend)
 
 /**
  * cpu_do_resume - restore CPU register context
@@ -89,13 +142,20 @@ SYM_FUNC_END(cpu_do_suspend)
  * x0: Address of context pointer
  */
 	.pushsection ".idmap.text", "awx"
-SYM_FUNC_START(cpu_do_resume)
+ENTRY(cpu_do_resume)
 	ldp	x2, x3, [x0]
 	ldp	x4, x5, [x0, #16]
 	ldp	x6, x8, [x0, #32]
 	ldp	x9, x10, [x0, #48]
 	ldp	x11, x12, [x0, #64]
 	ldp	x13, x14, [x0, #80]
+	/*
+	 * Restore x18, as it may be used as a platform register, and clear
+	 * the buffer to minimize the risk of exposure when used for shadow
+	 * call stack.
+	 */
+	ldr	x18, [x0, #96]
+	str	xzr, [x0, #96]
 	msr	tpidr_el0, x2
 	msr	tpidrro_el0, x3
 	msr	contextidr_el1, x4
@@ -138,7 +198,7 @@ alternative_else_nop_endif
 
 	isb
 	ret
-SYM_FUNC_END(cpu_do_resume)
+ENDPROC(cpu_do_resume)
 	.popsection
 #endif
 
@@ -149,16 +209,10 @@ SYM_FUNC_END(cpu_do_resume)
  *
  *	- pgd_phys - physical address of new TTB
  */
-SYM_FUNC_START(cpu_do_switch_mm)
+ENTRY(cpu_do_switch_mm)
 	mrs	x2, ttbr1_el1
 	mmid	x1, x1				// get mm->context.id
 	phys_to_ttbr x3, x0
-
-alternative_if ARM64_HAS_CNP
-	cbz     x1, 1f                          // skip CNP for reserved ASID
-	orr     x3, x3, #TTBR_CNP_BIT
-1:
-alternative_else_nop_endif
 #ifdef CONFIG_ARM64_SW_TTBR0_PAN
 	bfi	x3, x1, #48, #16		// set the ASID field in TTBR0
 #endif
@@ -168,14 +222,13 @@ alternative_else_nop_endif
 	msr	ttbr0_el1, x3			// now update TTBR0
 	isb
 	b	post_ttbr_update_workaround	// Back to C code...
-SYM_FUNC_END(cpu_do_switch_mm)
+ENDPROC(cpu_do_switch_mm)
 
 	.pushsection ".idmap.text", "awx"
 
 .macro	__idmap_cpu_set_reserved_ttbr1, tmp1, tmp2
 	adrp	\tmp1, empty_zero_page
 	phys_to_ttbr \tmp2, \tmp1
-	offset_ttbr1 \tmp2, \tmp1
 	msr	ttbr1_el1, \tmp2
 	isb
 	tlbi	vmalle1
@@ -184,24 +237,24 @@ SYM_FUNC_END(cpu_do_switch_mm)
 .endm
 
 /*
- * void idmap_cpu_replace_ttbr1(phys_addr_t ttbr1)
+ * void idmap_cpu_replace_ttbr1(phys_addr_t new_pgd)
  *
  * This is the low-level counterpart to cpu_replace_ttbr1, and should not be
  * called by anything else. It can only be executed from a TTBR0 mapping.
  */
-SYM_FUNC_START(idmap_cpu_replace_ttbr1)
+ENTRY(idmap_cpu_replace_ttbr1)
 	save_and_disable_daif flags=x2
 
 	__idmap_cpu_set_reserved_ttbr1 x1, x3
 
-	offset_ttbr1 x0, x3
-	msr	ttbr1_el1, x0
+	phys_to_ttbr x3, x0
+	msr	ttbr1_el1, x3
 	isb
 
 	restore_daif x2
 
 	ret
-SYM_FUNC_END(idmap_cpu_replace_ttbr1)
+ENDPROC(idmap_cpu_replace_ttbr1)
 	.popsection
 
 #ifdef CONFIG_UNMAP_KERNEL_AT_EL0
@@ -229,7 +282,7 @@ SYM_FUNC_END(idmap_cpu_replace_ttbr1)
  */
 __idmap_kpti_flag:
 	.long	1
-SYM_FUNC_START(idmap_kpti_install_ng_mappings)
+ENTRY(idmap_kpti_install_ng_mappings)
 	cpu		.req	w0
 	num_cpus	.req	w1
 	swapper_pa	.req	x2
@@ -249,7 +302,6 @@ SYM_FUNC_START(idmap_kpti_install_ng_mappings)
 	pte		.req	x16
 
 	mrs	swapper_ttb, ttbr1_el1
-	restore_ttbr1	swapper_ttb
 	adr	flag_ptr, __idmap_kpti_flag
 
 	cbnz	cpu, __idmap_kpti_secondary
@@ -394,14 +446,13 @@ __idmap_kpti_secondary:
 	cbnz	w16, 1b
 
 	/* All done, act like nothing happened */
-	offset_ttbr1 swapper_ttb, x16
 	msr	ttbr1_el1, swapper_ttb
 	isb
 	ret
 
 	.unreq	swapper_ttb
 	.unreq	flag_ptr
-SYM_FUNC_END(idmap_kpti_install_ng_mappings)
+ENDPROC(idmap_kpti_install_ng_mappings)
 	.popsection
 #endif
 
@@ -412,7 +463,7 @@ SYM_FUNC_END(idmap_kpti_install_ng_mappings)
  *	value of the SCTLR_EL1 register.
  */
 	.pushsection ".idmap.text", "awx"
-SYM_FUNC_START(__cpu_setup)
+ENTRY(__cpu_setup)
 	tlbi	vmalle1				// Invalidate local TLB
 	dsb	nsh
 
@@ -424,9 +475,23 @@ SYM_FUNC_START(__cpu_setup)
 	enable_dbg				// since this is per-cpu
 	reset_pmuserenr_el0 x0			// Disable PMU access from EL0
 	/*
-	 * Memory region attributes
+	 * Memory region attributes for LPAE:
+	 *
+	 *   n = AttrIndx[2:0]
+	 *			n	MAIR
+	 *   DEVICE_nGnRnE	000	00000000
+	 *   DEVICE_nGnRE	001	00000100
+	 *   DEVICE_GRE		010	00001100
+	 *   NORMAL_NC		011	01000100
+	 *   NORMAL		100	11111111
+	 *   NORMAL_WT		101	10111011
 	 */
-	mov_q	x5, MAIR_EL1_SET
+	ldr	x5, =MAIR(0x00, MT_DEVICE_nGnRnE) | \
+		     MAIR(0x04, MT_DEVICE_nGnRE) | \
+		     MAIR(0x0c, MT_DEVICE_GRE) | \
+		     MAIR(0x44, MT_NORMAL_NC) | \
+		     MAIR(0xff, MT_NORMAL) | \
+		     MAIR(0xbb, MT_NORMAL_WT)
 	msr	mair_el1, x5
 	/*
 	 * Prepare SCTLR
@@ -439,17 +504,7 @@ SYM_FUNC_START(__cpu_setup)
 	ldr	x10, =TCR_TxSZ(VA_BITS) | TCR_CACHE_FLAGS | TCR_SMP_FLAGS | \
 			TCR_TG_FLAGS | TCR_KASLR_FLAGS | TCR_ASID16 | \
 			TCR_TBI0 | TCR_A1 | TCR_KASAN_FLAGS
-	tcr_clear_errata_bits x10, x9, x5
-
-#ifdef CONFIG_ARM64_VA_BITS_52
-	ldr_l		x9, vabits_actual
-	sub		x9, xzr, x9
-	add		x9, x9, #64
-	tcr_set_t1sz	x10, x9
-#else
-	ldr_l		x9, idmap_t0sz
-#endif
-	tcr_set_t0sz	x10, x9
+	tcr_set_idmap_t0sz	x10, x9
 
 	/*
 	 * Set the IPS bits in TCR_EL1.
@@ -469,4 +524,4 @@ SYM_FUNC_START(__cpu_setup)
 #endif	/* CONFIG_ARM64_HW_AFDBM */
 	msr	tcr_el1, x10
 	ret					// return to head.S
-SYM_FUNC_END(__cpu_setup)
+ENDPROC(__cpu_setup)

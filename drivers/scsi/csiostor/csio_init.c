@@ -154,20 +154,27 @@ csio_dfs_create(struct csio_hw *hw)
 /*
  * csio_dfs_destroy - Destroys per-hw debugfs.
  */
-static void
+static int
 csio_dfs_destroy(struct csio_hw *hw)
 {
-	debugfs_remove_recursive(hw->debugfs_root);
+	if (hw->debugfs_root)
+		debugfs_remove_recursive(hw->debugfs_root);
+
+	return 0;
 }
 
 /*
  * csio_dfs_init - Debug filesystem initialization for the module.
  *
  */
-static void
+static int
 csio_dfs_init(void)
 {
 	csio_debugfs_root = debugfs_create_dir(KBUILD_MODNAME, NULL);
+	if (!csio_debugfs_root)
+		pr_warn("Could not create debugfs entry, continuing\n");
+
+	return 0;
 }
 
 /*
@@ -203,11 +210,11 @@ csio_pci_init(struct pci_dev *pdev, int *bars)
 	pci_set_master(pdev);
 	pci_try_set_mwi(pdev);
 
-	rv = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(64));
-	if (rv)
-		rv = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32));
-	if (rv) {
-		rv = -ENODEV;
+	if (!pci_set_dma_mask(pdev, DMA_BIT_MASK(64))) {
+		pci_set_consistent_dma_mask(pdev, DMA_BIT_MASK(64));
+	} else if (!pci_set_dma_mask(pdev, DMA_BIT_MASK(32))) {
+		pci_set_consistent_dma_mask(pdev, DMA_BIT_MASK(32));
+	} else {
 		dev_err(&pdev->dev, "No suitable DMA available.\n");
 		goto err_release_regions;
 	}
@@ -251,6 +258,7 @@ static void
 csio_hw_exit_workers(struct csio_hw *hw)
 {
 	cancel_work_sync(&hw->evtq_work);
+	flush_scheduled_work();
 }
 
 static int
@@ -529,7 +537,7 @@ static struct csio_hw *csio_hw_alloc(struct pci_dev *pdev)
 		goto err_free_hw;
 
 	/* Get the start address of registers from BAR 0 */
-	hw->regstart = ioremap(pci_resource_start(pdev, 0),
+	hw->regstart = ioremap_nocache(pci_resource_start(pdev, 0),
 				       pci_resource_len(pdev, 0));
 	if (!hw->regstart) {
 		csio_err(hw, "Could not map BAR 0, regstart = %p\n",
@@ -1094,6 +1102,7 @@ csio_pci_slot_reset(struct pci_dev *pdev)
 	pci_set_master(pdev);
 	pci_restore_state(pdev);
 	pci_save_state(pdev);
+	pci_cleanup_aer_uncorrect_error_status(pdev);
 
 	/* Bring HW s/m to ready state.
 	 * but don't resume IOs.

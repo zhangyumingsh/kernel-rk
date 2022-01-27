@@ -2,8 +2,9 @@
 /*
  *  Native support for the I/O-Warrior USB devices
  *
- *  Copyright (c) 2003-2005  Code Mercenaries GmbH
- *  written by Christian Lucht <lucht@codemercs.com>
+ *  Copyright (c) 2003-2005, 2020  Code Mercenaries GmbH
+ *  written by Christian Lucht <lucht@codemercs.com> and
+ *  Christoph Jung <jung@codemercs.com>
  *
  *  based on
 
@@ -62,7 +63,11 @@ MODULE_AUTHOR(DRIVER_AUTHOR);
 MODULE_DESCRIPTION(DRIVER_DESC);
 MODULE_LICENSE("GPL");
 
+/* Module parameters */
+static DEFINE_MUTEX(iowarrior_mutex);
+
 static struct usb_driver iowarrior_driver;
+static DEFINE_MUTEX(iowarrior_open_disc_lock);
 
 /*--------------*/
 /*     data     */
@@ -495,6 +500,8 @@ static long iowarrior_ioctl(struct file *file, unsigned int cmd,
 	if (!buffer)
 		return -ENOMEM;
 
+	/* lock this object */
+	mutex_lock(&iowarrior_mutex);
 	mutex_lock(&dev->mutex);
 
 	/* verify that the device wasn't unplugged */
@@ -588,6 +595,7 @@ static long iowarrior_ioctl(struct file *file, unsigned int cmd,
 error_out:
 	/* unlock the device */
 	mutex_unlock(&dev->mutex);
+	mutex_unlock(&iowarrior_mutex);
 	kfree(buffer);
 	return retval;
 }
@@ -602,20 +610,27 @@ static int iowarrior_open(struct inode *inode, struct file *file)
 	int subminor;
 	int retval = 0;
 
+	mutex_lock(&iowarrior_mutex);
 	subminor = iminor(inode);
 
 	interface = usb_find_interface(&iowarrior_driver, subminor);
 	if (!interface) {
-		pr_err("%s - error, can't find device for minor %d\n",
+		mutex_unlock(&iowarrior_mutex);
+		printk(KERN_ERR "%s - error, can't find device for minor %d\n",
 		       __func__, subminor);
 		return -ENODEV;
 	}
 
+	mutex_lock(&iowarrior_open_disc_lock);
 	dev = usb_get_intfdata(interface);
-	if (!dev)
+	if (!dev) {
+		mutex_unlock(&iowarrior_open_disc_lock);
+		mutex_unlock(&iowarrior_mutex);
 		return -ENODEV;
+	}
 
 	mutex_lock(&dev->mutex);
+	mutex_unlock(&iowarrior_open_disc_lock);
 
 	/* Only one process can open each device, no sharing. */
 	if (dev->opened) {
@@ -637,6 +652,7 @@ static int iowarrior_open(struct inode *inode, struct file *file)
 
 out:
 	mutex_unlock(&dev->mutex);
+	mutex_unlock(&iowarrior_mutex);
 	return retval;
 }
 
@@ -802,14 +818,28 @@ static int iowarrior_probe(struct usb_interface *interface,
 
 	/* we have to check the report_size often, so remember it in the endianness suitable for our machine */
 	dev->report_size = usb_endpoint_maxp(dev->int_in_endpoint);
-	if ((dev->interface->cur_altsetting->desc.bInterfaceNumber == 0) &&
-	    ((dev->product_id == USB_DEVICE_ID_CODEMERCS_IOW56) ||
-	     (dev->product_id == USB_DEVICE_ID_CODEMERCS_IOW56AM) ||
-	     (dev->product_id == USB_DEVICE_ID_CODEMERCS_IOW28) ||
-	     (dev->product_id == USB_DEVICE_ID_CODEMERCS_IOW28L) ||
-	     (dev->product_id == USB_DEVICE_ID_CODEMERCS_IOW100)))
-		/* IOWarrior56 has wMaxPacketSize different from report size */
-		dev->report_size = 7;
+
+	/*
+	 * Some devices need the report size to be different than the
+	 * endpoint size.
+	 */
+	if (dev->interface->cur_altsetting->desc.bInterfaceNumber == 0) {
+		switch (dev->product_id) {
+		case USB_DEVICE_ID_CODEMERCS_IOW56:
+		case USB_DEVICE_ID_CODEMERCS_IOW56AM:
+			dev->report_size = 7;
+			break;
+
+		case USB_DEVICE_ID_CODEMERCS_IOW28:
+		case USB_DEVICE_ID_CODEMERCS_IOW28L:
+			dev->report_size = 4;
+			break;
+
+		case USB_DEVICE_ID_CODEMERCS_IOW100:
+			dev->report_size = 13;
+			break;
+		}
+	}
 
 	/* create the urb and buffer for reading */
 	dev->int_in_urb = usb_alloc_urb(0, GFP_KERNEL);
@@ -826,8 +856,8 @@ static int iowarrior_probe(struct usb_interface *interface,
 			 dev->int_in_endpoint->bInterval);
 	/* create an internal buffer for interrupt data from the device */
 	dev->read_queue =
-	    kmalloc_array(dev->report_size + 1, MAX_INTERRUPT_BUFFER,
-			  GFP_KERNEL);
+	    kmalloc(((dev->report_size + 1) * MAX_INTERRUPT_BUFFER),
+		    GFP_KERNEL);
 	if (!dev->read_queue)
 		goto error;
 	/* Get the serial-number of the chip */
@@ -854,6 +884,7 @@ static int iowarrior_probe(struct usb_interface *interface,
 	if (retval) {
 		/* something prevented us from registering this driver */
 		dev_err(&interface->dev, "Not able to get a minor for this device.\n");
+		usb_set_intfdata(interface, NULL);
 		goto error;
 	}
 
@@ -877,8 +908,16 @@ error:
  */
 static void iowarrior_disconnect(struct usb_interface *interface)
 {
-	struct iowarrior *dev = usb_get_intfdata(interface);
-	int minor = dev->minor;
+	struct iowarrior *dev;
+	int minor;
+
+	dev = usb_get_intfdata(interface);
+	mutex_lock(&iowarrior_open_disc_lock);
+	usb_set_intfdata(interface, NULL);
+
+	minor = dev->minor;
+	mutex_unlock(&iowarrior_open_disc_lock);
+	/* give back our minor - this will call close() locks need to be dropped at this point*/
 
 	usb_deregister_dev(interface, &iowarrior_class);
 

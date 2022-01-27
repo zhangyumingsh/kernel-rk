@@ -6,7 +6,7 @@
  * GPL LICENSE SUMMARY
  *
  * Copyright(c) 2017 Intel Deutschland GmbH
- * Copyright(c) 2018 - 2019 Intel Corporation
+ * Copyright(c) 2018        Intel Corporation
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of version 2 of the GNU General Public License as
@@ -20,7 +20,7 @@
  * BSD LICENSE
  *
  * Copyright(c) 2017 Intel Deutschland GmbH
- * Copyright(c) 2018 - 2019 Intel Corporation
+ * Copyright(c) 2018        Intel Corporation
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -50,6 +50,7 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *
  *****************************************************************************/
+#include <linux/pm_runtime.h>
 #include <net/tso.h>
 #include <linux/tcp.h>
 
@@ -98,7 +99,10 @@ static void iwl_pcie_gen2_update_byte_tbl(struct iwl_trans_pcie *trans_pcie,
 	u16 len = byte_cnt;
 	__le16 bc_ent;
 
-	if (WARN(idx >= txq->n_window, "%d >= %d\n", idx, txq->n_window))
+	if (trans_pcie->bc_table_dword)
+		len = DIV_ROUND_UP(len, 4);
+
+	if (WARN_ON(len > 0xFFF || idx >= txq->n_window))
 		return;
 
 	filled_tfd_size = offsetof(struct iwl_tfh_tfd, tbs) +
@@ -113,27 +117,18 @@ static void iwl_pcie_gen2_update_byte_tbl(struct iwl_trans_pcie *trans_pcie,
 	 */
 	num_fetch_chunks = DIV_ROUND_UP(filled_tfd_size, 64) - 1;
 
-	if (trans->trans_cfg->device_family >= IWL_DEVICE_FAMILY_AX210) {
-		/* Starting from AX210, the HW expects bytes */
-		WARN_ON(trans_pcie->bc_table_dword);
-		WARN_ON(len > 0x3FFF);
-		bc_ent = cpu_to_le16(len | (num_fetch_chunks << 14));
+	bc_ent = cpu_to_le16(len | (num_fetch_chunks << 12));
+	if (trans->cfg->device_family >= IWL_DEVICE_FAMILY_22560)
 		scd_bc_tbl_gen3->tfd_offset[idx] = bc_ent;
-	} else {
-		/* Before AX210, the HW expects DW */
-		WARN_ON(!trans_pcie->bc_table_dword);
-		len = DIV_ROUND_UP(len, 4);
-		WARN_ON(len > 0xFFF);
-		bc_ent = cpu_to_le16(len | (num_fetch_chunks << 12));
+	else
 		scd_bc_tbl->tfd_offset[idx] = bc_ent;
-	}
 }
 
 /*
  * iwl_pcie_gen2_txq_inc_wr_ptr - Send new write index to hardware
  */
-void iwl_pcie_gen2_txq_inc_wr_ptr(struct iwl_trans *trans,
-				  struct iwl_txq *txq)
+static void iwl_pcie_gen2_txq_inc_wr_ptr(struct iwl_trans *trans,
+					 struct iwl_txq *txq)
 {
 	lockdep_assert_held(&txq->lock);
 
@@ -219,22 +214,7 @@ static int iwl_pcie_gen2_set_tb(struct iwl_trans *trans,
 {
 	struct iwl_trans_pcie *trans_pcie = IWL_TRANS_GET_PCIE_TRANS(trans);
 	int idx = iwl_pcie_gen2_get_num_tbs(trans, tfd);
-	struct iwl_tfh_tb *tb;
-
-	/*
-	 * Only WARN here so we know about the issue, but we mess up our
-	 * unmap path because not every place currently checks for errors
-	 * returned from this function - it can only return an error if
-	 * there's no more space, and so when we know there is enough we
-	 * don't always check ...
-	 */
-	WARN(iwl_pcie_crosses_4g_boundary(addr, len),
-	     "possible DMA problem with iova:0x%llx, len:%d\n",
-	     (unsigned long long)addr, len);
-
-	if (WARN_ON(idx >= IWL_TFH_NUM_TBS))
-		return -EINVAL;
-	tb = &tfd->tbs[idx];
+	struct iwl_tfh_tb *tb = &tfd->tbs[idx];
 
 	/* Each TFD can point to a maximum max_tbs Tx buffers */
 	if (le16_to_cpu(tfd->num_tbs) >= trans_pcie->max_tbs) {
@@ -251,121 +231,21 @@ static int iwl_pcie_gen2_set_tb(struct iwl_trans *trans,
 	return idx;
 }
 
-static struct page *get_workaround_page(struct iwl_trans *trans,
-					struct sk_buff *skb)
-{
-	struct iwl_trans_pcie *trans_pcie = IWL_TRANS_GET_PCIE_TRANS(trans);
-	struct page **page_ptr;
-	struct page *ret;
-
-	page_ptr = (void *)((u8 *)skb->cb + trans_pcie->page_offs);
-
-	ret = alloc_page(GFP_ATOMIC);
-	if (!ret)
-		return NULL;
-
-	/* set the chaining pointer to the previous page if there */
-	*(void **)(page_address(ret) + PAGE_SIZE - sizeof(void *)) = *page_ptr;
-	*page_ptr = ret;
-
-	return ret;
-}
-
-/*
- * Add a TB and if needed apply the FH HW bug workaround;
- * meta != NULL indicates that it's a page mapping and we
- * need to dma_unmap_page() and set the meta->tbs bit in
- * this case.
- */
-static int iwl_pcie_gen2_set_tb_with_wa(struct iwl_trans *trans,
-					struct sk_buff *skb,
-					struct iwl_tfh_tfd *tfd,
-					dma_addr_t phys, void *virt,
-					u16 len, struct iwl_cmd_meta *meta)
-{
-	dma_addr_t oldphys = phys;
-	struct page *page;
-	int ret;
-
-	if (unlikely(dma_mapping_error(trans->dev, phys)))
-		return -ENOMEM;
-
-	if (likely(!iwl_pcie_crosses_4g_boundary(phys, len))) {
-		ret = iwl_pcie_gen2_set_tb(trans, tfd, phys, len);
-
-		if (ret < 0)
-			goto unmap;
-
-		if (meta)
-			meta->tbs |= BIT(ret);
-
-		ret = 0;
-		goto trace;
-	}
-
-	/*
-	 * Work around a hardware bug. If (as expressed in the
-	 * condition above) the TB ends on a 32-bit boundary,
-	 * then the next TB may be accessed with the wrong
-	 * address.
-	 * To work around it, copy the data elsewhere and make
-	 * a new mapping for it so the device will not fail.
-	 */
-
-	if (WARN_ON(len > PAGE_SIZE - sizeof(void *))) {
-		ret = -ENOBUFS;
-		goto unmap;
-	}
-
-	page = get_workaround_page(trans, skb);
-	if (!page) {
-		ret = -ENOMEM;
-		goto unmap;
-	}
-
-	memcpy(page_address(page), virt, len);
-
-	phys = dma_map_single(trans->dev, page_address(page), len,
-			      DMA_TO_DEVICE);
-	if (unlikely(dma_mapping_error(trans->dev, phys)))
-		return -ENOMEM;
-	ret = iwl_pcie_gen2_set_tb(trans, tfd, phys, len);
-	if (ret < 0) {
-		/* unmap the new allocation as single */
-		oldphys = phys;
-		meta = NULL;
-		goto unmap;
-	}
-	IWL_WARN(trans,
-		 "TB bug workaround: copied %d bytes from 0x%llx to 0x%llx\n",
-		 len, (unsigned long long)oldphys, (unsigned long long)phys);
-
-	ret = 0;
-unmap:
-	if (meta)
-		dma_unmap_page(trans->dev, oldphys, len, DMA_TO_DEVICE);
-	else
-		dma_unmap_single(trans->dev, oldphys, len, DMA_TO_DEVICE);
-trace:
-	trace_iwlwifi_dev_tx_tb(trans->dev, skb, virt, phys, len);
-
-	return ret;
-}
-
 static int iwl_pcie_gen2_build_amsdu(struct iwl_trans *trans,
 				     struct sk_buff *skb,
 				     struct iwl_tfh_tfd *tfd, int start_len,
-				     u8 hdr_len,
-				     struct iwl_device_tx_cmd *dev_cmd)
+				     u8 hdr_len, struct iwl_device_cmd *dev_cmd)
 {
 #ifdef CONFIG_INET
-	struct iwl_tx_cmd_gen2 *tx_cmd = (void *)dev_cmd->payload;
+	struct iwl_trans_pcie *trans_pcie = IWL_TRANS_GET_PCIE_TRANS(trans);
+	struct iwl_tx_cmd *tx_cmd = (void *)dev_cmd->payload;
 	struct ieee80211_hdr *hdr = (void *)skb->data;
 	unsigned int snap_ip_tcp_hdrlen, ip_hdrlen, total_len, hdr_room;
 	unsigned int mss = skb_shinfo(skb)->gso_size;
 	u16 length, amsdu_pad;
 	u8 *start_hdr;
 	struct iwl_tso_hdr_page *hdr_page;
+	struct page **page_ptr;
 	struct tso_t tso;
 
 	trace_iwlwifi_dev_tx(trans->dev, skb, tfd, sizeof(*tfd),
@@ -381,11 +261,14 @@ static int iwl_pcie_gen2_build_amsdu(struct iwl_trans *trans,
 		(3 + snap_ip_tcp_hdrlen + sizeof(struct ethhdr));
 
 	/* Our device supports 9 segments at most, it will fit in 1 page */
-	hdr_page = get_page_hdr(trans, hdr_room, skb);
+	hdr_page = get_page_hdr(trans, hdr_room);
 	if (!hdr_page)
 		return -ENOMEM;
 
+	get_page(hdr_page->page);
 	start_hdr = hdr_page->pos;
+	page_ptr = (void *)((u8 *)skb->cb + trans_pcie->page_offs);
+	*page_ptr = hdr_page->page;
 
 	/*
 	 * Pull the ieee80211 header to be able to use TSO core,
@@ -440,14 +323,8 @@ static int iwl_pcie_gen2_build_amsdu(struct iwl_trans *trans,
 			dev_kfree_skb(csum_skb);
 			goto out_err;
 		}
-		/*
-		 * No need for _with_wa, this is from the TSO page and
-		 * we leave some space at the end of it so can't hit
-		 * the buggy scenario.
-		 */
 		iwl_pcie_gen2_set_tb(trans, tfd, tb_phys, tb_len);
-		trace_iwlwifi_dev_tx_tb(trans->dev, skb, start_hdr,
-					tb_phys, tb_len);
+		trace_iwlwifi_dev_tx_tso_chunk(trans->dev, start_hdr, tb_len);
 		/* add this subframe's headers' length to the tx_cmd */
 		le16_add_cpu(&tx_cmd->len, hdr_page->pos - subf_hdrs_start);
 
@@ -456,18 +333,16 @@ static int iwl_pcie_gen2_build_amsdu(struct iwl_trans *trans,
 
 		/* put the payload */
 		while (data_left) {
-			int ret;
-
 			tb_len = min_t(unsigned int, tso.size, data_left);
 			tb_phys = dma_map_single(trans->dev, tso.data,
 						 tb_len, DMA_TO_DEVICE);
-			ret = iwl_pcie_gen2_set_tb_with_wa(trans, skb, tfd,
-							   tb_phys, tso.data,
-							   tb_len, NULL);
-			if (ret) {
+			if (unlikely(dma_mapping_error(trans->dev, tb_phys))) {
 				dev_kfree_skb(csum_skb);
 				goto out_err;
 			}
+			iwl_pcie_gen2_set_tb(trans, tfd, tb_phys, tb_len);
+			trace_iwlwifi_dev_tx_tso_chunk(trans->dev, tso.data,
+						       tb_len);
 
 			data_left -= tb_len;
 			tso_build_data(skb, &tso, tb_len);
@@ -487,7 +362,7 @@ out_err:
 static struct
 iwl_tfh_tfd *iwl_pcie_gen2_build_tx_amsdu(struct iwl_trans *trans,
 					  struct iwl_txq *txq,
-					  struct iwl_device_tx_cmd *dev_cmd,
+					  struct iwl_device_cmd *dev_cmd,
 					  struct sk_buff *skb,
 					  struct iwl_cmd_meta *out_meta,
 					  int hdr_len,
@@ -501,11 +376,6 @@ iwl_tfh_tfd *iwl_pcie_gen2_build_tx_amsdu(struct iwl_trans *trans,
 
 	tb_phys = iwl_pcie_get_first_tb_dma(txq, idx);
 
-	/*
-	 * No need for _with_wa, the first TB allocation is aligned up
-	 * to a 64-byte boundary and thus can't be at the end or cross
-	 * a page boundary (much less a 2^32 boundary).
-	 */
 	iwl_pcie_gen2_set_tb(trans, tfd, tb_phys, IWL_FIRST_TB_SIZE);
 
 	/*
@@ -524,10 +394,6 @@ iwl_tfh_tfd *iwl_pcie_gen2_build_tx_amsdu(struct iwl_trans *trans,
 	tb_phys = dma_map_single(trans->dev, tb1_addr, len, DMA_TO_DEVICE);
 	if (unlikely(dma_mapping_error(trans->dev, tb_phys)))
 		goto out_err;
-	/*
-	 * No need for _with_wa(), we ensure (via alignment) that the data
-	 * here can never cross or end at a page boundary.
-	 */
 	iwl_pcie_gen2_set_tb(trans, tfd, tb_phys, len);
 
 	if (iwl_pcie_gen2_build_amsdu(trans, skb, tfd,
@@ -536,7 +402,7 @@ iwl_tfh_tfd *iwl_pcie_gen2_build_tx_amsdu(struct iwl_trans *trans,
 		goto out_err;
 
 	/* building the A-MSDU might have changed this data, memcpy it now */
-	memcpy(&txq->first_tb_bufs[idx], dev_cmd, IWL_FIRST_TB_SIZE);
+	memcpy(&txq->first_tb_bufs[idx], &dev_cmd->hdr, IWL_FIRST_TB_SIZE);
 	return tfd;
 
 out_err:
@@ -544,61 +410,26 @@ out_err:
 	return NULL;
 }
 
-static int iwl_pcie_gen2_tx_add_frags(struct iwl_trans *trans,
-				      struct sk_buff *skb,
-				      struct iwl_tfh_tfd *tfd,
-				      struct iwl_cmd_meta *out_meta)
-{
-	int i;
-
-	for (i = 0; i < skb_shinfo(skb)->nr_frags; i++) {
-		const skb_frag_t *frag = &skb_shinfo(skb)->frags[i];
-		dma_addr_t tb_phys;
-		unsigned int fragsz = skb_frag_size(frag);
-		int ret;
-
-		if (!fragsz)
-			continue;
-
-		tb_phys = skb_frag_dma_map(trans->dev, frag, 0,
-					   fragsz, DMA_TO_DEVICE);
-		ret = iwl_pcie_gen2_set_tb_with_wa(trans, skb, tfd, tb_phys,
-						   skb_frag_address(frag),
-						   fragsz, out_meta);
-		if (ret)
-			return ret;
-	}
-
-	return 0;
-}
-
 static struct
 iwl_tfh_tfd *iwl_pcie_gen2_build_tx(struct iwl_trans *trans,
 				    struct iwl_txq *txq,
-				    struct iwl_device_tx_cmd *dev_cmd,
+				    struct iwl_device_cmd *dev_cmd,
 				    struct sk_buff *skb,
 				    struct iwl_cmd_meta *out_meta,
 				    int hdr_len,
-				    int tx_cmd_len,
-				    bool pad)
+				    int tx_cmd_len)
 {
 	int idx = iwl_pcie_get_cmd_index(txq, txq->write_ptr);
 	struct iwl_tfh_tfd *tfd = iwl_pcie_get_tfd(trans, txq, idx);
 	dma_addr_t tb_phys;
-	int len, tb1_len, tb2_len;
+	int i, len, tb1_len, tb2_len;
 	void *tb1_addr;
-	struct sk_buff *frag;
 
 	tb_phys = iwl_pcie_get_first_tb_dma(txq, idx);
 
 	/* The first TB points to bi-directional DMA data */
-	memcpy(&txq->first_tb_bufs[idx], dev_cmd, IWL_FIRST_TB_SIZE);
+	memcpy(&txq->first_tb_bufs[idx], &dev_cmd->hdr, IWL_FIRST_TB_SIZE);
 
-	/*
-	 * No need for _with_wa, the first TB allocation is aligned up
-	 * to a 64-byte boundary and thus can't be at the end or cross
-	 * a page boundary (much less a 2^32 boundary).
-	 */
 	iwl_pcie_gen2_set_tb(trans, tfd, tb_phys, IWL_FIRST_TB_SIZE);
 
 	/*
@@ -610,55 +441,48 @@ iwl_tfh_tfd *iwl_pcie_gen2_build_tx(struct iwl_trans *trans,
 	len = tx_cmd_len + sizeof(struct iwl_cmd_header) + hdr_len -
 	      IWL_FIRST_TB_SIZE;
 
-	if (pad)
-		tb1_len = ALIGN(len, 4);
-	else
-		tb1_len = len;
+	tb1_len = ALIGN(len, 4);
 
 	/* map the data for TB1 */
 	tb1_addr = ((u8 *)&dev_cmd->hdr) + IWL_FIRST_TB_SIZE;
 	tb_phys = dma_map_single(trans->dev, tb1_addr, tb1_len, DMA_TO_DEVICE);
 	if (unlikely(dma_mapping_error(trans->dev, tb_phys)))
 		goto out_err;
-	/*
-	 * No need for _with_wa(), we ensure (via alignment) that the data
-	 * here can never cross or end at a page boundary.
-	 */
 	iwl_pcie_gen2_set_tb(trans, tfd, tb_phys, tb1_len);
-	trace_iwlwifi_dev_tx(trans->dev, skb, tfd, sizeof(*tfd), &dev_cmd->hdr,
-			     IWL_FIRST_TB_SIZE + tb1_len, hdr_len);
 
 	/* set up TFD's third entry to point to remainder of skb's head */
 	tb2_len = skb_headlen(skb) - hdr_len;
 
 	if (tb2_len > 0) {
-		int ret;
-
 		tb_phys = dma_map_single(trans->dev, skb->data + hdr_len,
 					 tb2_len, DMA_TO_DEVICE);
-		ret = iwl_pcie_gen2_set_tb_with_wa(trans, skb, tfd, tb_phys,
-						   skb->data + hdr_len, tb2_len,
-						   NULL);
-		if (ret)
+		if (unlikely(dma_mapping_error(trans->dev, tb_phys)))
 			goto out_err;
+		iwl_pcie_gen2_set_tb(trans, tfd, tb_phys, tb2_len);
 	}
 
-	if (iwl_pcie_gen2_tx_add_frags(trans, skb, tfd, out_meta))
-		goto out_err;
+	/* set up the remaining entries to point to the data */
+	for (i = 0; i < skb_shinfo(skb)->nr_frags; i++) {
+		const skb_frag_t *frag = &skb_shinfo(skb)->frags[i];
+		int tb_idx;
 
-	skb_walk_frags(skb, frag) {
-		int ret;
+		if (!skb_frag_size(frag))
+			continue;
 
-		tb_phys = dma_map_single(trans->dev, frag->data,
-					 skb_headlen(frag), DMA_TO_DEVICE);
-		ret = iwl_pcie_gen2_set_tb_with_wa(trans, skb, tfd, tb_phys,
-						   frag->data,
-						   skb_headlen(frag), NULL);
-		if (ret)
+		tb_phys = skb_frag_dma_map(trans->dev, frag, 0,
+					   skb_frag_size(frag), DMA_TO_DEVICE);
+
+		if (unlikely(dma_mapping_error(trans->dev, tb_phys)))
 			goto out_err;
-		if (iwl_pcie_gen2_tx_add_frags(trans, frag, tfd, out_meta))
-			goto out_err;
+		tb_idx = iwl_pcie_gen2_set_tb(trans, tfd, tb_phys,
+					      skb_frag_size(frag));
+
+		out_meta->tbs |= BIT(tb_idx);
 	}
+
+	trace_iwlwifi_dev_tx(trans->dev, skb, tfd, sizeof(*tfd), &dev_cmd->hdr,
+			     IWL_FIRST_TB_SIZE + tb1_len, hdr_len);
+	trace_iwlwifi_dev_tx_data(trans->dev, skb, hdr_len);
 
 	return tfd;
 
@@ -670,7 +494,7 @@ out_err:
 static
 struct iwl_tfh_tfd *iwl_pcie_gen2_build_tfd(struct iwl_trans *trans,
 					    struct iwl_txq *txq,
-					    struct iwl_device_tx_cmd *dev_cmd,
+					    struct iwl_device_cmd *dev_cmd,
 					    struct sk_buff *skb,
 					    struct iwl_cmd_meta *out_meta)
 {
@@ -685,7 +509,7 @@ struct iwl_tfh_tfd *iwl_pcie_gen2_build_tfd(struct iwl_trans *trans,
 
 	memset(tfd, 0, sizeof(*tfd));
 
-	if (trans->trans_cfg->device_family < IWL_DEVICE_FAMILY_AX210)
+	if (trans->cfg->device_family < IWL_DEVICE_FAMILY_22560)
 		len = sizeof(struct iwl_tx_cmd_gen2);
 	else
 		len = sizeof(struct iwl_tx_cmd_gen3);
@@ -706,11 +530,11 @@ struct iwl_tfh_tfd *iwl_pcie_gen2_build_tfd(struct iwl_trans *trans,
 						    out_meta, hdr_len, len);
 
 	return iwl_pcie_gen2_build_tx(trans, txq, dev_cmd, skb, out_meta,
-				      hdr_len, len, !amsdu);
+				      hdr_len, len);
 }
 
 int iwl_trans_pcie_gen2_tx(struct iwl_trans *trans, struct sk_buff *skb,
-			   struct iwl_device_tx_cmd *dev_cmd, int txq_id)
+			   struct iwl_device_cmd *dev_cmd, int txq_id)
 {
 	struct iwl_trans_pcie *trans_pcie = IWL_TRANS_GET_PCIE_TRANS(trans);
 	struct iwl_cmd_meta *out_meta;
@@ -718,10 +542,6 @@ int iwl_trans_pcie_gen2_tx(struct iwl_trans *trans, struct sk_buff *skb,
 	u16 cmd_len;
 	int idx;
 	void *tfd;
-
-	if (WARN_ONCE(txq_id >= IWL_MAX_TVQM_QUEUES,
-		      "queue %d out of range", txq_id))
-		return -EINVAL;
 
 	if (WARN_ONCE(!test_bit(txq_id, trans_pcie->queue_used),
 		      "TX on unused queue %d\n", txq_id))
@@ -739,7 +559,7 @@ int iwl_trans_pcie_gen2_tx(struct iwl_trans *trans, struct sk_buff *skb,
 
 		/* don't put the packet on the ring, if there is no room */
 		if (unlikely(iwl_queue_space(trans, txq) < 3)) {
-			struct iwl_device_tx_cmd **dev_cmd_ptr;
+			struct iwl_device_cmd **dev_cmd_ptr;
 
 			dev_cmd_ptr = (void *)((u8 *)skb->cb +
 					       trans_pcie->dev_cmd_offs);
@@ -771,7 +591,7 @@ int iwl_trans_pcie_gen2_tx(struct iwl_trans *trans, struct sk_buff *skb,
 		return -1;
 	}
 
-	if (trans->trans_cfg->device_family >= IWL_DEVICE_FAMILY_AX210) {
+	if (trans->cfg->device_family >= IWL_DEVICE_FAMILY_22560) {
 		struct iwl_tx_cmd_gen3 *tx_cmd_gen3 =
 			(void *)dev_cmd->payload;
 
@@ -788,8 +608,12 @@ int iwl_trans_pcie_gen2_tx(struct iwl_trans *trans, struct sk_buff *skb,
 				      iwl_pcie_gen2_get_num_tbs(trans, tfd));
 
 	/* start timer if queue currently empty */
-	if (txq->read_ptr == txq->write_ptr && txq->wd_timeout)
-		mod_timer(&txq->stuck_timer, jiffies + txq->wd_timeout);
+	if (txq->read_ptr == txq->write_ptr) {
+		if (txq->wd_timeout)
+			mod_timer(&txq->stuck_timer, jiffies + txq->wd_timeout);
+		IWL_DEBUG_RPM(trans, "Q: %d first tx - take ref\n", txq->id);
+		iwl_trans_ref(trans);
+	}
 
 	/* Tell device the write index *just past* this latest filled TFD */
 	txq->write_ptr = iwl_queue_inc_wrap(trans, txq->write_ptr);
@@ -830,6 +654,7 @@ static int iwl_pcie_gen2_enqueue_hcmd(struct iwl_trans *trans,
 	const u8 *cmddata[IWL_MAX_CMD_TBS_PER_TFD];
 	u16 cmdlen[IWL_MAX_CMD_TBS_PER_TFD];
 	struct iwl_tfh_tfd *tfd;
+	unsigned long flags2;
 
 	copy_size = sizeof(struct iwl_cmd_header_wide);
 	cmd_size = sizeof(struct iwl_cmd_header_wide);
@@ -898,14 +723,14 @@ static int iwl_pcie_gen2_enqueue_hcmd(struct iwl_trans *trans,
 		goto free_dup_buf;
 	}
 
-	spin_lock_bh(&txq->lock);
+	spin_lock_irqsave(&txq->lock, flags2);
 
 	idx = iwl_pcie_get_cmd_index(txq, txq->write_ptr);
 	tfd = iwl_pcie_get_tfd(trans, txq, txq->write_ptr);
 	memset(tfd, 0, sizeof(*tfd));
 
 	if (iwl_queue_space(trans, txq) < ((cmd->flags & CMD_ASYNC) ? 2 : 1)) {
-		spin_unlock_bh(&txq->lock);
+		spin_unlock_irqrestore(&txq->lock, flags2);
 
 		IWL_ERR(trans, "No space in command queue\n");
 		iwl_op_mode_cmd_queue_full(trans->op_mode);
@@ -981,14 +806,14 @@ static int iwl_pcie_gen2_enqueue_hcmd(struct iwl_trans *trans,
 
 	/* start the TFD with the minimum copy bytes */
 	tb0_size = min_t(int, copy_size, IWL_FIRST_TB_SIZE);
-	memcpy(&txq->first_tb_bufs[idx], out_cmd, tb0_size);
+	memcpy(&txq->first_tb_bufs[idx], &out_cmd->hdr, tb0_size);
 	iwl_pcie_gen2_set_tb(trans, tfd, iwl_pcie_get_first_tb_dma(txq, idx),
 			     tb0_size);
 
 	/* map first command fragment, if any remains */
 	if (copy_size > tb0_size) {
 		phys_addr = dma_map_single(trans->dev,
-					   (u8 *)out_cmd + tb0_size,
+					   ((u8 *)&out_cmd->hdr) + tb0_size,
 					   copy_size - tb0_size,
 					   DMA_TO_DEVICE);
 		if (dma_mapping_error(trans->dev, phys_addr)) {
@@ -1034,13 +859,19 @@ static int iwl_pcie_gen2_enqueue_hcmd(struct iwl_trans *trans,
 		mod_timer(&txq->stuck_timer, jiffies + txq->wd_timeout);
 
 	spin_lock_irqsave(&trans_pcie->reg_lock, flags);
+	if (!(cmd->flags & CMD_SEND_IN_IDLE) &&
+	    !trans_pcie->ref_cmd_in_flight) {
+		trans_pcie->ref_cmd_in_flight = true;
+		IWL_DEBUG_RPM(trans, "set ref_cmd_in_flight - ref\n");
+		iwl_trans_ref(trans);
+	}
 	/* Increment and update queue's write index */
 	txq->write_ptr = iwl_queue_inc_wrap(trans, txq->write_ptr);
 	iwl_pcie_gen2_txq_inc_wr_ptr(trans, txq);
 	spin_unlock_irqrestore(&trans_pcie->reg_lock, flags);
 
 out:
-	spin_unlock_bh(&txq->lock);
+	spin_unlock_irqrestore(&txq->lock, flags2);
 free_dup_buf:
 	if (idx < 0)
 		kfree(dup_buf);
@@ -1067,6 +898,16 @@ static int iwl_pcie_gen2_send_hcmd_sync(struct iwl_trans *trans,
 
 	IWL_DEBUG_INFO(trans, "Setting HCMD_ACTIVE for command %s\n", cmd_str);
 
+	if (pm_runtime_suspended(&trans_pcie->pci_dev->dev)) {
+		ret = wait_event_timeout(trans_pcie->d0i3_waitq,
+				 pm_runtime_active(&trans_pcie->pci_dev->dev),
+				 msecs_to_jiffies(IWL_TRANS_IDLE_TIMEOUT));
+		if (!ret) {
+			IWL_ERR(trans, "Timeout exiting D0i3 before hcmd\n");
+			return -ETIMEDOUT;
+		}
+	}
+
 	cmd_idx = iwl_pcie_gen2_enqueue_hcmd(trans, cmd);
 	if (cmd_idx < 0) {
 		ret = cmd_idx;
@@ -1092,7 +933,9 @@ static int iwl_pcie_gen2_send_hcmd_sync(struct iwl_trans *trans,
 			       cmd_str);
 		ret = -ETIMEDOUT;
 
-		iwl_trans_pcie_sync_nmi(trans);
+		iwl_force_nmi(trans);
+		iwl_trans_fw_error(trans);
+
 		goto cancel;
 	}
 
@@ -1191,6 +1034,23 @@ void iwl_pcie_gen2_txq_unmap(struct iwl_trans *trans, int txq_id)
 		}
 		iwl_pcie_gen2_free_tfd(trans, txq);
 		txq->read_ptr = iwl_queue_inc_wrap(trans, txq->read_ptr);
+
+		if (txq->read_ptr == txq->write_ptr) {
+			unsigned long flags;
+
+			spin_lock_irqsave(&trans_pcie->reg_lock, flags);
+			if (txq_id != trans_pcie->cmd_queue) {
+				IWL_DEBUG_RPM(trans, "Q %d - last tx freed\n",
+					      txq->id);
+				iwl_trans_unref(trans);
+			} else if (trans_pcie->ref_cmd_in_flight) {
+				trans_pcie->ref_cmd_in_flight = false;
+				IWL_DEBUG_RPM(trans,
+					      "clear ref_cmd_in_flight\n");
+				iwl_trans_unref(trans);
+			}
+			spin_unlock_irqrestore(&trans_pcie->reg_lock, flags);
+		}
 	}
 
 	while (!skb_queue_empty(&txq->overflow_q)) {
@@ -1205,8 +1065,8 @@ void iwl_pcie_gen2_txq_unmap(struct iwl_trans *trans, int txq_id)
 	iwl_wake_queue(trans, txq);
 }
 
-void iwl_pcie_gen2_txq_free_memory(struct iwl_trans *trans,
-				   struct iwl_txq *txq)
+static void iwl_pcie_gen2_txq_free_memory(struct iwl_trans *trans,
+					  struct iwl_txq *txq)
 {
 	struct iwl_trans_pcie *trans_pcie = IWL_TRANS_GET_PCIE_TRANS(trans);
 	struct device *dev = trans->dev;
@@ -1237,14 +1097,8 @@ void iwl_pcie_gen2_txq_free_memory(struct iwl_trans *trans,
 static void iwl_pcie_gen2_txq_free(struct iwl_trans *trans, int txq_id)
 {
 	struct iwl_trans_pcie *trans_pcie = IWL_TRANS_GET_PCIE_TRANS(trans);
-	struct iwl_txq *txq;
+	struct iwl_txq *txq = trans_pcie->txq[txq_id];
 	int i;
-
-	if (WARN_ONCE(txq_id >= IWL_MAX_TVQM_QUEUES,
-		      "queue %d out of range", txq_id))
-		return;
-
-	txq = trans_pcie->txq[txq_id];
 
 	if (WARN_ON(!txq))
 		return;
@@ -1266,19 +1120,29 @@ static void iwl_pcie_gen2_txq_free(struct iwl_trans *trans, int txq_id)
 	clear_bit(txq_id, trans_pcie->queue_used);
 }
 
-int iwl_trans_pcie_dyn_txq_alloc_dma(struct iwl_trans *trans,
-				     struct iwl_txq **intxq, int size,
-				     unsigned int timeout)
+int iwl_trans_pcie_dyn_txq_alloc(struct iwl_trans *trans,
+				 struct iwl_tx_queue_cfg_cmd *cmd,
+				 int cmd_id, int size,
+				 unsigned int timeout)
 {
-	int ret;
-
+	struct iwl_trans_pcie *trans_pcie = IWL_TRANS_GET_PCIE_TRANS(trans);
+	struct iwl_tx_queue_cfg_rsp *rsp;
 	struct iwl_txq *txq;
+	struct iwl_host_cmd hcmd = {
+		.id = cmd_id,
+		.len = { sizeof(*cmd) },
+		.data = { cmd, },
+		.flags = CMD_WANT_SKB,
+	};
+	int ret, qid;
+	u32 wr_ptr;
+
 	txq = kzalloc(sizeof(*txq), GFP_KERNEL);
 	if (!txq)
 		return -ENOMEM;
 	ret = iwl_pcie_alloc_dma_ptr(trans, &txq->bc_tbl,
-				     (trans->trans_cfg->device_family >=
-				      IWL_DEVICE_FAMILY_AX210) ?
+				     (trans->cfg->device_family >=
+				      IWL_DEVICE_FAMILY_22560) ?
 				     sizeof(struct iwl_gen3_bc_tbl) :
 				     sizeof(struct iwlagn_scd_bc_tbl));
 	if (ret) {
@@ -1300,30 +1164,20 @@ int iwl_trans_pcie_dyn_txq_alloc_dma(struct iwl_trans *trans,
 
 	txq->wd_timeout = msecs_to_jiffies(timeout);
 
-	*intxq = txq;
-	return 0;
+	cmd->tfdq_addr = cpu_to_le64(txq->dma_addr);
+	cmd->byte_cnt_addr = cpu_to_le64(txq->bc_tbl.dma);
+	cmd->cb_size = cpu_to_le32(TFD_QUEUE_CB_SIZE(size));
 
-error:
-	iwl_pcie_gen2_txq_free_memory(trans, txq);
-	return ret;
-}
+	ret = iwl_trans_send_cmd(trans, &hcmd);
+	if (ret)
+		goto error;
 
-int iwl_trans_pcie_txq_alloc_response(struct iwl_trans *trans,
-				      struct iwl_txq *txq,
-				      struct iwl_host_cmd *hcmd)
-{
-	struct iwl_trans_pcie *trans_pcie = IWL_TRANS_GET_PCIE_TRANS(trans);
-	struct iwl_tx_queue_cfg_rsp *rsp;
-	int ret, qid;
-	u32 wr_ptr;
-
-	if (WARN_ON(iwl_rx_packet_payload_len(hcmd->resp_pkt) !=
-		    sizeof(*rsp))) {
+	if (WARN_ON(iwl_rx_packet_payload_len(hcmd.resp_pkt) != sizeof(*rsp))) {
 		ret = -EINVAL;
 		goto error_free_resp;
 	}
 
-	rsp = (void *)hcmd->resp_pkt->data;
+	rsp = (void *)hcmd.resp_pkt->data;
 	qid = le16_to_cpu(rsp->queue_number);
 	wr_ptr = le16_to_cpu(rsp->write_pointer);
 
@@ -1341,56 +1195,20 @@ int iwl_trans_pcie_txq_alloc_response(struct iwl_trans *trans,
 
 	txq->id = qid;
 	trans_pcie->txq[qid] = txq;
-	wr_ptr &= (trans->trans_cfg->base_params->max_tfd_queue_size - 1);
+	wr_ptr &= (trans->cfg->base_params->max_tfd_queue_size - 1);
 
 	/* Place first TFD at index corresponding to start sequence number */
 	txq->read_ptr = wr_ptr;
 	txq->write_ptr = wr_ptr;
-
+	iwl_write_direct32(trans, HBUS_TARG_WRPTR,
+			   (txq->write_ptr) | (qid << 16));
 	IWL_DEBUG_TX_QUEUES(trans, "Activate queue %d\n", qid);
 
-	iwl_free_resp(hcmd);
+	iwl_free_resp(&hcmd);
 	return qid;
 
 error_free_resp:
-	iwl_free_resp(hcmd);
-	iwl_pcie_gen2_txq_free_memory(trans, txq);
-	return ret;
-}
-
-int iwl_trans_pcie_dyn_txq_alloc(struct iwl_trans *trans,
-				 __le16 flags, u8 sta_id, u8 tid,
-				 int cmd_id, int size,
-				 unsigned int timeout)
-{
-	struct iwl_txq *txq = NULL;
-	struct iwl_tx_queue_cfg_cmd cmd = {
-		.flags = flags,
-		.sta_id = sta_id,
-		.tid = tid,
-	};
-	struct iwl_host_cmd hcmd = {
-		.id = cmd_id,
-		.len = { sizeof(cmd) },
-		.data = { &cmd, },
-		.flags = CMD_WANT_SKB,
-	};
-	int ret;
-
-	ret = iwl_trans_pcie_dyn_txq_alloc_dma(trans, &txq, size, timeout);
-	if (ret)
-		return ret;
-
-	cmd.tfdq_addr = cpu_to_le64(txq->dma_addr);
-	cmd.byte_cnt_addr = cpu_to_le64(txq->bc_tbl.dma);
-	cmd.cb_size = cpu_to_le32(TFD_QUEUE_CB_SIZE(size));
-
-	ret = iwl_trans_send_cmd(trans, &hcmd);
-	if (ret)
-		goto error;
-
-	return iwl_trans_pcie_txq_alloc_response(trans, txq, &hcmd);
-
+	iwl_free_resp(&hcmd);
 error:
 	iwl_pcie_gen2_txq_free_memory(trans, txq);
 	return ret;
@@ -1399,10 +1217,6 @@ error:
 void iwl_trans_pcie_dyn_txq_free(struct iwl_trans *trans, int queue)
 {
 	struct iwl_trans_pcie *trans_pcie = IWL_TRANS_GET_PCIE_TRANS(trans);
-
-	if (WARN(queue >= IWL_MAX_TVQM_QUEUES,
-		 "queue %d out of range", queue))
-		return;
 
 	/*
 	 * Upon HW Rfkill - we stop the device, and then stop the queues
@@ -1417,6 +1231,9 @@ void iwl_trans_pcie_dyn_txq_free(struct iwl_trans *trans, int queue)
 	}
 
 	iwl_pcie_gen2_txq_unmap(trans, queue);
+
+	iwl_pcie_gen2_txq_free_memory(trans, trans_pcie->txq[queue]);
+	trans_pcie->txq[queue] = NULL;
 
 	IWL_DEBUG_TX_QUEUES(trans, "Deactivate queue %d\n", queue);
 }
@@ -1437,31 +1254,30 @@ void iwl_pcie_gen2_tx_free(struct iwl_trans *trans)
 	}
 }
 
-int iwl_pcie_gen2_tx_init(struct iwl_trans *trans, int txq_id, int queue_size)
+int iwl_pcie_gen2_tx_init(struct iwl_trans *trans)
 {
 	struct iwl_trans_pcie *trans_pcie = IWL_TRANS_GET_PCIE_TRANS(trans);
-	struct iwl_txq *queue;
-	int ret;
+	struct iwl_txq *cmd_queue;
+	int txq_id = trans_pcie->cmd_queue, ret;
 
-	/* alloc and init the tx queue */
+	/* alloc and init the command queue */
 	if (!trans_pcie->txq[txq_id]) {
-		queue = kzalloc(sizeof(*queue), GFP_KERNEL);
-		if (!queue) {
-			IWL_ERR(trans, "Not enough memory for tx queue\n");
+		cmd_queue = kzalloc(sizeof(*cmd_queue), GFP_KERNEL);
+		if (!cmd_queue) {
+			IWL_ERR(trans, "Not enough memory for command queue\n");
 			return -ENOMEM;
 		}
-		trans_pcie->txq[txq_id] = queue;
-		ret = iwl_pcie_txq_alloc(trans, queue, queue_size, true);
+		trans_pcie->txq[txq_id] = cmd_queue;
+		ret = iwl_pcie_txq_alloc(trans, cmd_queue, TFD_CMD_SLOTS, true);
 		if (ret) {
 			IWL_ERR(trans, "Tx %d queue init failed\n", txq_id);
 			goto error;
 		}
 	} else {
-		queue = trans_pcie->txq[txq_id];
+		cmd_queue = trans_pcie->txq[txq_id];
 	}
 
-	ret = iwl_pcie_txq_init(trans, queue, queue_size,
-				(txq_id == trans_pcie->cmd_queue));
+	ret = iwl_pcie_txq_init(trans, cmd_queue, TFD_CMD_SLOTS, true);
 	if (ret) {
 		IWL_ERR(trans, "Tx %d queue alloc failed\n", txq_id);
 		goto error;

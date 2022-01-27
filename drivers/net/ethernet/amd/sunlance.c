@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /* $Id: sunlance.c,v 1.112 2002/01/15 06:48:55 davem Exp $
  * lance.c: Linux/Sparc/Lance driver
  *
@@ -1097,7 +1096,7 @@ static void lance_piozero(void __iomem *dest, int len)
 		sbus_writeb(0, piobuf);
 }
 
-static void lance_tx_timeout(struct net_device *dev, unsigned int txqueue)
+static void lance_tx_timeout(struct net_device *dev)
 {
 	struct lance_private *lp = netdev_priv(dev);
 
@@ -1489,9 +1488,9 @@ static int sunlance_sbus_probe(struct platform_device *op)
 	struct device_node *parent_dp = parent->dev.of_node;
 	int err;
 
-	if (of_node_name_eq(parent_dp, "ledma")) {
+	if (!strcmp(parent_dp->name, "ledma")) {
 		err = sparc_lance_probe_one(op, parent, NULL);
-	} else if (of_node_name_eq(parent_dp, "lebuffer")) {
+	} else if (!strcmp(parent_dp->name, "lebuffer")) {
 		err = sparc_lance_probe_one(op, NULL, parent);
 	} else
 		err = sparc_lance_probe_one(op, NULL, NULL);

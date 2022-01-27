@@ -1,10 +1,12 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /* Intel i7 core/Nehalem Memory Controller kernel module
  *
  * This driver supports the memory controllers found on the Intel
  * processor families i7core, i7core 7xx/8xx, i5core, Xeon 35xx,
  * Xeon 55xx and Xeon 56xx also known as Nehalem, Nehalem-EP, Lynnfield
  * and Westmere-EP.
+ *
+ * This file may be distributed under the terms of the
+ * GNU General Public License version 2 only.
  *
  * Copyright (c) 2009-2010 by:
  *	 Mauro Carvalho Chehab
@@ -585,7 +587,8 @@ static int get_dimm_config(struct mem_ctl_info *mci)
 			if (!DIMM_PRESENT(dimm_dod[j]))
 				continue;
 
-			dimm = edac_get_dimm(mci, i, j, 0);
+			dimm = EDAC_DIMM_PTR(mci->layers, mci->dimms, mci->n_layers,
+				       i, j, 0);
 			banks = numbank(MC_DOD_NUMBANK(dimm_dod[j]));
 			ranks = numrank(MC_DOD_NUMRANK(dimm_dod[j]));
 			rows = numrow(MC_DOD_NUMROW(dimm_dod[j]));
@@ -721,7 +724,7 @@ static ssize_t i7core_inject_type_store(struct device *dev,
 					const char *data, size_t count)
 {
 	struct mem_ctl_info *mci = to_mci(dev);
-	struct i7core_pvt *pvt = mci->pvt_info;
+struct i7core_pvt *pvt = mci->pvt_info;
 	unsigned long value;
 	int rc;
 
@@ -1813,12 +1816,14 @@ static int i7core_mce_check_error(struct notifier_block *nb, unsigned long val,
 	struct mce *mce = (struct mce *)data;
 	struct i7core_dev *i7_dev;
 	struct mem_ctl_info *mci;
+	struct i7core_pvt *pvt;
 
 	i7_dev = get_i7core_dev(mce->socketid);
 	if (!i7_dev)
 		return NOTIFY_DONE;
 
 	mci = i7_dev->mci;
+	pvt = mci->pvt_info;
 
 	/*
 	 * Just let mcelog handle it if the error is

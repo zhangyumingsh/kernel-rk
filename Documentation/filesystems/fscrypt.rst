@@ -292,8 +292,22 @@ files' data differently, inode numbers are included in the IVs.
 Consequently, shrinking the filesystem may not be allowed.
 
 This format is optimized for use with inline encryption hardware
-compliant with the UFS or eMMC standards, which support only 64 IV
-bits per I/O request and may have only a small number of keyslots.
+compliant with the UFS standard, which supports only 64 IV bits per
+I/O request and may have only a small number of keyslots.
+
+IV_INO_LBLK_32 policies
+-----------------------
+
+IV_INO_LBLK_32 policies work like IV_INO_LBLK_64, except that for
+IV_INO_LBLK_32, the inode number is hashed with SipHash-2-4 (where the
+SipHash key is derived from the master key) and added to the file
+logical block number mod 2^32 to produce a 32-bit IV.
+
+This format is optimized for use with inline encryption hardware
+compliant with the eMMC v5.2 standard, which supports only 32 IV bits
+per I/O request and may have only a small number of keyslots.  This
+format results in some level of IV reuse, so it should only be used
+when necessary due to hardware limitations.
 
 Key identifiers
 ---------------
@@ -352,8 +366,8 @@ Contents encryption
 -------------------
 
 For file contents, each filesystem block is encrypted independently.
-Starting from Linux kernel 5.5, encryption of filesystems with block
-size less than system's page size is supported.
+Currently, only the case where the filesystem block size is equal to
+the system's page size (usually 4096 bytes) is supported.
 
 Each block's IV is set to the logical block number within the file as
 a little endian number, except that:
@@ -368,6 +382,10 @@ a little endian number, except that:
 - With `IV_INO_LBLK_64 policies`_, the logical block number is limited
   to 32 bits and is placed in bits 0-31 of the IV.  The inode number
   (which is also limited to 32 bits) is placed in bits 32-63.
+
+- With `IV_INO_LBLK_32 policies`_, the logical block number is limited
+  to 32 bits and is placed in bits 0-31 of the IV.  The inode number
+  is then hashed and added mod 2^32.
 
 Note that because file logical block numbers are included in the IVs,
 filesystems must enforce that blocks are never shifted around within
@@ -465,8 +483,15 @@ This structure must be initialized as follows:
     (0x3).
   - FSCRYPT_POLICY_FLAG_DIRECT_KEY: See `DIRECT_KEY policies`_.
   - FSCRYPT_POLICY_FLAG_IV_INO_LBLK_64: See `IV_INO_LBLK_64
-    policies`_.  This is mutually exclusive with DIRECT_KEY and is not
-    supported on v1 policies.
+    policies`_.
+  - FSCRYPT_POLICY_FLAG_IV_INO_LBLK_32: See `IV_INO_LBLK_32
+    policies`_.
+
+  v1 encryption policies only support the PAD_* and DIRECT_KEY flags.
+  The other flags are only supported by v2 encryption policies.
+
+  The DIRECT_KEY, IV_INO_LBLK_64, and IV_INO_LBLK_32 flags are
+  mutually exclusive.
 
 - For v2 encryption policies, ``__reserved`` must be zeroed.
 
@@ -632,6 +657,17 @@ from a passphrase or other low-entropy user credential.
 
 FS_IOC_GET_ENCRYPTION_PWSALT is deprecated.  Instead, prefer to
 generate and manage any needed salt(s) in userspace.
+
+Getting a file's encryption nonce
+---------------------------------
+
+Since Linux v5.7, the ioctl FS_IOC_GET_ENCRYPTION_NONCE is supported.
+On encrypted files and directories it gets the inode's 16-byte nonce.
+On unencrypted files and directories, it fails with ENODATA.
+
+This ioctl can be useful for automated tests which verify that the
+encryption is being done correctly.  It is not needed for normal use
+of fscrypt.
 
 Adding keys
 -----------
@@ -1016,9 +1052,9 @@ astute users may notice some differences in behavior:
 - Direct I/O is not supported on encrypted files.  Attempts to use
   direct I/O on such files will fall back to buffered I/O.
 
-- The fallocate operations FALLOC_FL_COLLAPSE_RANGE and
-  FALLOC_FL_INSERT_RANGE are not supported on encrypted files and will
-  fail with EOPNOTSUPP.
+- The fallocate operations FALLOC_FL_COLLAPSE_RANGE,
+  FALLOC_FL_INSERT_RANGE, and FALLOC_FL_ZERO_RANGE are not supported
+  on encrypted files and will fail with EOPNOTSUPP.
 
 - Online defragmentation of encrypted files is not supported.  The
   EXT4_IOC_MOVE_EXT and F2FS_IOC_MOVE_RANGE ioctls will fail with

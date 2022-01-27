@@ -1,8 +1,12 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * ASPEED Static Memory Controller driver
  *
  * Copyright (c) 2015-2016, IBM Corporation.
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License
+ * as published by the Free Software Foundation; either version
+ * 2 of the License, or (at your option) any later version.
  */
 
 #include <linux/bug.h>
@@ -305,7 +309,7 @@ static void aspeed_smc_stop_user(struct spi_nor *nor)
 	writel(ctl, chip->ctl);		/* default to fread or read mode */
 }
 
-static int aspeed_smc_prep(struct spi_nor *nor)
+static int aspeed_smc_prep(struct spi_nor *nor, enum spi_nor_ops ops)
 {
 	struct aspeed_smc_chip *chip = nor->priv;
 
@@ -313,15 +317,14 @@ static int aspeed_smc_prep(struct spi_nor *nor)
 	return 0;
 }
 
-static void aspeed_smc_unprep(struct spi_nor *nor)
+static void aspeed_smc_unprep(struct spi_nor *nor, enum spi_nor_ops ops)
 {
 	struct aspeed_smc_chip *chip = nor->priv;
 
 	mutex_unlock(&chip->controller->mutex);
 }
 
-static int aspeed_smc_read_reg(struct spi_nor *nor, u8 opcode, u8 *buf,
-			       size_t len)
+static int aspeed_smc_read_reg(struct spi_nor *nor, u8 opcode, u8 *buf, int len)
 {
 	struct aspeed_smc_chip *chip = nor->priv;
 
@@ -332,8 +335,8 @@ static int aspeed_smc_read_reg(struct spi_nor *nor, u8 opcode, u8 *buf,
 	return 0;
 }
 
-static int aspeed_smc_write_reg(struct spi_nor *nor, u8 opcode, const u8 *buf,
-				size_t len)
+static int aspeed_smc_write_reg(struct spi_nor *nor, u8 opcode, u8 *buf,
+				int len)
 {
 	struct aspeed_smc_chip *chip = nor->priv;
 
@@ -747,15 +750,6 @@ static int aspeed_smc_chip_setup_finish(struct aspeed_smc_chip *chip)
 	return 0;
 }
 
-static const struct spi_nor_controller_ops aspeed_smc_controller_ops = {
-	.prepare = aspeed_smc_prep,
-	.unprepare = aspeed_smc_unprep,
-	.read_reg = aspeed_smc_read_reg,
-	.write_reg = aspeed_smc_write_reg,
-	.read = aspeed_smc_read_user,
-	.write = aspeed_smc_write_user,
-};
-
 static int aspeed_smc_setup_flash(struct aspeed_smc_controller *controller,
 				  struct device_node *np, struct resource *r)
 {
@@ -815,7 +809,12 @@ static int aspeed_smc_setup_flash(struct aspeed_smc_controller *controller,
 		nor->dev = dev;
 		nor->priv = chip;
 		spi_nor_set_flash_node(nor, child);
-		nor->controller_ops = &aspeed_smc_controller_ops;
+		nor->read = aspeed_smc_read_user;
+		nor->write = aspeed_smc_write_user;
+		nor->read_reg = aspeed_smc_read_reg;
+		nor->write_reg = aspeed_smc_write_reg;
+		nor->prepare = aspeed_smc_prep;
+		nor->unprepare = aspeed_smc_unprep;
 
 		ret = aspeed_smc_chip_setup_init(chip, r);
 		if (ret)
@@ -841,10 +840,8 @@ static int aspeed_smc_setup_flash(struct aspeed_smc_controller *controller,
 		controller->chips[cs] = chip;
 	}
 
-	if (ret) {
-		of_node_put(child);
+	if (ret)
 		aspeed_smc_unregister(controller);
-	}
 
 	return ret;
 }

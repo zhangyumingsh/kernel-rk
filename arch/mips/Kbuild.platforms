@@ -1,4 +1,3 @@
-# SPDX-License-Identifier: GPL-2.0
 # All platforms listed in alphabetic order
 
 platforms += alchemy
@@ -17,7 +16,6 @@ platforms += jazz
 platforms += jz4740
 platforms += lantiq
 platforms += lasat
-platforms += loongson2ef
 platforms += loongson32
 platforms += loongson64
 platforms += mti-malta
@@ -31,7 +29,6 @@ platforms += ralink
 platforms += rb532
 platforms += sgi-ip22
 platforms += sgi-ip27
-platforms += sgi-ip30
 platforms += sgi-ip32
 platforms += sibyte
 platforms += sni

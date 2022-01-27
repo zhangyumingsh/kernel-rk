@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * ARM Specific GTDT table Support
  *
@@ -6,6 +5,10 @@
  * Author: Daniel Lezcano <daniel.lezcano@linaro.org>
  *         Fu Wei <fu.wei@linaro.org>
  *         Hanjun Guo <hanjun.guo@linaro.org>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  */
 
 #include <linux/acpi.h>
@@ -329,7 +332,7 @@ static int __init gtdt_import_sbsa_gwdt(struct acpi_gtdt_watchdog *wd,
 					int index)
 {
 	struct platform_device *pdev;
-	int irq = map_gt_gsi(wd->timer_interrupt, wd->timer_flags);
+	int irq;
 
 	/*
 	 * According to SBSA specification the size of refresh and control
@@ -338,7 +341,7 @@ static int __init gtdt_import_sbsa_gwdt(struct acpi_gtdt_watchdog *wd,
 	struct resource res[] = {
 		DEFINE_RES_MEM(wd->control_frame_address, SZ_4K),
 		DEFINE_RES_MEM(wd->refresh_frame_address, SZ_4K),
-		DEFINE_RES_IRQ(irq),
+		{},
 	};
 	int nr_res = ARRAY_SIZE(res);
 
@@ -348,10 +351,11 @@ static int __init gtdt_import_sbsa_gwdt(struct acpi_gtdt_watchdog *wd,
 
 	if (!(wd->refresh_frame_address && wd->control_frame_address)) {
 		pr_err(FW_BUG "failed to get the Watchdog base address.\n");
-		acpi_unregister_gsi(wd->timer_interrupt);
 		return -EINVAL;
 	}
 
+	irq = map_gt_gsi(wd->timer_interrupt, wd->timer_flags);
+	res[2] = (struct resource)DEFINE_RES_IRQ(irq);
 	if (irq <= 0) {
 		pr_warn("failed to map the Watchdog interrupt.\n");
 		nr_res--;
@@ -364,7 +368,8 @@ static int __init gtdt_import_sbsa_gwdt(struct acpi_gtdt_watchdog *wd,
 	 */
 	pdev = platform_device_register_simple("sbsa-gwdt", index, res, nr_res);
 	if (IS_ERR(pdev)) {
-		acpi_unregister_gsi(wd->timer_interrupt);
+		if (irq > 0)
+			acpi_unregister_gsi(wd->timer_interrupt);
 		return PTR_ERR(pdev);
 	}
 

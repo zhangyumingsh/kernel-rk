@@ -187,7 +187,6 @@ static int net_hwtstamp_validate(struct ifreq *ifr)
 	case HWTSTAMP_TX_OFF:
 	case HWTSTAMP_TX_ON:
 	case HWTSTAMP_TX_ONESTEP_SYNC:
-	case HWTSTAMP_TX_ONESTEP_P2P:
 		tx_type_valid = 1;
 		break;
 	}
@@ -235,7 +234,7 @@ static int dev_ifsioc(struct net *net, struct ifreq *ifr, unsigned int cmd)
 
 	switch (cmd) {
 	case SIOCSIFFLAGS:	/* Set interface flags */
-		return dev_change_flags(dev, ifr->ifr_flags, NULL);
+		return dev_change_flags(dev, ifr->ifr_flags);
 
 	case SIOCSIFMETRIC:	/* Set the metric on the interface
 				   (currently unused) */
@@ -247,7 +246,7 @@ static int dev_ifsioc(struct net *net, struct ifreq *ifr, unsigned int cmd)
 	case SIOCSIFHWADDR:
 		if (dev->addr_len > sizeof(struct sockaddr))
 			return -EINVAL;
-		return dev_set_mac_address(dev, &ifr->ifr_hwaddr, NULL);
+		return dev_set_mac_address(dev, &ifr->ifr_hwaddr);
 
 	case SIOCSIFHWBROADCAST:
 		if (ifr->ifr_hwaddr.sa_family != dev->type)
@@ -367,8 +366,7 @@ EXPORT_SYMBOL(dev_load);
  *	dev_ioctl	-	network device ioctl
  *	@net: the applicable net namespace
  *	@cmd: command to issue
- *	@ifr: pointer to a struct ifreq in user space
- *	@need_copyout: whether or not copy_to_user() should be called
+ *	@arg: pointer to a struct ifreq in user space
  *
  *	Issue ioctl functions to devices. This is normally called by the
  *	user space syscall interfaces but can sometimes be useful for

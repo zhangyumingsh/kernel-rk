@@ -87,7 +87,6 @@
 #include <linux/string.h>
 #include <linux/slab.h>
 #include <linux/poll.h>
-#include <linux/ppp-ioctl.h>
 #include <linux/proc_fs.h>
 #include <linux/init.h>
 #include <linux/module.h>
@@ -98,7 +97,6 @@
 #include <linux/seq_file.h>
 #include <linux/serial.h>
 #include <linux/ratelimit.h>
-#include <linux/compat.h>
 
 #include <linux/uaccess.h>
 
@@ -1174,7 +1172,7 @@ static struct tty_struct *tty_driver_lookup_tty(struct tty_driver *driver,
  *	tty_init_termios	-  helper for termios setup
  *	@tty: the tty to set up
  *
- *	Initialise the termios structure for this tty. This runs under
+ *	Initialise the termios structures for this tty. Thus runs under
  *	the tty_mutex currently so we can be relaxed about ordering.
  */
 
@@ -1345,12 +1343,9 @@ struct tty_struct *tty_init_dev(struct tty_driver *driver, int idx)
 	if (!tty->port)
 		tty->port = driver->ports[idx];
 
-	if (WARN_RATELIMIT(!tty->port,
-			"%s: %s driver does not set tty->port. This would crash the kernel. Fix the driver!\n",
-			__func__, tty->driver->name)) {
-		retval = -EINVAL;
-		goto err_release_lock;
-	}
+	WARN_RATELIMIT(!tty->port,
+			"%s: %s driver does not set tty->port. This will crash the kernel later. Fix the driver!\n",
+			__func__, tty->driver->name);
 
 	retval = tty_ldisc_lock(tty, 5 * HZ);
 	if (retval)
@@ -1589,7 +1584,9 @@ void tty_kclose(struct tty_struct *tty)
 	tty_debug_hangup(tty, "freeing structure\n");
 	/*
 	 * The release_tty function takes care of the details of clearing
-	 * the slots and preserving the termios structure.
+	 * the slots and preserving the termios structure. The tty_unlock_pair
+	 * should be safe as we keep a kref while the tty is locked (so the
+	 * unlock never unlocks a freed tty).
 	 */
 	mutex_lock(&tty_mutex);
 	tty_port_set_kopened(tty->port, 0);
@@ -1619,7 +1616,9 @@ void tty_release_struct(struct tty_struct *tty, int idx)
 	tty_debug_hangup(tty, "freeing structure\n");
 	/*
 	 * The release_tty function takes care of the details of clearing
-	 * the slots and preserving the termios structure.
+	 * the slots and preserving the termios structure. The tty_unlock_pair
+	 * should be safe as we keep a kref while the tty is locked (so the
+	 * unlock never unlocks a freed tty).
 	 */
 	mutex_lock(&tty_mutex);
 	release_tty(tty, idx);
@@ -1837,7 +1836,7 @@ static struct tty_struct *tty_open_current_tty(dev_t device, struct file *filp)
 static struct tty_driver *tty_lookup_driver(dev_t device, struct file *filp,
 		int *index)
 {
-	struct tty_driver *driver = NULL;
+	struct tty_driver *driver;
 
 	switch (device) {
 #ifdef CONFIG_VT
@@ -1858,8 +1857,6 @@ static struct tty_driver *tty_lookup_driver(dev_t device, struct file *filp,
 				break;
 			}
 		}
-		if (driver)
-			tty_driver_kref_put(driver);
 		return ERR_PTR(-ENODEV);
 	}
 	default:
@@ -1889,7 +1886,7 @@ static struct tty_driver *tty_lookup_driver(dev_t device, struct file *filp,
 struct tty_struct *tty_kopen(dev_t device)
 {
 	struct tty_struct *tty;
-	struct tty_driver *driver;
+	struct tty_driver *driver = NULL;
 	int index = -1;
 
 	mutex_lock(&tty_mutex);
@@ -1924,6 +1921,7 @@ EXPORT_SYMBOL_GPL(tty_kopen);
 /**
  *	tty_open_by_driver	-	open a tty device
  *	@device: dev_t of device to open
+ *	@inode: inode of device file
  *	@filp: file pointer to tty
  *
  *	Performs the driver lookup, checks for a reopen, or otherwise
@@ -1936,7 +1934,7 @@ EXPORT_SYMBOL_GPL(tty_kopen);
  *	  - concurrent tty driver removal w/ lookup
  *	  - concurrent tty removal from driver table
  */
-static struct tty_struct *tty_open_by_driver(dev_t device,
+static struct tty_struct *tty_open_by_driver(dev_t device, struct inode *inode,
 					     struct file *filp)
 {
 	struct tty_struct *tty;
@@ -2028,7 +2026,7 @@ retry_open:
 
 	tty = tty_open_current_tty(device, filp);
 	if (!tty)
-		tty = tty_open_by_driver(device, filp);
+		tty = tty_open_by_driver(device, inode, filp);
 
 	if (IS_ERR(tty)) {
 		tty_free_file(filp);
@@ -2313,6 +2311,34 @@ static int tioccons(struct file *file)
 }
 
 /**
+ *	fionbio		-	non blocking ioctl
+ *	@file: file to set blocking value
+ *	@p: user parameter
+ *
+ *	Historical tty interfaces had a blocking control ioctl before
+ *	the generic functionality existed. This piece of history is preserved
+ *	in the expected tty API of posix OS's.
+ *
+ *	Locking: none, the open file handle ensures it won't go away.
+ */
+
+static int fionbio(struct file *file, int __user *p)
+{
+	int nonblock;
+
+	if (get_user(nonblock, p))
+		return -EFAULT;
+
+	spin_lock(&file->f_lock);
+	if (nonblock)
+		file->f_flags |= O_NONBLOCK;
+	else
+		file->f_flags &= ~O_NONBLOCK;
+	spin_unlock(&file->f_lock);
+	return 0;
+}
+
+/**
  *	tiocsetd	-	set line discipline
  *	@tty: tty device
  *	@p: pointer to user data
@@ -2406,14 +2432,14 @@ out:
  *	@p: pointer to result
  *
  *	Obtain the modem status bits from the tty driver if the feature
- *	is supported. Return -EINVAL if it is not available.
+ *	is supported. Return -ENOTTY if it is not available.
  *
  *	Locking: none (up to the driver)
  */
 
 static int tty_tiocmget(struct tty_struct *tty, int __user *p)
 {
-	int retval = -EINVAL;
+	int retval = -ENOTTY;
 
 	if (tty->ops->tiocmget) {
 		retval = tty->ops->tiocmget(tty);
@@ -2431,7 +2457,7 @@ static int tty_tiocmget(struct tty_struct *tty, int __user *p)
  *	@p: pointer to desired bits
  *
  *	Set the modem status bits from the tty driver if the feature
- *	is supported. Return -EINVAL if it is not available.
+ *	is supported. Return -ENOTTY if it is not available.
  *
  *	Locking: none (up to the driver)
  */
@@ -2443,7 +2469,7 @@ static int tty_tiocmset(struct tty_struct *tty, unsigned int cmd,
 	unsigned int set, clear, val;
 
 	if (tty->ops->tiocmset == NULL)
-		return -EINVAL;
+		return -ENOTTY;
 
 	retval = get_user(val, p);
 	if (retval)
@@ -2480,40 +2506,22 @@ static int tty_tiocgicount(struct tty_struct *tty, void __user *arg)
 	return 0;
 }
 
-static int tty_tiocsserial(struct tty_struct *tty, struct serial_struct __user *ss)
+static void tty_warn_deprecated_flags(struct serial_struct __user *ss)
 {
 	static DEFINE_RATELIMIT_STATE(depr_flags,
 			DEFAULT_RATELIMIT_INTERVAL,
 			DEFAULT_RATELIMIT_BURST);
 	char comm[TASK_COMM_LEN];
-	struct serial_struct v;
 	int flags;
 
-	if (copy_from_user(&v, ss, sizeof(struct serial_struct)))
-		return -EFAULT;
+	if (get_user(flags, &ss->flags))
+		return;
 
-	flags = v.flags & ASYNC_DEPRECATED;
+	flags &= ASYNC_DEPRECATED;
 
 	if (flags && __ratelimit(&depr_flags))
 		pr_warn("%s: '%s' is using deprecated serial flags (with no effect): %.8x\n",
 			__func__, get_task_comm(comm, current), flags);
-	if (!tty->ops->set_serial)
-		return -ENOTTY;
-	return tty->ops->set_serial(tty, &v);
-}
-
-static int tty_tiocgserial(struct tty_struct *tty, struct serial_struct __user *ss)
-{
-	struct serial_struct v;
-	int err;
-
-	memset(&v, 0, sizeof(struct serial_struct));
-	if (!tty->ops->get_serial)
-		return -ENOTTY;
-	err = tty->ops->get_serial(tty, &v);
-	if (!err && copy_to_user(ss, &v, sizeof(struct serial_struct)))
-		err = -EFAULT;
-	return err;
 }
 
 /*
@@ -2576,6 +2584,8 @@ long tty_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		return tiocswinsz(real_tty, p);
 	case TIOCCONS:
 		return real_tty != tty ? -EINVAL : tioccons(file);
+	case FIONBIO:
+		return fionbio(file, p);
 	case TIOCEXCL:
 		set_bit(TTY_EXCLUSIVE, &tty->flags);
 		return 0;
@@ -2630,7 +2640,11 @@ long tty_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	case TIOCMBIS:
 		return tty_tiocmset(tty, cmd, p);
 	case TIOCGICOUNT:
-		return tty_tiocgicount(tty, p);
+		retval = tty_tiocgicount(tty, p);
+		/* For the moment allow fall through to the old method */
+        	if (retval != -EINVAL)
+			return retval;
+		break;
 	case TCFLSH:
 		switch (arg) {
 		case TCIFLUSH:
@@ -2641,9 +2655,8 @@ long tty_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		}
 		break;
 	case TIOCSSERIAL:
-		return tty_tiocsserial(tty, p);
-	case TIOCGSERIAL:
-		return tty_tiocgserial(tty, p);
+		tty_warn_deprecated_flags(p);
+		break;
 	case TIOCGPTPEER:
 		/* Special because the struct file is needed */
 		return ptm_open_peer(file, tty, (int)arg);
@@ -2671,83 +2684,6 @@ long tty_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 }
 
 #ifdef CONFIG_COMPAT
-
-struct serial_struct32 {
-        compat_int_t    type;
-        compat_int_t    line;
-        compat_uint_t   port;
-        compat_int_t    irq;
-        compat_int_t    flags;
-        compat_int_t    xmit_fifo_size;
-        compat_int_t    custom_divisor;
-        compat_int_t    baud_base;
-        unsigned short  close_delay;
-        char    io_type;
-        char    reserved_char[1];
-        compat_int_t    hub6;
-        unsigned short  closing_wait; /* time to wait before closing */
-        unsigned short  closing_wait2; /* no longer used... */
-        compat_uint_t   iomem_base;
-        unsigned short  iomem_reg_shift;
-        unsigned int    port_high;
-     /* compat_ulong_t  iomap_base FIXME */
-        compat_int_t    reserved[1];
-};
-
-static int compat_tty_tiocsserial(struct tty_struct *tty,
-		struct serial_struct32 __user *ss)
-{
-	static DEFINE_RATELIMIT_STATE(depr_flags,
-			DEFAULT_RATELIMIT_INTERVAL,
-			DEFAULT_RATELIMIT_BURST);
-	char comm[TASK_COMM_LEN];
-	struct serial_struct32 v32;
-	struct serial_struct v;
-	int flags;
-
-	if (copy_from_user(&v32, ss, sizeof(struct serial_struct32)))
-		return -EFAULT;
-
-	memcpy(&v, &v32, offsetof(struct serial_struct32, iomem_base));
-	v.iomem_base = compat_ptr(v32.iomem_base);
-	v.iomem_reg_shift = v32.iomem_reg_shift;
-	v.port_high = v32.port_high;
-	v.iomap_base = 0;
-
-	flags = v.flags & ASYNC_DEPRECATED;
-
-	if (flags && __ratelimit(&depr_flags))
-		pr_warn("%s: '%s' is using deprecated serial flags (with no effect): %.8x\n",
-			__func__, get_task_comm(comm, current), flags);
-	if (!tty->ops->set_serial)
-		return -ENOTTY;
-	return tty->ops->set_serial(tty, &v);
-}
-
-static int compat_tty_tiocgserial(struct tty_struct *tty,
-			struct serial_struct32 __user *ss)
-{
-	struct serial_struct32 v32;
-	struct serial_struct v;
-	int err;
-
-	memset(&v, 0, sizeof(v));
-	memset(&v32, 0, sizeof(v32));
-
-	if (!tty->ops->get_serial)
-		return -ENOTTY;
-	err = tty->ops->get_serial(tty, &v);
-	if (!err) {
-		memcpy(&v32, &v, offsetof(struct serial_struct32, iomem_base));
-		v32.iomem_base = (unsigned long)v.iomem_base >> 32 ?
-			0xfffffff : ptr_to_compat(v.iomem_base);
-		v32.iomem_reg_shift = v.iomem_reg_shift;
-		v32.port_high = v.port_high;
-		if (copy_to_user(ss, &v32, sizeof(struct serial_struct32)))
-			err = -EFAULT;
-	}
-	return err;
-}
 static long tty_compat_ioctl(struct file *file, unsigned int cmd,
 				unsigned long arg)
 {
@@ -2755,94 +2691,9 @@ static long tty_compat_ioctl(struct file *file, unsigned int cmd,
 	struct tty_ldisc *ld;
 	int retval = -ENOIOCTLCMD;
 
-	switch (cmd) {
-	case TIOCOUTQ:
-	case TIOCSTI:
-	case TIOCGWINSZ:
-	case TIOCSWINSZ:
-	case TIOCGEXCL:
-	case TIOCGETD:
-	case TIOCSETD:
-	case TIOCGDEV:
-	case TIOCMGET:
-	case TIOCMSET:
-	case TIOCMBIC:
-	case TIOCMBIS:
-	case TIOCGICOUNT:
-	case TIOCGPGRP:
-	case TIOCSPGRP:
-	case TIOCGSID:
-	case TIOCSERGETLSR:
-	case TIOCGRS485:
-	case TIOCSRS485:
-#ifdef TIOCGETP
-	case TIOCGETP:
-	case TIOCSETP:
-	case TIOCSETN:
-#endif
-#ifdef TIOCGETC
-	case TIOCGETC:
-	case TIOCSETC:
-#endif
-#ifdef TIOCGLTC
-	case TIOCGLTC:
-	case TIOCSLTC:
-#endif
-	case TCSETSF:
-	case TCSETSW:
-	case TCSETS:
-	case TCGETS:
-#ifdef TCGETS2
-	case TCGETS2:
-	case TCSETSF2:
-	case TCSETSW2:
-	case TCSETS2:
-#endif
-	case TCGETA:
-	case TCSETAF:
-	case TCSETAW:
-	case TCSETA:
-	case TIOCGLCKTRMIOS:
-	case TIOCSLCKTRMIOS:
-#ifdef TCGETX
-	case TCGETX:
-	case TCSETX:
-	case TCSETXW:
-	case TCSETXF:
-#endif
-	case TIOCGSOFTCAR:
-	case TIOCSSOFTCAR:
-
-	case PPPIOCGCHAN:
-	case PPPIOCGUNIT:
-		return tty_ioctl(file, cmd, (unsigned long)compat_ptr(arg));
-	case TIOCCONS:
-	case TIOCEXCL:
-	case TIOCNXCL:
-	case TIOCVHANGUP:
-	case TIOCSBRK:
-	case TIOCCBRK:
-	case TCSBRK:
-	case TCSBRKP:
-	case TCFLSH:
-	case TIOCGPTPEER:
-	case TIOCNOTTY:
-	case TIOCSCTTY:
-	case TCXONC:
-	case TIOCMIWAIT:
-	case TIOCSERCONFIG:
-		return tty_ioctl(file, cmd, arg);
-	}
-
 	if (tty_paranoia_check(tty, file_inode(file), "tty_ioctl"))
 		return -EINVAL;
 
-	switch (cmd) {
-	case TIOCSSERIAL:
-		return compat_tty_tiocsserial(tty, compat_ptr(arg));
-	case TIOCGSERIAL:
-		return compat_tty_tiocgserial(tty, compat_ptr(arg));
-	}
 	if (tty->ops->compat_ioctl) {
 		retval = tty->ops->compat_ioctl(tty, cmd, arg);
 		if (retval != -ENOIOCTLCMD)
@@ -2854,9 +2705,8 @@ static long tty_compat_ioctl(struct file *file, unsigned int cmd,
 		return hung_up_tty_compat_ioctl(file, cmd, arg);
 	if (ld->ops->compat_ioctl)
 		retval = ld->ops->compat_ioctl(tty, file, cmd, arg);
-	if (retval == -ENOIOCTLCMD && ld->ops->ioctl)
-		retval = ld->ops->ioctl(tty, file,
-				(unsigned long)compat_ptr(cmd), arg);
+	else
+		retval = n_tty_compat_ioctl_helper(tty, file, cmd, arg);
 	tty_ldisc_deref(ld);
 
 	return retval;
@@ -2897,10 +2747,14 @@ void __do_SAK(struct tty_struct *tty)
 	struct task_struct *g, *p;
 	struct pid *session;
 	int		i;
+	unsigned long flags;
 
 	if (!tty)
 		return;
-	session = tty->session;
+
+	spin_lock_irqsave(&tty->ctrl_lock, flags);
+	session = get_pid(tty->session);
+	spin_unlock_irqrestore(&tty->ctrl_lock, flags);
 
 	tty_ldisc_flush(tty);
 
@@ -2911,7 +2765,7 @@ void __do_SAK(struct tty_struct *tty)
 	do_each_pid_task(session, PIDTYPE_SID, p) {
 		tty_notice(tty, "SAK: killed process %d (%s): by session\n",
 			   task_pid_nr(p), p->comm);
-		group_send_sig_info(SIGKILL, SEND_SIG_PRIV, p, PIDTYPE_SID);
+		send_sig(SIGKILL, p, 1);
 	} while_each_pid_task(session, PIDTYPE_SID, p);
 
 	/* Now kill any processes that happen to have the tty open */
@@ -2919,7 +2773,7 @@ void __do_SAK(struct tty_struct *tty)
 		if (p->signal->tty == tty) {
 			tty_notice(tty, "SAK: killed process %d (%s): by controlling tty\n",
 				   task_pid_nr(p), p->comm);
-			group_send_sig_info(SIGKILL, SEND_SIG_PRIV, p, PIDTYPE_SID);
+			send_sig(SIGKILL, p, 1);
 			continue;
 		}
 		task_lock(p);
@@ -2927,11 +2781,12 @@ void __do_SAK(struct tty_struct *tty)
 		if (i != 0) {
 			tty_notice(tty, "SAK: killed process %d (%s): by fd#%d\n",
 				   task_pid_nr(p), p->comm, i - 1);
-			group_send_sig_info(SIGKILL, SEND_SIG_PRIV, p, PIDTYPE_SID);
+			force_sig(SIGKILL, p);
 		}
 		task_unlock(p);
 	} while_each_thread(g, p);
 	read_unlock(&tasklist_lock);
+	put_pid(session);
 #endif
 }
 
@@ -2957,11 +2812,17 @@ void do_SAK(struct tty_struct *tty)
 
 EXPORT_SYMBOL(do_SAK);
 
+static int dev_match_devt(struct device *dev, const void *data)
+{
+	const dev_t *devt = data;
+	return dev->devt == *devt;
+}
+
 /* Must put_device() after it's unused! */
 static struct device *tty_get_device(struct tty_struct *tty)
 {
 	dev_t devt = tty_devnum(tty);
-	return class_find_device_by_devt(tty_class, devt);
+	return class_find_device(tty_class, NULL, &devt, dev_match_devt);
 }
 
 

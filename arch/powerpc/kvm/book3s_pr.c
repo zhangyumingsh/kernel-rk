@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2009. SUSE Linux Products GmbH. All rights reserved.
  *
@@ -14,6 +13,10 @@
  *
  * This file is derived from arch/powerpc/kvm/44x.c,
  * by Hollis Blanchard <hollisb@us.ibm.com>.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License, version 2, as
+ * published by the Free Software Foundation.
  */
 
 #include <linux/kvm_host.h>
@@ -90,43 +93,7 @@ static void kvmppc_fixup_split_real(struct kvm_vcpu *vcpu)
 	kvmppc_set_pc(vcpu, pc | SPLIT_HACK_OFFS);
 }
 
-static void kvmppc_unfixup_split_real(struct kvm_vcpu *vcpu)
-{
-	if (vcpu->arch.hflags & BOOK3S_HFLAG_SPLIT_HACK) {
-		ulong pc = kvmppc_get_pc(vcpu);
-		ulong lr = kvmppc_get_lr(vcpu);
-		if ((pc & SPLIT_HACK_MASK) == SPLIT_HACK_OFFS)
-			kvmppc_set_pc(vcpu, pc & ~SPLIT_HACK_MASK);
-		if ((lr & SPLIT_HACK_MASK) == SPLIT_HACK_OFFS)
-			kvmppc_set_lr(vcpu, lr & ~SPLIT_HACK_MASK);
-		vcpu->arch.hflags &= ~BOOK3S_HFLAG_SPLIT_HACK;
-	}
-}
-
-static void kvmppc_inject_interrupt_pr(struct kvm_vcpu *vcpu, int vec, u64 srr1_flags)
-{
-	unsigned long msr, pc, new_msr, new_pc;
-
-	kvmppc_unfixup_split_real(vcpu);
-
-	msr = kvmppc_get_msr(vcpu);
-	pc = kvmppc_get_pc(vcpu);
-	new_msr = vcpu->arch.intr_msr;
-	new_pc = to_book3s(vcpu)->hior + vec;
-
-#ifdef CONFIG_PPC_BOOK3S_64
-	/* If transactional, change to suspend mode on IRQ delivery */
-	if (MSR_TM_TRANSACTIONAL(msr))
-		new_msr |= MSR_TS_S;
-	else
-		new_msr |= msr & MSR_TS_MASK;
-#endif
-
-	kvmppc_set_srr0(vcpu, pc);
-	kvmppc_set_srr1(vcpu, (msr & SRR1_MSR_BITS) | srr1_flags);
-	kvmppc_set_pc(vcpu, new_pc);
-	kvmppc_set_msr(vcpu, new_msr);
-}
+void kvmppc_unfixup_split_real(struct kvm_vcpu *vcpu);
 
 static void kvmppc_core_vcpu_load_pr(struct kvm_vcpu *vcpu, int cpu)
 {
@@ -620,7 +587,6 @@ void kvmppc_set_pvr_pr(struct kvm_vcpu *vcpu, u32 pvr)
 	case PVR_POWER8:
 	case PVR_POWER8E:
 	case PVR_POWER8NVL:
-	case PVR_POWER9:
 		vcpu->arch.hflags |= BOOK3S_HFLAG_MULTI_PGSIZE |
 			BOOK3S_HFLAG_NEW_TLBIE;
 		break;
@@ -1280,6 +1246,7 @@ int kvmppc_handle_exit_pr(struct kvm_run *run, struct kvm_vcpu *vcpu,
 		r = RESUME_GUEST;
 		break;
 	case BOOK3S_INTERRUPT_EXTERNAL:
+	case BOOK3S_INTERRUPT_EXTERNAL_LEVEL:
 	case BOOK3S_INTERRUPT_EXTERNAL_HV:
 	case BOOK3S_INTERRUPT_H_VIRT:
 		vcpu->stat.ext_intr_exits++;
@@ -1744,17 +1711,21 @@ static int kvmppc_set_one_reg_pr(struct kvm_vcpu *vcpu, u64 id,
 	return r;
 }
 
-static int kvmppc_core_vcpu_create_pr(struct kvm_vcpu *vcpu)
+static struct kvm_vcpu *kvmppc_core_vcpu_create_pr(struct kvm *kvm,
+						   unsigned int id)
 {
 	struct kvmppc_vcpu_book3s *vcpu_book3s;
+	struct kvm_vcpu *vcpu;
+	int err = -ENOMEM;
 	unsigned long p;
-	int err;
 
-	err = -ENOMEM;
+	vcpu = kmem_cache_zalloc(kvm_vcpu_cache, GFP_KERNEL);
+	if (!vcpu)
+		goto out;
 
 	vcpu_book3s = vzalloc(sizeof(struct kvmppc_vcpu_book3s));
 	if (!vcpu_book3s)
-		goto out;
+		goto free_vcpu;
 	vcpu->arch.book3s = vcpu_book3s;
 
 #ifdef CONFIG_KVM_BOOK3S_32_HANDLER
@@ -1764,9 +1735,14 @@ static int kvmppc_core_vcpu_create_pr(struct kvm_vcpu *vcpu)
 		goto free_vcpu3s;
 #endif
 
+	err = kvm_vcpu_init(vcpu, kvm, id);
+	if (err)
+		goto free_shadow_vcpu;
+
+	err = -ENOMEM;
 	p = __get_free_page(GFP_KERNEL|__GFP_ZERO);
 	if (!p)
-		goto free_shadow_vcpu;
+		goto uninit_vcpu;
 	vcpu->arch.shared = (void *)p;
 #ifdef CONFIG_PPC_BOOK3S_64
 	/* Always start the shared struct in native endian mode */
@@ -1788,7 +1764,6 @@ static int kvmppc_core_vcpu_create_pr(struct kvm_vcpu *vcpu)
 #else
 	/* default to book3s_32 (750) */
 	vcpu->arch.pvr = 0x84202;
-	vcpu->arch.intr_msr = 0;
 #endif
 	kvmppc_set_pvr_pr(vcpu, vcpu->arch.pvr);
 	vcpu->arch.slb_nr = 64;
@@ -1799,30 +1774,35 @@ static int kvmppc_core_vcpu_create_pr(struct kvm_vcpu *vcpu)
 	if (err < 0)
 		goto free_shared_page;
 
-	return 0;
+	return vcpu;
 
 free_shared_page:
 	free_page((unsigned long)vcpu->arch.shared);
+uninit_vcpu:
+	kvm_vcpu_uninit(vcpu);
 free_shadow_vcpu:
 #ifdef CONFIG_KVM_BOOK3S_32_HANDLER
 	kfree(vcpu->arch.shadow_vcpu);
 free_vcpu3s:
 #endif
 	vfree(vcpu_book3s);
+free_vcpu:
+	kmem_cache_free(kvm_vcpu_cache, vcpu);
 out:
-	return err;
+	return ERR_PTR(err);
 }
 
 static void kvmppc_core_vcpu_free_pr(struct kvm_vcpu *vcpu)
 {
 	struct kvmppc_vcpu_book3s *vcpu_book3s = to_book3s(vcpu);
 
-	kvmppc_mmu_destroy_pr(vcpu);
 	free_page((unsigned long)vcpu->arch.shared & PAGE_MASK);
+	kvm_vcpu_uninit(vcpu);
 #ifdef CONFIG_KVM_BOOK3S_32_HANDLER
 	kfree(vcpu->arch.shadow_vcpu);
 #endif
 	vfree(vcpu_book3s);
+	kmem_cache_free(kvm_vcpu_cache, vcpu);
 }
 
 static int kvmppc_vcpu_run_pr(struct kvm_run *kvm_run, struct kvm_vcpu *vcpu)
@@ -1936,8 +1916,7 @@ static int kvmppc_core_prepare_memory_region_pr(struct kvm *kvm,
 static void kvmppc_core_commit_memory_region_pr(struct kvm *kvm,
 				const struct kvm_userspace_memory_region *mem,
 				const struct kvm_memory_slot *old,
-				const struct kvm_memory_slot *new,
-				enum kvm_mr_change change)
+				const struct kvm_memory_slot *new)
 {
 	return;
 }
@@ -2018,7 +1997,6 @@ static int kvm_vm_ioctl_get_smmu_info_pr(struct kvm *kvm,
 {
 	/* We should not get called */
 	BUG();
-	return 0;
 }
 #endif /* CONFIG_PPC64 */
 
@@ -2084,7 +2062,6 @@ static struct kvmppc_ops kvm_ops_pr = {
 	.set_one_reg = kvmppc_set_one_reg_pr,
 	.vcpu_load   = kvmppc_core_vcpu_load_pr,
 	.vcpu_put    = kvmppc_core_vcpu_put_pr,
-	.inject_interrupt = kvmppc_inject_interrupt_pr,
 	.set_msr     = kvmppc_set_msr_pr,
 	.vcpu_run    = kvmppc_vcpu_run_pr,
 	.vcpu_create = kvmppc_core_vcpu_create_pr,

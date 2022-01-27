@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
 /* Copyright 2002 Andi Kleen */
 
 #include <linux/linkage.h>
@@ -15,8 +14,6 @@
  * to a jmp to memcpy_erms which does the REP; MOVSB mem copy.
  */
 
-.weak memcpy
-
 /*
  * memcpy - Copy a memory block.
  *
@@ -28,8 +25,10 @@
  * Output:
  * rax original destination
  */
-SYM_FUNC_START_ALIAS(__memcpy)
-SYM_FUNC_START_LOCAL(memcpy)
+ENTRY(__memcpy)
+.weak memcpy
+.p2align 4, 0x90
+memcpy:
 	ALTERNATIVE_2 "jmp memcpy_orig", "", X86_FEATURE_REP_GOOD, \
 		      "jmp memcpy_erms", X86_FEATURE_ERMS
 
@@ -41,8 +40,8 @@ SYM_FUNC_START_LOCAL(memcpy)
 	movl %edx, %ecx
 	rep movsb
 	ret
-SYM_FUNC_END(memcpy)
-SYM_FUNC_END_ALIAS(__memcpy)
+ENDPROC(memcpy)
+ENDPROC(__memcpy)
 EXPORT_SYMBOL(memcpy)
 EXPORT_SYMBOL(__memcpy)
 
@@ -50,14 +49,14 @@ EXPORT_SYMBOL(__memcpy)
  * memcpy_erms() - enhanced fast string memcpy. This is faster and
  * simpler than memcpy. Use memcpy_erms when possible.
  */
-SYM_FUNC_START_LOCAL(memcpy_erms)
+ENTRY(memcpy_erms)
 	movq %rdi, %rax
 	movq %rdx, %rcx
 	rep movsb
 	ret
-SYM_FUNC_END(memcpy_erms)
+ENDPROC(memcpy_erms)
 
-SYM_FUNC_START_LOCAL(memcpy_orig)
+ENTRY(memcpy_orig)
 	movq %rdi, %rax
 
 	cmpq $0x20, %rdx
@@ -182,7 +181,7 @@ SYM_FUNC_START_LOCAL(memcpy_orig)
 
 .Lend:
 	retq
-SYM_FUNC_END(memcpy_orig)
+ENDPROC(memcpy_orig)
 
 #ifndef CONFIG_UML
 
@@ -193,7 +192,7 @@ MCSAFE_TEST_CTL
  * Note that we only catch machine checks when reading the source addresses.
  * Writes to target are posted and don't generate machine checks.
  */
-SYM_FUNC_START(__memcpy_mcsafe)
+ENTRY(__memcpy_mcsafe)
 	cmpl $8, %edx
 	/* Less than 8 bytes? Go to byte copy loop */
 	jb .L_no_whole_words
@@ -260,7 +259,7 @@ SYM_FUNC_START(__memcpy_mcsafe)
 	xorl %eax, %eax
 .L_done:
 	ret
-SYM_FUNC_END(__memcpy_mcsafe)
+ENDPROC(__memcpy_mcsafe)
 EXPORT_SYMBOL_GPL(__memcpy_mcsafe)
 
 	.section .fixup, "ax"

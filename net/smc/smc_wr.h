@@ -60,16 +60,6 @@ static inline void smc_wr_tx_set_wr_id(atomic_long_t *wr_tx_id, long val)
 	atomic_long_set(wr_tx_id, val);
 }
 
-static inline void smc_wr_wakeup_tx_wait(struct smc_link *lnk)
-{
-	wake_up_all(&lnk->wr_tx_wait);
-}
-
-static inline void smc_wr_wakeup_reg_wait(struct smc_link *lnk)
-{
-	wake_up(&lnk->wr_reg_wait);
-}
-
 /* post a new receive work request to fill a completed old work request entry */
 static inline int smc_wr_rx_post(struct smc_link *link)
 {
@@ -95,7 +85,6 @@ void smc_wr_add_dev(struct smc_ib_device *smcibdev);
 
 int smc_wr_tx_get_free_slot(struct smc_link *link, smc_wr_tx_handler handler,
 			    struct smc_wr_buf **wr_buf,
-			    struct smc_rdma_wr **wrs,
 			    struct smc_wr_tx_pend_priv **wr_pend_priv);
 int smc_wr_tx_put_slot(struct smc_link *link,
 		       struct smc_wr_tx_pend_priv *wr_pend_priv);

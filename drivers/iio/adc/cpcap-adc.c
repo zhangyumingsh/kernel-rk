@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2017 Tony Lindgren <tony@atomide.com>
  *
@@ -6,6 +5,15 @@
  * earlier driver found in the Motorola Linux kernel:
  *
  * Copyright (C) 2009-2010 Motorola, Inc.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+ * GNU General Public License for more details.
  */
 
 #include <linux/delay.h>
@@ -1008,7 +1016,7 @@ static int cpcap_adc_probe(struct platform_device *pdev)
 
 	error = devm_request_threaded_irq(&pdev->dev, ddata->irq, NULL,
 					  cpcap_adc_irq_thread,
-					  IRQF_TRIGGER_NONE | IRQF_ONESHOT,
+					  IRQF_TRIGGER_NONE,
 					  "cpcap-adc", indio_dev);
 	if (error) {
 		dev_err(&pdev->dev, "could not get irq: %i\n",

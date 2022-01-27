@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * trace_hwlat.c - A simple Hardware Latency detector.
+ * trace_hwlatdetect.c - A simple Hardware Latency detector.
  *
  * Use this tracer to detect large system latencies induced by the behavior of
  * certain underlying system hardware or firmware, independent of Linux itself.
@@ -104,7 +104,7 @@ static void trace_hwlat_sample(struct hwlat_sample *sample)
 {
 	struct trace_array *tr = hwlat_trace;
 	struct trace_event_call *call = &event_hwlat;
-	struct trace_buffer *buffer = tr->array_buffer.buffer;
+	struct ring_buffer *buffer = tr->trace_buffer.buffer;
 	struct ring_buffer_event *event;
 	struct hwlat_entry *entry;
 	unsigned long flags;
@@ -237,7 +237,6 @@ static int get_sample(void)
 	/* If we exceed the threshold value, we have found a hardware latency */
 	if (sample > thresh || outer_sample > thresh) {
 		struct hwlat_sample s;
-		u64 latency;
 
 		ret = 1;
 
@@ -254,13 +253,11 @@ static int get_sample(void)
 		s.nmi_count = nmi_count;
 		trace_hwlat_sample(&s);
 
-		latency = max(sample, outer_sample);
-
 		/* Keep a running maximum ever recorded hardware latency */
-		if (latency > tr->max_latency) {
-			tr->max_latency = latency;
-			latency_fsnotify(tr);
-		}
+		if (sample > tr->max_latency)
+			tr->max_latency = sample;
+		if (outer_sample > tr->max_latency)
+			tr->max_latency = outer_sample;
 	}
 
 out:
@@ -273,20 +270,21 @@ static bool disable_migrate;
 static void move_to_next_cpu(void)
 {
 	struct cpumask *current_mask = &save_cpumask;
+	struct trace_array *tr = hwlat_trace;
 	int next_cpu;
 
 	if (disable_migrate)
 		return;
 	/*
 	 * If for some reason the user modifies the CPU affinity
-	 * of this thread, then stop migrating for the duration
+	 * of this thread, than stop migrating for the duration
 	 * of the current test.
 	 */
-	if (!cpumask_equal(current_mask, current->cpus_ptr))
+	if (!cpumask_equal(current_mask, &current->cpus_allowed))
 		goto disable;
 
 	get_online_cpus();
-	cpumask_and(current_mask, cpu_online_mask, tracing_buffer_mask);
+	cpumask_and(current_mask, cpu_online_mask, tr->tracing_cpumask);
 	next_cpu = cpumask_next(smp_processor_id(), current_mask);
 	put_online_cpus();
 
@@ -357,13 +355,13 @@ static int start_kthread(struct trace_array *tr)
 	struct task_struct *kthread;
 	int next_cpu;
 
-	if (WARN_ON(hwlat_kthread))
+	if (hwlat_kthread)
 		return 0;
 
 	/* Just pick the first CPU on first iteration */
 	current_mask = &save_cpumask;
 	get_online_cpus();
-	cpumask_and(current_mask, cpu_online_mask, tracing_buffer_mask);
+	cpumask_and(current_mask, cpu_online_mask, tr->tracing_cpumask);
 	put_online_cpus();
 	next_cpu = cpumask_first(current_mask);
 
@@ -556,7 +554,7 @@ static int init_tracefs(void)
 	return 0;
 
  err:
-	tracefs_remove(top_dir);
+	tracefs_remove_recursive(top_dir);
 	return -ENOMEM;
 }
 

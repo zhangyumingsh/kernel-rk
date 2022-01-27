@@ -1,10 +1,19 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Copyright (c) 2014 MundoReader S.L.
  * Author: Heiko Stuebner <heiko@sntech.de>
  *
  * Copyright (c) 2015 Rockchip Electronics Co. Ltd.
  * Author: Xing Zheng <zhengxing@rock-chips.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include <asm/div64.h>
@@ -282,7 +291,7 @@ static int rockchip_rk3036_pll_is_enabled(struct clk_hw *hw)
 	return !(pllcon & RK3036_PLLCON1_PWRDOWN);
 }
 
-static int rockchip_rk3036_pll_init(struct clk_hw *hw)
+static void rockchip_rk3036_pll_init(struct clk_hw *hw)
 {
 	struct rockchip_clk_pll *pll = to_rockchip_clk_pll(hw);
 	const struct rockchip_pll_rate_table *rate;
@@ -290,14 +299,14 @@ static int rockchip_rk3036_pll_init(struct clk_hw *hw)
 	unsigned long drate;
 
 	if (!(pll->flags & ROCKCHIP_PLL_SYNC_RATE))
-		return 0;
+		return;
 
 	drate = clk_hw_get_rate(hw);
 	rate = rockchip_get_pll_settings(pll, drate);
 
 	/* when no rate setting for the current rate, rely on clk_set_rate */
 	if (!rate)
-		return 0;
+		return;
 
 	rockchip_rk3036_pll_get_params(pll, &cur);
 
@@ -319,15 +328,13 @@ static int rockchip_rk3036_pll_init(struct clk_hw *hw)
 		if (!parent) {
 			pr_warn("%s: parent of %s not available\n",
 				__func__, __clk_get_name(hw->clk));
-			return 0;
+			return;
 		}
 
 		pr_debug("%s: pll %s: rate params do not match rate table, adjusting\n",
 			 __func__, __clk_get_name(hw->clk));
 		rockchip_rk3036_pll_set_params(pll, rate);
 	}
-
-	return 0;
 }
 
 static const struct clk_ops rockchip_rk3036_pll_clk_norate_ops = {
@@ -517,7 +524,7 @@ static int rockchip_rk3066_pll_is_enabled(struct clk_hw *hw)
 	return !(pllcon & RK3066_PLLCON3_PWRDOWN);
 }
 
-static int rockchip_rk3066_pll_init(struct clk_hw *hw)
+static void rockchip_rk3066_pll_init(struct clk_hw *hw)
 {
 	struct rockchip_clk_pll *pll = to_rockchip_clk_pll(hw);
 	const struct rockchip_pll_rate_table *rate;
@@ -525,14 +532,14 @@ static int rockchip_rk3066_pll_init(struct clk_hw *hw)
 	unsigned long drate;
 
 	if (!(pll->flags & ROCKCHIP_PLL_SYNC_RATE))
-		return 0;
+		return;
 
 	drate = clk_hw_get_rate(hw);
 	rate = rockchip_get_pll_settings(pll, drate);
 
 	/* when no rate setting for the current rate, rely on clk_set_rate */
 	if (!rate)
-		return 0;
+		return;
 
 	rockchip_rk3066_pll_get_params(pll, &cur);
 
@@ -545,8 +552,6 @@ static int rockchip_rk3066_pll_init(struct clk_hw *hw)
 			 __func__, clk_hw_get_name(hw));
 		rockchip_rk3066_pll_set_params(pll, rate);
 	}
-
-	return 0;
 }
 
 static const struct clk_ops rockchip_rk3066_pll_clk_norate_ops = {
@@ -765,7 +770,7 @@ static int rockchip_rk3399_pll_is_enabled(struct clk_hw *hw)
 	return !(pllcon & RK3399_PLLCON3_PWRDOWN);
 }
 
-static int rockchip_rk3399_pll_init(struct clk_hw *hw)
+static void rockchip_rk3399_pll_init(struct clk_hw *hw)
 {
 	struct rockchip_clk_pll *pll = to_rockchip_clk_pll(hw);
 	const struct rockchip_pll_rate_table *rate;
@@ -773,14 +778,14 @@ static int rockchip_rk3399_pll_init(struct clk_hw *hw)
 	unsigned long drate;
 
 	if (!(pll->flags & ROCKCHIP_PLL_SYNC_RATE))
-		return 0;
+		return;
 
 	drate = clk_hw_get_rate(hw);
 	rate = rockchip_get_pll_settings(pll, drate);
 
 	/* when no rate setting for the current rate, rely on clk_set_rate */
 	if (!rate)
-		return 0;
+		return;
 
 	rockchip_rk3399_pll_get_params(pll, &cur);
 
@@ -802,15 +807,13 @@ static int rockchip_rk3399_pll_init(struct clk_hw *hw)
 		if (!parent) {
 			pr_warn("%s: parent of %s not available\n",
 				__func__, __clk_get_name(hw->clk));
-			return 0;
+			return;
 		}
 
 		pr_debug("%s: pll %s: rate params do not match rate table, adjusting\n",
 			 __func__, __clk_get_name(hw->clk));
 		rockchip_rk3399_pll_set_params(pll, rate);
 	}
-
-	return 0;
 }
 
 static const struct clk_ops rockchip_rk3399_pll_clk_norate_ops = {
@@ -843,7 +846,7 @@ struct clk *rockchip_clk_register_pll(struct rockchip_clk_provider *ctx,
 		unsigned long flags, u8 clk_pll_flags)
 {
 	const char *pll_parents[3];
-	struct clk_init_data init;
+	struct clk_init_data init = {};
 	struct rockchip_clk_pll *pll;
 	struct clk_mux *pll_mux;
 	struct clk *pll_clk, *mux_clk;

@@ -1,11 +1,19 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2012-2016, The Linux Foundation. All rights reserved.
  * Copyright (C) 2017 Linaro Ltd.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
  */
 #include <linux/clk.h>
 #include <linux/init.h>
-#include <linux/interconnect.h>
 #include <linux/ioctl.h>
 #include <linux/list.h>
 #include <linux/module.h>
@@ -68,7 +76,7 @@ static void venus_sys_error_handler(struct work_struct *work)
 	hfi_core_deinit(core, true);
 	hfi_destroy(core);
 	mutex_lock(&core->lock);
-	venus_shutdown(core);
+	venus_shutdown(core->dev);
 
 	pm_runtime_put_sync(core->dev);
 
@@ -76,7 +84,7 @@ static void venus_sys_error_handler(struct work_struct *work)
 
 	pm_runtime_get_sync(core->dev);
 
-	ret |= venus_boot(core);
+	ret |= venus_boot(core->dev, core->res->fwname);
 
 	ret |= hfi_core_resume(core, true);
 
@@ -199,7 +207,7 @@ static int venus_enumerate_codecs(struct venus_core *core, u32 type)
 		goto err;
 
 	for (i = 0; i < MAX_CODEC_NUM; i++) {
-		codec = (1UL << i) & codecs;
+		codec = (1 << i) & codecs;
 		if (!codec)
 			continue;
 
@@ -240,14 +248,6 @@ static int venus_probe(struct platform_device *pdev)
 	if (IS_ERR(core->base))
 		return PTR_ERR(core->base);
 
-	core->video_path = of_icc_get(dev, "video-mem");
-	if (IS_ERR(core->video_path))
-		return PTR_ERR(core->video_path);
-
-	core->cpucfg_path = of_icc_get(dev, "cpu-cfg");
-	if (IS_ERR(core->cpucfg_path))
-		return PTR_ERR(core->cpucfg_path);
-
 	core->irq = platform_get_irq(pdev, 0);
 	if (core->irq < 0)
 		return core->irq;
@@ -282,10 +282,6 @@ static int venus_probe(struct platform_device *pdev)
 	if (ret)
 		return ret;
 
-	ret = icc_set_bw(core->cpucfg_path, 0, kbps_to_icc(1000));
-	if (ret)
-		return ret;
-
 	ret = hfi_create(core, &venus_core_ops);
 	if (ret)
 		return ret;
@@ -296,15 +292,7 @@ static int venus_probe(struct platform_device *pdev)
 	if (ret < 0)
 		goto err_runtime_disable;
 
-	ret = of_platform_populate(dev->of_node, NULL, NULL, dev);
-	if (ret)
-		goto err_runtime_disable;
-
-	ret = venus_firmware_init(core);
-	if (ret)
-		goto err_runtime_disable;
-
-	ret = venus_boot(core);
+	ret = venus_boot(dev, core->res->fwname);
 	if (ret)
 		goto err_runtime_disable;
 
@@ -328,9 +316,15 @@ static int venus_probe(struct platform_device *pdev)
 	if (ret)
 		goto err_core_deinit;
 
-	ret = pm_runtime_put_sync(dev);
+	ret = of_platform_populate(dev->of_node, NULL, NULL, dev);
 	if (ret)
 		goto err_dev_unregister;
+
+	ret = pm_runtime_put_sync(dev);
+	if (ret) {
+		pm_runtime_get_noresume(dev);
+		goto err_dev_unregister;
+	}
 
 	return 0;
 
@@ -339,8 +333,9 @@ err_dev_unregister:
 err_core_deinit:
 	hfi_core_deinit(core, false);
 err_venus_shutdown:
-	venus_shutdown(core);
+	venus_shutdown(dev);
 err_runtime_disable:
+	pm_runtime_put_noidle(dev);
 	pm_runtime_set_suspended(dev);
 	pm_runtime_disable(dev);
 	hfi_destroy(core);
@@ -360,16 +355,11 @@ static int venus_remove(struct platform_device *pdev)
 	WARN_ON(ret);
 
 	hfi_destroy(core);
-	venus_shutdown(core);
+	venus_shutdown(dev);
 	of_platform_depopulate(dev);
-
-	venus_firmware_deinit(core);
 
 	pm_runtime_put_sync(dev);
 	pm_runtime_disable(dev);
-
-	icc_put(core->video_path);
-	icc_put(core->cpucfg_path);
 
 	v4l2_device_unregister(&core->v4l2_dev);
 
@@ -473,51 +463,18 @@ static const struct venus_resources msm8996_res = {
 };
 
 static const struct freq_tbl sdm845_freq_table[] = {
-	{ 3110400, 533000000 },	/* 4096x2160@90 */
-	{ 2073600, 444000000 },	/* 4096x2160@60 */
-	{ 1944000, 404000000 },	/* 3840x2160@60 */
-	{  972000, 330000000 },	/* 3840x2160@30 */
-	{  489600, 200000000 },	/* 1920x1080@60 */
-	{  244800, 100000000 },	/* 1920x1080@30 */
-};
-
-static struct codec_freq_data sdm845_codec_freq_data[] =  {
-	{ V4L2_PIX_FMT_H264, VIDC_SESSION_TYPE_ENC, 675, 10 },
-	{ V4L2_PIX_FMT_HEVC, VIDC_SESSION_TYPE_ENC, 675, 10 },
-	{ V4L2_PIX_FMT_VP8, VIDC_SESSION_TYPE_ENC, 675, 10 },
-	{ V4L2_PIX_FMT_MPEG2, VIDC_SESSION_TYPE_DEC, 200, 10 },
-	{ V4L2_PIX_FMT_H264, VIDC_SESSION_TYPE_DEC, 200, 10 },
-	{ V4L2_PIX_FMT_HEVC, VIDC_SESSION_TYPE_DEC, 200, 10 },
-	{ V4L2_PIX_FMT_VP8, VIDC_SESSION_TYPE_DEC, 200, 10 },
-	{ V4L2_PIX_FMT_VP9, VIDC_SESSION_TYPE_DEC, 200, 10 },
-};
-
-static const struct bw_tbl sdm845_bw_table_enc[] = {
-	{ 1944000, 1612000, 0, 2416000, 0 },	/* 3840x2160@60 */
-	{  972000,  951000, 0, 1434000, 0 },	/* 3840x2160@30 */
-	{  489600,  723000, 0,  973000, 0 },	/* 1920x1080@60 */
-	{  244800,  370000, 0,	495000, 0 },	/* 1920x1080@30 */
-};
-
-static const struct bw_tbl sdm845_bw_table_dec[] = {
-	{ 2073600, 3929000, 0, 5551000, 0 },	/* 4096x2160@60 */
-	{ 1036800, 1987000, 0, 2797000, 0 },	/* 4096x2160@30 */
-	{  489600, 1040000, 0, 1298000, 0 },	/* 1920x1080@60 */
-	{  244800,  530000, 0,  659000, 0 },	/* 1920x1080@30 */
+	{ 1944000, 380000000 },	/* 4k UHD @ 60 */
+	{  972000, 320000000 },	/* 4k UHD @ 30 */
+	{  489600, 200000000 },	/* 1080p @ 60 */
+	{  244800, 100000000 },	/* 1080p @ 30 */
 };
 
 static const struct venus_resources sdm845_res = {
 	.freq_tbl = sdm845_freq_table,
 	.freq_tbl_size = ARRAY_SIZE(sdm845_freq_table),
-	.bw_tbl_enc = sdm845_bw_table_enc,
-	.bw_tbl_enc_size = ARRAY_SIZE(sdm845_bw_table_enc),
-	.bw_tbl_dec = sdm845_bw_table_dec,
-	.bw_tbl_dec_size = ARRAY_SIZE(sdm845_bw_table_dec),
-	.codec_freq_data = sdm845_codec_freq_data,
-	.codec_freq_data_size = ARRAY_SIZE(sdm845_codec_freq_data),
 	.clks = {"core", "iface", "bus" },
 	.clks_num = 3,
-	.max_load = 3110400,	/* 4096x2160@90 */
+	.max_load = 2563200,
 	.hfi_version = HFI_VERSION_4XX,
 	.vmem_id = VIDC_RESOURCE_NONE,
 	.vmem_size = 0,

@@ -14,23 +14,8 @@
 #include "spectrum_span.h"
 #include "spectrum_switchdev.h"
 
-static u64 mlxsw_sp_span_occ_get(void *priv)
-{
-	const struct mlxsw_sp *mlxsw_sp = priv;
-	u64 occ = 0;
-	int i;
-
-	for (i = 0; i < mlxsw_sp->span.entries_count; i++) {
-		if (mlxsw_sp->span.entries[i].ref_count)
-			occ++;
-	}
-
-	return occ;
-}
-
 int mlxsw_sp_span_init(struct mlxsw_sp *mlxsw_sp)
 {
-	struct devlink *devlink = priv_to_devlink(mlxsw_sp->core);
 	int i;
 
 	if (!MLXSW_CORE_RES_VALID(mlxsw_sp->core, MAX_SPAN))
@@ -51,18 +36,12 @@ int mlxsw_sp_span_init(struct mlxsw_sp *mlxsw_sp)
 		curr->id = i;
 	}
 
-	devlink_resource_occ_get_register(devlink, MLXSW_SP_RESOURCE_SPAN,
-					  mlxsw_sp_span_occ_get, mlxsw_sp);
-
 	return 0;
 }
 
 void mlxsw_sp_span_fini(struct mlxsw_sp *mlxsw_sp)
 {
-	struct devlink *devlink = priv_to_devlink(mlxsw_sp->core);
 	int i;
-
-	devlink_resource_occ_get_unregister(devlink, MLXSW_SP_RESOURCE_SPAN);
 
 	for (i = 0; i < mlxsw_sp->span.entries_count; i++) {
 		struct mlxsw_sp_span_entry *curr = &mlxsw_sp->span.entries[i];
@@ -326,7 +305,7 @@ mlxsw_sp_span_gretap4_route(const struct net_device *to_dev,
 
 	parms = mlxsw_sp_ipip_netdev_parms4(to_dev);
 	ip_tunnel_init_flow(&fl4, parms.iph.protocol, *daddrp, *saddrp,
-			    0, 0, parms.link, tun->fwmark, 0);
+			    0, 0, parms.link, tun->fwmark);
 
 	rt = ip_route_output_key(tun->net, &fl4);
 	if (IS_ERR(rt))
@@ -337,11 +316,7 @@ mlxsw_sp_span_gretap4_route(const struct net_device *to_dev,
 
 	dev = rt->dst.dev;
 	*saddrp = fl4.saddr;
-	if (rt->rt_gw_family == AF_INET)
-		*daddrp = rt->rt_gw4;
-	/* can not offload if route has an IPv6 gateway */
-	else if (rt->rt_gw_family == AF_INET6)
-		dev = NULL;
+	*daddrp = rt->rt_gateway;
 
 out:
 	ip_rt_put(rt);
@@ -408,7 +383,7 @@ mlxsw_sp_span_entry_gretap4_deconfigure(struct mlxsw_sp_span_entry *span_entry)
 }
 
 static const struct mlxsw_sp_span_entry_ops mlxsw_sp_span_entry_ops_gretap4 = {
-	.can_handle = netif_is_gretap,
+	.can_handle = is_gretap_dev,
 	.parms = mlxsw_sp_span_entry_gretap4_parms,
 	.configure = mlxsw_sp_span_entry_gretap4_configure,
 	.deconfigure = mlxsw_sp_span_entry_gretap4_deconfigure,
@@ -509,7 +484,7 @@ mlxsw_sp_span_entry_gretap6_deconfigure(struct mlxsw_sp_span_entry *span_entry)
 
 static const
 struct mlxsw_sp_span_entry_ops mlxsw_sp_span_entry_ops_gretap6 = {
-	.can_handle = netif_is_ip6gretap,
+	.can_handle = is_ip6gretap_dev,
 	.parms = mlxsw_sp_span_entry_gretap6_parms,
 	.configure = mlxsw_sp_span_entry_gretap6_configure,
 	.deconfigure = mlxsw_sp_span_entry_gretap6_deconfigure,
@@ -748,50 +723,33 @@ static bool mlxsw_sp_span_is_egress_mirror(struct mlxsw_sp_port *port)
 	return false;
 }
 
-static int
-mlxsw_sp_span_port_buffsize_update(struct mlxsw_sp_port *mlxsw_sp_port, u16 mtu)
+static int mlxsw_sp_span_mtu_to_buffsize(const struct mlxsw_sp *mlxsw_sp,
+					 int mtu)
 {
-	struct mlxsw_sp *mlxsw_sp = mlxsw_sp_port->mlxsw_sp;
-	char sbib_pl[MLXSW_REG_SBIB_LEN];
-	u32 buffsize;
-	u32 speed;
-	int err;
-
-	err = mlxsw_sp_port_speed_get(mlxsw_sp_port, &speed);
-	if (err)
-		return err;
-	if (speed == SPEED_UNKNOWN)
-		speed = 0;
-
-	buffsize = mlxsw_sp_span_buffsize_get(mlxsw_sp, speed, mtu);
-	mlxsw_reg_sbib_pack(sbib_pl, mlxsw_sp_port->local_port, buffsize);
-	return mlxsw_reg_write(mlxsw_sp->core, MLXSW_REG(sbib), sbib_pl);
+	return mlxsw_sp_bytes_cells(mlxsw_sp, mtu * 5 / 2) + 1;
 }
 
 int mlxsw_sp_span_port_mtu_update(struct mlxsw_sp_port *port, u16 mtu)
 {
+	struct mlxsw_sp *mlxsw_sp = port->mlxsw_sp;
+	char sbib_pl[MLXSW_REG_SBIB_LEN];
+	int err;
+
 	/* If port is egress mirrored, the shared buffer size should be
 	 * updated according to the mtu value
 	 */
-	if (mlxsw_sp_span_is_egress_mirror(port))
-		return mlxsw_sp_span_port_buffsize_update(port, mtu);
+	if (mlxsw_sp_span_is_egress_mirror(port)) {
+		u32 buffsize = mlxsw_sp_span_mtu_to_buffsize(mlxsw_sp, mtu);
+
+		mlxsw_reg_sbib_pack(sbib_pl, port->local_port, buffsize);
+		err = mlxsw_reg_write(mlxsw_sp->core, MLXSW_REG(sbib), sbib_pl);
+		if (err) {
+			netdev_err(port->dev, "Could not update shared buffer for mirroring\n");
+			return err;
+		}
+	}
+
 	return 0;
-}
-
-void mlxsw_sp_span_speed_update_work(struct work_struct *work)
-{
-	struct delayed_work *dwork = to_delayed_work(work);
-	struct mlxsw_sp_port *mlxsw_sp_port;
-
-	mlxsw_sp_port = container_of(dwork, struct mlxsw_sp_port,
-				     span.speed_update_dw);
-
-	/* If port is egress mirrored, the shared buffer size should be
-	 * updated according to the speed value.
-	 */
-	if (mlxsw_sp_span_is_egress_mirror(mlxsw_sp_port))
-		mlxsw_sp_span_port_buffsize_update(mlxsw_sp_port,
-						   mlxsw_sp_port->dev->mtu);
 }
 
 static struct mlxsw_sp_span_inspected_port *
@@ -853,9 +811,15 @@ mlxsw_sp_span_inspected_port_add(struct mlxsw_sp_port *port,
 
 	/* if it is an egress SPAN, bind a shared buffer to it */
 	if (type == MLXSW_SP_SPAN_EGRESS) {
-		err = mlxsw_sp_span_port_buffsize_update(port, port->dev->mtu);
-		if (err)
+		u32 buffsize = mlxsw_sp_span_mtu_to_buffsize(mlxsw_sp,
+							     port->dev->mtu);
+
+		mlxsw_reg_sbib_pack(sbib_pl, port->local_port, buffsize);
+		err = mlxsw_reg_write(mlxsw_sp->core, MLXSW_REG(sbib), sbib_pl);
+		if (err) {
+			netdev_err(port->dev, "Could not create shared buffer for mirroring\n");
 			return err;
+		}
 	}
 
 	if (bind) {

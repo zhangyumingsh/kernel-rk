@@ -24,8 +24,7 @@
 /**
  * enum vfl_devnode_type - type of V4L2 device node
  *
- * @VFL_TYPE_VIDEO:	for video input/output devices
- * @VFL_TYPE_GRABBER:	deprecated, same as VFL_TYPE_VIDEO
+ * @VFL_TYPE_GRABBER:	for video input/output devices
  * @VFL_TYPE_VBI:	for vertical blank data (i.e. closed captions, teletext)
  * @VFL_TYPE_RADIO:	for radio tuners
  * @VFL_TYPE_SUBDEV:	for V4L2 subdevices
@@ -34,8 +33,7 @@
  * @VFL_TYPE_MAX:	number of VFL types, must always be last in the enum
  */
 enum vfl_devnode_type {
-	VFL_TYPE_VIDEO,
-	VFL_TYPE_GRABBER = VFL_TYPE_VIDEO,
+	VFL_TYPE_GRABBER	= 0,
 	VFL_TYPE_VBI,
 	VFL_TYPE_RADIO,
 	VFL_TYPE_SUBDEV,
@@ -76,19 +74,10 @@ struct v4l2_ctrl_handler;
  *	indicates that file->private_data points to &struct v4l2_fh.
  *	This flag is set by the core when v4l2_fh_init() is called.
  *	All new drivers should use it.
- * @V4L2_FL_QUIRK_INVERTED_CROP:
- *	some old M2M drivers use g/s_crop/cropcap incorrectly: crop and
- *	compose are swapped. If this flag is set, then the selection
- *	targets are swapped in the g/s_crop/cropcap functions in v4l2-ioctl.c.
- *	This allows those drivers to correctly implement the selection API,
- *	but the old crop API will still work as expected in order to preserve
- *	backwards compatibility.
- *	Never set this flag for new drivers.
  */
 enum v4l2_video_device_flags {
-	V4L2_FL_REGISTERED		= 0,
-	V4L2_FL_USES_V4L2_FH		= 1,
-	V4L2_FL_QUIRK_INVERTED_CROP	= 2,
+	V4L2_FL_REGISTERED	= 0,
+	V4L2_FL_USES_V4L2_FH	= 1,
 };
 
 /* Priority helper functions */

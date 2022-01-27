@@ -327,9 +327,9 @@ static struct kobject *hotplug_kobj;
 
 struct acpi_table_attr {
 	struct bin_attribute attr;
-	char name[ACPI_NAMESEG_SIZE];
+	char name[ACPI_NAME_SIZE];
 	int instance;
-	char filename[ACPI_NAMESEG_SIZE+ACPI_INST_SIZE];
+	char filename[ACPI_NAME_SIZE+ACPI_INST_SIZE];
 	struct list_head node;
 };
 
@@ -368,10 +368,10 @@ static int acpi_table_attr_init(struct kobject *tables_obj,
 	char instance_str[ACPI_INST_SIZE];
 
 	sysfs_attr_init(&table_attr->attr.attr);
-	ACPI_COPY_NAMESEG(table_attr->name, table_header->signature);
+	ACPI_MOVE_NAME(table_attr->name, table_header->signature);
 
 	list_for_each_entry(attr, &acpi_table_attr_list, node) {
-		if (ACPI_COMPARE_NAMESEG(table_attr->name, attr->name))
+		if (ACPI_COMPARE_NAME(table_attr->name, attr->name))
 			if (table_attr->instance < attr->instance)
 				table_attr->instance = attr->instance;
 	}
@@ -382,8 +382,8 @@ static int acpi_table_attr_init(struct kobject *tables_obj,
 		return -ERANGE;
 	}
 
-	ACPI_COPY_NAMESEG(table_attr->filename, table_header->signature);
-	table_attr->filename[ACPI_NAMESEG_SIZE] = '\0';
+	ACPI_MOVE_NAME(table_attr->filename, table_header->signature);
+	table_attr->filename[ACPI_NAME_SIZE] = '\0';
 	if (table_attr->instance > 1 || (table_attr->instance == 1 &&
 					 !acpi_get_table
 					 (table_header->signature, 2, &header))) {
@@ -484,7 +484,7 @@ static int acpi_table_data_init(struct acpi_table_header *th)
 	int i;
 
 	for (i = 0; i < NUM_ACPI_DATA_OBJS; i++) {
-		if (ACPI_COMPARE_NAMESEG(th->signature, acpi_data_objs[i].name)) {
+		if (ACPI_COMPARE_NAME(th->signature, acpi_data_objs[i].name)) {
 			data_attr = kzalloc(sizeof(*data_attr), GFP_KERNEL);
 			if (!data_attr)
 				return -ENOMEM;
@@ -648,29 +648,26 @@ static void acpi_global_event_handler(u32 event_type, acpi_handle device,
 	}
 }
 
-static int get_status(u32 index, acpi_event_status *ret,
+static int get_status(u32 index, acpi_event_status *status,
 		      acpi_handle *handle)
 {
-	acpi_status status;
+	int result;
 
 	if (index >= num_gpes + ACPI_NUM_FIXED_EVENTS)
 		return -EINVAL;
 
 	if (index < num_gpes) {
-		status = acpi_get_gpe_device(index, handle);
-		if (ACPI_FAILURE(status)) {
+		result = acpi_get_gpe_device(index, handle);
+		if (result) {
 			ACPI_EXCEPTION((AE_INFO, AE_NOT_FOUND,
 					"Invalid GPE 0x%x", index));
-			return -ENXIO;
+			return result;
 		}
-		status = acpi_get_gpe_status(*handle, index, ret);
-	} else {
-		status = acpi_get_event_status(index - num_gpes, ret);
-	}
-	if (ACPI_FAILURE(status))
-		return -EIO;
+		result = acpi_get_gpe_status(*handle, index, status);
+	} else if (index < (num_gpes + ACPI_NUM_FIXED_EVENTS))
+		result = acpi_get_event_status(index - num_gpes, status);
 
-	return 0;
+	return result;
 }
 
 static ssize_t counter_show(struct kobject *kobj,
@@ -938,13 +935,13 @@ static void __exit interrupt_stats_exit(void)
 }
 
 static ssize_t
-acpi_show_profile(struct device *dev, struct device_attribute *attr,
+acpi_show_profile(struct kobject *kobj, struct kobj_attribute *attr,
 		  char *buf)
 {
 	return sprintf(buf, "%d\n", acpi_gbl_FADT.preferred_profile);
 }
 
-static const struct device_attribute pm_profile_attr =
+static const struct kobj_attribute pm_profile_attr =
 	__ATTR(pm_profile, S_IRUGO, acpi_show_profile, NULL);
 
 static ssize_t hotplug_enabled_show(struct kobject *kobj,
@@ -993,8 +990,10 @@ void acpi_sysfs_add_hotplug_profile(struct acpi_hotplug_profile *hotplug,
 
 	error = kobject_init_and_add(&hotplug->kobj,
 		&acpi_hotplug_profile_ktype, hotplug_kobj, "%s", name);
-	if (error)
+	if (error) {
+		kobject_put(&hotplug->kobj);
 		goto err_out;
+	}
 
 	kobject_uevent(&hotplug->kobj, KOBJ_ADD);
 	return;

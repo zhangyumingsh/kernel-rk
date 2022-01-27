@@ -1,6 +1,9 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  *  Copyright (C) 2014 ARM Limited
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  */
 
 #include <linux/cpu.h>
@@ -404,7 +407,7 @@ static int swp_handler(struct pt_regs *regs, u32 instr)
 
 	/* Check access in reasonable access range for both SWP and SWPB */
 	user_ptr = (const void __user *)(unsigned long)(address & ~3);
-	if (!access_ok(user_ptr, 4)) {
+	if (!access_ok(VERIFY_WRITE, user_ptr, 4)) {
 		pr_debug("SWP{B} emulation: access to 0x%08x not allowed!\n",
 			address);
 		goto fault;
@@ -618,8 +621,7 @@ static struct insn_emulation_ops setend_ops = {
 };
 
 /*
- * Invoked as core_initcall, which guarantees that the instruction
- * emulation is ready for userspace.
+ * Invoked as late_initcall, since not needed before init spawned.
  */
 static int __init armv8_deprecated_init(void)
 {

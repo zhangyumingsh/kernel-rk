@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * AppArmor security module
  *
@@ -6,6 +5,11 @@
  *
  * Copyright (C) 1998-2008 Novell/SUSE
  * Copyright 2009-2010 Canonical Ltd.
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License as
+ * published by the Free Software Foundation, version 2 of the
+ * License.
  */
 
 #include <linux/tty.h>
@@ -76,7 +80,7 @@ static void file_audit_cb(struct audit_buffer *ab, void *va)
 	if (aad(sa)->peer) {
 		audit_log_format(ab, " target=");
 		aa_label_xaudit(ab, labels_ns(aad(sa)->label), aad(sa)->peer,
-				FLAG_VIEW_SUBNS, GFP_KERNEL);
+				FLAG_VIEW_SUBNS, GFP_ATOMIC);
 	} else if (aad(sa)->fs.target) {
 		audit_log_format(ab, " target=");
 		audit_log_untrustedstring(ab, aad(sa)->fs.target);
@@ -332,14 +336,12 @@ int aa_path_perm(const char *op, struct aa_label *label,
 
 	flags |= PATH_DELEGATE_DELETED | (S_ISDIR(cond->mode) ? PATH_IS_DIR :
 								0);
-	buffer = aa_get_buffer(false);
-	if (!buffer)
-		return -ENOMEM;
+	get_buffers(buffer);
 	error = fn_for_each_confined(label, profile,
 			profile_path_perm(op, profile, path, buffer, request,
 					  cond, flags, &perms));
 
-	aa_put_buffer(buffer);
+	put_buffers(buffer);
 
 	return error;
 }
@@ -477,18 +479,12 @@ int aa_path_link(struct aa_label *label, struct dentry *old_dentry,
 	int error;
 
 	/* buffer freed below, lname is pointer in buffer */
-	buffer = aa_get_buffer(false);
-	buffer2 = aa_get_buffer(false);
-	error = -ENOMEM;
-	if (!buffer || !buffer2)
-		goto out;
-
+	get_buffers(buffer, buffer2);
 	error = fn_for_each_confined(label, profile,
 			profile_path_link(profile, &link, buffer, &target,
 					  buffer2, &cond));
-out:
-	aa_put_buffer(buffer);
-	aa_put_buffer(buffer2);
+	put_buffers(buffer, buffer2);
+
 	return error;
 }
 
@@ -500,7 +496,7 @@ static void update_file_ctx(struct aa_file_ctx *fctx, struct aa_label *label,
 	/* update caching of label on file_ctx */
 	spin_lock(&fctx->lock);
 	old = rcu_dereference_protected(fctx->label,
-					lockdep_is_held(&fctx->lock));
+					spin_is_locked(&fctx->lock));
 	l = aa_label_merge(old, label, GFP_ATOMIC);
 	if (l) {
 		if (l != old) {
@@ -515,7 +511,7 @@ static void update_file_ctx(struct aa_file_ctx *fctx, struct aa_label *label,
 
 static int __file_path_perm(const char *op, struct aa_label *label,
 			    struct aa_label *flabel, struct file *file,
-			    u32 request, u32 denied, bool in_atomic)
+			    u32 request, u32 denied)
 {
 	struct aa_profile *profile;
 	struct aa_perms perms = {};
@@ -532,9 +528,7 @@ static int __file_path_perm(const char *op, struct aa_label *label,
 		return 0;
 
 	flags = PATH_DELEGATE_DELETED | (S_ISDIR(cond.mode) ? PATH_IS_DIR : 0);
-	buffer = aa_get_buffer(in_atomic);
-	if (!buffer)
-		return -ENOMEM;
+	get_buffers(buffer);
 
 	/* check every profile in task label not in current cache */
 	error = fn_for_each_not_in_set(flabel, label, profile,
@@ -563,7 +557,7 @@ static int __file_path_perm(const char *op, struct aa_label *label,
 	if (!error)
 		update_file_ctx(file_ctx(file), label, request);
 
-	aa_put_buffer(buffer);
+	put_buffers(buffer);
 
 	return error;
 }
@@ -600,12 +594,11 @@ static int __file_sock_perm(const char *op, struct aa_label *label,
  * @label: label being enforced   (NOT NULL)
  * @file: file to revalidate access permissions on  (NOT NULL)
  * @request: requested permissions
- * @in_atomic: whether allocations need to be done in atomic context
  *
  * Returns: %0 if access allowed else error
  */
 int aa_file_perm(const char *op, struct aa_label *label, struct file *file,
-		 u32 request, bool in_atomic)
+		 u32 request)
 {
 	struct aa_file_ctx *fctx;
 	struct aa_label *flabel;
@@ -630,25 +623,21 @@ int aa_file_perm(const char *op, struct aa_label *label, struct file *file,
 	 */
 	denied = request & ~fctx->allow;
 	if (unconfined(label) || unconfined(flabel) ||
-	    (!denied && aa_label_is_subset(flabel, label))) {
-		rcu_read_unlock();
+	    (!denied && aa_label_is_subset(flabel, label)))
 		goto done;
-	}
 
-	flabel  = aa_get_newest_label(flabel);
-	rcu_read_unlock();
 	/* TODO: label cross check */
 
 	if (file->f_path.mnt && path_mediated_fs(file->f_path.dentry))
 		error = __file_path_perm(op, label, flabel, file, request,
-					 denied, in_atomic);
+					 denied);
 
 	else if (S_ISSOCK(file_inode(file)->i_mode))
 		error = __file_sock_perm(op, label, flabel, file, request,
 					 denied);
-	aa_put_label(flabel);
-
 done:
+	rcu_read_unlock();
+
 	return error;
 }
 
@@ -670,8 +659,7 @@ static void revalidate_tty(struct aa_label *label)
 					     struct tty_file_private, list);
 		file = file_priv->file;
 
-		if (aa_file_perm(OP_INHERIT, label, file, MAY_READ | MAY_WRITE,
-				 IN_ATOMIC))
+		if (aa_file_perm(OP_INHERIT, label, file, MAY_READ | MAY_WRITE))
 			drop_tty = 1;
 	}
 	spin_unlock(&tty->files_lock);
@@ -685,8 +673,7 @@ static int match_file(const void *p, struct file *file, unsigned int fd)
 {
 	struct aa_label *label = (struct aa_label *)p;
 
-	if (aa_file_perm(OP_INHERIT, label, file, aa_map_file_to_perms(file),
-			 IN_ATOMIC))
+	if (aa_file_perm(OP_INHERIT, label, file, aa_map_file_to_perms(file)))
 		return fd + 1;
 	return 0;
 }

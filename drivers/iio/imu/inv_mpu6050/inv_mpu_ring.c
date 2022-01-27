@@ -1,6 +1,14 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
 * Copyright (C) 2012 Invensense, Inc.
+*
+* This software is licensed under the terms of the GNU General Public
+* License version 2, as published by the Free Software Foundation, and
+* may be copied, distributed, and modified under those terms.
+*
+* This program is distributed in the hope that it will be useful,
+* but WITHOUT ANY WARRANTY; without even the implied warranty of
+* MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+* GNU General Public License for more details.
 */
 
 #include <linux/module.h>
@@ -124,8 +132,7 @@ int inv_reset_fifo(struct iio_dev *indio_dev)
 
 	/* enable interrupt */
 	if (st->chip_config.accl_fifo_enable ||
-	    st->chip_config.gyro_fifo_enable ||
-	    st->chip_config.magn_fifo_enable) {
+	    st->chip_config.gyro_fifo_enable) {
 		result = regmap_write(st->map, st->reg->int_enable,
 				      INV_MPU6050_BIT_DATA_RDY_EN);
 		if (result)
@@ -142,10 +149,6 @@ int inv_reset_fifo(struct iio_dev *indio_dev)
 		d |= INV_MPU6050_BITS_GYRO_OUT;
 	if (st->chip_config.accl_fifo_enable)
 		d |= INV_MPU6050_BIT_ACCEL_OUT;
-	if (st->chip_config.temp_fifo_enable)
-		d |= INV_MPU6050_BIT_TEMP_OUT;
-	if (st->chip_config.magn_fifo_enable)
-		d |= INV_MPU6050_BIT_SLAVE_0;
 	result = regmap_write(st->map, st->reg->fifo_en, d);
 	if (result)
 		goto reset_fifo_fail;
@@ -185,12 +188,14 @@ irqreturn_t inv_mpu6050_read_fifo(int irq, void *p)
 			"failed to ack interrupt\n");
 		goto flush_fifo;
 	}
-	if (!(int_status & INV_MPU6050_BIT_RAW_DATA_RDY_INT))
+	if (!(int_status & INV_MPU6050_BIT_RAW_DATA_RDY_INT)) {
+		dev_warn(regmap_get_device(st->map),
+			"spurious interrupt with status 0x%x\n", int_status);
 		goto end_session;
+	}
 
 	if (!(st->chip_config.accl_fifo_enable |
-		st->chip_config.gyro_fifo_enable |
-		st->chip_config.magn_fifo_enable))
+		st->chip_config.gyro_fifo_enable))
 		goto end_session;
 	bytes_per_datum = 0;
 	if (st->chip_config.accl_fifo_enable)
@@ -199,11 +204,8 @@ irqreturn_t inv_mpu6050_read_fifo(int irq, void *p)
 	if (st->chip_config.gyro_fifo_enable)
 		bytes_per_datum += INV_MPU6050_BYTES_PER_3AXIS_SENSOR;
 
-	if (st->chip_config.temp_fifo_enable)
-		bytes_per_datum += INV_MPU6050_BYTES_PER_TEMP_SENSOR;
-
-	if (st->chip_config.magn_fifo_enable)
-		bytes_per_datum += INV_MPU9X50_BYTES_MAGN;
+	if (st->chip_type == INV_ICM20602)
+		bytes_per_datum += INV_ICM20602_BYTES_PER_TEMP_SENSOR;
 
 	/*
 	 * read fifo_count register to know how many bytes are inside the FIFO

@@ -20,6 +20,7 @@
 
 #include <crypto/skcipher.h>
 #include <linux/key-type.h>
+#include <linux/random.h>
 #include <linux/seq_file.h>
 
 #include "fscrypt_private.h"
@@ -44,8 +45,9 @@ static void free_master_key(struct fscrypt_master_key *mk)
 	wipe_master_key_secret(&mk->mk_secret);
 
 	for (i = 0; i <= __FSCRYPT_MODE_MAX; i++) {
-		crypto_free_skcipher(mk->mk_direct_tfms[i]);
-		crypto_free_skcipher(mk->mk_iv_ino_lblk_64_tfms[i]);
+		fscrypt_destroy_prepared_key(&mk->mk_direct_keys[i]);
+		fscrypt_destroy_prepared_key(&mk->mk_iv_ino_lblk_64_keys[i]);
+		fscrypt_destroy_prepared_key(&mk->mk_iv_ino_lblk_32_keys[i]);
 	}
 
 	key_put(mk->mk_users);
@@ -140,7 +142,7 @@ static struct key *search_fscrypt_keyring(struct key *keyring,
 	 */
 	key_ref_t keyref = make_key_ref(keyring, true /* possessed */);
 
-	keyref = keyring_search(keyref, type, description, false);
+	keyref = keyring_search(keyref, type, description);
 	if (IS_ERR(keyref)) {
 		if (PTR_ERR(keyref) == -EAGAIN || /* not found */
 		    PTR_ERR(keyref) == -EKEYREVOKED) /* recently invalidated */
@@ -151,7 +153,7 @@ static struct key *search_fscrypt_keyring(struct key *keyring,
 }
 
 #define FSCRYPT_FS_KEYRING_DESCRIPTION_SIZE	\
-	(CONST_STRLEN("fscrypt-") + sizeof_field(struct super_block, s_id))
+	(CONST_STRLEN("fscrypt-") + FIELD_SIZEOF(struct super_block, s_id))
 
 #define FSCRYPT_MK_DESCRIPTION_SIZE	(2 * FSCRYPT_KEY_IDENTIFIER_SIZE + 1)
 
@@ -424,9 +426,9 @@ static int add_existing_master_key(struct fscrypt_master_key *mk,
 	return 0;
 }
 
-static int add_master_key(struct super_block *sb,
-			  struct fscrypt_master_key_secret *secret,
-			  const struct fscrypt_key_specifier *mk_spec)
+static int do_add_master_key(struct super_block *sb,
+			     struct fscrypt_master_key_secret *secret,
+			     const struct fscrypt_key_specifier *mk_spec)
 {
 	static DEFINE_MUTEX(fscrypt_add_key_mutex);
 	struct key *key;
@@ -465,12 +467,57 @@ out_unlock:
 	return err;
 }
 
+/* Size of software "secret" derived from hardware-wrapped key */
+#define RAW_SECRET_SIZE 32
+
+static int add_master_key(struct super_block *sb,
+			  struct fscrypt_master_key_secret *secret,
+			  struct fscrypt_key_specifier *key_spec)
+{
+	int err;
+
+	if (key_spec->type == FSCRYPT_KEY_SPEC_TYPE_IDENTIFIER) {
+		u8 _kdf_key[RAW_SECRET_SIZE];
+		u8 *kdf_key = secret->raw;
+		unsigned int kdf_key_size = secret->size;
+
+		if (secret->is_hw_wrapped) {
+			kdf_key = _kdf_key;
+			kdf_key_size = RAW_SECRET_SIZE;
+			err = fscrypt_derive_raw_secret(sb, secret->raw,
+							secret->size,
+							kdf_key, kdf_key_size);
+			if (err)
+				return err;
+		}
+		err = fscrypt_init_hkdf(&secret->hkdf, kdf_key, kdf_key_size);
+		/*
+		 * Now that the HKDF context is initialized, the raw HKDF key is
+		 * no longer needed.
+		 */
+		memzero_explicit(kdf_key, kdf_key_size);
+		if (err)
+			return err;
+
+		/* Calculate the key identifier */
+		err = fscrypt_hkdf_expand(&secret->hkdf,
+					  HKDF_CONTEXT_KEY_IDENTIFIER, NULL, 0,
+					  key_spec->u.identifier,
+					  FSCRYPT_KEY_IDENTIFIER_SIZE);
+		if (err)
+			return err;
+	}
+	return do_add_master_key(sb, secret, key_spec);
+}
+
 static int fscrypt_provisioning_key_preparse(struct key_preparsed_payload *prep)
 {
 	const struct fscrypt_provisioning_key_payload *payload = prep->data;
 
+	BUILD_BUG_ON(FSCRYPT_MAX_HW_WRAPPED_KEY_SIZE < FSCRYPT_MAX_KEY_SIZE);
+
 	if (prep->datalen < sizeof(*payload) + FSCRYPT_MIN_KEY_SIZE ||
-	    prep->datalen > sizeof(*payload) + FSCRYPT_MAX_KEY_SIZE)
+	    prep->datalen > sizeof(*payload) + FSCRYPT_MAX_HW_WRAPPED_KEY_SIZE)
 		return -EINVAL;
 
 	if (payload->type != FSCRYPT_KEY_SPEC_TYPE_DESCRIPTOR &&
@@ -609,16 +656,39 @@ int fscrypt_ioctl_add_key(struct file *filp, void __user *_uarg)
 	if (memchr_inv(arg.__reserved, 0, sizeof(arg.__reserved)))
 		return -EINVAL;
 
+	/*
+	 * Only root can add keys that are identified by an arbitrary descriptor
+	 * rather than by a cryptographic hash --- since otherwise a malicious
+	 * user could add the wrong key.
+	 */
+	if (arg.key_spec.type == FSCRYPT_KEY_SPEC_TYPE_DESCRIPTOR &&
+	    !capable(CAP_SYS_ADMIN))
+		return -EACCES;
+
 	memset(&secret, 0, sizeof(secret));
+
+	if (arg.__flags) {
+		if (arg.__flags & ~__FSCRYPT_ADD_KEY_FLAG_HW_WRAPPED)
+			return -EINVAL;
+		if (arg.key_spec.type != FSCRYPT_KEY_SPEC_TYPE_IDENTIFIER)
+			return -EINVAL;
+		secret.is_hw_wrapped = true;
+	}
+
 	if (arg.key_id) {
 		if (arg.raw_size != 0)
 			return -EINVAL;
 		err = get_keyring_key(arg.key_id, arg.key_spec.type, &secret);
 		if (err)
 			goto out_wipe_secret;
+		err = -EINVAL;
+		if (secret.size > FSCRYPT_MAX_KEY_SIZE && !secret.is_hw_wrapped)
+			goto out_wipe_secret;
 	} else {
 		if (arg.raw_size < FSCRYPT_MIN_KEY_SIZE ||
-		    arg.raw_size > FSCRYPT_MAX_KEY_SIZE)
+		    arg.raw_size > (secret.is_hw_wrapped ?
+				    FSCRYPT_MAX_HW_WRAPPED_KEY_SIZE :
+				    FSCRYPT_MAX_KEY_SIZE))
 			return -EINVAL;
 		secret.size = arg.raw_size;
 		err = -EFAULT;
@@ -626,53 +696,45 @@ int fscrypt_ioctl_add_key(struct file *filp, void __user *_uarg)
 			goto out_wipe_secret;
 	}
 
-	switch (arg.key_spec.type) {
-	case FSCRYPT_KEY_SPEC_TYPE_DESCRIPTOR:
-		/*
-		 * Only root can add keys that are identified by an arbitrary
-		 * descriptor rather than by a cryptographic hash --- since
-		 * otherwise a malicious user could add the wrong key.
-		 */
-		err = -EACCES;
-		if (!capable(CAP_SYS_ADMIN))
-			goto out_wipe_secret;
-		break;
-	case FSCRYPT_KEY_SPEC_TYPE_IDENTIFIER:
-		err = fscrypt_init_hkdf(&secret.hkdf, secret.raw, secret.size);
-		if (err)
-			goto out_wipe_secret;
-
-		/*
-		 * Now that the HKDF context is initialized, the raw key is no
-		 * longer needed.
-		 */
-		memzero_explicit(secret.raw, secret.size);
-
-		/* Calculate the key identifier and return it to userspace. */
-		err = fscrypt_hkdf_expand(&secret.hkdf,
-					  HKDF_CONTEXT_KEY_IDENTIFIER,
-					  NULL, 0, arg.key_spec.u.identifier,
-					  FSCRYPT_KEY_IDENTIFIER_SIZE);
-		if (err)
-			goto out_wipe_secret;
-		err = -EFAULT;
-		if (copy_to_user(uarg->key_spec.u.identifier,
-				 arg.key_spec.u.identifier,
-				 FSCRYPT_KEY_IDENTIFIER_SIZE))
-			goto out_wipe_secret;
-		break;
-	default:
-		WARN_ON(1);
-		err = -EINVAL;
-		goto out_wipe_secret;
-	}
-
 	err = add_master_key(sb, &secret, &arg.key_spec);
+	if (err)
+		goto out_wipe_secret;
+
+	/* Return the key identifier to userspace, if applicable */
+	err = -EFAULT;
+	if (arg.key_spec.type == FSCRYPT_KEY_SPEC_TYPE_IDENTIFIER &&
+	    copy_to_user(uarg->key_spec.u.identifier, arg.key_spec.u.identifier,
+			 FSCRYPT_KEY_IDENTIFIER_SIZE))
+		goto out_wipe_secret;
+	err = 0;
 out_wipe_secret:
 	wipe_master_key_secret(&secret);
 	return err;
 }
 EXPORT_SYMBOL_GPL(fscrypt_ioctl_add_key);
+
+/*
+ * Add the key for '-o test_dummy_encryption' to the filesystem keyring.
+ *
+ * Use a per-boot random key to prevent people from misusing this option.
+ */
+int fscrypt_add_test_dummy_key(struct super_block *sb,
+			       struct fscrypt_key_specifier *key_spec)
+{
+	static u8 test_key[FSCRYPT_MAX_KEY_SIZE];
+	struct fscrypt_master_key_secret secret;
+	int err;
+
+	get_random_once(test_key, FSCRYPT_MAX_KEY_SIZE);
+
+	memset(&secret, 0, sizeof(secret));
+	secret.size = FSCRYPT_MAX_KEY_SIZE;
+	memcpy(secret.raw, test_key, FSCRYPT_MAX_KEY_SIZE);
+
+	err = add_master_key(sb, &secret, key_spec);
+	wipe_master_key_secret(&secret);
+	return err;
+}
 
 /*
  * Verify that the current user has added a master key with the given identifier

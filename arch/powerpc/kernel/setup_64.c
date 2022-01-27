@@ -1,9 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * 
  * Common boot and setup code.
  *
  * Copyright (C) 2001 PPC64 Team, IBM Corp
+ *
+ *      This program is free software; you can redistribute it and/or
+ *      modify it under the terms of the GNU General Public License
+ *      as published by the Free Software Foundation; either version
+ *      2 of the License, or (at your option) any later version.
  */
 
 #include <linux/export.h>
@@ -25,9 +29,10 @@
 #include <linux/unistd.h>
 #include <linux/serial.h>
 #include <linux/serial_8250.h>
-#include <linux/memblock.h>
+#include <linux/bootmem.h>
 #include <linux/pci.h>
 #include <linux/lockdep.h>
+#include <linux/memblock.h>
 #include <linux/memory.h>
 #include <linux/nmi.h>
 
@@ -64,10 +69,14 @@
 #include <asm/cputhreads.h>
 #include <asm/hw_irq.h>
 #include <asm/feature-fixups.h>
-#include <asm/kup.h>
-#include <asm/early_ioremap.h>
 
 #include "setup.h"
+
+#ifdef DEBUG
+#define DBG(fmt...) udbg_printf(fmt)
+#else
+#define DBG(fmt...)
+#endif
 
 int spinning_secondaries;
 u64 ppc64_pft_size;
@@ -279,46 +288,28 @@ void __init record_spr_defaults(void)
  * device-tree is not accessible via normal means at this point.
  */
 
-void __init __nostackprotector early_setup(unsigned long dt_ptr)
+void __init early_setup(unsigned long dt_ptr)
 {
 	static __initdata struct paca_struct boot_paca;
 
 	/* -------- printk is _NOT_ safe to use here ! ------- */
-
-	/*
-	 * Assume we're on cpu 0 for now.
-	 *
-	 * We need to load a PACA very early for a few reasons.
-	 *
-	 * The stack protector canary is stored in the paca, so as soon as we
-	 * call any stack protected code we need r13 pointing somewhere valid.
-	 *
-	 * If we are using kcov it will call in_task() in its instrumentation,
-	 * which relies on the current task from the PACA.
-	 *
-	 * dt_cpu_ftrs_init() calls into generic OF/fdt code, as well as
-	 * printk(), which can trigger both stack protector and kcov.
-	 *
-	 * percpu variables and spin locks also use the paca.
-	 *
-	 * So set up a temporary paca. It will be replaced below once we know
-	 * what CPU we are on.
-	 */
-	initialise_paca(&boot_paca, 0);
-	setup_paca(&boot_paca);
-	fixup_boot_paca();
-
-	/* -------- printk is now safe to use ------- */
 
 	/* Try new device tree based feature discovery ... */
 	if (!dt_cpu_ftrs_init(__va(dt_ptr)))
 		/* Otherwise use the old style CPU table */
 		identify_cpu(0, mfspr(SPRN_PVR));
 
+	/* Assume we're on cpu 0 for now. Don't write to the paca yet! */
+	initialise_paca(&boot_paca, 0);
+	setup_paca(&boot_paca);
+	fixup_boot_paca();
+
+	/* -------- printk is now safe to use ------- */
+
 	/* Enable early debugging if any specified (see udbg.h) */
 	udbg_early_init();
 
-	udbg_printf(" -> %s(), dt_ptr: 0x%lx\n", __func__, dt_ptr);
+ 	DBG(" -> early_setup(), dt_ptr: 0x%lx\n", dt_ptr);
 
 	/*
 	 * Do early initialization using the flattened device
@@ -341,17 +332,9 @@ void __init __nostackprotector early_setup(unsigned long dt_ptr)
 	 */
 	configure_exceptions();
 
-	/*
-	 * Configure Kernel Userspace Protection. This needs to happen before
-	 * feature fixups for platforms that implement this using features.
-	 */
-	setup_kup();
-
 	/* Apply all the dynamic patching */
 	apply_feature_fixups();
 	setup_feature_keys();
-
-	early_ioremap_setup();
 
 	/* Initialize the hash table or TLB handling */
 	early_init_mmu();
@@ -377,11 +360,11 @@ void __init __nostackprotector early_setup(unsigned long dt_ptr)
 	 */
 	this_cpu_enable_ftrace();
 
-	udbg_printf(" <- %s()\n", __func__);
+	DBG(" <- early_setup()\n");
 
 #ifdef CONFIG_PPC_EARLY_DEBUG_BOOTX
 	/*
-	 * This needs to be done *last* (after the above udbg_printf() even)
+	 * This needs to be done *last* (after the above DBG() even)
 	 *
 	 * Right after we return from this function, we turn on the MMU
 	 * which means the real-mode access trick that btext does will
@@ -400,9 +383,6 @@ void early_setup_secondary(void)
 
 	/* Initialize the hash table or TLB handling */
 	early_init_mmu_secondary();
-
-	/* Perform any KUP setup that is per-cpu */
-	setup_kup();
 
 	/*
 	 * At this point, we can let interrupts switch to virtual mode
@@ -451,6 +431,8 @@ void smp_release_cpus(void)
 	if (!use_spinloop())
 		return;
 
+	DBG(" -> smp_release_cpus()\n");
+
 	/* All secondary cpus are spinning on a common spinloop, release them
 	 * all now so they can start to spin on their individual paca
 	 * spinloops. For non SMP kernels, the secondary cpus never get out
@@ -469,7 +451,9 @@ void smp_release_cpus(void)
 			break;
 		udelay(1);
 	}
-	pr_debug("spinning_secondaries = %d\n", spinning_secondaries);
+	DBG("spinning_secondaries = %d\n", spinning_secondaries);
+
+	DBG(" <- smp_release_cpus()\n");
 }
 #endif /* CONFIG_SMP || CONFIG_KEXEC_CORE */
 
@@ -534,6 +518,8 @@ static bool __init parse_cache_info(struct device_node *np,
 	lsizep = of_get_property(np, propnames[3], NULL);
 	if (bsizep == NULL)
 		bsizep = lsizep;
+	if (lsizep == NULL)
+		lsizep = bsizep;
 	if (lsizep != NULL)
 		lsize = be32_to_cpu(*lsizep);
 	if (bsizep != NULL)
@@ -562,6 +548,8 @@ void __init initialize_cache_info(void)
 	struct device_node *cpu = NULL, *l2, *l3 = NULL;
 	u32 pvr;
 
+	DBG(" -> initialize_cache_info()\n");
+
 	/*
 	 * All shipping POWER8 machines have a firmware bug that
 	 * puts incorrect information in the device-tree. This will
@@ -585,10 +573,10 @@ void __init initialize_cache_info(void)
 	 */
 	if (cpu) {
 		if (!parse_cache_info(cpu, false, &ppc64_caches.l1d))
-			pr_warn("Argh, can't find dcache properties !\n");
+			DBG("Argh, can't find dcache properties !\n");
 
 		if (!parse_cache_info(cpu, true, &ppc64_caches.l1i))
-			pr_warn("Argh, can't find icache properties !\n");
+			DBG("Argh, can't find icache properties !\n");
 
 		/*
 		 * Try to find the L2 and L3 if any. Assume they are
@@ -613,6 +601,8 @@ void __init initialize_cache_info(void)
 
 	cur_cpu_spec->dcache_bsize = dcache_bsize;
 	cur_cpu_spec->icache_bsize = icache_bsize;
+
+	DBG(" <- initialize_cache_info()\n");
 }
 
 /*
@@ -647,17 +637,17 @@ __init u64 ppc64_bolted_size(void)
 
 static void *__init alloc_stack(unsigned long limit, int cpu)
 {
-	void *ptr;
+	unsigned long pa;
 
-	BUILD_BUG_ON(STACK_INT_FRAME_SIZE % 16);
+	pa = memblock_alloc_base_nid(THREAD_SIZE, THREAD_SIZE, limit,
+					early_cpu_to_node(cpu), MEMBLOCK_NONE);
+	if (!pa) {
+		pa = memblock_alloc_base(THREAD_SIZE, THREAD_SIZE, limit);
+		if (!pa)
+			panic("cannot allocate stacks");
+	}
 
-	ptr = memblock_alloc_try_nid(THREAD_SIZE, THREAD_ALIGN,
-				     MEMBLOCK_LOW_LIMIT, limit,
-				     early_cpu_to_node(cpu));
-	if (!ptr)
-		panic("cannot allocate stacks");
-
-	return ptr;
+	return __va(pa);
 }
 
 void __init irqstack_early_init(void)
@@ -703,6 +693,24 @@ void __init exc_lvl_early_init(void)
 #endif
 
 /*
+ * Emergency stacks are used for a range of things, from asynchronous
+ * NMIs (system reset, machine check) to synchronous, process context.
+ * We set preempt_count to zero, even though that isn't necessarily correct. To
+ * get the right value we'd need to copy it from the previous thread_info, but
+ * doing that might fault causing more problems.
+ * TODO: what to do with accounting?
+ */
+static void emerg_stack_init_thread_info(struct thread_info *ti, int cpu)
+{
+	ti->task = NULL;
+	ti->cpu = cpu;
+	ti->preempt_count = 0;
+	ti->local_flags = 0;
+	ti->flags = 0;
+	klp_init_thread_info(ti);
+}
+
+/*
  * Stack space used when we detect a bad kernel stack pointer, and
  * early in SMP boots before relocation is enabled. Exclusive emergency
  * stack for machine checks.
@@ -729,14 +737,25 @@ void __init emergency_stack_init(void)
 	limit = min(ppc64_bolted_size(), ppc64_rma_size);
 
 	for_each_possible_cpu(i) {
-		paca_ptrs[i]->emergency_sp = alloc_stack(limit, i) + THREAD_SIZE;
+		struct thread_info *ti;
+
+		ti = alloc_stack(limit, i);
+		memset(ti, 0, THREAD_SIZE);
+		emerg_stack_init_thread_info(ti, i);
+		paca_ptrs[i]->emergency_sp = (void *)ti + THREAD_SIZE;
 
 #ifdef CONFIG_PPC_BOOK3S_64
 		/* emergency stack for NMI exception handling. */
-		paca_ptrs[i]->nmi_emergency_sp = alloc_stack(limit, i) + THREAD_SIZE;
+		ti = alloc_stack(limit, i);
+		memset(ti, 0, THREAD_SIZE);
+		emerg_stack_init_thread_info(ti, i);
+		paca_ptrs[i]->nmi_emergency_sp = (void *)ti + THREAD_SIZE;
 
 		/* emergency stack for machine check exception handling. */
-		paca_ptrs[i]->mc_emergency_sp = alloc_stack(limit, i) + THREAD_SIZE;
+		ti = alloc_stack(limit, i);
+		memset(ti, 0, THREAD_SIZE);
+		emerg_stack_init_thread_info(ti, i);
+		paca_ptrs[i]->mc_emergency_sp = (void *)ti + THREAD_SIZE;
 #endif
 	}
 }
@@ -746,15 +765,13 @@ void __init emergency_stack_init(void)
 
 static void * __init pcpu_fc_alloc(unsigned int cpu, size_t size, size_t align)
 {
-	return memblock_alloc_try_nid(size, align, __pa(MAX_DMA_ADDRESS),
-				      MEMBLOCK_ALLOC_ACCESSIBLE,
-				      early_cpu_to_node(cpu));
-
+	return __alloc_bootmem_node(NODE_DATA(early_cpu_to_node(cpu)), size, align,
+				    __pa(MAX_DMA_ADDRESS));
 }
 
 static void __init pcpu_fc_free(void *ptr, size_t size)
 {
-	memblock_free(__pa(ptr), size);
+	free_bootmem(__pa(ptr), size);
 }
 
 static int pcpu_cpu_distance(unsigned int from, unsigned int to)
@@ -846,7 +863,13 @@ early_initcall(disable_hardlockup_detector);
 static enum l1d_flush_type enabled_flush_types;
 static void *l1d_flush_fallback_area;
 static bool no_rfi_flush;
+static bool no_entry_flush;
+static bool no_uaccess_flush;
 bool rfi_flush;
+bool entry_flush;
+bool uaccess_flush;
+DEFINE_STATIC_KEY_FALSE(uaccess_flush_key);
+EXPORT_SYMBOL(uaccess_flush_key);
 
 static int __init handle_no_rfi_flush(char *p)
 {
@@ -855,6 +878,22 @@ static int __init handle_no_rfi_flush(char *p)
 	return 0;
 }
 early_param("no_rfi_flush", handle_no_rfi_flush);
+
+static int __init handle_no_entry_flush(char *p)
+{
+	pr_info("entry-flush: disabled on command line.");
+	no_entry_flush = true;
+	return 0;
+}
+early_param("no_entry_flush", handle_no_entry_flush);
+
+static int __init handle_no_uaccess_flush(char *p)
+{
+	pr_info("uaccess-flush: disabled on command line.");
+	no_uaccess_flush = true;
+	return 0;
+}
+early_param("no_uaccess_flush", handle_no_uaccess_flush);
 
 /*
  * The RFI flush is not KPTI, but because users will see doco that says to use
@@ -887,6 +926,32 @@ void rfi_flush_enable(bool enable)
 	rfi_flush = enable;
 }
 
+void entry_flush_enable(bool enable)
+{
+	if (enable) {
+		do_entry_flush_fixups(enabled_flush_types);
+		on_each_cpu(do_nothing, NULL, 1);
+	} else {
+		do_entry_flush_fixups(L1D_FLUSH_NONE);
+	}
+
+	entry_flush = enable;
+}
+
+void uaccess_flush_enable(bool enable)
+{
+	if (enable) {
+		do_uaccess_flush_fixups(enabled_flush_types);
+		static_branch_enable(&uaccess_flush_key);
+		on_each_cpu(do_nothing, NULL, 1);
+	} else {
+		static_branch_disable(&uaccess_flush_key);
+		do_uaccess_flush_fixups(L1D_FLUSH_NONE);
+	}
+
+	uaccess_flush = enable;
+}
+
 static void __ref init_fallback_flush(void)
 {
 	u64 l1d_size, limit;
@@ -915,13 +980,8 @@ static void __ref init_fallback_flush(void)
 	 * hardware prefetch runoff. We don't have a recipe for load patterns to
 	 * reliably avoid the prefetcher.
 	 */
-	l1d_flush_fallback_area = memblock_alloc_try_nid(l1d_size * 2,
-						l1d_size, MEMBLOCK_LOW_LIMIT,
-						limit, NUMA_NO_NODE);
-	if (!l1d_flush_fallback_area)
-		panic("%s: Failed to allocate %llu bytes align=0x%llx max_addr=%pa\n",
-		      __func__, l1d_size * 2, l1d_size, &limit);
-
+	l1d_flush_fallback_area = __va(memblock_alloc_base(l1d_size * 2, l1d_size, limit));
+	memset(l1d_flush_fallback_area, 0, l1d_size * 2);
 
 	for_each_possible_cpu(cpu) {
 		struct paca_struct *paca = paca_ptrs[cpu];
@@ -945,8 +1005,26 @@ void setup_rfi_flush(enum l1d_flush_type types, bool enable)
 
 	enabled_flush_types = types;
 
-	if (!no_rfi_flush && !cpu_mitigations_off())
+	if (!cpu_mitigations_off() && !no_rfi_flush)
 		rfi_flush_enable(enable);
+}
+
+void setup_entry_flush(bool enable)
+{
+	if (cpu_mitigations_off())
+		return;
+
+	if (!no_entry_flush)
+		entry_flush_enable(enable);
+}
+
+void setup_uaccess_flush(bool enable)
+{
+	if (cpu_mitigations_off())
+		return;
+
+	if (!no_uaccess_flush)
+		uaccess_flush_enable(enable);
 }
 
 #ifdef CONFIG_DEBUG_FS
@@ -976,9 +1054,63 @@ static int rfi_flush_get(void *data, u64 *val)
 
 DEFINE_SIMPLE_ATTRIBUTE(fops_rfi_flush, rfi_flush_get, rfi_flush_set, "%llu\n");
 
+static int entry_flush_set(void *data, u64 val)
+{
+	bool enable;
+
+	if (val == 1)
+		enable = true;
+	else if (val == 0)
+		enable = false;
+	else
+		return -EINVAL;
+
+	/* Only do anything if we're changing state */
+	if (enable != entry_flush)
+		entry_flush_enable(enable);
+
+	return 0;
+}
+
+static int entry_flush_get(void *data, u64 *val)
+{
+	*val = entry_flush ? 1 : 0;
+	return 0;
+}
+
+DEFINE_SIMPLE_ATTRIBUTE(fops_entry_flush, entry_flush_get, entry_flush_set, "%llu\n");
+
+static int uaccess_flush_set(void *data, u64 val)
+{
+	bool enable;
+
+	if (val == 1)
+		enable = true;
+	else if (val == 0)
+		enable = false;
+	else
+		return -EINVAL;
+
+	/* Only do anything if we're changing state */
+	if (enable != uaccess_flush)
+		uaccess_flush_enable(enable);
+
+	return 0;
+}
+
+static int uaccess_flush_get(void *data, u64 *val)
+{
+	*val = uaccess_flush ? 1 : 0;
+	return 0;
+}
+
+DEFINE_SIMPLE_ATTRIBUTE(fops_uaccess_flush, uaccess_flush_get, uaccess_flush_set, "%llu\n");
+
 static __init int rfi_flush_debugfs_init(void)
 {
 	debugfs_create_file("rfi_flush", 0600, powerpc_debugfs_root, NULL, &fops_rfi_flush);
+	debugfs_create_file("entry_flush", 0600, powerpc_debugfs_root, NULL, &fops_entry_flush);
+	debugfs_create_file("uaccess_flush", 0600, powerpc_debugfs_root, NULL, &fops_uaccess_flush);
 	return 0;
 }
 device_initcall(rfi_flush_debugfs_init);

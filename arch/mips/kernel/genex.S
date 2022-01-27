@@ -18,7 +18,6 @@
 #include <asm/fpregdef.h>
 #include <asm/mipsregs.h>
 #include <asm/stackframe.h>
-#include <asm/sync.h>
 #include <asm/war.h>
 #include <asm/thread_info.h>
 
@@ -33,6 +32,9 @@
 NESTED(except_vec3_generic, 0, sp)
 	.set	push
 	.set	noat
+#if R5432_CP0_INTERRUPT_WAR
+	mfc0	k0, CP0_INDEX
+#endif
 	mfc0	k1, CP0_CAUSE
 	andi	k1, k1, 0x7c
 #ifdef CONFIG_64BIT
@@ -354,9 +356,8 @@ NESTED(ejtag_debug_handler, PT_SIZE, sp)
 
 #ifdef CONFIG_SMP
 1:	PTR_LA	k0, ejtag_debug_buffer_spinlock
-	__SYNC(full, loongson3_war)
-2:	ll	k0, 0(k0)
-	bnez	k0, 2b
+	ll	k0, 0(k0)
+	bnez	k0, 1b
 	PTR_LA	k0, ejtag_debug_buffer_spinlock
 	sc	k0, 0(k0)
 	beqz	k0, 1b
@@ -476,20 +477,20 @@ NESTED(nmi_handler, PT_SIZE, sp)
 	.endm
 
 	.macro	__build_clear_fpe
+	CLI
+	TRACE_IRQS_OFF
 	.set	push
 	/* gas fails to assemble cfc1 for some archs (octeon).*/ \
 	.set	mips1
 	SET_HARDFLOAT
 	cfc1	a1, fcr31
 	.set	pop
-	CLI
-	TRACE_IRQS_OFF
 	.endm
 
 	.macro	__build_clear_msa_fpe
-	_cfcmsa	a1, MSA_CSR
 	CLI
 	TRACE_IRQS_OFF
+	_cfcmsa	a1, MSA_CSR
 	.endm
 
 	.macro	__build_clear_ade
@@ -552,9 +553,7 @@ NESTED(nmi_handler, PT_SIZE, sp)
 	BUILD_HANDLER ov ov sti silent			/* #12 */
 	BUILD_HANDLER tr tr sti silent			/* #13 */
 	BUILD_HANDLER msa_fpe msa_fpe msa_fpe silent	/* #14 */
-#ifdef CONFIG_MIPS_FP_SUPPORT
 	BUILD_HANDLER fpe fpe fpe silent		/* #15 */
-#endif
 	BUILD_HANDLER ftlb ftlb none silent		/* #16 */
 	BUILD_HANDLER msa msa sti silent		/* #21 */
 	BUILD_HANDLER mdmx mdmx sti silent		/* #22 */
@@ -651,15 +650,14 @@ isrdhwr:
 	ori	k1, _THREAD_MASK
 	xori	k1, _THREAD_MASK
 	LONG_L	v1, TI_TP_VALUE(k1)
-	.set	push
 	.set	arch=r4000
 	eret
-	.set	pop
+	.set	mips0
 #endif
 	.set	pop
 	END(handle_ri_rdhwr)
 
-#ifdef CONFIG_CPU_R4X00_BUGS64
+#ifdef CONFIG_64BIT
 /* A temporary overflow handler used by check_daddi(). */
 
 	__INIT

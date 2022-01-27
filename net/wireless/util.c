@@ -5,21 +5,17 @@
  * Copyright 2007-2009	Johannes Berg <johannes@sipsolutions.net>
  * Copyright 2013-2014  Intel Mobile Communications GmbH
  * Copyright 2017	Intel Deutschland GmbH
- * Copyright (C) 2018-2019 Intel Corporation
  */
 #include <linux/export.h>
 #include <linux/bitops.h>
 #include <linux/etherdevice.h>
 #include <linux/slab.h>
-#include <linux/ieee80211.h>
 #include <net/cfg80211.h>
 #include <net/ip.h>
 #include <net/dsfield.h>
 #include <linux/if_vlan.h>
 #include <linux/mpls.h>
 #include <linux/gcd.h>
-#include <linux/bitfield.h>
-#include <linux/nospec.h>
 #include "core.h"
 #include "rdev-ops.h"
 
@@ -91,13 +87,8 @@ int ieee80211_channel_to_frequency(int chan, enum nl80211_band band)
 		else
 			return 5000 + chan * 5;
 		break;
-	case NL80211_BAND_6GHZ:
-		/* see 802.11ax D4.1 27.3.22.2 */
-		if (chan <= 253)
-			return 5940 + chan * 5;
-		break;
 	case NL80211_BAND_60GHZ:
-		if (chan < 7)
+		if (chan < 5)
 			return 56160 + chan * 2160;
 		break;
 	default:
@@ -116,12 +107,9 @@ int ieee80211_frequency_to_channel(int freq)
 		return (freq - 2407) / 5;
 	else if (freq >= 4910 && freq <= 4980)
 		return (freq - 4000) / 5;
-	else if (freq < 5945)
-		return (freq - 5000) / 5;
 	else if (freq <= 45000) /* DMG band lower limit */
-		/* see 802.11ax D4.1 27.3.22.2 */
-		return (freq - 5940) / 5;
-	else if (freq >= 58320 && freq <= 70200)
+		return (freq - 5000) / 5;
+	else if (freq >= 58320 && freq <= 64800)
 		return (freq - 56160) / 2160;
 	else
 		return 0;
@@ -156,7 +144,6 @@ static void set_mandatory_flags_band(struct ieee80211_supported_band *sband)
 
 	switch (sband->band) {
 	case NL80211_BAND_5GHZ:
-	case NL80211_BAND_6GHZ:
 		want = 3;
 		for (i = 0; i < sband->n_bitrates; i++) {
 			if (sband->bitrates[i].bitrate == 60 ||
@@ -231,7 +218,12 @@ int cfg80211_validate_key_settings(struct cfg80211_registered_device *rdev,
 				   struct key_params *params, int key_idx,
 				   bool pairwise, const u8 *mac_addr)
 {
-	if (key_idx < 0 || key_idx > 5)
+	int max_key_idx = 5;
+
+	if (wiphy_ext_feature_isset(&rdev->wiphy,
+				    NL80211_EXT_FEATURE_BEACON_PROTECTION))
+		max_key_idx = 7;
+	if (key_idx < 0 || key_idx > max_key_idx)
 		return -EINVAL;
 
 	if (!pairwise && mac_addr && !(rdev->wiphy.flags & WIPHY_FLAG_IBSS_RSN))
@@ -242,32 +234,18 @@ int cfg80211_validate_key_settings(struct cfg80211_registered_device *rdev,
 
 	switch (params->cipher) {
 	case WLAN_CIPHER_SUITE_TKIP:
-		/* Extended Key ID can only be used with CCMP/GCMP ciphers */
-		if ((pairwise && key_idx) ||
-		    params->mode != NL80211_KEY_RX_TX)
-			return -EINVAL;
-		break;
 	case WLAN_CIPHER_SUITE_CCMP:
 	case WLAN_CIPHER_SUITE_CCMP_256:
 	case WLAN_CIPHER_SUITE_GCMP:
 	case WLAN_CIPHER_SUITE_GCMP_256:
-		/* IEEE802.11-2016 allows only 0 and - when supporting
-		 * Extended Key ID - 1 as index for pairwise keys.
-		 * @NL80211_KEY_NO_TX is only allowed for pairwise keys when
-		 * the driver supports Extended Key ID.
-		 * @NL80211_KEY_SET_TX can't be set when installing and
-		 * validating a key.
+		/* Disallow pairwise keys with non-zero index unless it's WEP
+		 * or a vendor specific cipher (because current deployments use
+		 * pairwise WEP keys with non-zero indices and for vendor
+		 * specific ciphers this should be validated in the driver or
+		 * hardware level - but 802.11i clearly specifies to use zero)
 		 */
-		if ((params->mode == NL80211_KEY_NO_TX && !pairwise) ||
-		    params->mode == NL80211_KEY_SET_TX)
+		if (pairwise && key_idx)
 			return -EINVAL;
-		if (wiphy_ext_feature_isset(&rdev->wiphy,
-					    NL80211_EXT_FEATURE_EXT_KEY_ID)) {
-			if (pairwise && (key_idx < 0 || key_idx > 1))
-				return -EINVAL;
-		} else if (pairwise && key_idx) {
-			return -EINVAL;
-		}
 		break;
 	case WLAN_CIPHER_SUITE_AES_CMAC:
 	case WLAN_CIPHER_SUITE_BIP_CMAC_256:
@@ -449,7 +427,7 @@ EXPORT_SYMBOL(ieee80211_get_mesh_hdrlen);
 
 int ieee80211_data_to_8023_exthdr(struct sk_buff *skb, struct ethhdr *ehdr,
 				  const u8 *addr, enum nl80211_iftype iftype,
-				  u8 data_offset)
+				  u8 data_offset, bool is_amsdu)
 {
 	struct ieee80211_hdr *hdr = (struct ieee80211_hdr *) skb->data;
 	struct {
@@ -537,7 +515,7 @@ int ieee80211_data_to_8023_exthdr(struct sk_buff *skb, struct ethhdr *ehdr,
 	skb_copy_bits(skb, hdrlen, &payload, sizeof(payload));
 	tmp.h_proto = payload.proto;
 
-	if (likely((ether_addr_equal(payload.hdr, rfc1042_header) &&
+	if (likely((!is_amsdu && ether_addr_equal(payload.hdr, rfc1042_header) &&
 		    tmp.h_proto != htons(ETH_P_AARP) &&
 		    tmp.h_proto != htons(ETH_P_IPX)) ||
 		   ether_addr_equal(payload.hdr, bridge_tunnel_header)))
@@ -679,6 +657,9 @@ void ieee80211_amsdu_to_8023s(struct sk_buff *skb, struct sk_buff_head *list,
 		remaining = skb->len - offset;
 		if (subframe_len > remaining)
 			goto purge;
+		/* mitigate A-MSDU aggregation injection attacks */
+		if (ether_addr_equal(eth.h_dest, rfc1042_header))
+			goto purge;
 
 		offset += sizeof(struct ethhdr);
 		last = remaining <= subframe_len + padding;
@@ -739,25 +720,20 @@ unsigned int cfg80211_classify8021d(struct sk_buff *skb,
 {
 	unsigned int dscp;
 	unsigned char vlan_priority;
-	unsigned int ret;
 
 	/* skb->priority values from 256->263 are magic values to
 	 * directly indicate a specific 802.1d priority.  This is used
 	 * to allow 802.1d priority to be passed directly in from VLAN
 	 * tags, etc.
 	 */
-	if (skb->priority >= 256 && skb->priority <= 263) {
-		ret = skb->priority - 256;
-		goto out;
-	}
+	if (skb->priority >= 256 && skb->priority <= 263)
+		return skb->priority - 256;
 
 	if (skb_vlan_tag_present(skb)) {
 		vlan_priority = (skb_vlan_tag_get(skb) & VLAN_PRIO_MASK)
 			>> VLAN_PRIO_SHIFT;
-		if (vlan_priority > 0) {
-			ret = vlan_priority;
-			goto out;
-		}
+		if (vlan_priority > 0)
+			return vlan_priority;
 	}
 
 	switch (skb->protocol) {
@@ -776,9 +752,8 @@ unsigned int cfg80211_classify8021d(struct sk_buff *skb,
 		if (!mpls)
 			return 0;
 
-		ret = (ntohl(mpls->entry) & MPLS_LS_TC_MASK)
+		return (ntohl(mpls->entry) & MPLS_LS_TC_MASK)
 			>> MPLS_LS_TC_SHIFT;
-		goto out;
 	}
 	case htons(ETH_P_80221):
 		/* 802.21 is always network control traffic */
@@ -791,28 +766,22 @@ unsigned int cfg80211_classify8021d(struct sk_buff *skb,
 		unsigned int i, tmp_dscp = dscp >> 2;
 
 		for (i = 0; i < qos_map->num_des; i++) {
-			if (tmp_dscp == qos_map->dscp_exception[i].dscp) {
-				ret = qos_map->dscp_exception[i].up;
-				goto out;
-			}
+			if (tmp_dscp == qos_map->dscp_exception[i].dscp)
+				return qos_map->dscp_exception[i].up;
 		}
 
 		for (i = 0; i < 8; i++) {
 			if (tmp_dscp >= qos_map->up[i].low &&
-			    tmp_dscp <= qos_map->up[i].high) {
-				ret = i;
-				goto out;
-			}
+			    tmp_dscp <= qos_map->up[i].high)
+				return i;
 		}
 	}
 
-	ret = dscp >> 5;
-out:
-	return array_index_nospec(ret, IEEE80211_NUM_TIDS);
+	return dscp >> 5;
 }
 EXPORT_SYMBOL(cfg80211_classify8021d);
 
-const struct element *ieee80211_bss_get_elem(struct cfg80211_bss *bss, u8 id)
+const u8 *ieee80211_bss_get_ie(struct cfg80211_bss *bss, u8 ie)
 {
 	const struct cfg80211_bss_ies *ies;
 
@@ -820,9 +789,9 @@ const struct element *ieee80211_bss_get_elem(struct cfg80211_bss *bss, u8 id)
 	if (!ies)
 		return NULL;
 
-	return cfg80211_find_elem(id, ies->data, ies->len);
+	return cfg80211_find_ie(ie, ies->data, ies->len);
 }
-EXPORT_SYMBOL(ieee80211_bss_get_elem);
+EXPORT_SYMBOL(ieee80211_bss_get_ie);
 
 void cfg80211_upload_connect_keys(struct wireless_dev *wdev)
 {
@@ -1278,11 +1247,9 @@ static u32 cfg80211_calculate_bitrate_he(struct rate_info *rate)
 	else if (rate->bw == RATE_INFO_BW_HE_RU &&
 		 rate->he_ru_alloc == NL80211_RATE_INFO_HE_RU_ALLOC_26)
 		result = rates_26[rate->he_gi];
-	else {
-		WARN(1, "invalid HE MCS: bw:%d, ru:%d\n",
-		     rate->bw, rate->he_ru_alloc);
+	else if (WARN(1, "invalid HE MCS: bw:%d, ru:%d\n",
+		      rate->bw, rate->he_ru_alloc))
 		return 0;
-	}
 
 	/* now scale to the appropriate MCS */
 	tmp = result;
@@ -1517,9 +1484,6 @@ bool ieee80211_operating_class_to_band(u8 operating_class,
 	case 128 ... 130:
 		*band = NL80211_BAND_5GHZ;
 		return true;
-	case 131 ... 135:
-		*band = NL80211_BAND_6GHZ;
-		return true;
 	case 81:
 	case 82:
 	case 83:
@@ -1559,8 +1523,7 @@ bool ieee80211_chandef_to_operating_class(struct cfg80211_chan_def *chandef,
 	}
 
 	if (freq == 2484) {
-		/* channel 14 is only for IEEE 802.11b */
-		if (chandef->width != NL80211_CHAN_WIDTH_20_NOHT)
+		if (chandef->width > NL80211_CHAN_WIDTH_40)
 			return false;
 
 		*op_class = 82; /* channel 14 */
@@ -1652,7 +1615,7 @@ bool ieee80211_chandef_to_operating_class(struct cfg80211_chan_def *chandef,
 	}
 
 	/* 56.16 GHz, channel 1..4 */
-	if (freq >= 56160 + 2160 * 1 && freq <= 56160 + 2160 * 6) {
+	if (freq >= 56160 + 2160 * 1 && freq <= 56160 + 2160 * 4) {
 		if (chandef->width >= NL80211_CHAN_WIDTH_40)
 			return false;
 
@@ -1978,6 +1941,29 @@ const unsigned char bridge_tunnel_header[] __aligned(2) =
 	{ 0xaa, 0xaa, 0x03, 0x00, 0x00, 0xf8 };
 EXPORT_SYMBOL(bridge_tunnel_header);
 
+bool cfg80211_iftype_allowed(struct wiphy *wiphy, enum nl80211_iftype iftype,
+			     bool is_4addr, u8 check_swif)
+
+{
+	bool is_vlan = iftype == NL80211_IFTYPE_AP_VLAN;
+
+	switch (check_swif) {
+	case 0:
+		if (is_vlan && is_4addr)
+			return wiphy->flags & WIPHY_FLAG_4ADDR_AP;
+		return wiphy->interface_modes & BIT(iftype);
+	case 1:
+		if (!(wiphy->software_iftypes & BIT(iftype)) && is_vlan)
+			return wiphy->flags & WIPHY_FLAG_4ADDR_AP;
+		return wiphy->software_iftypes & BIT(iftype);
+	default:
+		break;
+	}
+
+	return false;
+}
+EXPORT_SYMBOL(cfg80211_iftype_allowed);
+
 /* Layer 2 Update frame (802.2 Type 1 LLC XID Update response) */
 struct iapp_layer2_update {
 	u8 da[ETH_ALEN];	/* broadcast */
@@ -2022,131 +2008,3 @@ void cfg80211_send_layer2_update(struct net_device *dev, const u8 *addr)
 	netif_rx_ni(skb);
 }
 EXPORT_SYMBOL(cfg80211_send_layer2_update);
-
-int ieee80211_get_vht_max_nss(struct ieee80211_vht_cap *cap,
-			      enum ieee80211_vht_chanwidth bw,
-			      int mcs, bool ext_nss_bw_capable)
-{
-	u16 map = le16_to_cpu(cap->supp_mcs.rx_mcs_map);
-	int max_vht_nss = 0;
-	int ext_nss_bw;
-	int supp_width;
-	int i, mcs_encoding;
-
-	if (map == 0xffff)
-		return 0;
-
-	if (WARN_ON(mcs > 9))
-		return 0;
-	if (mcs <= 7)
-		mcs_encoding = 0;
-	else if (mcs == 8)
-		mcs_encoding = 1;
-	else
-		mcs_encoding = 2;
-
-	/* find max_vht_nss for the given MCS */
-	for (i = 7; i >= 0; i--) {
-		int supp = (map >> (2 * i)) & 3;
-
-		if (supp == 3)
-			continue;
-
-		if (supp >= mcs_encoding) {
-			max_vht_nss = i + 1;
-			break;
-		}
-	}
-
-	if (!(cap->supp_mcs.tx_mcs_map &
-			cpu_to_le16(IEEE80211_VHT_EXT_NSS_BW_CAPABLE)))
-		return max_vht_nss;
-
-	ext_nss_bw = le32_get_bits(cap->vht_cap_info,
-				   IEEE80211_VHT_CAP_EXT_NSS_BW_MASK);
-	supp_width = le32_get_bits(cap->vht_cap_info,
-				   IEEE80211_VHT_CAP_SUPP_CHAN_WIDTH_MASK);
-
-	/* if not capable, treat ext_nss_bw as 0 */
-	if (!ext_nss_bw_capable)
-		ext_nss_bw = 0;
-
-	/* This is invalid */
-	if (supp_width == 3)
-		return 0;
-
-	/* This is an invalid combination so pretend nothing is supported */
-	if (supp_width == 2 && (ext_nss_bw == 1 || ext_nss_bw == 2))
-		return 0;
-
-	/*
-	 * Cover all the special cases according to IEEE 802.11-2016
-	 * Table 9-250. All other cases are either factor of 1 or not
-	 * valid/supported.
-	 */
-	switch (bw) {
-	case IEEE80211_VHT_CHANWIDTH_USE_HT:
-	case IEEE80211_VHT_CHANWIDTH_80MHZ:
-		if ((supp_width == 1 || supp_width == 2) &&
-		    ext_nss_bw == 3)
-			return 2 * max_vht_nss;
-		break;
-	case IEEE80211_VHT_CHANWIDTH_160MHZ:
-		if (supp_width == 0 &&
-		    (ext_nss_bw == 1 || ext_nss_bw == 2))
-			return max_vht_nss / 2;
-		if (supp_width == 0 &&
-		    ext_nss_bw == 3)
-			return (3 * max_vht_nss) / 4;
-		if (supp_width == 1 &&
-		    ext_nss_bw == 3)
-			return 2 * max_vht_nss;
-		break;
-	case IEEE80211_VHT_CHANWIDTH_80P80MHZ:
-		if (supp_width == 0 && ext_nss_bw == 1)
-			return 0; /* not possible */
-		if (supp_width == 0 &&
-		    ext_nss_bw == 2)
-			return max_vht_nss / 2;
-		if (supp_width == 0 &&
-		    ext_nss_bw == 3)
-			return (3 * max_vht_nss) / 4;
-		if (supp_width == 1 &&
-		    ext_nss_bw == 0)
-			return 0; /* not possible */
-		if (supp_width == 1 &&
-		    ext_nss_bw == 1)
-			return max_vht_nss / 2;
-		if (supp_width == 1 &&
-		    ext_nss_bw == 2)
-			return (3 * max_vht_nss) / 4;
-		break;
-	}
-
-	/* not covered or invalid combination received */
-	return max_vht_nss;
-}
-EXPORT_SYMBOL(ieee80211_get_vht_max_nss);
-
-bool cfg80211_iftype_allowed(struct wiphy *wiphy, enum nl80211_iftype iftype,
-			     bool is_4addr, u8 check_swif)
-
-{
-	bool is_vlan = iftype == NL80211_IFTYPE_AP_VLAN;
-
-	switch (check_swif) {
-	case 0:
-		if (is_vlan && is_4addr)
-			return wiphy->flags & WIPHY_FLAG_4ADDR_AP;
-		return wiphy->interface_modes & BIT(iftype);
-	case 1:
-		if (!(wiphy->software_iftypes & BIT(iftype)) && is_vlan)
-			return wiphy->flags & WIPHY_FLAG_4ADDR_AP;
-		return wiphy->software_iftypes & BIT(iftype);
-	default:
-		break;
-	}
-
-	return false;
-}
-EXPORT_SYMBOL(cfg80211_iftype_allowed);

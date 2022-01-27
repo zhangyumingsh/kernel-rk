@@ -1,23 +1,31 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2013-2017 ARM Limited, All Rights Reserved.
  * Author: Marc Zyngier <marc.zyngier@arm.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <linux/acpi.h>
 #include <linux/acpi_iort.h>
-#include <linux/bitfield.h>
 #include <linux/bitmap.h>
 #include <linux/cpu.h>
-#include <linux/crash_dump.h>
 #include <linux/delay.h>
 #include <linux/dma-iommu.h>
-#include <linux/efi.h>
 #include <linux/interrupt.h>
 #include <linux/irqdomain.h>
 #include <linux/list.h>
+#include <linux/list_sort.h>
 #include <linux/log2.h>
-#include <linux/memblock.h>
 #include <linux/mm.h>
 #include <linux/msi.h>
 #include <linux/of.h>
@@ -41,10 +49,8 @@
 #define ITS_FLAGS_CMDQ_NEEDS_FLUSHING		(1ULL << 0)
 #define ITS_FLAGS_WORKAROUND_CAVIUM_22375	(1ULL << 1)
 #define ITS_FLAGS_WORKAROUND_CAVIUM_23144	(1ULL << 2)
-#define ITS_FLAGS_SAVE_SUSPEND_STATE		(1ULL << 3)
 
 #define RDIST_FLAGS_PROPBASE_NEEDS_FLUSHING	(1 << 0)
-#define RDIST_FLAGS_RD_TABLES_PREALLOCATED	(1 << 1)
 
 static u32 lpi_id_bits;
 
@@ -57,7 +63,7 @@ static u32 lpi_id_bits;
 #define LPI_PROPBASE_SZ		ALIGN(BIT(LPI_NRBITS), SZ_64K)
 #define LPI_PENDBASE_SZ		ALIGN(BIT(LPI_NRBITS) / 8, SZ_64K)
 
-#define LPI_PROP_DEFAULT_PRIO	GICD_INT_DEF_PRI
+#define LPI_PROP_DEFAULT_PRIO	0xa0
 
 /*
  * Collection structure - just an ID, and a redistributor address to
@@ -103,36 +109,24 @@ struct its_node {
 	struct its_collection	*collections;
 	struct fwnode_handle	*fwnode_handle;
 	u64			(*get_msi_base)(struct its_device *its_dev);
-	u64			typer;
 	u64			cbaser_save;
 	u32			ctlr_save;
-	u32			mpidr;
 	struct list_head	its_device_list;
 	u64			flags;
 	unsigned long		list_nr;
+	u32			ite_size;
+	u32			device_ids;
 	int			numa_node;
 	unsigned int		msi_domain_flags;
 	u32			pre_its_base; /* for Socionext Synquacer */
+	bool			is_v4;
 	int			vlpi_redist_offset;
 };
-
-#define is_v4(its)		(!!((its)->typer & GITS_TYPER_VLPIS))
-#define is_v4_1(its)		(!!((its)->typer & GITS_TYPER_VMAPP))
-#define device_ids(its)		(FIELD_GET(GITS_TYPER_DEVBITS, (its)->typer) + 1)
 
 #define ITS_ITT_ALIGN		SZ_256
 
 /* The maximum number of VPEID bits supported by VLPI commands */
-#define ITS_MAX_VPEID_BITS						\
-	({								\
-		int nvpeid = 16;					\
-		if (gic_rdists->has_rvpeid &&				\
-		    gic_rdists->gicd_typer2 & GICD_TYPER2_VIL)		\
-			nvpeid = 1 + (gic_rdists->gicd_typer2 &		\
-				      GICD_TYPER2_VID);			\
-									\
-		nvpeid;							\
-	})
+#define ITS_MAX_VPEID_BITS	(16)
 #define ITS_MAX_VPEID		(1 << (ITS_MAX_VPEID_BITS))
 
 /* Convert page order to size in bytes */
@@ -143,7 +137,7 @@ struct event_lpi_map {
 	u16			*col_map;
 	irq_hw_number_t		lpi_base;
 	int			nr_lpis;
-	raw_spinlock_t		vlpi_lock;
+	struct mutex		vlpi_lock;
 	struct its_vm		*vm;
 	struct its_vlpi_map	*vlpi_maps;
 	int			nr_vlpis;
@@ -184,7 +178,6 @@ static DEFINE_RAW_SPINLOCK(vmovp_lock);
 static DEFINE_IDA(its_vpeid_ida);
 
 #define gic_data_rdist()		(raw_cpu_ptr(gic_rdists->rdist))
-#define gic_data_rdist_cpu(cpu)		(per_cpu_ptr(gic_rdists->rdist, cpu))
 #define gic_data_rdist_rd_base()	(gic_data_rdist()->rd_base)
 #define gic_data_rdist_vlpi_base()	(gic_data_rdist_rd_base() + SZ_128K)
 
@@ -194,7 +187,7 @@ static u16 get_its_list(struct its_vm *vm)
 	unsigned long its_list = 0;
 
 	list_for_each_entry(its, &its_nodes, entry) {
-		if (!is_v4(its))
+		if (!its->is_v4)
 			continue;
 
 		if (vm->vlpi_count[its->list_nr])
@@ -204,50 +197,12 @@ static u16 get_its_list(struct its_vm *vm)
 	return (u16)its_list;
 }
 
-static inline u32 its_get_event_id(struct irq_data *d)
-{
-	struct its_device *its_dev = irq_data_get_irq_chip_data(d);
-	return d->hwirq - its_dev->event_map.lpi_base;
-}
-
 static struct its_collection *dev_event_to_col(struct its_device *its_dev,
 					       u32 event)
 {
 	struct its_node *its = its_dev->its;
 
 	return its->collections + its_dev->event_map.col_map[event];
-}
-
-static struct its_vlpi_map *dev_event_to_vlpi_map(struct its_device *its_dev,
-					       u32 event)
-{
-	if (WARN_ON_ONCE(event >= its_dev->event_map.nr_lpis))
-		return NULL;
-
-	return &its_dev->event_map.vlpi_maps[event];
-}
-
-static struct its_vlpi_map *get_vlpi_map(struct irq_data *d)
-{
-	if (irqd_is_forwarded_to_vcpu(d)) {
-		struct its_device *its_dev = irq_data_get_irq_chip_data(d);
-		u32 event = its_get_event_id(d);
-
-		return dev_event_to_vlpi_map(its_dev, event);
-	}
-
-	return NULL;
-}
-
-static int irq_to_cpuid(struct irq_data *d)
-{
-	struct its_device *its_dev = irq_data_get_irq_chip_data(d);
-	struct its_vlpi_map *map = get_vlpi_map(d);
-
-	if (map)
-		return map->vpe->col_idx;
-
-	return its_dev->event_map.col_map[its_get_event_id(d)];
 }
 
 static struct its_collection *valid_col(struct its_collection *col)
@@ -349,10 +304,6 @@ struct its_cmd_desc {
 			u16 seq_num;
 			u16 its_list;
 		} its_vmovp_cmd;
-
-		struct {
-			struct its_vpe *vpe;
-		} its_invdb_cmd;
 	};
 };
 
@@ -360,10 +311,7 @@ struct its_cmd_desc {
  * The ITS command block, which is what the ITS actually parses.
  */
 struct its_cmd_block {
-	union {
-		u64	raw_cmd[4];
-		__le64	raw_cmd_le[4];
-	};
+	u64	raw_cmd[4];
 };
 
 #define ITS_CMD_QUEUE_SZ		SZ_64K
@@ -469,45 +417,13 @@ static void its_encode_vpt_size(struct its_cmd_block *cmd, u8 vpt_size)
 	its_mask_encode(&cmd->raw_cmd[3], vpt_size, 4, 0);
 }
 
-static void its_encode_vconf_addr(struct its_cmd_block *cmd, u64 vconf_pa)
-{
-	its_mask_encode(&cmd->raw_cmd[0], vconf_pa >> 16, 51, 16);
-}
-
-static void its_encode_alloc(struct its_cmd_block *cmd, bool alloc)
-{
-	its_mask_encode(&cmd->raw_cmd[0], alloc, 8, 8);
-}
-
-static void its_encode_ptz(struct its_cmd_block *cmd, bool ptz)
-{
-	its_mask_encode(&cmd->raw_cmd[0], ptz, 9, 9);
-}
-
-static void its_encode_vmapp_default_db(struct its_cmd_block *cmd,
-					u32 vpe_db_lpi)
-{
-	its_mask_encode(&cmd->raw_cmd[1], vpe_db_lpi, 31, 0);
-}
-
-static void its_encode_vmovp_default_db(struct its_cmd_block *cmd,
-					u32 vpe_db_lpi)
-{
-	its_mask_encode(&cmd->raw_cmd[3], vpe_db_lpi, 31, 0);
-}
-
-static void its_encode_db(struct its_cmd_block *cmd, bool db)
-{
-	its_mask_encode(&cmd->raw_cmd[2], db, 63, 63);
-}
-
 static inline void its_fixup_cmd(struct its_cmd_block *cmd)
 {
 	/* Let's fixup BE commands */
-	cmd->raw_cmd_le[0] = cpu_to_le64(cmd->raw_cmd[0]);
-	cmd->raw_cmd_le[1] = cpu_to_le64(cmd->raw_cmd[1]);
-	cmd->raw_cmd_le[2] = cpu_to_le64(cmd->raw_cmd[2]);
-	cmd->raw_cmd_le[3] = cpu_to_le64(cmd->raw_cmd[3]);
+	cmd->raw_cmd[0] = cpu_to_le64(cmd->raw_cmd[0]);
+	cmd->raw_cmd[1] = cpu_to_le64(cmd->raw_cmd[1]);
+	cmd->raw_cmd[2] = cpu_to_le64(cmd->raw_cmd[2]);
+	cmd->raw_cmd[3] = cpu_to_le64(cmd->raw_cmd[3]);
 }
 
 static struct its_collection *its_build_mapd_cmd(struct its_node *its,
@@ -684,45 +600,19 @@ static struct its_vpe *its_build_vmapp_cmd(struct its_node *its,
 					   struct its_cmd_block *cmd,
 					   struct its_cmd_desc *desc)
 {
-	unsigned long vpt_addr, vconf_addr;
+	unsigned long vpt_addr;
 	u64 target;
-	bool alloc;
-
-	its_encode_cmd(cmd, GITS_CMD_VMAPP);
-	its_encode_vpeid(cmd, desc->its_vmapp_cmd.vpe->vpe_id);
-	its_encode_valid(cmd, desc->its_vmapp_cmd.valid);
-
-	if (!desc->its_vmapp_cmd.valid) {
-		if (is_v4_1(its)) {
-			alloc = !atomic_dec_return(&desc->its_vmapp_cmd.vpe->vmapp_count);
-			its_encode_alloc(cmd, alloc);
-		}
-
-		goto out;
-	}
 
 	vpt_addr = virt_to_phys(page_address(desc->its_vmapp_cmd.vpe->vpt_page));
 	target = desc->its_vmapp_cmd.col->target_address + its->vlpi_redist_offset;
 
+	its_encode_cmd(cmd, GITS_CMD_VMAPP);
+	its_encode_vpeid(cmd, desc->its_vmapp_cmd.vpe->vpe_id);
+	its_encode_valid(cmd, desc->its_vmapp_cmd.valid);
 	its_encode_target(cmd, target);
 	its_encode_vpt_addr(cmd, vpt_addr);
 	its_encode_vpt_size(cmd, LPI_NRBITS - 1);
 
-	if (!is_v4_1(its))
-		goto out;
-
-	vconf_addr = virt_to_phys(page_address(desc->its_vmapp_cmd.vpe->its_vm->vprop_page));
-
-	alloc = !atomic_fetch_inc(&desc->its_vmapp_cmd.vpe->vmapp_count);
-
-	its_encode_alloc(cmd, alloc);
-
-	/* We can only signal PTZ when alloc==1. Why do we have two bits? */
-	its_encode_ptz(cmd, alloc);
-	its_encode_vconf_addr(cmd, vconf_addr);
-	its_encode_vmapp_default_db(cmd, desc->its_vmapp_cmd.vpe->vpe_db_lpi);
-
-out:
 	its_fixup_cmd(cmd);
 
 	return valid_vpe(its, desc->its_vmapp_cmd.vpe);
@@ -734,7 +624,7 @@ static struct its_vpe *its_build_vmapti_cmd(struct its_node *its,
 {
 	u32 db;
 
-	if (!is_v4_1(its) && desc->its_vmapti_cmd.db_enabled)
+	if (desc->its_vmapti_cmd.db_enabled)
 		db = desc->its_vmapti_cmd.vpe->vpe_db_lpi;
 	else
 		db = 1023;
@@ -757,7 +647,7 @@ static struct its_vpe *its_build_vmovi_cmd(struct its_node *its,
 {
 	u32 db;
 
-	if (!is_v4_1(its) && desc->its_vmovi_cmd.db_enabled)
+	if (desc->its_vmovi_cmd.db_enabled)
 		db = desc->its_vmovi_cmd.vpe->vpe_db_lpi;
 	else
 		db = 1023;
@@ -787,83 +677,9 @@ static struct its_vpe *its_build_vmovp_cmd(struct its_node *its,
 	its_encode_vpeid(cmd, desc->its_vmovp_cmd.vpe->vpe_id);
 	its_encode_target(cmd, target);
 
-	if (is_v4_1(its)) {
-		its_encode_db(cmd, true);
-		its_encode_vmovp_default_db(cmd, desc->its_vmovp_cmd.vpe->vpe_db_lpi);
-	}
-
 	its_fixup_cmd(cmd);
 
 	return valid_vpe(its, desc->its_vmovp_cmd.vpe);
-}
-
-static struct its_vpe *its_build_vinv_cmd(struct its_node *its,
-					  struct its_cmd_block *cmd,
-					  struct its_cmd_desc *desc)
-{
-	struct its_vlpi_map *map;
-
-	map = dev_event_to_vlpi_map(desc->its_inv_cmd.dev,
-				    desc->its_inv_cmd.event_id);
-
-	its_encode_cmd(cmd, GITS_CMD_INV);
-	its_encode_devid(cmd, desc->its_inv_cmd.dev->device_id);
-	its_encode_event_id(cmd, desc->its_inv_cmd.event_id);
-
-	its_fixup_cmd(cmd);
-
-	return valid_vpe(its, map->vpe);
-}
-
-static struct its_vpe *its_build_vint_cmd(struct its_node *its,
-					  struct its_cmd_block *cmd,
-					  struct its_cmd_desc *desc)
-{
-	struct its_vlpi_map *map;
-
-	map = dev_event_to_vlpi_map(desc->its_int_cmd.dev,
-				    desc->its_int_cmd.event_id);
-
-	its_encode_cmd(cmd, GITS_CMD_INT);
-	its_encode_devid(cmd, desc->its_int_cmd.dev->device_id);
-	its_encode_event_id(cmd, desc->its_int_cmd.event_id);
-
-	its_fixup_cmd(cmd);
-
-	return valid_vpe(its, map->vpe);
-}
-
-static struct its_vpe *its_build_vclear_cmd(struct its_node *its,
-					    struct its_cmd_block *cmd,
-					    struct its_cmd_desc *desc)
-{
-	struct its_vlpi_map *map;
-
-	map = dev_event_to_vlpi_map(desc->its_clear_cmd.dev,
-				    desc->its_clear_cmd.event_id);
-
-	its_encode_cmd(cmd, GITS_CMD_CLEAR);
-	its_encode_devid(cmd, desc->its_clear_cmd.dev->device_id);
-	its_encode_event_id(cmd, desc->its_clear_cmd.event_id);
-
-	its_fixup_cmd(cmd);
-
-	return valid_vpe(its, map->vpe);
-}
-
-static struct its_vpe *its_build_invdb_cmd(struct its_node *its,
-					   struct its_cmd_block *cmd,
-					   struct its_cmd_desc *desc)
-{
-	if (WARN_ON(!is_v4_1(its)))
-		return NULL;
-
-	its_encode_cmd(cmd, GITS_CMD_INVDB);
-	its_encode_vpeid(cmd, desc->its_invdb_cmd.vpe->vpe_id);
-
-	its_fixup_cmd(cmd);
-
-	return valid_vpe(its, desc->its_invdb_cmd.vpe);
 }
 
 static u64 its_cmd_ptr_to_offset(struct its_node *its,
@@ -1143,7 +959,7 @@ static void its_send_invall(struct its_node *its, struct its_collection *col)
 
 static void its_send_vmapti(struct its_device *dev, u32 id)
 {
-	struct its_vlpi_map *map = dev_event_to_vlpi_map(dev, id);
+	struct its_vlpi_map *map = &dev->event_map.vlpi_maps[id];
 	struct its_cmd_desc desc;
 
 	desc.its_vmapti_cmd.vpe = map->vpe;
@@ -1157,7 +973,7 @@ static void its_send_vmapti(struct its_device *dev, u32 id)
 
 static void its_send_vmovi(struct its_device *dev, u32 id)
 {
-	struct its_vlpi_map *map = dev_event_to_vlpi_map(dev, id);
+	struct its_vlpi_map *map = &dev->event_map.vlpi_maps[id];
 	struct its_cmd_desc desc;
 
 	desc.its_vmovi_cmd.vpe = map->vpe;
@@ -1211,7 +1027,7 @@ static void its_send_vmovp(struct its_vpe *vpe)
 
 	/* Emit VMOVPs */
 	list_for_each_entry(its, &its_nodes, entry) {
-		if (!is_v4(its))
+		if (!its->is_v4)
 			continue;
 
 		if (!vpe->its_vm->vlpi_count[its->list_nr])
@@ -1232,79 +1048,40 @@ static void its_send_vinvall(struct its_node *its, struct its_vpe *vpe)
 	its_send_single_vcommand(its, its_build_vinvall_cmd, &desc);
 }
 
-static void its_send_vinv(struct its_device *dev, u32 event_id)
-{
-	struct its_cmd_desc desc;
-
-	/*
-	 * There is no real VINV command. This is just a normal INV,
-	 * with a VSYNC instead of a SYNC.
-	 */
-	desc.its_inv_cmd.dev = dev;
-	desc.its_inv_cmd.event_id = event_id;
-
-	its_send_single_vcommand(dev->its, its_build_vinv_cmd, &desc);
-}
-
-static void its_send_vint(struct its_device *dev, u32 event_id)
-{
-	struct its_cmd_desc desc;
-
-	/*
-	 * There is no real VINT command. This is just a normal INT,
-	 * with a VSYNC instead of a SYNC.
-	 */
-	desc.its_int_cmd.dev = dev;
-	desc.its_int_cmd.event_id = event_id;
-
-	its_send_single_vcommand(dev->its, its_build_vint_cmd, &desc);
-}
-
-static void its_send_vclear(struct its_device *dev, u32 event_id)
-{
-	struct its_cmd_desc desc;
-
-	/*
-	 * There is no real VCLEAR command. This is just a normal CLEAR,
-	 * with a VSYNC instead of a SYNC.
-	 */
-	desc.its_clear_cmd.dev = dev;
-	desc.its_clear_cmd.event_id = event_id;
-
-	its_send_single_vcommand(dev->its, its_build_vclear_cmd, &desc);
-}
-
-static void its_send_invdb(struct its_node *its, struct its_vpe *vpe)
-{
-	struct its_cmd_desc desc;
-
-	desc.its_invdb_cmd.vpe = vpe;
-	its_send_single_vcommand(its, its_build_invdb_cmd, &desc);
-}
-
 /*
  * irqchip functions - assumes MSI, mostly.
  */
+
+static inline u32 its_get_event_id(struct irq_data *d)
+{
+	struct its_device *its_dev = irq_data_get_irq_chip_data(d);
+	return d->hwirq - its_dev->event_map.lpi_base;
+}
+
 static void lpi_write_config(struct irq_data *d, u8 clr, u8 set)
 {
-	struct its_vlpi_map *map = get_vlpi_map(d);
 	irq_hw_number_t hwirq;
-	void *va;
+	struct page *prop_page;
 	u8 *cfg;
 
-	if (map) {
-		va = page_address(map->vm->vprop_page);
+	if (irqd_is_forwarded_to_vcpu(d)) {
+		struct its_device *its_dev = irq_data_get_irq_chip_data(d);
+		u32 event = its_get_event_id(d);
+		struct its_vlpi_map *map;
+
+		prop_page = its_dev->event_map.vm->vprop_page;
+		map = &its_dev->event_map.vlpi_maps[event];
 		hwirq = map->vintid;
 
 		/* Remember the updated property */
 		map->properties &= ~clr;
 		map->properties |= set | LPI_PROP_GROUP1;
 	} else {
-		va = gic_rdists->prop_table_va;
+		prop_page = gic_rdists->prop_page;
 		hwirq = d->hwirq;
 	}
 
-	cfg = va + hwirq - 8192;
+	cfg = page_address(prop_page) + hwirq - 8192;
 	*cfg &= ~clr;
 	*cfg |= set | LPI_PROP_GROUP1;
 
@@ -1319,70 +1096,23 @@ static void lpi_write_config(struct irq_data *d, u8 clr, u8 set)
 		dsb(ishst);
 }
 
-static void wait_for_syncr(void __iomem *rdbase)
-{
-	while (gic_read_lpir(rdbase + GICR_SYNCR) & 1)
-		cpu_relax();
-}
-
-static void direct_lpi_inv(struct irq_data *d)
-{
-	struct its_vlpi_map *map = get_vlpi_map(d);
-	void __iomem *rdbase;
-	u64 val;
-
-	if (map) {
-		struct its_device *its_dev = irq_data_get_irq_chip_data(d);
-
-		WARN_ON(!is_v4_1(its_dev->its));
-
-		val  = GICR_INVLPIR_V;
-		val |= FIELD_PREP(GICR_INVLPIR_VPEID, map->vpe->vpe_id);
-		val |= FIELD_PREP(GICR_INVLPIR_INTID, map->vintid);
-	} else {
-		val = d->hwirq;
-	}
-
-	/* Target the redistributor this LPI is currently routed to */
-	rdbase = per_cpu_ptr(gic_rdists->rdist, irq_to_cpuid(d))->rd_base;
-	gic_write_lpir(val, rdbase + GICR_INVLPIR);
-
-	wait_for_syncr(rdbase);
-}
-
 static void lpi_update_config(struct irq_data *d, u8 clr, u8 set)
 {
 	struct its_device *its_dev = irq_data_get_irq_chip_data(d);
 
 	lpi_write_config(d, clr, set);
-	if (gic_rdists->has_direct_lpi &&
-	    (is_v4_1(its_dev->its) || !irqd_is_forwarded_to_vcpu(d)))
-		direct_lpi_inv(d);
-	else if (!irqd_is_forwarded_to_vcpu(d))
-		its_send_inv(its_dev, its_get_event_id(d));
-	else
-		its_send_vinv(its_dev, its_get_event_id(d));
+	its_send_inv(its_dev, its_get_event_id(d));
 }
 
 static void its_vlpi_set_doorbell(struct irq_data *d, bool enable)
 {
 	struct its_device *its_dev = irq_data_get_irq_chip_data(d);
 	u32 event = its_get_event_id(d);
-	struct its_vlpi_map *map;
 
-	/*
-	 * GICv4.1 does away with the per-LPI nonsense, nothing to do
-	 * here.
-	 */
-	if (is_v4_1(its_dev->its))
+	if (its_dev->event_map.vlpi_maps[event].db_enabled == enable)
 		return;
 
-	map = dev_event_to_vlpi_map(its_dev, event);
-
-	if (map->db_enabled == enable)
-		return;
-
-	map->db_enabled = enable;
+	its_dev->event_map.vlpi_maps[event].db_enabled = enable;
 
 	/*
 	 * More fun with the architecture:
@@ -1471,7 +1201,7 @@ static void its_irq_compose_msi_msg(struct irq_data *d, struct msi_msg *msg)
 	msg->address_hi		= upper_32_bits(addr);
 	msg->data		= its_get_event_id(d);
 
-	iommu_dma_compose_msi_msg(irq_data_get_msi_desc(d), msg);
+	iommu_dma_map_msi_msg(d->irq, msg);
 }
 
 static int its_irq_set_irqchip_state(struct irq_data *d,
@@ -1484,17 +1214,10 @@ static int its_irq_set_irqchip_state(struct irq_data *d,
 	if (which != IRQCHIP_STATE_PENDING)
 		return -EINVAL;
 
-	if (irqd_is_forwarded_to_vcpu(d)) {
-		if (state)
-			its_send_vint(its_dev, event);
-		else
-			its_send_vclear(its_dev, event);
-	} else {
-		if (state)
-			its_send_int(its_dev, event);
-		else
-			its_send_clear(its_dev, event);
-	}
+	if (state)
+		its_send_int(its_dev, event);
+	else
+		its_send_clear(its_dev, event);
 
 	return 0;
 }
@@ -1562,13 +1285,13 @@ static int its_vlpi_map(struct irq_data *d, struct its_cmd_info *info)
 	if (!info->map)
 		return -EINVAL;
 
-	raw_spin_lock(&its_dev->event_map.vlpi_lock);
+	mutex_lock(&its_dev->event_map.vlpi_lock);
 
 	if (!its_dev->event_map.vm) {
 		struct its_vlpi_map *maps;
 
 		maps = kcalloc(its_dev->event_map.nr_lpis, sizeof(*maps),
-			       GFP_ATOMIC);
+			       GFP_KERNEL);
 		if (!maps) {
 			ret = -ENOMEM;
 			goto out;
@@ -1611,30 +1334,29 @@ static int its_vlpi_map(struct irq_data *d, struct its_cmd_info *info)
 	}
 
 out:
-	raw_spin_unlock(&its_dev->event_map.vlpi_lock);
+	mutex_unlock(&its_dev->event_map.vlpi_lock);
 	return ret;
 }
 
 static int its_vlpi_get(struct irq_data *d, struct its_cmd_info *info)
 {
 	struct its_device *its_dev = irq_data_get_irq_chip_data(d);
-	struct its_vlpi_map *map;
+	u32 event = its_get_event_id(d);
 	int ret = 0;
 
-	raw_spin_lock(&its_dev->event_map.vlpi_lock);
+	mutex_lock(&its_dev->event_map.vlpi_lock);
 
-	map = get_vlpi_map(d);
-
-	if (!its_dev->event_map.vm || !map) {
+	if (!its_dev->event_map.vm ||
+	    !its_dev->event_map.vlpi_maps[event].vm) {
 		ret = -EINVAL;
 		goto out;
 	}
 
 	/* Copy our mapping information to the incoming request */
-	*info->map = *map;
+	*info->map = its_dev->event_map.vlpi_maps[event];
 
 out:
-	raw_spin_unlock(&its_dev->event_map.vlpi_lock);
+	mutex_unlock(&its_dev->event_map.vlpi_lock);
 	return ret;
 }
 
@@ -1644,7 +1366,7 @@ static int its_vlpi_unmap(struct irq_data *d)
 	u32 event = its_get_event_id(d);
 	int ret = 0;
 
-	raw_spin_lock(&its_dev->event_map.vlpi_lock);
+	mutex_lock(&its_dev->event_map.vlpi_lock);
 
 	if (!its_dev->event_map.vm || !irqd_is_forwarded_to_vcpu(d)) {
 		ret = -EINVAL;
@@ -1674,7 +1396,7 @@ static int its_vlpi_unmap(struct irq_data *d)
 	}
 
 out:
-	raw_spin_unlock(&its_dev->event_map.vlpi_lock);
+	mutex_unlock(&its_dev->event_map.vlpi_lock);
 	return ret;
 }
 
@@ -1700,7 +1422,7 @@ static int its_irq_set_vcpu_affinity(struct irq_data *d, void *vcpu_info)
 	struct its_cmd_info *info = vcpu_info;
 
 	/* Need a v4 ITS */
-	if (!is_v4(its_dev->its))
+	if (!its_dev->its->is_v4)
 		return -EINVAL;
 
 	/* Unmap request? */
@@ -1765,13 +1487,39 @@ static struct lpi_range *mk_lpi_range(u32 base, u32 span)
 {
 	struct lpi_range *range;
 
-	range = kmalloc(sizeof(*range), GFP_KERNEL);
+	range = kzalloc(sizeof(*range), GFP_KERNEL);
 	if (range) {
+		INIT_LIST_HEAD(&range->entry);
 		range->base_id = base;
 		range->span = span;
 	}
 
 	return range;
+}
+
+static int lpi_range_cmp(void *priv, struct list_head *a, struct list_head *b)
+{
+	struct lpi_range *ra, *rb;
+
+	ra = container_of(a, struct lpi_range, entry);
+	rb = container_of(b, struct lpi_range, entry);
+
+	return ra->base_id - rb->base_id;
+}
+
+static void merge_lpi_ranges(void)
+{
+	struct lpi_range *range, *tmp;
+
+	list_for_each_entry_safe(range, tmp, &lpi_range_list, entry) {
+		if (!list_is_last(&range->entry, &lpi_range_list) &&
+		    (tmp->base_id == (range->base_id + range->span))) {
+			tmp->base_id = range->base_id;
+			tmp->span += range->span;
+			list_del(&range->entry);
+			kfree(range);
+		}
+	}
 }
 
 static int alloc_lpi_range(u32 nr_lpis, u32 *base)
@@ -1803,49 +1551,25 @@ static int alloc_lpi_range(u32 nr_lpis, u32 *base)
 	return err;
 }
 
-static void merge_lpi_ranges(struct lpi_range *a, struct lpi_range *b)
-{
-	if (&a->entry == &lpi_range_list || &b->entry == &lpi_range_list)
-		return;
-	if (a->base_id + a->span != b->base_id)
-		return;
-	b->base_id = a->base_id;
-	b->span += a->span;
-	list_del(&a->entry);
-	kfree(a);
-}
-
 static int free_lpi_range(u32 base, u32 nr_lpis)
 {
-	struct lpi_range *new, *old;
-
-	new = mk_lpi_range(base, nr_lpis);
-	if (!new)
-		return -ENOMEM;
+	struct lpi_range *new;
+	int err = 0;
 
 	mutex_lock(&lpi_range_lock);
 
-	list_for_each_entry_reverse(old, &lpi_range_list, entry) {
-		if (old->base_id < base)
-			break;
+	new = mk_lpi_range(base, nr_lpis);
+	if (!new) {
+		err = -ENOMEM;
+		goto out;
 	}
-	/*
-	 * old is the last element with ->base_id smaller than base,
-	 * so new goes right after it. If there are no elements with
-	 * ->base_id smaller than base, &old->entry ends up pointing
-	 * at the head of the list, and inserting new it the start of
-	 * the list is the right thing to do in that case as well.
-	 */
-	list_add(&new->entry, &old->entry);
-	/*
-	 * Now check if we can merge with the preceding and/or
-	 * following ranges.
-	 */
-	merge_lpi_ranges(old, new);
-	merge_lpi_ranges(new, list_next_entry(new, entry));
 
+	list_add(&new->entry, &lpi_range_list);
+	list_sort(NULL, &lpi_range_list, lpi_range_cmp);
+	merge_lpi_ranges();
+out:
 	mutex_unlock(&lpi_range_lock);
-	return 0;
+	return err;
 }
 
 static int __init its_lpi_init(u32 id_bits)
@@ -1909,15 +1633,6 @@ static void its_lpi_free(unsigned long *bitmap, u32 base, u32 nr_ids)
 	kfree(bitmap);
 }
 
-static void gic_reset_prop_table(void *va)
-{
-	/* Priority 0xa0, Group-1, disabled */
-	memset(va, LPI_PROP_DEFAULT_PRIO | LPI_PROP_GROUP1, LPI_PROPBASE_SZ);
-
-	/* Make sure the GIC will observe the written configuration */
-	gic_flush_dcache_to_poc(va, LPI_PROPBASE_SZ);
-}
-
 static struct page *its_allocate_prop_table(gfp_t gfp_flags)
 {
 	struct page *prop_page;
@@ -1926,7 +1641,13 @@ static struct page *its_allocate_prop_table(gfp_t gfp_flags)
 	if (!prop_page)
 		return NULL;
 
-	gic_reset_prop_table(page_address(prop_page));
+	/* Priority 0xa0, Group-1, disabled */
+	memset(page_address(prop_page),
+	       LPI_PROP_DEFAULT_PRIO | LPI_PROP_GROUP1,
+	       LPI_PROPBASE_SZ);
+
+	/* Make sure the GIC will observe the written configuration */
+	gic_flush_dcache_to_poc(page_address(prop_page), LPI_PROPBASE_SZ);
 
 	return prop_page;
 }
@@ -1937,74 +1658,20 @@ static void its_free_prop_table(struct page *prop_page)
 		   get_order(LPI_PROPBASE_SZ));
 }
 
-static bool gic_check_reserved_range(phys_addr_t addr, unsigned long size)
+static int __init its_alloc_lpi_tables(void)
 {
-	phys_addr_t start, end, addr_end;
-	u64 i;
+	phys_addr_t paddr;
 
-	/*
-	 * We don't bother checking for a kdump kernel as by
-	 * construction, the LPI tables are out of this kernel's
-	 * memory map.
-	 */
-	if (is_kdump_kernel())
-		return true;
-
-	addr_end = addr + size - 1;
-
-	for_each_reserved_mem_region(i, &start, &end) {
-		if (addr >= start && addr_end <= end)
-			return true;
+	lpi_id_bits = min_t(u32, GICD_TYPER_ID_BITS(gic_rdists->gicd_typer),
+				ITS_MAX_LPI_NRBITS);
+	gic_rdists->prop_page = its_allocate_prop_table(GFP_NOWAIT);
+	if (!gic_rdists->prop_page) {
+		pr_err("Failed to allocate PROPBASE\n");
+		return -ENOMEM;
 	}
 
-	/* Not found, not a good sign... */
-	pr_warn("GICv3: Expected reserved range [%pa:%pa], not found\n",
-		&addr, &addr_end);
-	add_taint(TAINT_CRAP, LOCKDEP_STILL_OK);
-	return false;
-}
-
-static int gic_reserve_range(phys_addr_t addr, unsigned long size)
-{
-	if (efi_enabled(EFI_CONFIG_TABLES))
-		return efi_mem_reserve_persistent(addr, size);
-
-	return 0;
-}
-
-static int __init its_setup_lpi_prop_table(void)
-{
-	if (gic_rdists->flags & RDIST_FLAGS_RD_TABLES_PREALLOCATED) {
-		u64 val;
-
-		val = gicr_read_propbaser(gic_data_rdist_rd_base() + GICR_PROPBASER);
-		lpi_id_bits = (val & GICR_PROPBASER_IDBITS_MASK) + 1;
-
-		gic_rdists->prop_table_pa = val & GENMASK_ULL(51, 12);
-		gic_rdists->prop_table_va = memremap(gic_rdists->prop_table_pa,
-						     LPI_PROPBASE_SZ,
-						     MEMREMAP_WB);
-		gic_reset_prop_table(gic_rdists->prop_table_va);
-	} else {
-		struct page *page;
-
-		lpi_id_bits = min_t(u32,
-				    GICD_TYPER_ID_BITS(gic_rdists->gicd_typer),
-				    ITS_MAX_LPI_NRBITS);
-		page = its_allocate_prop_table(GFP_NOWAIT);
-		if (!page) {
-			pr_err("Failed to allocate PROPBASE\n");
-			return -ENOMEM;
-		}
-
-		gic_rdists->prop_table_pa = page_to_phys(page);
-		gic_rdists->prop_table_va = page_address(page);
-		WARN_ON(gic_reserve_range(gic_rdists->prop_table_pa,
-					  LPI_PROPBASE_SZ));
-	}
-
-	pr_info("GICv3: using LPI property table @%pa\n",
-		&gic_rdists->prop_table_pa);
+	paddr = page_to_phys(gic_rdists->prop_page);
+	pr_info("GIC: using LPI property table @%pa\n", &paddr);
 
 	return its_lpi_init(lpi_id_bits);
 }
@@ -2044,7 +1711,6 @@ static int its_setup_baser(struct its_node *its, struct its_baser *baser,
 	u64 type = GITS_BASER_TYPE(val);
 	u64 baser_phys, tmp;
 	u32 alloc_pages;
-	struct page *page;
 	void *base;
 
 retry_alloc_baser:
@@ -2057,11 +1723,10 @@ retry_alloc_baser:
 		order = get_order(GITS_BASER_PAGES_MAX * psz);
 	}
 
-	page = alloc_pages_node(its->numa_node, GFP_KERNEL | __GFP_ZERO, order);
-	if (!page)
+	base = (void *)__get_free_pages(GFP_KERNEL | __GFP_ZERO, order);
+	if (!base)
 		return -ENOMEM;
 
-	base = (void *)page_address(page);
 	baser_phys = virt_to_phys(base);
 
 	/* Check if the physical address of the memory is above 48bits */
@@ -2206,73 +1871,14 @@ static bool its_parse_indirect_baser(struct its_node *its,
 	if (new_order >= MAX_ORDER) {
 		new_order = MAX_ORDER - 1;
 		ids = ilog2(PAGE_ORDER_TO_SIZE(new_order) / (int)esz);
-		pr_warn("ITS@%pa: %s Table too large, reduce ids %llu->%u\n",
+		pr_warn("ITS@%pa: %s Table too large, reduce ids %u->%u\n",
 			&its->phys_base, its_base_type_string[type],
-			device_ids(its), ids);
+			its->device_ids, ids);
 	}
 
 	*order = new_order;
 
 	return indirect;
-}
-
-static u32 compute_common_aff(u64 val)
-{
-	u32 aff, clpiaff;
-
-	aff = FIELD_GET(GICR_TYPER_AFFINITY, val);
-	clpiaff = FIELD_GET(GICR_TYPER_COMMON_LPI_AFF, val);
-
-	return aff & ~(GENMASK(31, 0) >> (clpiaff * 8));
-}
-
-static u32 compute_its_aff(struct its_node *its)
-{
-	u64 val;
-	u32 svpet;
-
-	/*
-	 * Reencode the ITS SVPET and MPIDR as a GICR_TYPER, and compute
-	 * the resulting affinity. We then use that to see if this match
-	 * our own affinity.
-	 */
-	svpet = FIELD_GET(GITS_TYPER_SVPET, its->typer);
-	val  = FIELD_PREP(GICR_TYPER_COMMON_LPI_AFF, svpet);
-	val |= FIELD_PREP(GICR_TYPER_AFFINITY, its->mpidr);
-	return compute_common_aff(val);
-}
-
-static struct its_node *find_sibling_its(struct its_node *cur_its)
-{
-	struct its_node *its;
-	u32 aff;
-
-	if (!FIELD_GET(GITS_TYPER_SVPET, cur_its->typer))
-		return NULL;
-
-	aff = compute_its_aff(cur_its);
-
-	list_for_each_entry(its, &its_nodes, entry) {
-		u64 baser;
-
-		if (!is_v4_1(its) || its == cur_its)
-			continue;
-
-		if (!FIELD_GET(GITS_TYPER_SVPET, its->typer))
-			continue;
-
-		if (aff != compute_its_aff(its))
-			continue;
-
-		/* GICv4.1 guarantees that the vPE table is GITS_BASER2 */
-		baser = its->tables[2].val;
-		if (!(baser & GITS_BASER_VALID))
-			continue;
-
-		return its;
-	}
-
-	return NULL;
 }
 
 static void its_free_tables(struct its_node *its)
@@ -2313,21 +1919,10 @@ static int its_alloc_tables(struct its_node *its)
 		case GITS_BASER_TYPE_DEVICE:
 			indirect = its_parse_indirect_baser(its, baser,
 							    psz, &order,
-							    device_ids(its));
+							    its->device_ids);
 			break;
 
 		case GITS_BASER_TYPE_VCPU:
-			if (is_v4_1(its)) {
-				struct its_node *sibling;
-
-				WARN_ON(i != 2);
-				if ((sibling = find_sibling_its(its))) {
-					*baser = sibling->tables[2];
-					its_write_baser(its, baser, baser->val);
-					continue;
-				}
-			}
-
 			indirect = its_parse_indirect_baser(its, baser,
 							    psz, &order,
 							    ITS_MAX_VPEID_BITS);
@@ -2345,291 +1940,6 @@ static int its_alloc_tables(struct its_node *its)
 		cache = baser->val & GITS_BASER_CACHEABILITY_MASK;
 		shr = baser->val & GITS_BASER_SHAREABILITY_MASK;
 	}
-
-	return 0;
-}
-
-static u64 inherit_vpe_l1_table_from_its(void)
-{
-	struct its_node *its;
-	u64 val;
-	u32 aff;
-
-	val = gic_read_typer(gic_data_rdist_rd_base() + GICR_TYPER);
-	aff = compute_common_aff(val);
-
-	list_for_each_entry(its, &its_nodes, entry) {
-		u64 baser, addr;
-
-		if (!is_v4_1(its))
-			continue;
-
-		if (!FIELD_GET(GITS_TYPER_SVPET, its->typer))
-			continue;
-
-		if (aff != compute_its_aff(its))
-			continue;
-
-		/* GICv4.1 guarantees that the vPE table is GITS_BASER2 */
-		baser = its->tables[2].val;
-		if (!(baser & GITS_BASER_VALID))
-			continue;
-
-		/* We have a winner! */
-		gic_data_rdist()->vpe_l1_base = its->tables[2].base;
-
-		val  = GICR_VPROPBASER_4_1_VALID;
-		if (baser & GITS_BASER_INDIRECT)
-			val |= GICR_VPROPBASER_4_1_INDIRECT;
-		val |= FIELD_PREP(GICR_VPROPBASER_4_1_PAGE_SIZE,
-				  FIELD_GET(GITS_BASER_PAGE_SIZE_MASK, baser));
-		switch (FIELD_GET(GITS_BASER_PAGE_SIZE_MASK, baser)) {
-		case GIC_PAGE_SIZE_64K:
-			addr = GITS_BASER_ADDR_48_to_52(baser);
-			break;
-		default:
-			addr = baser & GENMASK_ULL(47, 12);
-			break;
-		}
-		val |= FIELD_PREP(GICR_VPROPBASER_4_1_ADDR, addr >> 12);
-		val |= FIELD_PREP(GICR_VPROPBASER_SHAREABILITY_MASK,
-				  FIELD_GET(GITS_BASER_SHAREABILITY_MASK, baser));
-		val |= FIELD_PREP(GICR_VPROPBASER_INNER_CACHEABILITY_MASK,
-				  FIELD_GET(GITS_BASER_INNER_CACHEABILITY_MASK, baser));
-		val |= FIELD_PREP(GICR_VPROPBASER_4_1_SIZE, GITS_BASER_NR_PAGES(baser) - 1);
-
-		return val;
-	}
-
-	return 0;
-}
-
-static u64 inherit_vpe_l1_table_from_rd(cpumask_t **mask)
-{
-	u32 aff;
-	u64 val;
-	int cpu;
-
-	val = gic_read_typer(gic_data_rdist_rd_base() + GICR_TYPER);
-	aff = compute_common_aff(val);
-
-	for_each_possible_cpu(cpu) {
-		void __iomem *base = gic_data_rdist_cpu(cpu)->rd_base;
-
-		if (!base || cpu == smp_processor_id())
-			continue;
-
-		val = gic_read_typer(base + GICR_TYPER);
-		if (aff != compute_common_aff(val))
-			continue;
-
-		/*
-		 * At this point, we have a victim. This particular CPU
-		 * has already booted, and has an affinity that matches
-		 * ours wrt CommonLPIAff. Let's use its own VPROPBASER.
-		 * Make sure we don't write the Z bit in that case.
-		 */
-		val = gicr_read_vpropbaser(base + SZ_128K + GICR_VPROPBASER);
-		val &= ~GICR_VPROPBASER_4_1_Z;
-
-		gic_data_rdist()->vpe_l1_base = gic_data_rdist_cpu(cpu)->vpe_l1_base;
-		*mask = gic_data_rdist_cpu(cpu)->vpe_table_mask;
-
-		return val;
-	}
-
-	return 0;
-}
-
-static bool allocate_vpe_l2_table(int cpu, u32 id)
-{
-	void __iomem *base = gic_data_rdist_cpu(cpu)->rd_base;
-	unsigned int psz, esz, idx, npg, gpsz;
-	u64 val;
-	struct page *page;
-	__le64 *table;
-
-	if (!gic_rdists->has_rvpeid)
-		return true;
-
-	/* Skip non-present CPUs */
-	if (!base)
-		return true;
-
-	val  = gicr_read_vpropbaser(base + SZ_128K + GICR_VPROPBASER);
-
-	esz  = FIELD_GET(GICR_VPROPBASER_4_1_ENTRY_SIZE, val) + 1;
-	gpsz = FIELD_GET(GICR_VPROPBASER_4_1_PAGE_SIZE, val);
-	npg  = FIELD_GET(GICR_VPROPBASER_4_1_SIZE, val) + 1;
-
-	switch (gpsz) {
-	default:
-		WARN_ON(1);
-		/* fall through */
-	case GIC_PAGE_SIZE_4K:
-		psz = SZ_4K;
-		break;
-	case GIC_PAGE_SIZE_16K:
-		psz = SZ_16K;
-		break;
-	case GIC_PAGE_SIZE_64K:
-		psz = SZ_64K;
-		break;
-	}
-
-	/* Don't allow vpe_id that exceeds single, flat table limit */
-	if (!(val & GICR_VPROPBASER_4_1_INDIRECT))
-		return (id < (npg * psz / (esz * SZ_8)));
-
-	/* Compute 1st level table index & check if that exceeds table limit */
-	idx = id >> ilog2(psz / (esz * SZ_8));
-	if (idx >= (npg * psz / GITS_LVL1_ENTRY_SIZE))
-		return false;
-
-	table = gic_data_rdist_cpu(cpu)->vpe_l1_base;
-
-	/* Allocate memory for 2nd level table */
-	if (!table[idx]) {
-		page = alloc_pages(GFP_KERNEL | __GFP_ZERO, get_order(psz));
-		if (!page)
-			return false;
-
-		/* Flush Lvl2 table to PoC if hw doesn't support coherency */
-		if (!(val & GICR_VPROPBASER_SHAREABILITY_MASK))
-			gic_flush_dcache_to_poc(page_address(page), psz);
-
-		table[idx] = cpu_to_le64(page_to_phys(page) | GITS_BASER_VALID);
-
-		/* Flush Lvl1 entry to PoC if hw doesn't support coherency */
-		if (!(val & GICR_VPROPBASER_SHAREABILITY_MASK))
-			gic_flush_dcache_to_poc(table + idx, GITS_LVL1_ENTRY_SIZE);
-
-		/* Ensure updated table contents are visible to RD hardware */
-		dsb(sy);
-	}
-
-	return true;
-}
-
-static int allocate_vpe_l1_table(void)
-{
-	void __iomem *vlpi_base = gic_data_rdist_vlpi_base();
-	u64 val, gpsz, npg, pa;
-	unsigned int psz = SZ_64K;
-	unsigned int np, epp, esz;
-	struct page *page;
-
-	if (!gic_rdists->has_rvpeid)
-		return 0;
-
-	/*
-	 * if VPENDBASER.Valid is set, disable any previously programmed
-	 * VPE by setting PendingLast while clearing Valid. This has the
-	 * effect of making sure no doorbell will be generated and we can
-	 * then safely clear VPROPBASER.Valid.
-	 */
-	if (gicr_read_vpendbaser(vlpi_base + GICR_VPENDBASER) & GICR_VPENDBASER_Valid)
-		gicr_write_vpendbaser(GICR_VPENDBASER_PendingLast,
-				      vlpi_base + GICR_VPENDBASER);
-
-	/*
-	 * If we can inherit the configuration from another RD, let's do
-	 * so. Otherwise, we have to go through the allocation process. We
-	 * assume that all RDs have the exact same requirements, as
-	 * nothing will work otherwise.
-	 */
-	val = inherit_vpe_l1_table_from_rd(&gic_data_rdist()->vpe_table_mask);
-	if (val & GICR_VPROPBASER_4_1_VALID)
-		goto out;
-
-	gic_data_rdist()->vpe_table_mask = kzalloc(sizeof(cpumask_t), GFP_KERNEL);
-	if (!gic_data_rdist()->vpe_table_mask)
-		return -ENOMEM;
-
-	val = inherit_vpe_l1_table_from_its();
-	if (val & GICR_VPROPBASER_4_1_VALID)
-		goto out;
-
-	/* First probe the page size */
-	val = FIELD_PREP(GICR_VPROPBASER_4_1_PAGE_SIZE, GIC_PAGE_SIZE_64K);
-	gicr_write_vpropbaser(val, vlpi_base + GICR_VPROPBASER);
-	val = gicr_read_vpropbaser(vlpi_base + GICR_VPROPBASER);
-	gpsz = FIELD_GET(GICR_VPROPBASER_4_1_PAGE_SIZE, val);
-	esz = FIELD_GET(GICR_VPROPBASER_4_1_ENTRY_SIZE, val);
-
-	switch (gpsz) {
-	default:
-		gpsz = GIC_PAGE_SIZE_4K;
-		/* fall through */
-	case GIC_PAGE_SIZE_4K:
-		psz = SZ_4K;
-		break;
-	case GIC_PAGE_SIZE_16K:
-		psz = SZ_16K;
-		break;
-	case GIC_PAGE_SIZE_64K:
-		psz = SZ_64K;
-		break;
-	}
-
-	/*
-	 * Start populating the register from scratch, including RO fields
-	 * (which we want to print in debug cases...)
-	 */
-	val = 0;
-	val |= FIELD_PREP(GICR_VPROPBASER_4_1_PAGE_SIZE, gpsz);
-	val |= FIELD_PREP(GICR_VPROPBASER_4_1_ENTRY_SIZE, esz);
-
-	/* How many entries per GIC page? */
-	esz++;
-	epp = psz / (esz * SZ_8);
-
-	/*
-	 * If we need more than just a single L1 page, flag the table
-	 * as indirect and compute the number of required L1 pages.
-	 */
-	if (epp < ITS_MAX_VPEID) {
-		int nl2;
-
-		val |= GICR_VPROPBASER_4_1_INDIRECT;
-
-		/* Number of L2 pages required to cover the VPEID space */
-		nl2 = DIV_ROUND_UP(ITS_MAX_VPEID, epp);
-
-		/* Number of L1 pages to point to the L2 pages */
-		npg = DIV_ROUND_UP(nl2 * SZ_8, psz);
-	} else {
-		npg = 1;
-	}
-
-	val |= FIELD_PREP(GICR_VPROPBASER_4_1_SIZE, npg - 1);
-
-	/* Right, that's the number of CPU pages we need for L1 */
-	np = DIV_ROUND_UP(npg * psz, PAGE_SIZE);
-
-	pr_debug("np = %d, npg = %lld, psz = %d, epp = %d, esz = %d\n",
-		 np, npg, psz, epp, esz);
-	page = alloc_pages(GFP_KERNEL | __GFP_ZERO, get_order(np * PAGE_SIZE));
-	if (!page)
-		return -ENOMEM;
-
-	gic_data_rdist()->vpe_l1_base = page_address(page);
-	pa = virt_to_phys(page_address(page));
-	WARN_ON(!IS_ALIGNED(pa, psz));
-
-	val |= FIELD_PREP(GICR_VPROPBASER_4_1_ADDR, pa >> 12);
-	val |= GICR_VPROPBASER_RaWb;
-	val |= GICR_VPROPBASER_InnerShareable;
-	val |= GICR_VPROPBASER_4_1_Z;
-	val |= GICR_VPROPBASER_4_1_VALID;
-
-out:
-	gicr_write_vpropbaser(val, vlpi_base + GICR_VPROPBASER);
-	cpumask_set_cpu(smp_processor_id(), gic_data_rdist()->vpe_table_mask);
-
-	pr_debug("CPU%d: VPROPBASER = %llx %*pbl\n",
-		 smp_processor_id(), val,
-		 cpumask_pr_args(gic_data_rdist()->vpe_table_mask));
 
 	return 0;
 }
@@ -2652,9 +1962,12 @@ static int its_alloc_collections(struct its_node *its)
 static struct page *its_allocate_pending_table(gfp_t gfp_flags)
 {
 	struct page *pend_page;
-
+	/*
+	 * The pending pages have to be at least 64kB aligned,
+	 * hence the 'max(LPI_PENDBASE_SZ, SZ_64K)' below.
+	 */
 	pend_page = alloc_pages(gfp_flags | __GFP_ZERO,
-				get_order(LPI_PENDBASE_SZ));
+				get_order(max_t(u32, LPI_PENDBASE_SZ, SZ_64K)));
 	if (!pend_page)
 		return NULL;
 
@@ -2666,79 +1979,22 @@ static struct page *its_allocate_pending_table(gfp_t gfp_flags)
 
 static void its_free_pending_table(struct page *pt)
 {
-	free_pages((unsigned long)page_address(pt), get_order(LPI_PENDBASE_SZ));
+	free_pages((unsigned long)page_address(pt),
+		   get_order(max_t(u32, LPI_PENDBASE_SZ, SZ_64K)));
 }
 
-/*
- * Booting with kdump and LPIs enabled is generally fine. Any other
- * case is wrong in the absence of firmware/EFI support.
- */
-static bool enabled_lpis_allowed(void)
-{
-	phys_addr_t addr;
-	u64 val;
-
-	/* Check whether the property table is in a reserved region */
-	val = gicr_read_propbaser(gic_data_rdist_rd_base() + GICR_PROPBASER);
-	addr = val & GENMASK_ULL(51, 12);
-
-	return gic_check_reserved_range(addr, LPI_PROPBASE_SZ);
-}
-
-static int __init allocate_lpi_tables(void)
-{
-	u64 val;
-	int err, cpu;
-
-	/*
-	 * If LPIs are enabled while we run this from the boot CPU,
-	 * flag the RD tables as pre-allocated if the stars do align.
-	 */
-	val = readl_relaxed(gic_data_rdist_rd_base() + GICR_CTLR);
-	if ((val & GICR_CTLR_ENABLE_LPIS) && enabled_lpis_allowed()) {
-		gic_rdists->flags |= (RDIST_FLAGS_RD_TABLES_PREALLOCATED |
-				      RDIST_FLAGS_PROPBASE_NEEDS_FLUSHING);
-		pr_info("GICv3: Using preallocated redistributor tables\n");
-	}
-
-	err = its_setup_lpi_prop_table();
-	if (err)
-		return err;
-
-	/*
-	 * We allocate all the pending tables anyway, as we may have a
-	 * mix of RDs that have had LPIs enabled, and some that
-	 * don't. We'll free the unused ones as each CPU comes online.
-	 */
-	for_each_possible_cpu(cpu) {
-		struct page *pend_page;
-
-		pend_page = its_allocate_pending_table(GFP_NOWAIT);
-		if (!pend_page) {
-			pr_err("Failed to allocate PENDBASE for CPU%d\n", cpu);
-			return -ENOMEM;
-		}
-
-		gic_data_rdist_cpu(cpu)->pend_page = pend_page;
-	}
-
-	return 0;
-}
-
-static u64 its_clear_vpend_valid(void __iomem *vlpi_base, u64 clr, u64 set)
+static u64 its_clear_vpend_valid(void __iomem *vlpi_base)
 {
 	u32 count = 1000000;	/* 1s! */
 	bool clean;
 	u64 val;
 
-	val = gicr_read_vpendbaser(vlpi_base + GICR_VPENDBASER);
+	val = gits_read_vpendbaser(vlpi_base + GICR_VPENDBASER);
 	val &= ~GICR_VPENDBASER_Valid;
-	val &= ~clr;
-	val |= set;
-	gicr_write_vpendbaser(val, vlpi_base + GICR_VPENDBASER);
+	gits_write_vpendbaser(val, vlpi_base + GICR_VPENDBASER);
 
 	do {
-		val = gicr_read_vpendbaser(vlpi_base + GICR_VPENDBASER);
+		val = gits_read_vpendbaser(vlpi_base + GICR_VPENDBASER);
 		clean = !(val & GICR_VPENDBASER_Dirty);
 		if (!clean) {
 			count--;
@@ -2747,11 +2003,6 @@ static u64 its_clear_vpend_valid(void __iomem *vlpi_base, u64 clr, u64 set)
 		}
 	} while (!clean && count);
 
-	if (unlikely(val & GICR_VPENDBASER_Dirty)) {
-		pr_err_ratelimited("ITS virtual pending table not cleaning\n");
-		val |= GICR_VPENDBASER_PendingLast;
-	}
-
 	return val;
 }
 
@@ -2759,40 +2010,28 @@ static void its_cpu_init_lpis(void)
 {
 	void __iomem *rbase = gic_data_rdist_rd_base();
 	struct page *pend_page;
-	phys_addr_t paddr;
 	u64 val, tmp;
 
-	if (gic_data_rdist()->lpi_enabled)
-		return;
+	/* If we didn't allocate the pending table yet, do it now */
+	pend_page = gic_data_rdist()->pend_page;
+	if (!pend_page) {
+		phys_addr_t paddr;
 
-	val = readl_relaxed(rbase + GICR_CTLR);
-	if ((gic_rdists->flags & RDIST_FLAGS_RD_TABLES_PREALLOCATED) &&
-	    (val & GICR_CTLR_ENABLE_LPIS)) {
-		/*
-		 * Check that we get the same property table on all
-		 * RDs. If we don't, this is hopeless.
-		 */
-		paddr = gicr_read_propbaser(rbase + GICR_PROPBASER);
-		paddr &= GENMASK_ULL(51, 12);
-		if (WARN_ON(gic_rdists->prop_table_pa != paddr))
-			add_taint(TAINT_CRAP, LOCKDEP_STILL_OK);
+		pend_page = its_allocate_pending_table(GFP_NOWAIT);
+		if (!pend_page) {
+			pr_err("Failed to allocate PENDBASE for CPU%d\n",
+			       smp_processor_id());
+			return;
+		}
 
-		paddr = gicr_read_pendbaser(rbase + GICR_PENDBASER);
-		paddr &= GENMASK_ULL(51, 16);
-
-		WARN_ON(!gic_check_reserved_range(paddr, LPI_PENDBASE_SZ));
-		its_free_pending_table(gic_data_rdist()->pend_page);
-		gic_data_rdist()->pend_page = NULL;
-
-		goto out;
+		paddr = page_to_phys(pend_page);
+		pr_info("CPU%d: using LPI pending table @%pa\n",
+			smp_processor_id(), &paddr);
+		gic_data_rdist()->pend_page = pend_page;
 	}
 
-	pend_page = gic_data_rdist()->pend_page;
-	paddr = page_to_phys(pend_page);
-	WARN_ON(gic_reserve_range(paddr, LPI_PENDBASE_SZ));
-
 	/* set PROPBASE */
-	val = (gic_rdists->prop_table_pa |
+	val = (page_to_phys(gic_rdists->prop_page) |
 	       GICR_PROPBASER_InnerShareable |
 	       GICR_PROPBASER_RaWaWb |
 	       ((LPI_NRBITS - 1) & GICR_PROPBASER_IDBITS_MASK));
@@ -2840,7 +2079,7 @@ static void its_cpu_init_lpis(void)
 	val |= GICR_CTLR_ENABLE_LPIS;
 	writel_relaxed(val, rbase + GICR_CTLR);
 
-	if (gic_rdists->has_vlpis && !gic_rdists->has_rvpeid) {
+	if (gic_rdists->has_vlpis) {
 		void __iomem *vlpi_base = gic_data_rdist_vlpi_base();
 
 		/*
@@ -2853,34 +2092,19 @@ static void its_cpu_init_lpis(void)
 		val = (LPI_NRBITS - 1) & GICR_VPROPBASER_IDBITS_MASK;
 		pr_debug("GICv4: CPU%d: Init IDbits to 0x%llx for GICR_VPROPBASER\n",
 			smp_processor_id(), val);
-		gicr_write_vpropbaser(val, vlpi_base + GICR_VPROPBASER);
+		gits_write_vpropbaser(val, vlpi_base + GICR_VPROPBASER);
 
 		/*
 		 * Also clear Valid bit of GICR_VPENDBASER, in case some
 		 * ancient programming gets left in and has possibility of
 		 * corrupting memory.
 		 */
-		val = its_clear_vpend_valid(vlpi_base, 0, 0);
-	}
-
-	if (allocate_vpe_l1_table()) {
-		/*
-		 * If the allocation has failed, we're in massive trouble.
-		 * Disable direct injection, and pray that no VM was
-		 * already running...
-		 */
-		gic_rdists->has_rvpeid = false;
-		gic_rdists->has_vlpis = false;
+		val = its_clear_vpend_valid(vlpi_base);
+		WARN_ON(val & GICR_VPENDBASER_Dirty);
 	}
 
 	/* Make sure the GIC has seen the above */
 	dsb(sy);
-out:
-	gic_data_rdist()->lpi_enabled = true;
-	pr_info("GICv3: CPU%d: using %s LPI pending table @%pa\n",
-		smp_processor_id(),
-		gic_data_rdist()->pend_page ? "allocated" : "reserved",
-		&paddr);
 }
 
 static void its_cpu_init_collection(struct its_node *its)
@@ -2965,8 +2189,7 @@ static struct its_baser *its_get_baser(struct its_node *its, u32 type)
 	return NULL;
 }
 
-static bool its_alloc_table_entry(struct its_node *its,
-				  struct its_baser *baser, u32 id)
+static bool its_alloc_table_entry(struct its_baser *baser, u32 id)
 {
 	struct page *page;
 	u32 esz, idx;
@@ -2986,8 +2209,7 @@ static bool its_alloc_table_entry(struct its_node *its,
 
 	/* Allocate memory for 2nd level table */
 	if (!table[idx]) {
-		page = alloc_pages_node(its->numa_node, GFP_KERNEL | __GFP_ZERO,
-					get_order(baser->psz));
+		page = alloc_pages(GFP_KERNEL | __GFP_ZERO, get_order(baser->psz));
 		if (!page)
 			return false;
 
@@ -3016,15 +2238,14 @@ static bool its_alloc_device_table(struct its_node *its, u32 dev_id)
 
 	/* Don't allow device id that exceeds ITS hardware limit */
 	if (!baser)
-		return (ilog2(dev_id) < device_ids(its));
+		return (ilog2(dev_id) < its->device_ids);
 
-	return its_alloc_table_entry(its, baser, dev_id);
+	return its_alloc_table_entry(baser, dev_id);
 }
 
 static bool its_alloc_vpe_table(u32 vpe_id)
 {
 	struct its_node *its;
-	int cpu;
 
 	/*
 	 * Make sure the L2 tables are allocated on *all* v4 ITSs. We
@@ -3036,27 +2257,14 @@ static bool its_alloc_vpe_table(u32 vpe_id)
 	list_for_each_entry(its, &its_nodes, entry) {
 		struct its_baser *baser;
 
-		if (!is_v4(its))
+		if (!its->is_v4)
 			continue;
 
 		baser = its_get_baser(its, GITS_BASER_TYPE_VCPU);
 		if (!baser)
 			return false;
 
-		if (!its_alloc_table_entry(its, baser, vpe_id))
-			return false;
-	}
-
-	/* Non v4.1? No need to iterate RDs and go back early. */
-	if (!gic_rdists->has_rvpeid)
-		return true;
-
-	/*
-	 * Make sure the L2 tables are allocated for all copies of
-	 * the L1 table on *all* v4.1 RDs.
-	 */
-	for_each_possible_cpu(cpu) {
-		if (!allocate_vpe_l2_table(cpu, vpe_id))
+		if (!its_alloc_table_entry(baser, vpe_id))
 			return false;
 	}
 
@@ -3088,9 +2296,9 @@ static struct its_device *its_create_device(struct its_node *its, u32 dev_id,
 	 * sized as a power of two (and you need at least one bit...).
 	 */
 	nr_ites = max(2, nvecs);
-	sz = nr_ites * (FIELD_GET(GITS_TYPER_ITT_ENTRY_SIZE, its->typer) + 1);
+	sz = nr_ites * its->ite_size;
 	sz = max(sz, ITS_ITT_ALIGN) + ITS_ITT_ALIGN - 1;
-	itt = kzalloc_node(sz, GFP_KERNEL, its->numa_node);
+	itt = kzalloc(sz, GFP_KERNEL);
 	if (alloc_lpis) {
 		lpi_map = its_lpi_alloc(nvecs, &lpi_base, &nr_lpis);
 		if (lpi_map)
@@ -3119,7 +2327,7 @@ static struct its_device *its_create_device(struct its_node *its, u32 dev_id,
 	dev->event_map.col_map = col_map;
 	dev->event_map.lpi_base = lpi_base;
 	dev->event_map.nr_lpis = nr_lpis;
-	raw_spin_lock_init(&dev->event_map.vlpi_lock);
+	mutex_init(&dev->event_map.vlpi_lock);
 	dev->device_id = dev_id;
 	INIT_LIST_HEAD(&dev->entry);
 
@@ -3140,7 +2348,6 @@ static void its_free_device(struct its_device *its_dev)
 	raw_spin_lock_irqsave(&its_dev->its->lock, flags);
 	list_del(&its_dev->entry);
 	raw_spin_unlock_irqrestore(&its_dev->its->lock, flags);
-	kfree(its_dev->event_map.col_map);
 	kfree(its_dev->itt);
 	kfree(its_dev);
 }
@@ -3149,7 +2356,6 @@ static int its_alloc_device_irq(struct its_device *dev, int nvecs, irq_hw_number
 {
 	int idx;
 
-	/* Find a free LPI region in lpi_map and allocate them. */
 	idx = bitmap_find_free_region(dev->event_map.lpi_map,
 				      dev->event_map.nr_lpis,
 				      get_count_order(nvecs));
@@ -3157,6 +2363,7 @@ static int its_alloc_device_irq(struct its_device *dev, int nvecs, irq_hw_number
 		return -ENOSPC;
 
 	*hwirq = dev->event_map.lpi_base + idx;
+	set_bit(idx, dev->event_map.lpi_map);
 
 	return 0;
 }
@@ -3171,7 +2378,7 @@ static int its_msi_prepare(struct irq_domain *domain, struct device *dev,
 	int err = 0;
 
 	/*
-	 * We ignore "dev" entirely, and rely on the dev_id that has
+	 * We ignore "dev" entierely, and rely on the dev_id that has
 	 * been passed via the scratchpad. This limits this domain's
 	 * usefulness to upper layers that definitely know that they
 	 * are built on top of the ITS.
@@ -3250,16 +2457,12 @@ static int its_irq_domain_alloc(struct irq_domain *domain, unsigned int virq,
 {
 	msi_alloc_info_t *info = args;
 	struct its_device *its_dev = info->scratchpad[0].ptr;
-	struct its_node *its = its_dev->its;
+	struct irq_data *irqd;
 	irq_hw_number_t hwirq;
 	int err;
 	int i;
 
 	err = its_alloc_device_irq(its_dev, nr_irqs, &hwirq);
-	if (err)
-		return err;
-
-	err = iommu_dma_prepare_msi(info->desc, its->get_msi_base(its_dev));
 	if (err)
 		return err;
 
@@ -3270,7 +2473,9 @@ static int its_irq_domain_alloc(struct irq_domain *domain, unsigned int virq,
 
 		irq_domain_set_hwirq_and_chip(domain, virq + i,
 					      hwirq + i, &its_irq_chip, its_dev);
-		irqd_set_single_target(irq_desc_get_irq_data(irq_to_desc(virq + i)));
+		irqd = irq_get_irq_data(virq + i);
+		irqd_set_single_target(irqd);
+		irqd_set_affinity_on_activate(irqd);
 		pr_debug("ID:%d pID:%d vID:%d\n",
 			 (int)(hwirq + i - its_dev->event_map.lpi_base),
 			 (int)(hwirq + i), virq + i);
@@ -3349,6 +2554,7 @@ static void its_irq_domain_free(struct irq_domain *domain, unsigned int virq,
 		its_lpi_free(its_dev->event_map.lpi_map,
 			     its_dev->event_map.lpi_base,
 			     its_dev->event_map.nr_lpis);
+		kfree(its_dev->event_map.col_map);
 
 		/* Unmap device/itt */
 		its_send_mapd(its_dev, 0);
@@ -3370,7 +2576,7 @@ static const struct irq_domain_ops its_domain_ops = {
 /*
  * This is insane.
  *
- * If a GICv4.0 doesn't implement Direct LPIs (which is extremely
+ * If a GICv4 doesn't implement Direct LPIs (which is extremely
  * likely), the only way to perform an invalidate is to use a fake
  * device to issue an INV command, implying that the LPI has first
  * been mapped to some event on that device. Since this is not exactly
@@ -3378,20 +2584,9 @@ static const struct irq_domain_ops its_domain_ops = {
  * only issue an UNMAP if we're short on available slots.
  *
  * Broken by design(tm).
- *
- * GICv4.1, on the other hand, mandates that we're able to invalidate
- * by writing to a MMIO register. It doesn't implement the whole of
- * DirectLPI, but that's good enough. And most of the time, we don't
- * even have to invalidate anything, as the redistributor can be told
- * whether to generate a doorbell or not (we thus leave it enabled,
- * always).
  */
 static void its_vpe_db_proxy_unmap_locked(struct its_vpe *vpe)
 {
-	/* GICv4.1 doesn't use a proxy, so nothing to do here */
-	if (gic_rdists->has_rvpeid)
-		return;
-
 	/* Already unmapped? */
 	if (vpe->vpe_proxy_event == -1)
 		return;
@@ -3414,10 +2609,6 @@ static void its_vpe_db_proxy_unmap_locked(struct its_vpe *vpe)
 
 static void its_vpe_db_proxy_unmap(struct its_vpe *vpe)
 {
-	/* GICv4.1 doesn't use a proxy, so nothing to do here */
-	if (gic_rdists->has_rvpeid)
-		return;
-
 	if (!gic_rdists->has_direct_lpi) {
 		unsigned long flags;
 
@@ -3429,10 +2620,6 @@ static void its_vpe_db_proxy_unmap(struct its_vpe *vpe)
 
 static void its_vpe_db_proxy_map_locked(struct its_vpe *vpe)
 {
-	/* GICv4.1 doesn't use a proxy, so nothing to do here */
-	if (gic_rdists->has_rvpeid)
-		return;
-
 	/* Already mapped? */
 	if (vpe->vpe_proxy_event != -1)
 		return;
@@ -3455,16 +2642,13 @@ static void its_vpe_db_proxy_move(struct its_vpe *vpe, int from, int to)
 	unsigned long flags;
 	struct its_collection *target_col;
 
-	/* GICv4.1 doesn't use a proxy, so nothing to do here */
-	if (gic_rdists->has_rvpeid)
-		return;
-
 	if (gic_rdists->has_direct_lpi) {
 		void __iomem *rdbase;
 
 		rdbase = per_cpu_ptr(gic_rdists->rdist, from)->rd_base;
 		gic_write_lpir(vpe->vpe_db_lpi, rdbase + GICR_CLRLPIR);
-		wait_for_syncr(rdbase);
+		while (gic_read_lpir(rdbase + GICR_SYNCR) & 1)
+			cpu_relax();
 
 		return;
 	}
@@ -3485,7 +2669,7 @@ static int its_vpe_set_affinity(struct irq_data *d,
 				bool force)
 {
 	struct its_vpe *vpe = irq_data_get_irq_chip_data(d);
-	int from, cpu = cpumask_first(mask_val);
+	int cpu = cpumask_first(mask_val);
 
 	/*
 	 * Changing affinity is mega expensive, so let's be as lazy as
@@ -3493,24 +2677,14 @@ static int its_vpe_set_affinity(struct irq_data *d,
 	 * into the proxy device, we need to move the doorbell
 	 * interrupt to its new location.
 	 */
-	if (vpe->col_idx == cpu)
-		goto out;
+	if (vpe->col_idx != cpu) {
+		int from = vpe->col_idx;
 
-	from = vpe->col_idx;
-	vpe->col_idx = cpu;
+		vpe->col_idx = cpu;
+		its_send_vmovp(vpe);
+		its_vpe_db_proxy_move(vpe, from, cpu);
+	}
 
-	/*
-	 * GICv4.1 allows us to skip VMOVP if moving to a cpu whose RD
-	 * is sharing its VPE table with the current one.
-	 */
-	if (gic_data_rdist_cpu(cpu)->vpe_table_mask &&
-	    cpumask_test_cpu(from, gic_data_rdist_cpu(cpu)->vpe_table_mask))
-		goto out;
-
-	its_send_vmovp(vpe);
-	its_vpe_db_proxy_move(vpe, from, cpu);
-
-out:
 	irq_data_update_effective_affinity(d, cpumask_of(cpu));
 
 	return IRQ_SET_MASK_OK_DONE;
@@ -3527,7 +2701,7 @@ static void its_vpe_schedule(struct its_vpe *vpe)
 	val |= (LPI_NRBITS - 1) & GICR_VPROPBASER_IDBITS_MASK;
 	val |= GICR_VPROPBASER_RaWb;
 	val |= GICR_VPROPBASER_InnerShareable;
-	gicr_write_vpropbaser(val, vlpi_base + GICR_VPROPBASER);
+	gits_write_vpropbaser(val, vlpi_base + GICR_VPROPBASER);
 
 	val  = virt_to_phys(page_address(vpe->vpt_page)) &
 		GENMASK_ULL(51, 16);
@@ -3545,7 +2719,7 @@ static void its_vpe_schedule(struct its_vpe *vpe)
 	val |= GICR_VPENDBASER_PendingLast;
 	val |= vpe->idai ? GICR_VPENDBASER_IDAI : 0;
 	val |= GICR_VPENDBASER_Valid;
-	gicr_write_vpendbaser(val, vlpi_base + GICR_VPENDBASER);
+	gits_write_vpendbaser(val, vlpi_base + GICR_VPENDBASER);
 }
 
 static void its_vpe_deschedule(struct its_vpe *vpe)
@@ -3553,10 +2727,16 @@ static void its_vpe_deschedule(struct its_vpe *vpe)
 	void __iomem *vlpi_base = gic_data_rdist_vlpi_base();
 	u64 val;
 
-	val = its_clear_vpend_valid(vlpi_base, 0, 0);
+	val = its_clear_vpend_valid(vlpi_base);
 
-	vpe->idai = !!(val & GICR_VPENDBASER_IDAI);
-	vpe->pending_last = !!(val & GICR_VPENDBASER_PendingLast);
+	if (unlikely(val & GICR_VPENDBASER_Dirty)) {
+		pr_err_ratelimited("ITS virtual pending table not cleaning\n");
+		vpe->idai = false;
+		vpe->pending_last = true;
+	} else {
+		vpe->idai = !!(val & GICR_VPENDBASER_IDAI);
+		vpe->pending_last = !!(val & GICR_VPENDBASER_PendingLast);
+	}
 }
 
 static void its_vpe_invall(struct its_vpe *vpe)
@@ -3564,7 +2744,7 @@ static void its_vpe_invall(struct its_vpe *vpe)
 	struct its_node *its;
 
 	list_for_each_entry(its, &its_nodes, entry) {
-		if (!is_v4(its))
+		if (!its->is_v4)
 			continue;
 
 		if (its_list_map && !vpe->its_vm->vlpi_count[its->list_nr])
@@ -3622,10 +2802,10 @@ static void its_vpe_send_inv(struct irq_data *d)
 	if (gic_rdists->has_direct_lpi) {
 		void __iomem *rdbase;
 
-		/* Target the redistributor this VPE is currently known on */
 		rdbase = per_cpu_ptr(gic_rdists->rdist, vpe->col_idx)->rd_base;
-		gic_write_lpir(d->parent_data->hwirq, rdbase + GICR_INVLPIR);
-		wait_for_syncr(rdbase);
+		gic_write_lpir(vpe->vpe_db_lpi, rdbase + GICR_INVLPIR);
+		while (gic_read_lpir(rdbase + GICR_SYNCR) & 1)
+			cpu_relax();
 	} else {
 		its_vpe_send_cmd(vpe, its_send_inv);
 	}
@@ -3667,7 +2847,8 @@ static int its_vpe_set_irqchip_state(struct irq_data *d,
 			gic_write_lpir(vpe->vpe_db_lpi, rdbase + GICR_SETLPIR);
 		} else {
 			gic_write_lpir(vpe->vpe_db_lpi, rdbase + GICR_CLRLPIR);
-			wait_for_syncr(rdbase);
+			while (gic_read_lpir(rdbase + GICR_SYNCR) & 1)
+				cpu_relax();
 		}
 	} else {
 		if (state)
@@ -3693,139 +2874,6 @@ static struct irq_chip its_vpe_irq_chip = {
 	.irq_retrigger		= its_vpe_retrigger,
 	.irq_set_irqchip_state	= its_vpe_set_irqchip_state,
 	.irq_set_vcpu_affinity	= its_vpe_set_vcpu_affinity,
-};
-
-static struct its_node *find_4_1_its(void)
-{
-	static struct its_node *its = NULL;
-
-	if (!its) {
-		list_for_each_entry(its, &its_nodes, entry) {
-			if (is_v4_1(its))
-				return its;
-		}
-
-		/* Oops? */
-		its = NULL;
-	}
-
-	return its;
-}
-
-static void its_vpe_4_1_send_inv(struct irq_data *d)
-{
-	struct its_vpe *vpe = irq_data_get_irq_chip_data(d);
-	struct its_node *its;
-
-	/*
-	 * GICv4.1 wants doorbells to be invalidated using the
-	 * INVDB command in order to be broadcast to all RDs. Send
-	 * it to the first valid ITS, and let the HW do its magic.
-	 */
-	its = find_4_1_its();
-	if (its)
-		its_send_invdb(its, vpe);
-}
-
-static void its_vpe_4_1_mask_irq(struct irq_data *d)
-{
-	lpi_write_config(d->parent_data, LPI_PROP_ENABLED, 0);
-	its_vpe_4_1_send_inv(d);
-}
-
-static void its_vpe_4_1_unmask_irq(struct irq_data *d)
-{
-	lpi_write_config(d->parent_data, 0, LPI_PROP_ENABLED);
-	its_vpe_4_1_send_inv(d);
-}
-
-static void its_vpe_4_1_schedule(struct its_vpe *vpe,
-				 struct its_cmd_info *info)
-{
-	void __iomem *vlpi_base = gic_data_rdist_vlpi_base();
-	u64 val = 0;
-
-	/* Schedule the VPE */
-	val |= GICR_VPENDBASER_Valid;
-	val |= info->g0en ? GICR_VPENDBASER_4_1_VGRP0EN : 0;
-	val |= info->g1en ? GICR_VPENDBASER_4_1_VGRP1EN : 0;
-	val |= FIELD_PREP(GICR_VPENDBASER_4_1_VPEID, vpe->vpe_id);
-
-	gicr_write_vpendbaser(val, vlpi_base + GICR_VPENDBASER);
-}
-
-static void its_vpe_4_1_deschedule(struct its_vpe *vpe,
-				   struct its_cmd_info *info)
-{
-	void __iomem *vlpi_base = gic_data_rdist_vlpi_base();
-	u64 val;
-
-	if (info->req_db) {
-		/*
-		 * vPE is going to block: make the vPE non-resident with
-		 * PendingLast clear and DB set. The GIC guarantees that if
-		 * we read-back PendingLast clear, then a doorbell will be
-		 * delivered when an interrupt comes.
-		 */
-		val = its_clear_vpend_valid(vlpi_base,
-					    GICR_VPENDBASER_PendingLast,
-					    GICR_VPENDBASER_4_1_DB);
-		vpe->pending_last = !!(val & GICR_VPENDBASER_PendingLast);
-	} else {
-		/*
-		 * We're not blocking, so just make the vPE non-resident
-		 * with PendingLast set, indicating that we'll be back.
-		 */
-		val = its_clear_vpend_valid(vlpi_base,
-					    0,
-					    GICR_VPENDBASER_PendingLast);
-		vpe->pending_last = true;
-	}
-}
-
-static void its_vpe_4_1_invall(struct its_vpe *vpe)
-{
-	void __iomem *rdbase;
-	u64 val;
-
-	val  = GICR_INVALLR_V;
-	val |= FIELD_PREP(GICR_INVALLR_VPEID, vpe->vpe_id);
-
-	/* Target the redistributor this vPE is currently known on */
-	rdbase = per_cpu_ptr(gic_rdists->rdist, vpe->col_idx)->rd_base;
-	gic_write_lpir(val, rdbase + GICR_INVALLR);
-}
-
-static int its_vpe_4_1_set_vcpu_affinity(struct irq_data *d, void *vcpu_info)
-{
-	struct its_vpe *vpe = irq_data_get_irq_chip_data(d);
-	struct its_cmd_info *info = vcpu_info;
-
-	switch (info->cmd_type) {
-	case SCHEDULE_VPE:
-		its_vpe_4_1_schedule(vpe, info);
-		return 0;
-
-	case DESCHEDULE_VPE:
-		its_vpe_4_1_deschedule(vpe, info);
-		return 0;
-
-	case INVALL_VPE:
-		its_vpe_4_1_invall(vpe);
-		return 0;
-
-	default:
-		return -EINVAL;
-	}
-}
-
-static struct irq_chip its_vpe_4_1_irq_chip = {
-	.name			= "GICv4.1-vpe",
-	.irq_mask		= its_vpe_4_1_mask_irq,
-	.irq_unmask		= its_vpe_4_1_unmask_irq,
-	.irq_eoi		= irq_chip_eoi_parent,
-	.irq_set_affinity	= its_vpe_set_affinity,
-	.irq_set_vcpu_affinity	= its_vpe_4_1_set_vcpu_affinity,
 };
 
 static int its_vpe_id_alloc(void)
@@ -3863,10 +2911,7 @@ static int its_vpe_init(struct its_vpe *vpe)
 
 	vpe->vpe_id = vpe_id;
 	vpe->vpt_page = vpt_page;
-	if (gic_rdists->has_rvpeid)
-		atomic_set(&vpe->vmapp_count, 0);
-	else
-		vpe->vpe_proxy_event = -1;
+	vpe->vpe_proxy_event = -1;
 
 	return 0;
 }
@@ -3908,7 +2953,6 @@ static void its_vpe_irq_domain_free(struct irq_domain *domain,
 static int its_vpe_irq_domain_alloc(struct irq_domain *domain, unsigned int virq,
 				    unsigned int nr_irqs, void *args)
 {
-	struct irq_chip *irqchip = &its_vpe_irq_chip;
 	struct its_vm *vm = args;
 	unsigned long *bitmap;
 	struct page *vprop_page;
@@ -3936,9 +2980,6 @@ static int its_vpe_irq_domain_alloc(struct irq_domain *domain, unsigned int virq
 	vm->nr_db_lpis = nr_ids;
 	vm->vprop_page = vprop_page;
 
-	if (gic_rdists->has_rvpeid)
-		irqchip = &its_vpe_4_1_irq_chip;
-
 	for (i = 0; i < nr_irqs; i++) {
 		vm->vpes[i]->vpe_db_lpi = base + i;
 		err = its_vpe_init(vm->vpes[i]);
@@ -3949,7 +2990,7 @@ static int its_vpe_irq_domain_alloc(struct irq_domain *domain, unsigned int virq
 		if (err)
 			break;
 		irq_domain_set_hwirq_and_chip(domain, virq + i, i,
-					      irqchip, vm->vpes[i]);
+					      &its_vpe_irq_chip, vm->vpes[i]);
 		set_bit(i, bitmap);
 	}
 
@@ -3978,7 +3019,7 @@ static int its_vpe_irq_domain_activate(struct irq_domain *domain,
 	vpe->col_idx = cpumask_first(cpu_online_mask);
 
 	list_for_each_entry(its, &its_nodes, entry) {
-		if (!is_v4(its))
+		if (!its->is_v4)
 			continue;
 
 		its_send_vmapp(its, vpe, true);
@@ -4004,7 +3045,7 @@ static void its_vpe_irq_domain_deactivate(struct irq_domain *domain,
 		return;
 
 	list_for_each_entry(its, &its_nodes, entry) {
-		if (!is_v4(its))
+		if (!its->is_v4)
 			continue;
 
 		its_send_vmapp(its, vpe, false);
@@ -4055,9 +3096,8 @@ static bool __maybe_unused its_enable_quirk_cavium_22375(void *data)
 {
 	struct its_node *its = data;
 
-	/* erratum 22375: only alloc 8MB table size (20 bits) */
-	its->typer &= ~GITS_TYPER_DEVBITS;
-	its->typer |= FIELD_PREP(GITS_TYPER_DEVBITS, 20 - 1);
+	/* erratum 22375: only alloc 8MB table size */
+	its->device_ids = 0x14;		/* 20 bits, 8MB */
 	its->flags |= ITS_FLAGS_WORKAROUND_CAVIUM_22375;
 
 	return true;
@@ -4077,8 +3117,7 @@ static bool __maybe_unused its_enable_quirk_qdf2400_e0065(void *data)
 	struct its_node *its = data;
 
 	/* On QDF2400, the size of the ITE is 16Bytes */
-	its->typer &= ~GITS_TYPER_ITT_ENTRY_SIZE;
-	its->typer |= FIELD_PREP(GITS_TYPER_ITT_ENTRY_SIZE, 16 - 1);
+	its->ite_size = 16;
 
 	return true;
 }
@@ -4112,10 +3151,8 @@ static bool __maybe_unused its_enable_quirk_socionext_synquacer(void *data)
 		its->get_msi_base = its_irq_get_msi_base_pre_its;
 
 		ids = ilog2(pre_its_window[1]) - 2;
-		if (device_ids(its) > ids) {
-			its->typer &= ~GITS_TYPER_DEVBITS;
-			its->typer |= FIELD_PREP(GITS_TYPER_DEVBITS, ids - 1);
-		}
+		if (its->device_ids > ids)
+			its->device_ids = ids;
 
 		/* the pre-ITS breaks isolation, so disable MSI remapping */
 		its->msi_domain_flags &= ~IRQ_DOMAIN_FLAG_MSI_REMAP;
@@ -4202,9 +3239,6 @@ static int its_save_disable(void)
 	list_for_each_entry(its, &its_nodes, entry) {
 		void __iomem *base;
 
-		if (!(its->flags & ITS_FLAGS_SAVE_SUSPEND_STATE))
-			continue;
-
 		base = its->base;
 		its->ctlr_save = readl_relaxed(base + GITS_CTLR);
 		err = its_force_quiescent(base);
@@ -4222,9 +3256,6 @@ err:
 	if (err) {
 		list_for_each_entry_continue_reverse(its, &its_nodes, entry) {
 			void __iomem *base;
-
-			if (!(its->flags & ITS_FLAGS_SAVE_SUSPEND_STATE))
-				continue;
 
 			base = its->base;
 			writel_relaxed(its->ctlr_save, base + GITS_CTLR);
@@ -4245,9 +3276,6 @@ static void its_restore_enable(void)
 		void __iomem *base;
 		int i;
 
-		if (!(its->flags & ITS_FLAGS_SAVE_SUSPEND_STATE))
-			continue;
-
 		base = its->base;
 
 		/*
@@ -4255,7 +3283,10 @@ static void its_restore_enable(void)
 		 * don't restore it since writing to CBASER or BASER<n>
 		 * registers is undefined according to the GIC v3 ITS
 		 * Specification.
+		 *
+		 * Firmware resuming with the ITS enabled is terminally broken.
 		 */
+		WARN_ON(readl_relaxed(base + GITS_CTLR) & GITS_CTLR_ENABLE);
 		ret = its_force_quiescent(base);
 		if (ret) {
 			pr_err("ITS@%pa: failed to quiesce on resume: %d\n",
@@ -4348,7 +3379,7 @@ static int its_init_vpe_domain(void)
 	}
 
 	/* Use the last possible DevID */
-	devid = GENMASK(device_ids(its) - 1, 0);
+	devid = GENMASK(its->device_ids - 1, 0);
 	vpe_proxy.dev = its_create_device(its, devid, entries, false);
 	if (!vpe_proxy.dev) {
 		kfree(vpe_proxy.vpes);
@@ -4411,7 +3442,6 @@ static int __init its_probe_one(struct resource *res,
 	void __iomem *its_base;
 	u32 val, ctlr;
 	u64 baser, tmp, typer;
-	struct page *page;
 	int err;
 
 	its_base = ioremap(res->start, resource_size(res));
@@ -4446,10 +3476,12 @@ static int __init its_probe_one(struct resource *res,
 	INIT_LIST_HEAD(&its->entry);
 	INIT_LIST_HEAD(&its->its_device_list);
 	typer = gic_read_typer(its_base + GITS_TYPER);
-	its->typer = typer;
 	its->base = its_base;
 	its->phys_base = res->start;
-	if (is_v4(its)) {
+	its->ite_size = GITS_TYPER_ITT_ENTRY_SIZE(typer);
+	its->device_ids = GITS_TYPER_DEVBITS(typer);
+	its->is_v4 = !!(typer & GITS_TYPER_VLPIS);
+	if (its->is_v4) {
 		if (!(typer & GITS_TYPER_VMOVP)) {
 			err = its_compute_its_list_map(res, its_base);
 			if (err < 0)
@@ -4462,25 +3494,16 @@ static int __init its_probe_one(struct resource *res,
 		} else {
 			pr_info("ITS@%pa: Single VMOVP capable\n", &res->start);
 		}
-
-		if (is_v4_1(its)) {
-			u32 svpet = FIELD_GET(GITS_TYPER_SVPET, typer);
-			its->mpidr = readl_relaxed(its_base + GITS_MPIDR);
-
-			pr_info("ITS@%pa: Using GICv4.1 mode %08x %08x\n",
-				&res->start, its->mpidr, svpet);
-		}
 	}
 
 	its->numa_node = numa_node;
 
-	page = alloc_pages_node(its->numa_node, GFP_KERNEL | __GFP_ZERO,
-				get_order(ITS_CMD_QUEUE_SZ));
-	if (!page) {
+	its->cmd_base = (void *)__get_free_pages(GFP_KERNEL | __GFP_ZERO,
+						get_order(ITS_CMD_QUEUE_SZ));
+	if (!its->cmd_base) {
 		err = -ENOMEM;
 		goto out_free_its;
 	}
-	its->cmd_base = (void *)page_address(page);
 	its->cmd_write = its->cmd_base;
 	its->fwnode_handle = handle;
 	its->get_msi_base = its_irq_get_msi_base;
@@ -4524,12 +3547,9 @@ static int __init its_probe_one(struct resource *res,
 	gits_write_cwriter(0, its->base + GITS_CWRITER);
 	ctlr = readl_relaxed(its->base + GITS_CTLR);
 	ctlr |= GITS_CTLR_ENABLE;
-	if (is_v4(its))
+	if (its->is_v4)
 		ctlr |= GITS_CTLR_ImDe;
 	writel_relaxed(ctlr, its->base + GITS_CTLR);
-
-	if (GITS_TYPER_HCC(typer))
-		its->flags |= ITS_FLAGS_SAVE_SUSPEND_STATE;
 
 	err = its_init_domain(handle, its);
 	if (err)
@@ -4564,6 +3584,16 @@ static int redist_disable_lpis(void)
 	u64 timeout = USEC_PER_SEC;
 	u64 val;
 
+	/*
+	 * If coming via a CPU hotplug event, we don't need to disable
+	 * LPIs before trying to re-enable them. They are already
+	 * configured and all is well in the world. Detect this case
+	 * by checking the allocation of the pending table for the
+	 * current CPU.
+	 */
+	if (gic_data_rdist()->pend_page)
+		return 0;
+
 	if (!gic_rdists_supports_plpis()) {
 		pr_info("CPU%d: LPIs not supported\n", smp_processor_id());
 		return -ENXIO;
@@ -4573,21 +3603,7 @@ static int redist_disable_lpis(void)
 	if (!(val & GICR_CTLR_ENABLE_LPIS))
 		return 0;
 
-	/*
-	 * If coming via a CPU hotplug event, we don't need to disable
-	 * LPIs before trying to re-enable them. They are already
-	 * configured and all is well in the world.
-	 *
-	 * If running with preallocated tables, there is nothing to do.
-	 */
-	if (gic_data_rdist()->lpi_enabled ||
-	    (gic_rdists->flags & RDIST_FLAGS_RD_TABLES_PREALLOCATED))
-		return 0;
-
-	/*
-	 * From that point on, we only try to do some damage control.
-	 */
-	pr_warn("GICv3: CPU%d: Booted with LPIs enabled, memory probably corrupted\n",
+	pr_warn("CPU%d: Booted with LPIs enabled, memory probably corrupted\n",
 		smp_processor_id());
 	add_taint(TAINT_CRAP, LOCKDEP_STILL_OK);
 
@@ -4698,13 +3714,13 @@ static int __init acpi_get_its_numa_node(u32 its_id)
 	return NUMA_NO_NODE;
 }
 
-static int __init gic_acpi_match_srat_its(union acpi_subtable_headers *header,
+static int __init gic_acpi_match_srat_its(struct acpi_subtable_header *header,
 					  const unsigned long end)
 {
 	return 0;
 }
 
-static int __init gic_acpi_parse_srat_its(union acpi_subtable_headers *header,
+static int __init gic_acpi_parse_srat_its(struct acpi_subtable_header *header,
 			 const unsigned long end)
 {
 	int node;
@@ -4771,7 +3787,7 @@ static int __init acpi_get_its_numa_node(u32 its_id) { return NUMA_NO_NODE; }
 static void __init acpi_its_srat_maps_free(void) { }
 #endif
 
-static int __init gic_acpi_parse_madt_its(union acpi_subtable_headers *header,
+static int __init gic_acpi_parse_madt_its(struct acpi_subtable_header *header,
 					  const unsigned long end)
 {
 	struct acpi_madt_generic_translator *its_entry;
@@ -4785,7 +3801,7 @@ static int __init gic_acpi_parse_madt_its(union acpi_subtable_headers *header,
 	res.end = its_entry->base_address + ACPI_GICV3_ITS_MEM_SIZE - 1;
 	res.flags = IORESOURCE_MEM;
 
-	dom_handle = irq_domain_alloc_fwnode(&res.start);
+	dom_handle = irq_domain_alloc_fwnode((void *)its_entry->base_address);
 	if (!dom_handle) {
 		pr_err("ITS@%pa: Unable to allocate GICv3 ITS domain token\n",
 		       &res.start);
@@ -4830,8 +3846,6 @@ int __init its_init(struct fwnode_handle *handle, struct rdists *rdists,
 	bool has_v4 = false;
 	int err;
 
-	gic_rdists = rdists;
-
 	its_parent = parent_domain;
 	of_node = to_of_node(handle);
 	if (of_node)
@@ -4844,12 +3858,13 @@ int __init its_init(struct fwnode_handle *handle, struct rdists *rdists,
 		return -ENXIO;
 	}
 
-	err = allocate_lpi_tables();
+	gic_rdists = rdists;
+	err = its_alloc_lpi_tables();
 	if (err)
 		return err;
 
 	list_for_each_entry(its, &its_nodes, entry)
-		has_v4 |= is_v4(its);
+		has_v4 |= its->is_v4;
 
 	if (has_v4 & rdists->has_vlpis) {
 		if (its_init_vpe_domain() ||

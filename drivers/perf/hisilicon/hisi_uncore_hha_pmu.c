@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * HiSilicon SoC HHA uncore Hardware event counters support
  *
@@ -7,6 +6,10 @@
  *         Anurup M <anurup.m@huawei.com>
  *
  * This code is based on the uncore PMUs like arm-cci and arm-ccn.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  */
 #include <linux/acpi.h>
 #include <linux/bug.h>
@@ -207,8 +210,10 @@ static int hisi_hha_pmu_init_irq(struct hisi_pmu *hha_pmu,
 
 	/* Read and init IRQ */
 	irq = platform_get_irq(pdev, 0);
-	if (irq < 0)
+	if (irq < 0) {
+		dev_err(&pdev->dev, "HHA PMU get irq fail; irq:%d\n", irq);
 		return irq;
+	}
 
 	ret = devm_request_irq(&pdev->dev, irq, hisi_hha_pmu_isr,
 			      IRQF_NOBALANCING | IRQF_NO_THREAD,
@@ -234,6 +239,7 @@ static int hisi_hha_pmu_init_data(struct platform_device *pdev,
 				  struct hisi_pmu *hha_pmu)
 {
 	unsigned long long id;
+	struct resource *res;
 	acpi_status status;
 
 	status = acpi_evaluate_integer(ACPI_HANDLE(&pdev->dev),
@@ -255,7 +261,8 @@ static int hisi_hha_pmu_init_data(struct platform_device *pdev,
 	/* HHA PMUs only share the same SCCL */
 	hha_pmu->ccl_id = -1;
 
-	hha_pmu->base = devm_platform_ioremap_resource(pdev, 0);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	hha_pmu->base = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(hha_pmu->base)) {
 		dev_err(&pdev->dev, "ioremap failed for hha_pmu resource\n");
 		return PTR_ERR(hha_pmu->base);
@@ -283,7 +290,7 @@ static struct attribute *hisi_hha_pmu_events_attr[] = {
 	HISI_PMU_EVENT_ATTR(rx_wbip,		0x05),
 	HISI_PMU_EVENT_ATTR(rx_wtistash,	0x11),
 	HISI_PMU_EVENT_ATTR(rd_ddr_64b,		0x1c),
-	HISI_PMU_EVENT_ATTR(wr_dr_64b,		0x1d),
+	HISI_PMU_EVENT_ATTR(wr_ddr_64b,		0x1d),
 	HISI_PMU_EVENT_ATTR(rd_ddr_128b,	0x1e),
 	HISI_PMU_EVENT_ATTR(wr_ddr_128b,	0x1f),
 	HISI_PMU_EVENT_ATTR(spill_num,		0x20),
@@ -400,7 +407,6 @@ static int hisi_hha_pmu_probe(struct platform_device *pdev)
 		.stop		= hisi_uncore_pmu_stop,
 		.read		= hisi_uncore_pmu_read,
 		.attr_groups	= hisi_hha_pmu_attr_groups,
-		.capabilities	= PERF_PMU_CAP_NO_EXCLUDE,
 	};
 
 	ret = perf_pmu_register(&hha_pmu->pmu, name, -1);

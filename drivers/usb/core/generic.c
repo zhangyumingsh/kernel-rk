@@ -21,7 +21,6 @@
 
 #include <linux/usb.h>
 #include <linux/usb/hcd.h>
-#include <uapi/linux/usb/audio.h>
 #include "usb.h"
 
 static inline const char *plural(int n)
@@ -43,14 +42,34 @@ static int is_activesync(struct usb_interface_descriptor *desc)
 		&& desc->bInterfaceProtocol == 1;
 }
 
-static bool is_audio(struct usb_interface_descriptor *desc)
+static int get_usb_audio_config(struct usb_host_bos *bos)
 {
-	return desc->bInterfaceClass == USB_CLASS_AUDIO;
-}
+	unsigned int desc_cnt, num_cfg_desc, len = 0;
+	unsigned char *buffer;
+	struct usb_config_summary_descriptor *conf_summary;
 
-static bool is_uac3_config(struct usb_interface_descriptor *desc)
-{
-	return desc->bInterfaceProtocol == UAC_VERSION_3;
+	if (!bos || !bos->config_summary)
+		goto done;
+
+	num_cfg_desc = bos->num_config_summary_desc;
+	conf_summary = bos->config_summary;
+	buffer = (unsigned char *)conf_summary;
+	for (desc_cnt = 0; desc_cnt < num_cfg_desc; desc_cnt++) {
+		conf_summary =
+			(struct usb_config_summary_descriptor *)(buffer + len);
+
+		len += conf_summary->bLength;
+
+		if (conf_summary->bcdVersion != USB_CONFIG_SUMMARY_DESC_REV ||
+				conf_summary->bClass != USB_CLASS_AUDIO)
+			continue;
+
+		/* return 1st config as per device preference */
+		return conf_summary->bConfigurationIndex[0];
+	}
+
+done:
+	return -EINVAL;
 }
 
 int usb_choose_configuration(struct usb_device *udev)
@@ -118,31 +137,6 @@ int usb_choose_configuration(struct usb_device *udev)
 			continue;
 		}
 
-		/*
-		 * Select first configuration as default for audio so that
-		 * devices that don't comply with UAC3 protocol are supported.
-		 * But, still iterate through other configurations and
-		 * select UAC3 compliant config if present.
-		 */
-		if (desc && is_audio(desc)) {
-			/* Always prefer the first found UAC3 config */
-			if (is_uac3_config(desc)) {
-				best = c;
-				break;
-			}
-
-			/* If there is no UAC3 config, prefer the first config */
-			else if (i == 0)
-				best = c;
-
-			/* Unconditional continue, because the rest of the code
-			 * in the loop is irrelevant for audio devices, and
-			 * because it can reassign best, which for audio devices
-			 * we don't want.
-			 */
-			continue;
-		}
-
 		/* When the first config's first interface is one of Microsoft's
 		 * pet nonstandard Ethernet-over-USB protocols, ignore it unless
 		 * this kernel has enabled the necessary host side driver.
@@ -181,7 +175,10 @@ int usb_choose_configuration(struct usb_device *udev)
 			insufficient_power, plural(insufficient_power));
 
 	if (best) {
-		i = best->desc.bConfigurationValue;
+		/* choose device preferred config */
+		i = get_usb_audio_config(udev->bos);
+		if (i < 0)
+			i = best->desc.bConfigurationValue;
 		dev_dbg(&udev->dev,
 			"configuration #%d chosen from %d choice%s\n",
 			i, num_configs, plural(num_configs));
@@ -257,8 +254,6 @@ static int generic_suspend(struct usb_device *udev, pm_message_t msg)
 	else
 		rc = usb_port_suspend(udev, msg);
 
-	if (rc == 0)
-		usbfs_notify_suspend(udev);
 	return rc;
 }
 
@@ -275,9 +270,6 @@ static int generic_resume(struct usb_device *udev, pm_message_t msg)
 		rc = hcd_bus_resume(udev, msg);
 	else
 		rc = usb_port_resume(udev, msg);
-
-	if (rc == 0)
-		usbfs_notify_resume(udev);
 	return rc;
 }
 

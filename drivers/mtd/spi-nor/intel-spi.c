@@ -1,9 +1,12 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Intel PCH/PCU SPI flash driver.
  *
  * Copyright (C) 2016, Intel Corporation
  * Author: Mika Westerberg <mika.westerberg@linux.intel.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  */
 
 #include <linux/err.h>
@@ -108,10 +111,6 @@
 #define BXT_FREG_NUM			12
 #define BXT_PR_NUM			6
 
-#define CNL_PR				0x84
-#define CNL_FREG_NUM			6
-#define CNL_PR_NUM			5
-
 #define LVSCC				0xc4
 #define UVSCC				0xc8
 #define ERASE_OPCODE_SHIFT		8
@@ -191,16 +190,12 @@ static void intel_spi_dump_regs(struct intel_spi *ispi)
 		dev_dbg(ispi->dev, "PR(%d)=0x%08x\n", i,
 			readl(ispi->pregs + PR(i)));
 
-	if (ispi->sregs) {
-		value = readl(ispi->sregs + SSFSTS_CTL);
-		dev_dbg(ispi->dev, "SSFSTS_CTL=0x%08x\n", value);
-		dev_dbg(ispi->dev, "PREOP_OPTYPE=0x%08x\n",
-			readl(ispi->sregs + PREOP_OPTYPE));
-		dev_dbg(ispi->dev, "OPMENU0=0x%08x\n",
-			readl(ispi->sregs + OPMENU0));
-		dev_dbg(ispi->dev, "OPMENU1=0x%08x\n",
-			readl(ispi->sregs + OPMENU1));
-	}
+	value = readl(ispi->sregs + SSFSTS_CTL);
+	dev_dbg(ispi->dev, "SSFSTS_CTL=0x%08x\n", value);
+	dev_dbg(ispi->dev, "PREOP_OPTYPE=0x%08x\n",
+		readl(ispi->sregs + PREOP_OPTYPE));
+	dev_dbg(ispi->dev, "OPMENU0=0x%08x\n", readl(ispi->sregs + OPMENU0));
+	dev_dbg(ispi->dev, "OPMENU1=0x%08x\n", readl(ispi->sregs + OPMENU1));
 
 	if (ispi->info->type == INTEL_SPI_BYT)
 		dev_dbg(ispi->dev, "BCR=0x%08x\n", readl(ispi->base + BYT_BCR));
@@ -348,13 +343,6 @@ static int intel_spi_init(struct intel_spi *ispi)
 		ispi->erase_64k = true;
 		break;
 
-	case INTEL_SPI_CNL:
-		ispi->sregs = NULL;
-		ispi->pregs = ispi->base + CNL_PR;
-		ispi->nregions = CNL_FREG_NUM;
-		ispi->pr_num = CNL_PR_NUM;
-		break;
-
 	default:
 		return -EINVAL;
 	}
@@ -382,11 +370,6 @@ static int intel_spi_init(struct intel_spi *ispi)
 		    !(uvscc & ERASE_64K_OPCODE_MASK))
 			ispi->erase_64k = false;
 
-	if (ispi->sregs == NULL && (ispi->swseq_reg || ispi->swseq_erase)) {
-		dev_err(ispi->dev, "software sequencer not supported, but required\n");
-		return -EINVAL;
-	}
-
 	/*
 	 * Some controllers can only do basic operations using hardware
 	 * sequencer. All other operations are supposed to be carried out
@@ -403,7 +386,7 @@ static int intel_spi_init(struct intel_spi *ispi)
 	val = readl(ispi->base + HSFSTS_CTL);
 	ispi->locked = !!(val & HSFSTS_CTL_FLOCKDN);
 
-	if (ispi->locked && ispi->sregs) {
+	if (ispi->locked) {
 		/*
 		 * BIOS programs allowed opcodes and then locks down the
 		 * register. So read back what opcodes it decided to support.
@@ -446,7 +429,7 @@ static int intel_spi_opcode_index(struct intel_spi *ispi, u8 opcode, int optype)
 	return 0;
 }
 
-static int intel_spi_hw_cycle(struct intel_spi *ispi, u8 opcode, size_t len)
+static int intel_spi_hw_cycle(struct intel_spi *ispi, u8 opcode, int len)
 {
 	u32 val, status;
 	int ret;
@@ -489,7 +472,7 @@ static int intel_spi_hw_cycle(struct intel_spi *ispi, u8 opcode, size_t len)
 	return 0;
 }
 
-static int intel_spi_sw_cycle(struct intel_spi *ispi, u8 opcode, size_t len,
+static int intel_spi_sw_cycle(struct intel_spi *ispi, u8 opcode, int len,
 			      int optype)
 {
 	u32 val = 0, status;
@@ -555,8 +538,7 @@ static int intel_spi_sw_cycle(struct intel_spi *ispi, u8 opcode, size_t len,
 	return 0;
 }
 
-static int intel_spi_read_reg(struct spi_nor *nor, u8 opcode, u8 *buf,
-			      size_t len)
+static int intel_spi_read_reg(struct spi_nor *nor, u8 opcode, u8 *buf, int len)
 {
 	struct intel_spi *ispi = nor->priv;
 	int ret;
@@ -576,8 +558,7 @@ static int intel_spi_read_reg(struct spi_nor *nor, u8 opcode, u8 *buf,
 	return intel_spi_read_block(ispi, buf, len);
 }
 
-static int intel_spi_write_reg(struct spi_nor *nor, u8 opcode, const u8 *buf,
-			       size_t len)
+static int intel_spi_write_reg(struct spi_nor *nor, u8 opcode, u8 *buf, int len)
 {
 	struct intel_spi *ispi = nor->priv;
 	int ret;
@@ -643,8 +624,6 @@ static ssize_t intel_spi_read(struct spi_nor *nor, loff_t from, size_t len,
 	switch (nor->read_opcode) {
 	case SPINOR_OP_READ:
 	case SPINOR_OP_READ_FAST:
-	case SPINOR_OP_READ_4B:
-	case SPINOR_OP_READ_FAST_4B:
 		break;
 	default:
 		return -EINVAL;
@@ -886,14 +865,6 @@ static void intel_spi_fill_partition(struct intel_spi *ispi,
 	}
 }
 
-static const struct spi_nor_controller_ops intel_spi_controller_ops = {
-	.read_reg = intel_spi_read_reg,
-	.write_reg = intel_spi_write_reg,
-	.read = intel_spi_read,
-	.write = intel_spi_write,
-	.erase = intel_spi_erase,
-};
-
 struct intel_spi *intel_spi_probe(struct device *dev,
 	struct resource *mem, const struct intel_spi_boardinfo *info)
 {
@@ -927,7 +898,11 @@ struct intel_spi *intel_spi_probe(struct device *dev,
 
 	ispi->nor.dev = ispi->dev;
 	ispi->nor.priv = ispi;
-	ispi->nor.controller_ops = &intel_spi_controller_ops;
+	ispi->nor.read_reg = intel_spi_read_reg;
+	ispi->nor.write_reg = intel_spi_write_reg;
+	ispi->nor.read = intel_spi_read;
+	ispi->nor.write = intel_spi_write;
+	ispi->nor.erase = intel_spi_erase;
 
 	ret = spi_nor_scan(&ispi->nor, NULL, &hwcaps);
 	if (ret) {

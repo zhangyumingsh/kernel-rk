@@ -1,8 +1,11 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Broadcom GENET (Gigabit Ethernet) Wake-on-LAN support
  *
  * Copyright (c) 2014-2017 Broadcom
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  */
 
 #define pr_fmt(fmt)				"bcmgenet_wol: " fmt
@@ -132,12 +135,8 @@ int bcmgenet_wol_power_down_cfg(struct bcmgenet_priv *priv,
 		return -EINVAL;
 	}
 
-	/* Can't suspend with WoL if MAC is still in reset */
-	reg = bcmgenet_umac_readl(priv, UMAC_CMD);
-	if (reg & CMD_SW_RESET)
-		reg &= ~CMD_SW_RESET;
-
 	/* disable RX */
+	reg = bcmgenet_umac_readl(priv, UMAC_CMD);
 	reg &= ~CMD_RX_EN;
 	bcmgenet_umac_writel(priv, reg, UMAC_CMD);
 	mdelay(10);

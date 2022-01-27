@@ -2,53 +2,24 @@
 #include <fcntl.h>
 #include <stdio.h>
 #include <errno.h>
-#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <inttypes.h>
 
-#include "dso.h"
-#include "map.h"
-#include "maps.h"
 #include "symbol.h"
-#include "symsrc.h"
 #include "demangle-java.h"
 #include "demangle-rust.h"
 #include "machine.h"
 #include "vdso.h"
 #include "debug.h"
-#include "util/copyfile.h"
-#include <linux/ctype.h>
-#include <linux/kernel.h>
-#include <linux/zalloc.h>
+#include "sane_ctype.h"
 #include <symbol/kallsyms.h>
-#include <internal/lib.h>
 
 #ifndef EM_AARCH64
 #define EM_AARCH64	183  /* ARM 64 bit */
 #endif
 
-#ifndef ELF32_ST_VISIBILITY
-#define ELF32_ST_VISIBILITY(o)	((o) & 0x03)
-#endif
-
-/* For ELF64 the definitions are the same.  */
-#ifndef ELF64_ST_VISIBILITY
-#define ELF64_ST_VISIBILITY(o)	ELF32_ST_VISIBILITY (o)
-#endif
-
-/* How to extract information held in the st_other field.  */
-#ifndef GELF_ST_VISIBILITY
-#define GELF_ST_VISIBILITY(val)	ELF64_ST_VISIBILITY (val)
-#endif
-
 typedef Elf64_Nhdr GElf_Nhdr;
-
-#ifndef DMGL_PARAMS
-#define DMGL_NO_OPTS     0              /* For readability... */
-#define DMGL_PARAMS      (1 << 0)       /* Include function args */
-#define DMGL_ANSI        (1 << 1)       /* Include const, volatile, etc */
-#endif
 
 #ifdef HAVE_CPLUS_DEMANGLE_SUPPORT
 extern char *cplus_demangle(const char *, int);
@@ -712,6 +683,7 @@ bool __weak elf__needs_adjust_symbols(GElf_Ehdr ehdr)
 int symsrc__init(struct symsrc *ss, struct dso *dso, const char *name,
 		 enum dso_binary_type type)
 {
+	int err = -1;
 	GElf_Ehdr ehdr;
 	Elf *elf;
 	int fd;
@@ -805,7 +777,7 @@ out_elf_end:
 	elf_end(elf);
 out_close:
 	close(fd);
-	return -1;
+	return err;
 }
 
 /**
@@ -844,7 +816,7 @@ void __weak arch__sym_update(struct symbol *s __maybe_unused,
 
 static int dso__process_kernel_symbol(struct dso *dso, struct map *map,
 				      GElf_Sym *sym, GElf_Shdr *shdr,
-				      struct maps *kmaps, struct kmap *kmap,
+				      struct map_groups *kmaps, struct kmap *kmap,
 				      struct dso **curr_dsop, struct map **curr_mapp,
 				      const char *section_name,
 				      bool adjust_kernel_syms, bool kmodule, bool *remap_kernel)
@@ -876,8 +848,8 @@ static int dso__process_kernel_symbol(struct dso *dso, struct map *map,
 			/* Ensure maps are correctly ordered */
 			if (kmaps) {
 				map__get(map);
-				maps__remove(kmaps, map);
-				maps__insert(kmaps, map);
+				map_groups__remove(kmaps, map);
+				map_groups__insert(kmaps, map);
 				map__put(map);
 			}
 		}
@@ -902,7 +874,7 @@ static int dso__process_kernel_symbol(struct dso *dso, struct map *map,
 
 	snprintf(dso_name, sizeof(dso_name), "%s%s", dso->short_name, section_name);
 
-	curr_map = maps__find_by_name(kmaps, dso_name);
+	curr_map = map_groups__find_by_name(kmaps, dso_name);
 	if (curr_map == NULL) {
 		u64 start = sym->st_value;
 
@@ -920,9 +892,6 @@ static int dso__process_kernel_symbol(struct dso *dso, struct map *map,
 		if (curr_map == NULL)
 			return -1;
 
-		if (curr_dso->kernel)
-			map__kmap(curr_map)->kmaps = kmaps;
-
 		if (adjust_kernel_syms) {
 			curr_map->start  = shdr->sh_addr + ref_reloc(kmap);
 			curr_map->end	 = curr_map->start + shdr->sh_size;
@@ -931,13 +900,13 @@ static int dso__process_kernel_symbol(struct dso *dso, struct map *map,
 			curr_map->map_ip = curr_map->unmap_ip = identity__map_ip;
 		}
 		curr_dso->symtab_type = dso->symtab_type;
-		maps__insert(kmaps, curr_map);
+		map_groups__insert(kmaps, curr_map);
 		/*
 		 * Add it before we drop the referece to curr_map, i.e. while
 		 * we still are sure to have a reference to this DSO via
 		 * *curr_map->dso.
 		 */
-		dsos__add(&kmaps->machine->dsos, curr_dso);
+		dsos__add(&map->groups->machine->dsos, curr_dso);
 		/* kmaps already got it */
 		map__put(curr_map);
 		dso__set_loaded(curr_dso);
@@ -953,7 +922,7 @@ int dso__load_sym(struct dso *dso, struct map *map, struct symsrc *syms_ss,
 		  struct symsrc *runtime_ss, int kmodule)
 {
 	struct kmap *kmap = dso->kernel ? map__kmap(map) : NULL;
-	struct maps *kmaps = kmap ? map__kmaps(map) : NULL;
+	struct map_groups *kmaps = kmap ? map__kmaps(map) : NULL;
 	struct map *curr_map = map;
 	struct dso *curr_dso = dso;
 	Elf_Data *symstrs, *secstrs;
@@ -1165,7 +1134,7 @@ int dso__load_sym(struct dso *dso, struct map *map, struct symsrc *syms_ss,
 			 * We need to fixup this here too because we create new
 			 * maps here, for things like vsyscall sections.
 			 */
-			maps__fixup_end(kmaps);
+			map_groups__fixup_end(kmaps);
 		}
 	}
 	err = nr;
@@ -1452,6 +1421,7 @@ struct kcore_copy_info {
 	u64 first_symbol;
 	u64 last_symbol;
 	u64 first_module;
+	u64 first_module_symbol;
 	u64 last_module_symbol;
 	size_t phnum;
 	struct list_head phdrs;
@@ -1491,7 +1461,7 @@ static void kcore_copy__free_phdrs(struct kcore_copy_info *kci)
 	struct phdr_data *p, *tmp;
 
 	list_for_each_entry_safe(p, tmp, &kci->phdrs, node) {
-		list_del_init(&p->node);
+		list_del(&p->node);
 		free(p);
 	}
 }
@@ -1514,7 +1484,7 @@ static void kcore_copy__free_syms(struct kcore_copy_info *kci)
 	struct sym_data *s, *tmp;
 
 	list_for_each_entry_safe(s, tmp, &kci->syms, node) {
-		list_del_init(&s->node);
+		list_del(&s->node);
 		free(s);
 	}
 }
@@ -1528,6 +1498,8 @@ static int kcore_copy__process_kallsyms(void *arg, const char *name, char type,
 		return 0;
 
 	if (strchr(name, '[')) {
+		if (!kci->first_module_symbol || start < kci->first_module_symbol)
+			kci->first_module_symbol = start;
 		if (start > kci->last_module_symbol)
 			kci->last_module_symbol = start;
 		return 0;
@@ -1724,6 +1696,10 @@ static int kcore_copy__calc_maps(struct kcore_copy_info *kci, const char *dir,
 		kci->etext = round_up(kci->last_symbol, page_size);
 		kci->etext += page_size;
 	}
+
+	if (kci->first_module_symbol &&
+	    (!kci->first_module || kci->first_module_symbol < kci->first_module))
+		kci->first_module = kci->first_module_symbol;
 
 	kci->first_module = round_down(kci->first_module, page_size);
 
@@ -1995,34 +1971,6 @@ void kcore_extract__delete(struct kcore_extract *kce)
 }
 
 #ifdef HAVE_GELF_GETNOTE_SUPPORT
-
-static void sdt_adjust_loc(struct sdt_note *tmp, GElf_Addr base_off)
-{
-	if (!base_off)
-		return;
-
-	if (tmp->bit32)
-		tmp->addr.a32[SDT_NOTE_IDX_LOC] =
-			tmp->addr.a32[SDT_NOTE_IDX_LOC] + base_off -
-			tmp->addr.a32[SDT_NOTE_IDX_BASE];
-	else
-		tmp->addr.a64[SDT_NOTE_IDX_LOC] =
-			tmp->addr.a64[SDT_NOTE_IDX_LOC] + base_off -
-			tmp->addr.a64[SDT_NOTE_IDX_BASE];
-}
-
-static void sdt_adjust_refctr(struct sdt_note *tmp, GElf_Addr base_addr,
-			      GElf_Addr base_off)
-{
-	if (!base_off)
-		return;
-
-	if (tmp->bit32 && tmp->addr.a32[SDT_NOTE_IDX_REFCTR])
-		tmp->addr.a32[SDT_NOTE_IDX_REFCTR] -= (base_addr - base_off);
-	else if (tmp->addr.a64[SDT_NOTE_IDX_REFCTR])
-		tmp->addr.a64[SDT_NOTE_IDX_REFCTR] -= (base_addr - base_off);
-}
-
 /**
  * populate_sdt_note : Parse raw data and identify SDT note
  * @elf: elf of the opened file
@@ -2040,6 +1988,7 @@ static int populate_sdt_note(Elf **elf, const char *data, size_t len,
 	const char *provider, *name, *args;
 	struct sdt_note *tmp = NULL;
 	GElf_Ehdr ehdr;
+	GElf_Addr base_off = 0;
 	GElf_Shdr shdr;
 	int ret = -EINVAL;
 
@@ -2135,22 +2084,27 @@ static int populate_sdt_note(Elf **elf, const char *data, size_t len,
 	 * base address in the description of the SDT note. If its different,
 	 * then accordingly, adjust the note location.
 	 */
-	if (elf_section_by_name(*elf, &ehdr, &shdr, SDT_BASE_SCN, NULL))
-		sdt_adjust_loc(tmp, shdr.sh_offset);
-
-	/* Adjust reference counter offset */
-	if (elf_section_by_name(*elf, &ehdr, &shdr, SDT_PROBES_SCN, NULL))
-		sdt_adjust_refctr(tmp, shdr.sh_addr, shdr.sh_offset);
+	if (elf_section_by_name(*elf, &ehdr, &shdr, SDT_BASE_SCN, NULL)) {
+		base_off = shdr.sh_offset;
+		if (base_off) {
+			if (tmp->bit32)
+				tmp->addr.a32[0] = tmp->addr.a32[0] + base_off -
+					tmp->addr.a32[1];
+			else
+				tmp->addr.a64[0] = tmp->addr.a64[0] + base_off -
+					tmp->addr.a64[1];
+		}
+	}
 
 	list_add_tail(&tmp->note_list, sdt_notes);
 	return 0;
 
 out_free_args:
-	zfree(&tmp->args);
+	free(tmp->args);
 out_free_name:
-	zfree(&tmp->name);
+	free(tmp->name);
 out_free_prov:
-	zfree(&tmp->provider);
+	free(tmp->provider);
 out_free_note:
 	free(tmp);
 out_err:
@@ -2265,9 +2219,9 @@ int cleanup_sdt_note_list(struct list_head *sdt_notes)
 	int nr_free = 0;
 
 	list_for_each_entry_safe(pos, tmp, sdt_notes, note_list) {
-		list_del_init(&pos->note_list);
-		zfree(&pos->name);
-		zfree(&pos->provider);
+		list_del(&pos->note_list);
+		free(pos->name);
+		free(pos->provider);
 		free(pos);
 		nr_free++;
 	}

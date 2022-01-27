@@ -6,7 +6,6 @@
  *
  * Copyright 2009	Johannes Berg <johannes@sipsolutions.net>
  * Copyright 2013-2014  Intel Mobile Communications GmbH
- * Copyright 2018       Intel Corporation
  */
 
 #include <linux/export.h>
@@ -203,11 +202,6 @@ bool cfg80211_chandef_valid(const struct cfg80211_chan_def *chandef)
 	default:
 		return false;
 	}
-
-	/* channel 14 is only for IEEE 802.11b */
-	if (chandef->center_freq1 == 2484 &&
-	    chandef->width != NL80211_CHAN_WIDTH_20_NOHT)
-		return false;
 
 	if (cfg80211_chandef_is_edmg(chandef) &&
 	    !cfg80211_edmg_chandef_valid(chandef))
@@ -912,7 +906,6 @@ bool cfg80211_chandef_usable(struct wiphy *wiphy,
 	case NL80211_CHAN_WIDTH_20:
 		if (!ht_cap->ht_supported)
 			return false;
-		/* fall through */
 	case NL80211_CHAN_WIDTH_20_NOHT:
 		prohibited_flags |= IEEE80211_CHAN_NO_20MHZ;
 		width = 20;
@@ -935,7 +928,6 @@ bool cfg80211_chandef_usable(struct wiphy *wiphy,
 		cap = vht_cap->cap & IEEE80211_VHT_CAP_SUPP_CHAN_WIDTH_MASK;
 		if (cap != IEEE80211_VHT_CAP_SUPP_CHAN_WIDTH_160_80PLUS80MHZ)
 			return false;
-		/* fall through */
 	case NL80211_CHAN_WIDTH_80:
 		if (!vht_cap->vht_supported)
 			return false;
@@ -1058,8 +1050,7 @@ static bool cfg80211_ir_permissive_chan(struct wiphy *wiphy,
 		if (chan == other_chan)
 			return true;
 
-		if (chan->band != NL80211_BAND_5GHZ &&
-		    chan->band != NL80211_BAND_6GHZ)
+		if (chan->band != NL80211_BAND_5GHZ)
 			continue;
 
 		r1 = cfg80211_get_unii(chan->center_freq);

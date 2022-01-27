@@ -16,31 +16,21 @@
 #include "xfs_da_format.h"
 #include "xfs_da_btree.h"
 #include "xfs_inode.h"
+#include "xfs_alloc.h"
 #include "xfs_trans.h"
+#include "xfs_inode_item.h"
 #include "xfs_bmap.h"
+#include "xfs_bmap_util.h"
 #include "xfs_attr.h"
+#include "xfs_attr_leaf.h"
 #include "xfs_attr_remote.h"
+#include "xfs_trans_space.h"
 #include "xfs_trace.h"
+#include "xfs_cksum.h"
+#include "xfs_buf_item.h"
 #include "xfs_error.h"
 
 #define ATTR_RMTVALUE_MAPSIZE	1	/* # of map entries at once */
-
-/*
- * Remote Attribute Values
- * =======================
- *
- * Remote extended attribute values are conceptually simple -- they're written
- * to data blocks mapped by an inode's attribute fork, and they have an upper
- * size limit of 64k.  Setting a value does not involve the XFS log.
- *
- * However, on a v5 filesystem, maximally sized remote attr values require one
- * block more than 64k worth of space to hold both the remote attribute value
- * header (64 bytes).  On a 4k block filesystem this results in a 68k buffer;
- * on a 64k block filesystem, this would be a 128k buffer.  Note that the log
- * format can only handle a dirty buffer of XFS_MAX_BLOCKSIZE length (64k).
- * Therefore, we /must/ ensure that remote attribute value buffers never touch
- * the logging system and therefore never have a log item.
- */
 
 /*
  * Each contiguous block has a header, so it is not just a simple attribute
@@ -89,7 +79,6 @@ xfs_attr3_rmt_hdr_ok(
 static xfs_failaddr_t
 xfs_attr3_rmt_verify(
 	struct xfs_mount	*mp,
-	struct xfs_buf		*bp,
 	void			*ptr,
 	int			fsbsize,
 	xfs_daddr_t		bno)
@@ -98,7 +87,7 @@ xfs_attr3_rmt_verify(
 
 	if (!xfs_sb_version_hascrc(&mp->m_sb))
 		return __this_address;
-	if (!xfs_verify_magic(bp, rmt->rm_magic))
+	if (rmt->rm_magic != cpu_to_be32(XFS_ATTR3_RMT_MAGIC))
 		return __this_address;
 	if (!uuid_equal(&rmt->rm_uuid, &mp->m_sb.sb_meta_uuid))
 		return __this_address;
@@ -121,7 +110,7 @@ __xfs_attr3_rmt_read_verify(
 	bool		check_crc,
 	xfs_failaddr_t	*failaddr)
 {
-	struct xfs_mount *mp = bp->b_mount;
+	struct xfs_mount *mp = bp->b_target->bt_mount;
 	char		*ptr;
 	int		len;
 	xfs_daddr_t	bno;
@@ -142,7 +131,7 @@ __xfs_attr3_rmt_read_verify(
 			*failaddr = __this_address;
 			return -EFSBADCRC;
 		}
-		*failaddr = xfs_attr3_rmt_verify(mp, bp, ptr, blksize, bno);
+		*failaddr = xfs_attr3_rmt_verify(mp, ptr, blksize, bno);
 		if (*failaddr)
 			return -EFSCORRUPTED;
 		len -= blksize;
@@ -185,7 +174,7 @@ static void
 xfs_attr3_rmt_write_verify(
 	struct xfs_buf	*bp)
 {
-	struct xfs_mount *mp = bp->b_mount;
+	struct xfs_mount *mp = bp->b_target->bt_mount;
 	xfs_failaddr_t	fa;
 	int		blksize = mp->m_attr_geo->blksize;
 	char		*ptr;
@@ -204,7 +193,7 @@ xfs_attr3_rmt_write_verify(
 	while (len > 0) {
 		struct xfs_attr3_rmt_hdr *rmt = (struct xfs_attr3_rmt_hdr *)ptr;
 
-		fa = xfs_attr3_rmt_verify(mp, bp, ptr, blksize, bno);
+		fa = xfs_attr3_rmt_verify(mp, ptr, blksize, bno);
 		if (fa) {
 			xfs_verifier_error(bp, -EFSCORRUPTED, fa);
 			return;
@@ -231,7 +220,6 @@ xfs_attr3_rmt_write_verify(
 
 const struct xfs_buf_ops xfs_attr3_rmt_buf_ops = {
 	.name = "xfs_attr3_rmt",
-	.magic = { 0, cpu_to_be32(XFS_ATTR3_RMT_MAGIC) },
 	.verify_read = xfs_attr3_rmt_read_verify,
 	.verify_write = xfs_attr3_rmt_write_verify,
 	.verify_struct = xfs_attr3_rmt_verify_struct,
@@ -376,8 +364,6 @@ xfs_attr_rmtval_copyin(
 /*
  * Read the value associated with an attribute from the out-of-line buffer
  * that we stored it in.
- *
- * Returns 0 on successful retrieval, otherwise an error.
  */
 int
 xfs_attr_rmtval_get(
@@ -418,15 +404,17 @@ xfs_attr_rmtval_get(
 			       (map[i].br_startblock != HOLESTARTBLOCK));
 			dblkno = XFS_FSB_TO_DADDR(mp, map[i].br_startblock);
 			dblkcnt = XFS_FSB_TO_BB(mp, map[i].br_blockcount);
-			error = xfs_buf_read(mp->m_ddev_targp, dblkno, dblkcnt,
-					0, &bp, &xfs_attr3_rmt_buf_ops);
+			error = xfs_trans_read_buf(mp, args->trans,
+						   mp->m_ddev_targp,
+						   dblkno, dblkcnt, 0, &bp,
+						   &xfs_attr3_rmt_buf_ops);
 			if (error)
 				return error;
 
 			error = xfs_attr_rmtval_copyout(mp, bp, args->dp->i_ino,
 							&offset, &valuelen,
 							&dst);
-			xfs_buf_relse(bp);
+			xfs_trans_brelse(args->trans, bp);
 			if (error)
 				return error;
 
@@ -545,9 +533,9 @@ xfs_attr_rmtval_set(
 		dblkno = XFS_FSB_TO_DADDR(mp, map.br_startblock),
 		dblkcnt = XFS_FSB_TO_BB(mp, map.br_blockcount);
 
-		error = xfs_buf_get(mp->m_ddev_targp, dblkno, dblkcnt, &bp);
-		if (error)
-			return error;
+		bp = xfs_buf_get(mp->m_ddev_targp, dblkno, dblkcnt, 0);
+		if (!bp)
+			return -ENOMEM;
 		bp->b_ops = &xfs_attr3_rmt_buf_ops;
 
 		xfs_attr_rmtval_copyin(mp, bp, args->dp->i_ino, &offset,
@@ -567,33 +555,6 @@ xfs_attr_rmtval_set(
 	return 0;
 }
 
-/* Mark stale any incore buffers for the remote value. */
-int
-xfs_attr_rmtval_stale(
-	struct xfs_inode	*ip,
-	struct xfs_bmbt_irec	*map,
-	xfs_buf_flags_t		incore_flags)
-{
-	struct xfs_mount	*mp = ip->i_mount;
-	struct xfs_buf		*bp;
-
-	ASSERT(xfs_isilocked(ip, XFS_ILOCK_EXCL));
-
-	if (XFS_IS_CORRUPT(mp, map->br_startblock == DELAYSTARTBLOCK) ||
-	    XFS_IS_CORRUPT(mp, map->br_startblock == HOLESTARTBLOCK))
-		return -EFSCORRUPTED;
-
-	bp = xfs_buf_incore(mp->m_ddev_targp,
-			XFS_FSB_TO_DADDR(mp, map->br_startblock),
-			XFS_FSB_TO_BB(mp, map->br_blockcount), incore_flags);
-	if (bp) {
-		xfs_buf_stale(bp);
-		xfs_buf_relse(bp);
-	}
-
-	return 0;
-}
-
 /*
  * Remove the value associated with an attribute by deleting the
  * out-of-line buffer that it is stored on.
@@ -602,6 +563,7 @@ int
 xfs_attr_rmtval_remove(
 	struct xfs_da_args	*args)
 {
+	struct xfs_mount	*mp = args->dp->i_mount;
 	xfs_dablk_t		lblkno;
 	int			blkcnt;
 	int			error;
@@ -616,6 +578,9 @@ xfs_attr_rmtval_remove(
 	blkcnt = args->rmtblkcnt;
 	while (blkcnt > 0) {
 		struct xfs_bmbt_irec	map;
+		struct xfs_buf		*bp;
+		xfs_daddr_t		dblkno;
+		int			dblkcnt;
 		int			nmap;
 
 		/*
@@ -626,11 +591,22 @@ xfs_attr_rmtval_remove(
 				       blkcnt, &map, &nmap, XFS_BMAPI_ATTRFORK);
 		if (error)
 			return error;
-		if (XFS_IS_CORRUPT(args->dp->i_mount, nmap != 1))
-			return -EFSCORRUPTED;
-		error = xfs_attr_rmtval_stale(args->dp, &map, XBF_TRYLOCK);
-		if (error)
-			return error;
+		ASSERT(nmap == 1);
+		ASSERT((map.br_startblock != DELAYSTARTBLOCK) &&
+		       (map.br_startblock != HOLESTARTBLOCK));
+
+		dblkno = XFS_FSB_TO_DADDR(mp, map.br_startblock),
+		dblkcnt = XFS_FSB_TO_BB(mp, map.br_blockcount);
+
+		/*
+		 * If the "remote" value is in the cache, remove it.
+		 */
+		bp = xfs_buf_incore(mp->m_ddev_targp, dblkno, dblkcnt, XBF_TRYLOCK);
+		if (bp) {
+			xfs_buf_stale(bp);
+			xfs_buf_relse(bp);
+			bp = NULL;
+		}
 
 		lblkno += map.br_blockcount;
 		blkcnt -= map.br_blockcount;

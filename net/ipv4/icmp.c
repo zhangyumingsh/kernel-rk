@@ -1,8 +1,12 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *	NET3:	Implementation of the ICMP protocol layer.
  *
  *		Alan Cox, <alan@lxorguk.ukuu.org.uk>
+ *
+ *	This program is free software; you can redistribute it and/or
+ *	modify it under the terms of the GNU General Public License
+ *	as published by the Free Software Foundation; either version
+ *	2 of the License, or (at your option) any later version.
  *
  *	Some of the function names and the icmp unreach table for this
  *	module were derived from [icmp.c 1.0.11 06/02/93] by
@@ -55,6 +59,7 @@
  *
  *	- Should use skb_pull() instead of all the manual checking.
  *	  This would also greatly simply some upper layer error handlers. --AK
+ *
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -201,7 +206,7 @@ static const struct icmp_control icmp_pointers[NR_ICMP_TYPES+1];
  */
 static struct sock *icmp_sk(struct net *net)
 {
-	return this_cpu_read(*net->ipv4.icmp_sk);
+	return *this_cpu_ptr(net->ipv4.icmp_sk);
 }
 
 /* Called with BH disabled */
@@ -239,7 +244,7 @@ static struct {
 /**
  * icmp_global_allow - Are we allowed to send one more ICMP message ?
  *
- * Uses a token bucket to limit our ICMP messages to sysctl_icmp_msgs_per_sec.
+ * Uses a token bucket to limit our ICMP messages to ~sysctl_icmp_msgs_per_sec.
  * Returns false if we reached the limit and can not send another packet.
  * Note: called with BH disabled
  */
@@ -267,7 +272,10 @@ bool icmp_global_allow(void)
 	}
 	credit = min_t(u32, icmp_global.credit + incr, sysctl_icmp_msgs_burst);
 	if (credit) {
-		credit--;
+		/* We want to use a credit of one in average, but need to randomize
+		 * it for security reasons.
+		 */
+		credit = max_t(int, credit - prandom_u32_max(3), 0);
 		rc = true;
 	}
 	WRITE_ONCE(icmp_global.credit, credit);
@@ -683,8 +691,7 @@ void __icmp_send(struct sk_buff *skb_in, int type, int code, __be32 info,
 			dev = dev_get_by_index_rcu(net, inet_iif(skb_in));
 
 		if (dev)
-			saddr = inet_select_addr(dev, iph->saddr,
-						 RT_SCOPE_LINK);
+			saddr = inet_select_addr(dev, 0, RT_SCOPE_LINK);
 		else
 			saddr = 0;
 		rcu_read_unlock();
@@ -753,13 +760,14 @@ EXPORT_SYMBOL(__icmp_send);
 void icmp_ndo_send(struct sk_buff *skb_in, int type, int code, __be32 info)
 {
 	struct sk_buff *cloned_skb = NULL;
+	struct ip_options opts = { 0 };
 	enum ip_conntrack_info ctinfo;
 	struct nf_conn *ct;
 	__be32 orig_ip;
 
 	ct = nf_ct_get(skb_in, &ctinfo);
 	if (!ct || !(ct->status & IPS_SRC_NAT)) {
-		icmp_send(skb_in, type, code, info);
+		__icmp_send(skb_in, type, code, info, &opts);
 		return;
 	}
 
@@ -774,7 +782,7 @@ void icmp_ndo_send(struct sk_buff *skb_in, int type, int code, __be32 info)
 
 	orig_ip = ip_hdr(skb_in)->saddr;
 	ip_hdr(skb_in)->saddr = ct->tuplehash[0].tuple.src.u3.ip;
-	icmp_send(skb_in, type, code, info);
+	__icmp_send(skb_in, type, code, info, &opts);
 	ip_hdr(skb_in)->saddr = orig_ip;
 out:
 	consume_skb(cloned_skb);
@@ -943,7 +951,7 @@ static bool icmp_redirect(struct sk_buff *skb)
 		return false;
 	}
 
-	icmp_socket_deliver(skb, ntohl(icmp_hdr(skb)->un.gateway));
+	icmp_socket_deliver(skb, icmp_hdr(skb)->un.gateway);
 	return true;
 }
 
@@ -1116,7 +1124,7 @@ error:
 	goto drop;
 }
 
-int icmp_err(struct sk_buff *skb, u32 info)
+void icmp_err(struct sk_buff *skb, u32 info)
 {
 	struct iphdr *iph = (struct iphdr *)skb->data;
 	int offset = iph->ihl<<2;
@@ -1131,15 +1139,13 @@ int icmp_err(struct sk_buff *skb, u32 info)
 	 */
 	if (icmph->type != ICMP_ECHOREPLY) {
 		ping_err(skb, offset, info);
-		return 0;
+		return;
 	}
 
 	if (type == ICMP_DEST_UNREACH && code == ICMP_FRAG_NEEDED)
-		ipv4_update_pmtu(skb, net, info, 0, IPPROTO_ICMP);
+		ipv4_update_pmtu(skb, net, info, 0, 0, IPPROTO_ICMP, 0);
 	else if (type == ICMP_REDIRECT)
-		ipv4_redirect(skb, net, 0, IPPROTO_ICMP);
-
-	return 0;
+		ipv4_redirect(skb, net, 0, 0, IPPROTO_ICMP, 0);
 }
 
 /*
@@ -1282,7 +1288,9 @@ static int __net_init icmp_sk_init(struct net *net)
 	return 0;
 
 fail:
-	icmp_sk_exit(net);
+	for_each_possible_cpu(i)
+		inet_ctl_sock_destroy(*per_cpu_ptr(net->ipv4.icmp_sk, i));
+	free_percpu(net->ipv4.icmp_sk);
 	return err;
 }
 

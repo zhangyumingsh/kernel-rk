@@ -54,16 +54,13 @@ Description:
 What:		/sys/class/devfreq/.../trans_stat
 Date:		October 2012
 Contact:	MyungJoo Ham <myungjoo.ham@samsung.com>
-Description:
-		This ABI shows or clears the statistics of devfreq behavior
-		on a specific device. It shows the time spent in each state
-		and the number of transitions between states.
+Descrtiption:
+		This ABI shows the statistics of devfreq behavior on a
+		specific device. It shows the time spent in each state and
+		the number of transitions between states.
 		In order to activate this ABI, the devfreq target device
 		driver should provide the list of available frequencies
-		with its profile. If need to reset the statistics of devfreq
-		behavior on a specific device, enter 0(zero) to 'trans_stat'
-		as following:
-			echo 0 > /sys/class/devfreq/.../trans_stat
+		with its profile.
 
 What:		/sys/class/devfreq/.../userspace/set_freq
 Date:		September 2011

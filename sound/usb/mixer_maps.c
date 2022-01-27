@@ -1,8 +1,22 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  *   Additional mixer mapping
  *
  *   Copyright (c) 2002 by Takashi Iwai <tiwai@suse.de>
+ *
+ *   This program is free software; you can redistribute it and/or modify
+ *   it under the terms of the GNU General Public License as published by
+ *   the Free Software Foundation; either version 2 of the License, or
+ *   (at your option) any later version.
+ *
+ *   This program is distributed in the hope that it will be useful,
+ *   but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *   GNU General Public License for more details.
+ *
+ *   You should have received a copy of the GNU General Public License
+ *   along with this program; if not, write to the Free Software
+ *   Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
+ *
  */
 
 struct usbmix_dB_map {
@@ -27,6 +41,7 @@ struct usbmix_ctl_map {
 	u32 id;
 	const struct usbmix_name_map *map;
 	const struct usbmix_selector_map *selector_map;
+	const struct usbmix_connector_map *connector_map;
 	int ignore_ctl_error;
 };
 
@@ -336,6 +351,13 @@ static const struct usbmix_name_map bose_companion5_map[] = {
 	{ 0 }	/* terminator */
 };
 
+/* Sennheiser Communications Headset [PC 8], the dB value is reported as -6 negative maximum  */
+static const struct usbmix_dB_map sennheiser_pc8_dB = {-9500, 0};
+static const struct usbmix_name_map sennheiser_pc8_map[] = {
+	{ 9, NULL, .dB = &sennheiser_pc8_dB },
+	{ 0 }   /* terminator */
+};
+
 /*
  * Dell usb dock with ALC4020 codec had a firmware problem where it got
  * screwed up when zero volume is passed; just skip it as a workaround
@@ -349,16 +371,6 @@ static const struct usbmix_name_map dell_alc4020_map[] = {
 	{ 0 }
 };
 
-/*
- * Corsair Virtuoso calls everything "Headset" without this, leading to
- * applications moving the sidetone control instead of the main one.
- */
-static const struct usbmix_name_map corsair_virtuoso_map[] = {
-	{ 3, "Mic Capture" },
-	{ 6, "Sidetone Playback" },
-	{ 0 }
-};
-
 /* Some mobos shipped with a dummy HD-audio show the invalid GET_MIN/GET_MAX
  * response for Input Gain Pad (id=19, control=12) and the connector status
  * for SPDIF terminal (id=18).  Skip them.
@@ -366,6 +378,48 @@ static const struct usbmix_name_map corsair_virtuoso_map[] = {
 static const struct usbmix_name_map asus_rog_map[] = {
 	{ 18, NULL }, /* OT, connector control */
 	{ 19, NULL, 12 }, /* FU, Input Gain Pad */
+	{}
+};
+
+/* TRX40 mobos with Realtek ALC1220-VB */
+static const struct usbmix_name_map trx40_mobo_map[] = {
+	{ 18, NULL }, /* OT, IEC958 - broken response, disabled */
+	{ 19, NULL, 12 }, /* FU, Input Gain Pad - broken response, disabled */
+	{ 16, "Speaker" },		/* OT */
+	{ 22, "Speaker Playback" },	/* FU */
+	{ 7, "Line" },			/* IT */
+	{ 19, "Line Capture" },		/* FU */
+	{ 17, "Front Headphone" },	/* OT */
+	{ 23, "Front Headphone Playback" },	/* FU */
+	{ 8, "Mic" },			/* IT */
+	{ 20, "Mic Capture" },		/* FU */
+	{ 9, "Front Mic" },		/* IT */
+	{ 21, "Front Mic Capture" },	/* FU */
+	{ 24, "IEC958 Playback" },	/* FU */
+	{}
+};
+
+static const struct usbmix_connector_map trx40_mobo_connector_map[] = {
+	{ 10, 16 },	/* (Back) Speaker */
+	{ 11, 17 },	/* Front Headphone */
+	{ 13, 7 },	/* Line */
+	{ 14, 8 },	/* Mic */
+	{ 15, 9 },	/* Front Mic */
+	{}
+};
+
+/* Rear panel + front mic on Gigabyte TRX40 Aorus Master with ALC1220-VB */
+static const struct usbmix_name_map aorus_master_alc1220vb_map[] = {
+	{ 17, NULL },			/* OT, IEC958?, disabled */
+	{ 19, NULL, 12 }, /* FU, Input Gain Pad - broken response, disabled */
+	{ 16, "Line Out" },		/* OT */
+	{ 22, "Line Out Playback" },	/* FU */
+	{ 7, "Line" },			/* IT */
+	{ 19, "Line Capture" },		/* FU */
+	{ 8, "Mic" },			/* IT */
+	{ 20, "Mic Capture" },		/* FU */
+	{ 9, "Front Mic" },		/* IT */
+	{ 21, "Front Mic Capture" },	/* FU */
 	{}
 };
 
@@ -488,19 +542,14 @@ static const struct usbmix_ctl_map usbmix_ctl_maps[] = {
 		.id = USB_ID(0x05a7, 0x1020),
 		.map = bose_companion5_map,
 	},
-	{
-		/* Corsair Virtuoso (wired mode) */
-		.id = USB_ID(0x1b1c, 0x0a41),
-		.map = corsair_virtuoso_map,
-	},
-	{
-		/* Corsair Virtuoso (wireless mode) */
-		.id = USB_ID(0x1b1c, 0x0a42),
-		.map = corsair_virtuoso_map,
+	{	/* Gigabyte TRX40 Aorus Master (rear panel + front mic) */
+		.id = USB_ID(0x0414, 0xa001),
+		.map = aorus_master_alc1220vb_map,
 	},
 	{	/* Gigabyte TRX40 Aorus Pro WiFi */
 		.id = USB_ID(0x0414, 0xa002),
-		.map = asus_rog_map,
+		.map = trx40_mobo_map,
+		.connector_map = trx40_mobo_connector_map,
 	},
 	{	/* ASUS ROG Zenith II */
 		.id = USB_ID(0x0b05, 0x1916),
@@ -512,11 +561,18 @@ static const struct usbmix_ctl_map usbmix_ctl_maps[] = {
 	},
 	{	/* MSI TRX40 Creator */
 		.id = USB_ID(0x0db0, 0x0d64),
-		.map = asus_rog_map,
+		.map = trx40_mobo_map,
+		.connector_map = trx40_mobo_connector_map,
 	},
 	{	/* MSI TRX40 */
 		.id = USB_ID(0x0db0, 0x543d),
-		.map = asus_rog_map,
+		.map = trx40_mobo_map,
+		.connector_map = trx40_mobo_connector_map,
+	},
+	{	/* Asrock TRX40 Creator */
+		.id = USB_ID(0x26ce, 0x0a01),
+		.map = trx40_mobo_map,
+		.connector_map = trx40_mobo_connector_map,
 	},
 	{ 0 } /* terminator */
 };
@@ -583,6 +639,11 @@ static const struct usbmix_ctl_map uac3_badd_usbmix_ctl_maps[] = {
 	{
 		.id = UAC3_FUNCTION_SUBCLASS_SPEAKERPHONE,
 		.map = uac3_badd_speakerphone_map,
+	},
+	{
+		/* Sennheiser Communications Headset [PC 8] */
+		.id = USB_ID(0x1395, 0x0025),
+		.map = sennheiser_pc8_map,
 	},
 	{ 0 } /* terminator */
 };

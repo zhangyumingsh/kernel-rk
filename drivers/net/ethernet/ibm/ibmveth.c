@@ -1,6 +1,18 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * IBM Power Virtual Ethernet Device Driver
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, see <http://www.gnu.org/licenses/>.
  *
  * Copyright (C) IBM Corporation, 2003, 2010
  *
@@ -12,6 +24,7 @@
  */
 
 #include <linux/module.h>
+#include <linux/moduleparam.h>
 #include <linux/types.h>
 #include <linux/errno.h>
 #include <linux/dma-mapping.h>
@@ -81,7 +94,7 @@ struct ibmveth_stat {
 #define IBMVETH_STAT_OFF(stat) offsetof(struct ibmveth_adapter, stat)
 #define IBMVETH_GET_STAT(a, off) *((u64 *)(((unsigned long)(a)) + off))
 
-static struct ibmveth_stat ibmveth_stats[] = {
+struct ibmveth_stat ibmveth_stats[] = {
 	{ "replenish_task_cycles", IBMVETH_STAT_OFF(replenish_task_cycles) },
 	{ "replenish_no_mem", IBMVETH_STAT_OFF(replenish_no_mem) },
 	{ "replenish_add_buff_failure",
@@ -1011,29 +1024,6 @@ static int ibmveth_send(struct ibmveth_adapter *adapter,
 	return 0;
 }
 
-static int ibmveth_is_packet_unsupported(struct sk_buff *skb,
-					 struct net_device *netdev)
-{
-	struct ethhdr *ether_header;
-	int ret = 0;
-
-	ether_header = eth_hdr(skb);
-
-	if (ether_addr_equal(ether_header->h_dest, netdev->dev_addr)) {
-		netdev_dbg(netdev, "veth doesn't support loopback packets, dropping packet.\n");
-		netdev->stats.tx_dropped++;
-		ret = -EOPNOTSUPP;
-	}
-
-	if (!ether_addr_equal(ether_header->h_source, netdev->dev_addr)) {
-		netdev_dbg(netdev, "source packet MAC address does not match veth device's, dropping packet.\n");
-		netdev->stats.tx_dropped++;
-		ret = -EOPNOTSUPP;
-	}
-
-	return ret;
-}
-
 static netdev_tx_t ibmveth_start_xmit(struct sk_buff *skb,
 				      struct net_device *netdev)
 {
@@ -1044,9 +1034,6 @@ static netdev_tx_t ibmveth_start_xmit(struct sk_buff *skb,
 	int force_bounce = 0;
 	dma_addr_t dma_addr;
 	unsigned long mss = 0;
-
-	if (ibmveth_is_packet_unsupported(skb, netdev))
-		goto out;
 
 	/* veth doesn't handle frag_list, so linearize the skb.
 	 * When GRO is enabled SKB's can have frag_list.
@@ -1343,6 +1330,7 @@ static int ibmveth_poll(struct napi_struct *napi, int budget)
 			int offset = ibmveth_rxq_frame_offset(adapter);
 			int csum_good = ibmveth_rxq_csum_good(adapter);
 			int lrg_pkt = ibmveth_rxq_large_packet(adapter);
+			__sum16 iph_check = 0;
 
 			skb = ibmveth_rxq_get_buffer(adapter);
 
@@ -1379,14 +1367,24 @@ static int ibmveth_poll(struct napi_struct *napi, int budget)
 			skb_put(skb, length);
 			skb->protocol = eth_type_trans(skb, netdev);
 
+			/* PHYP without PLSO support places a -1 in the ip
+			 * checksum for large send frames.
+			 */
+			if (skb->protocol == cpu_to_be16(ETH_P_IP)) {
+				struct iphdr *iph = (struct iphdr *)skb->data;
+
+				iph_check = iph->check;
+			}
+
+			if ((length > netdev->mtu + ETH_HLEN) ||
+			    lrg_pkt || iph_check == 0xffff) {
+				ibmveth_rx_mss_helper(skb, mss, lrg_pkt);
+				adapter->rx_large_packets++;
+			}
+
 			if (csum_good) {
 				skb->ip_summed = CHECKSUM_UNNECESSARY;
 				ibmveth_rx_csum_helper(skb, adapter);
-			}
-
-			if (length > netdev->mtu + ETH_HLEN) {
-				ibmveth_rx_mss_helper(skb, mss, lrg_pkt);
-				adapter->rx_large_packets++;
 			}
 
 			napi_gro_receive(napi, skb);	/* send it up */
@@ -1708,7 +1706,7 @@ static int ibmveth_probe(struct vio_dev *dev, const struct vio_device_id *id)
 	}
 
 	netdev->min_mtu = IBMVETH_MIN_MTU;
-	netdev->max_mtu = ETH_MAX_MTU;
+	netdev->max_mtu = ETH_MAX_MTU - IBMVETH_BUFF_OH;
 
 	memcpy(netdev->dev_addr, mac_addr_p, ETH_ALEN);
 

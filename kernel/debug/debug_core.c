@@ -55,7 +55,6 @@
 #include <linux/mm.h>
 #include <linux/vmacache.h>
 #include <linux/rcupdate.h>
-#include <linux/irq.h>
 
 #include <asm/cacheflush.h>
 #include <asm/byteorder.h>
@@ -95,14 +94,6 @@ int dbg_switch_cpu;
 
 /* Use kdb or gdbserver mode */
 int dbg_kdb_mode = 1;
-
-static int __init opt_kgdb_con(char *str)
-{
-	kgdb_use_con = 1;
-	return 0;
-}
-
-early_param("kgdbcon", opt_kgdb_con);
 
 module_param(kgdb_use_con, int, 0644);
 module_param(kgdbreboot, int, 0644);
@@ -220,62 +211,6 @@ int __weak kgdb_skipexception(int exception, struct pt_regs *regs)
 {
 	return 0;
 }
-
-#ifdef CONFIG_SMP
-
-/*
- * Default (weak) implementation for kgdb_roundup_cpus
- */
-
-static DEFINE_PER_CPU(call_single_data_t, kgdb_roundup_csd);
-
-void __weak kgdb_call_nmi_hook(void *ignored)
-{
-	/*
-	 * NOTE: get_irq_regs() is supposed to get the registers from
-	 * before the IPI interrupt happened and so is supposed to
-	 * show where the processor was.  In some situations it's
-	 * possible we might be called without an IPI, so it might be
-	 * safer to figure out how to make kgdb_breakpoint() work
-	 * properly here.
-	 */
-	kgdb_nmicallback(raw_smp_processor_id(), get_irq_regs());
-}
-
-void __weak kgdb_roundup_cpus(void)
-{
-	call_single_data_t *csd;
-	int this_cpu = raw_smp_processor_id();
-	int cpu;
-	int ret;
-
-	for_each_online_cpu(cpu) {
-		/* No need to roundup ourselves */
-		if (cpu == this_cpu)
-			continue;
-
-		csd = &per_cpu(kgdb_roundup_csd, cpu);
-
-		/*
-		 * If it didn't round up last time, don't try again
-		 * since smp_call_function_single_async() will block.
-		 *
-		 * If rounding_up is false then we know that the
-		 * previous call must have at least started and that
-		 * means smp_call_function_single_async() won't block.
-		 */
-		if (kgdb_info[cpu].rounding_up)
-			continue;
-		kgdb_info[cpu].rounding_up = true;
-
-		csd->func = kgdb_call_nmi_hook;
-		ret = smp_call_function_single_async(cpu, csd);
-		if (ret)
-			kgdb_info[cpu].rounding_up = false;
-	}
-}
-
-#endif
 
 /*
  * Some architectures need cache flushes when we set/clear a
@@ -441,37 +376,6 @@ setundefined:
 	return 0;
 }
 
-#ifdef CONFIG_KGDB_KDB
-void kdb_dump_stack_on_cpu(int cpu)
-{
-	if (cpu == raw_smp_processor_id() || !IS_ENABLED(CONFIG_SMP)) {
-		dump_stack();
-		return;
-	}
-
-	if (!(kgdb_info[cpu].exception_state & DCPU_IS_SLAVE)) {
-		kdb_printf("ERROR: Task on cpu %d didn't stop in the debugger\n",
-			   cpu);
-		return;
-	}
-
-	/*
-	 * In general, architectures don't support dumping the stack of a
-	 * "running" process that's not the current one.  From the point of
-	 * view of the Linux, kernel processes that are looping in the kgdb
-	 * slave loop are still "running".  There's also no API (that actually
-	 * works across all architectures) that can do a stack crawl based
-	 * on registers passed as a parameter.
-	 *
-	 * Solve this conundrum by asking slave CPUs to do the backtrace
-	 * themselves.
-	 */
-	kgdb_info[cpu].exception_state |= DCPU_WANT_BT;
-	while (kgdb_info[cpu].exception_state & DCPU_WANT_BT)
-		cpu_relax();
-}
-#endif
-
 /*
  * Return true if there is a valid kgdb I/O module.  Also if no
  * debugger is attached a message can be printed to the console about
@@ -532,6 +436,7 @@ static int kgdb_reenter_check(struct kgdb_state *ks)
 
 	if (exception_level > 1) {
 		dump_stack();
+		kgdb_io_module_registered = false;
 		panic("Recursive entry to debugger");
 	}
 
@@ -576,6 +481,7 @@ static int kgdb_cpu_enter(struct kgdb_state *ks, struct pt_regs *regs,
 		arch_kgdb_ops.disable_hw_break(regs);
 
 acquirelock:
+	rcu_read_lock();
 	/*
 	 * Interrupts will be restored by the 'trap return' code, except when
 	 * single stepping.
@@ -611,9 +517,6 @@ cpu_loop:
 				atomic_xchg(&kgdb_active, cpu);
 				break;
 			}
-		} else if (kgdb_info[cpu].exception_state & DCPU_WANT_BT) {
-			dump_stack();
-			kgdb_info[cpu].exception_state &= ~DCPU_WANT_BT;
 		} else if (kgdb_info[cpu].exception_state & DCPU_IS_SLAVE) {
 			if (!raw_spin_is_locked(&dbg_slave_lock))
 				goto return_normal;
@@ -635,6 +538,7 @@ return_normal:
 			atomic_dec(&slaves_in_kgdb);
 			dbg_touch_watchdogs();
 			local_irq_restore(flags);
+			rcu_read_unlock();
 			return 0;
 		}
 		cpu_relax();
@@ -653,6 +557,7 @@ return_normal:
 		raw_spin_unlock(&dbg_master_lock);
 		dbg_touch_watchdogs();
 		local_irq_restore(flags);
+		rcu_read_unlock();
 
 		goto acquirelock;
 	}
@@ -667,6 +572,8 @@ return_normal:
 	 */
 	if (kgdb_skipexception(ks->ex_vector, ks->linux_regs))
 		goto kgdb_restore;
+
+	atomic_inc(&ignore_console_lock_warning);
 
 	/* Call the I/O driver's pre_exception routine */
 	if (dbg_io_ops->pre_exception)
@@ -686,7 +593,7 @@ return_normal:
 
 	/* Signal the other CPUs to enter kgdb_wait() */
 	else if ((!kgdb_single_step) && kgdb_do_roundup)
-		kgdb_roundup_cpus();
+		kgdb_roundup_cpus(flags);
 #endif
 
 	/*
@@ -740,6 +647,8 @@ cpu_master_loop:
 	if (dbg_io_ops->post_exception)
 		dbg_io_ops->post_exception();
 
+	atomic_dec(&ignore_console_lock_warning);
+
 	if (!kgdb_single_step) {
 		raw_spin_unlock(&dbg_slave_lock);
 		/* Wait till all the CPUs have quit from the debugger. */
@@ -772,6 +681,7 @@ kgdb_restore:
 	raw_spin_unlock(&dbg_master_lock);
 	dbg_touch_watchdogs();
 	local_irq_restore(flags);
+	rcu_read_unlock();
 
 	return kgdb_info[cpu].ret_state;
 }
@@ -821,8 +731,11 @@ out:
 }
 
 /*
- * GDB places a breakpoint at this function to know dynamically loaded objects.
+ * GDB places a breakpoint at this function to know dynamically
+ * loaded objects. It's not defined static so that only one instance with this
+ * name exists in the kernel.
  */
+
 static int module_event(struct notifier_block *self, unsigned long val,
 	void *data)
 {
@@ -838,8 +751,6 @@ int kgdb_nmicallback(int cpu, void *regs)
 #ifdef CONFIG_SMP
 	struct kgdb_state kgdb_var;
 	struct kgdb_state *ks = &kgdb_var;
-
-	kgdb_info[cpu].rounding_up = false;
 
 	memset(ks, 0, sizeof(struct kgdb_state));
 	ks->cpu			= cpu;
@@ -901,6 +812,20 @@ static struct console kgdbcons = {
 	.index		= -1,
 };
 
+static int __init opt_kgdb_con(char *str)
+{
+	kgdb_use_con = 1;
+
+	if (kgdb_io_module_registered && !kgdb_con_registered) {
+		register_console(&kgdbcons);
+		kgdb_con_registered = 1;
+	}
+
+	return 0;
+}
+
+early_param("kgdbcon", opt_kgdb_con);
+
 #ifdef CONFIG_MAGIC_SYSRQ
 static void sysrq_handle_dbg(int key)
 {
@@ -927,24 +852,29 @@ static struct sysrq_key_op sysrq_dbg_op = {
 };
 #endif
 
-void kgdb_panic(const char *msg)
+static int kgdb_panic_event(struct notifier_block *self,
+			    unsigned long val,
+			    void *data)
 {
-	if (!kgdb_io_module_registered)
-		return;
-
 	/*
-	 * We don't want to get stuck waiting for input from user if
-	 * "panic_timeout" indicates the system should automatically
+	 * Avoid entering the debugger if we were triggered due to a panic
+	 * We don't want to get stuck waiting for input from user in such case.
+	 * panic_timeout indicates the system should automatically
 	 * reboot on panic.
 	 */
 	if (panic_timeout)
-		return;
+		return NOTIFY_DONE;
 
 	if (dbg_kdb_mode)
-		kdb_printf("PANIC: %s\n", msg);
-
+		kdb_printf("PANIC: %s\n", (char *)data);
 	kgdb_breakpoint();
+	return NOTIFY_DONE;
 }
+
+static struct notifier_block kgdb_panic_event_nb = {
+       .notifier_call	= kgdb_panic_event,
+       .priority	= INT_MAX,
+};
 
 void __weak kgdb_arch_late(void)
 {
@@ -994,6 +924,8 @@ static void kgdb_register_callbacks(void)
 			kgdb_arch_late();
 		register_module_notifier(&dbg_module_load_nb);
 		register_reboot_notifier(&dbg_reboot_notifier);
+		atomic_notifier_chain_register(&panic_notifier_list,
+					       &kgdb_panic_event_nb);
 #ifdef CONFIG_MAGIC_SYSRQ
 		register_sysrq_key('g', &sysrq_dbg_op);
 #endif
@@ -1007,14 +939,16 @@ static void kgdb_register_callbacks(void)
 static void kgdb_unregister_callbacks(void)
 {
 	/*
-	 * When this routine is called KGDB should unregister from
-	 * handlers and clean up, making sure it is not handling any
+	 * When this routine is called KGDB should unregister from the
+	 * panic handler and clean up, making sure it is not handling any
 	 * break exceptions at the time.
 	 */
 	if (kgdb_io_module_registered) {
 		kgdb_io_module_registered = 0;
 		unregister_reboot_notifier(&dbg_reboot_notifier);
 		unregister_module_notifier(&dbg_module_load_nb);
+		atomic_notifier_chain_unregister(&panic_notifier_list,
+					       &kgdb_panic_event_nb);
 		kgdb_arch_exit();
 #ifdef CONFIG_MAGIC_SYSRQ
 		unregister_sysrq_key('g', &sysrq_dbg_op);

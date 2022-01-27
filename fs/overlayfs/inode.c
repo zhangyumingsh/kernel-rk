@@ -1,7 +1,10 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  *
  * Copyright (C) 2011 Novell Inc.
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License version 2 as published by
+ * the Free Software Foundation.
  */
 
 #include <linux/fs.h>
@@ -61,7 +64,7 @@ int ovl_setattr(struct dentry *dentry, struct iattr *attr)
 		inode_lock(upperdentry->d_inode);
 		old_cred = ovl_override_creds(dentry->d_sb);
 		err = notify_change(upperdentry, attr, NULL);
-		revert_creds(old_cred);
+		ovl_revert_creds(old_cred);
 		if (!err)
 			ovl_copyattr(upperdentry->d_inode, dentry->d_inode);
 		inode_unlock(upperdentry->d_inode);
@@ -75,9 +78,10 @@ out:
 	return err;
 }
 
-static int ovl_map_dev_ino(struct dentry *dentry, struct kstat *stat, int fsid)
+static int ovl_map_dev_ino(struct dentry *dentry, struct kstat *stat,
+			   struct ovl_layer *lower_layer)
 {
-	bool samefs = ovl_same_fs(dentry->d_sb);
+	bool samefs = ovl_same_sb(dentry->d_sb);
 	unsigned int xinobits = ovl_xino_bits(dentry->d_sb);
 
 	if (samefs) {
@@ -99,10 +103,12 @@ static int ovl_map_dev_ino(struct dentry *dentry, struct kstat *stat, int fsid)
 		 * persistent for a given layer configuration.
 		 */
 		if (stat->ino >> shift) {
-			pr_warn_ratelimited("inode number too big (%pd2, ino=%llu, xinobits=%d)\n",
+			pr_warn_ratelimited("overlayfs: inode number too big (%pd2, ino=%llu, xinobits=%d)\n",
 					    dentry, stat->ino, xinobits);
 		} else {
-			stat->ino |= ((u64)fsid) << shift;
+			if (lower_layer)
+				stat->ino |= ((u64)lower_layer->fsid) << shift;
+
 			stat->dev = dentry->d_sb->s_dev;
 			return 0;
 		}
@@ -121,14 +127,15 @@ static int ovl_map_dev_ino(struct dentry *dentry, struct kstat *stat, int fsid)
 		 */
 		stat->dev = dentry->d_sb->s_dev;
 		stat->ino = dentry->d_inode->i_ino;
-	} else {
+	} else if (lower_layer && lower_layer->fsid) {
 		/*
 		 * For non-samefs setup, if we cannot map all layers st_ino
 		 * to a unified address space, we need to make sure that st_dev
-		 * is unique per underlying fs, so we use the unique anonymous
-		 * bdev assigned to the underlying fs.
+		 * is unique per lower fs. Upper layer uses real st_dev and
+		 * lower layers use the unique anonymous bdev assigned to the
+		 * lower fs.
 		 */
-		stat->dev = OVL_FS(dentry->d_sb)->fs[fsid].pseudo_dev;
+		stat->dev = lower_layer->fs->pseudo_dev;
 	}
 
 	return 0;
@@ -142,7 +149,8 @@ int ovl_getattr(const struct path *path, struct kstat *stat,
 	struct path realpath;
 	const struct cred *old_cred;
 	bool is_dir = S_ISDIR(dentry->d_inode->i_mode);
-	int fsid = 0;
+	bool samefs = ovl_same_sb(dentry->d_sb);
+	struct ovl_layer *lower_layer = NULL;
 	int err;
 	bool metacopy_blocks = false;
 
@@ -163,9 +171,9 @@ int ovl_getattr(const struct path *path, struct kstat *stat,
 	 * If lower filesystem supports NFS file handles, this also guaranties
 	 * persistent st_ino across mount cycle.
 	 */
-	if (!is_dir || ovl_same_dev(dentry->d_sb)) {
+	if (!is_dir || samefs || ovl_xino_bits(dentry->d_sb)) {
 		if (!OVL_TYPE_UPPER(type)) {
-			fsid = ovl_layer_lower(dentry)->fsid;
+			lower_layer = ovl_layer_lower(dentry);
 		} else if (OVL_TYPE_ORIGIN(type)) {
 			struct kstat lowerstat;
 			u32 lowermask = STATX_INO | STATX_BLOCKS |
@@ -195,8 +203,14 @@ int ovl_getattr(const struct path *path, struct kstat *stat,
 			if (ovl_test_flag(OVL_INDEX, d_inode(dentry)) ||
 			    (!ovl_verify_lower(dentry->d_sb) &&
 			     (is_dir || lowerstat.nlink == 1))) {
-				fsid = ovl_layer_lower(dentry)->fsid;
-				stat->ino = lowerstat.ino;
+				lower_layer = ovl_layer_lower(dentry);
+				/*
+				 * Cannot use origin st_dev;st_ino because
+				 * origin inode content may differ from overlay
+				 * inode content.
+				 */
+				if (samefs || lower_layer->fsid)
+					stat->ino = lowerstat.ino;
 			}
 
 			/*
@@ -230,7 +244,7 @@ int ovl_getattr(const struct path *path, struct kstat *stat,
 		}
 	}
 
-	err = ovl_map_dev_ino(dentry, stat, fsid);
+	err = ovl_map_dev_ino(dentry, stat, lower_layer);
 	if (err)
 		goto out;
 
@@ -252,7 +266,7 @@ int ovl_getattr(const struct path *path, struct kstat *stat,
 		stat->nlink = dentry->d_inode->i_nlink;
 
 out:
-	revert_creds(old_cred);
+	ovl_revert_creds(old_cred);
 
 	return err;
 }
@@ -286,7 +300,7 @@ int ovl_permission(struct inode *inode, int mask)
 		mask |= MAY_READ;
 	}
 	err = inode_permission(realinode, mask);
-	revert_creds(old_cred);
+	ovl_revert_creds(old_cred);
 
 	return err;
 }
@@ -303,7 +317,7 @@ static const char *ovl_get_link(struct dentry *dentry,
 
 	old_cred = ovl_override_creds(dentry->d_sb);
 	p = vfs_get_link(ovl_dentry_real(dentry), done);
-	revert_creds(old_cred);
+	ovl_revert_creds(old_cred);
 	return p;
 }
 
@@ -326,7 +340,9 @@ int ovl_xattr_set(struct dentry *dentry, struct inode *inode, const char *name,
 		goto out;
 
 	if (!value && !upperdentry) {
+		old_cred = ovl_override_creds(dentry->d_sb);
 		err = vfs_getxattr(realdentry, name, NULL, 0);
+		revert_creds(old_cred);
 		if (err < 0)
 			goto out_drop_write;
 	}
@@ -346,7 +362,7 @@ int ovl_xattr_set(struct dentry *dentry, struct inode *inode, const char *name,
 		WARN_ON(flags != XATTR_REPLACE);
 		err = vfs_removexattr(realdentry, name);
 	}
-	revert_creds(old_cred);
+	ovl_revert_creds(old_cred);
 
 	/* copy c/mtime */
 	ovl_copyattr(d_inode(realdentry), inode);
@@ -355,6 +371,21 @@ out_drop_write:
 	ovl_drop_write(dentry);
 out:
 	return err;
+}
+
+int __ovl_xattr_get(struct dentry *dentry, struct inode *inode,
+		    const char *name, void *value, size_t size)
+{
+	ssize_t res;
+	const struct cred *old_cred;
+	struct dentry *realdentry =
+		ovl_i_dentry_upper(inode) ?: ovl_dentry_lower(dentry);
+
+	old_cred = ovl_override_creds(dentry->d_sb);
+	res = __vfs_getxattr(realdentry, d_inode(realdentry), name, value,
+			     size);
+	ovl_revert_creds(old_cred);
+	return res;
 }
 
 int ovl_xattr_get(struct dentry *dentry, struct inode *inode, const char *name,
@@ -367,7 +398,7 @@ int ovl_xattr_get(struct dentry *dentry, struct inode *inode, const char *name,
 
 	old_cred = ovl_override_creds(dentry->d_sb);
 	res = vfs_getxattr(realdentry, name, value, size);
-	revert_creds(old_cred);
+	ovl_revert_creds(old_cred);
 	return res;
 }
 
@@ -392,7 +423,7 @@ ssize_t ovl_listxattr(struct dentry *dentry, char *list, size_t size)
 
 	old_cred = ovl_override_creds(dentry->d_sb);
 	res = vfs_listxattr(realdentry, list, size);
-	revert_creds(old_cred);
+	ovl_revert_creds(old_cred);
 	if (res <= 0 || size == 0)
 		return res;
 
@@ -427,7 +458,7 @@ struct posix_acl *ovl_get_acl(struct inode *inode, int type)
 
 	old_cred = ovl_override_creds(inode->i_sb);
 	acl = get_acl(realinode, type);
-	revert_creds(old_cred);
+	ovl_revert_creds(old_cred);
 
 	return acl;
 }
@@ -465,7 +496,7 @@ static int ovl_fiemap(struct inode *inode, struct fiemap_extent_info *fieinfo,
 		filemap_write_and_wait(realinode->i_mapping);
 
 	err = realinode->i_op->fiemap(realinode, fieinfo, start, len);
-	revert_creds(old_cred);
+	ovl_revert_creds(old_cred);
 
 	return err;
 }
@@ -516,27 +547,6 @@ static const struct address_space_operations ovl_aops = {
  * [...] &ovl_i_mutex_dir_key[depth]   (stack_depth=2)
  * [...] &ovl_i_mutex_dir_key[depth]#2 (stack_depth=1)
  * [...] &type->i_mutex_dir_key        (stack_depth=0)
- *
- * Locking order w.r.t ovl_want_write() is important for nested overlayfs.
- *
- * This chain is valid:
- * - inode->i_rwsem			(inode_lock[2])
- * - upper_mnt->mnt_sb->s_writers	(ovl_want_write[0])
- * - OVL_I(inode)->lock			(ovl_inode_lock[2])
- * - OVL_I(lowerinode)->lock		(ovl_inode_lock[1])
- *
- * And this chain is valid:
- * - inode->i_rwsem			(inode_lock[2])
- * - OVL_I(inode)->lock			(ovl_inode_lock[2])
- * - lowerinode->i_rwsem		(inode_lock[1])
- * - OVL_I(lowerinode)->lock		(ovl_inode_lock[1])
- *
- * But lowerinode->i_rwsem SHOULD NOT be acquired while ovl_want_write() is
- * held, because it is in reverse order of the non-nested case using the same
- * upper fs:
- * - inode->i_rwsem			(inode_lock[1])
- * - upper_mnt->mnt_sb->s_writers	(ovl_want_write[0])
- * - OVL_I(inode)->lock			(ovl_inode_lock[1])
  */
 #define OVL_MAX_NESTING FILESYSTEM_MAX_STACK_DEPTH
 
@@ -575,7 +585,7 @@ static void ovl_fill_inode(struct inode *inode, umode_t mode, dev_t rdev,
 	 * ovl_new_inode(), ino arg is 0, so i_ino will be updated to real
 	 * upper inode i_ino on ovl_inode_init() or ovl_inode_update().
 	 */
-	if (ovl_same_dev(inode->i_sb)) {
+	if (ovl_same_sb(inode->i_sb) || xinobits) {
 		inode->i_ino = ino;
 		if (xinobits && fsid && !(ino >> (64 - xinobits)))
 			inode->i_ino |= (unsigned long)fsid << (64 - xinobits);
@@ -708,7 +718,7 @@ unsigned int ovl_get_nlink(struct dentry *lowerdentry,
 	return nlink;
 
 fail:
-	pr_warn_ratelimited("failed to get index nlink (%pd2, err=%i)\n",
+	pr_warn_ratelimited("overlayfs: failed to get index nlink (%pd2, err=%i)\n",
 			    upperdentry, err);
 	return fallback;
 }
@@ -981,7 +991,7 @@ out:
 	return inode;
 
 out_err:
-	pr_warn_ratelimited("failed to get inode (%i)\n", err);
+	pr_warn_ratelimited("overlayfs: failed to get inode (%i)\n", err);
 	inode = ERR_PTR(err);
 	goto out;
 }

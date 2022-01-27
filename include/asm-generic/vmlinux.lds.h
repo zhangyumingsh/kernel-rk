@@ -23,11 +23,12 @@
  *	_etext = .;
  *
  *      _sdata = .;
- *	RO_DATA(PAGE_SIZE)
- *	RW_DATA(...)
+ *	RO_DATA_SECTION(PAGE_SIZE)
+ *	RW_DATA_SECTION(...)
  *	_edata = .;
  *
  *	EXCEPTION_TABLE(...)
+ *	NOTES
  *
  *	BSS_SECTION(0, 0, 0)
  *	_end = .;
@@ -53,33 +54,6 @@
 #define LOAD_OFFSET 0
 #endif
 
-/*
- * Only some architectures want to have the .notes segment visible in
- * a separate PT_NOTE ELF Program Header. When this happens, it needs
- * to be visible in both the kernel text's PT_LOAD and the PT_NOTE
- * Program Headers. In this case, though, the PT_LOAD needs to be made
- * the default again so that all the following sections don't also end
- * up in the PT_NOTE Program Header.
- */
-#ifdef EMITS_PT_NOTE
-#define NOTES_HEADERS		:text :note
-#define NOTES_HEADERS_RESTORE	__restore_ph : { *(.__restore_ph) } :text
-#else
-#define NOTES_HEADERS
-#define NOTES_HEADERS_RESTORE
-#endif
-
-/*
- * Some architectures have non-executable read-only exception tables.
- * They can be added to the RO_DATA segment by specifying their desired
- * alignment.
- */
-#ifdef RO_EXCEPTION_TABLE_ALIGN
-#define RO_EXCEPTION_TABLE	EXCEPTION_TABLE(RO_EXCEPTION_TABLE_ALIGN)
-#else
-#define RO_EXCEPTION_TABLE
-#endif
-
 /* Align . to a 8 byte boundary equals to maximum function alignment. */
 #define ALIGN_FUNCTION()  . = ALIGN(8)
 
@@ -92,15 +66,17 @@
  * RODATA_MAIN is not used because existing code already defines .rodata.x
  * sections to be brought in with rodata.
  */
-#ifdef CONFIG_LD_DEAD_CODE_DATA_ELIMINATION
+#if defined(CONFIG_LD_DEAD_CODE_DATA_ELIMINATION) || defined(CONFIG_LTO_CLANG)
 #define TEXT_MAIN .text .text.[0-9a-zA-Z_]*
-#define DATA_MAIN .data .data.[0-9a-zA-Z_]* .data..LPBX*
+#define TEXT_CFI_MAIN .text.[0-9a-zA-Z_]*.cfi
+#define DATA_MAIN .data .data.[0-9a-zA-Z_]* .data..L* .data..compoundliteral*
 #define SDATA_MAIN .sdata .sdata.[0-9a-zA-Z_]*
-#define RODATA_MAIN .rodata .rodata.[0-9a-zA-Z_]*
-#define BSS_MAIN .bss .bss.[0-9a-zA-Z_]*
+#define RODATA_MAIN .rodata .rodata.[0-9a-zA-Z_]* .rodata..L*
+#define BSS_MAIN .bss .bss.[0-9a-zA-Z_]* .bss..compoundliteral*
 #define SBSS_MAIN .sbss .sbss.[0-9a-zA-Z_]*
 #else
 #define TEXT_MAIN .text
+#define TEXT_CFI_MAIN .text.cfi
 #define DATA_MAIN .data
 #define SDATA_MAIN .sdata
 #define RODATA_MAIN .rodata
@@ -136,28 +112,12 @@
 #endif
 
 #ifdef CONFIG_FTRACE_MCOUNT_RECORD
-/*
- * The ftrace call sites are logged to a section whose name depends on the
- * compiler option used. A given kernel image will only use one, AKA
- * FTRACE_CALLSITE_SECTION. We capture all of them here to avoid header
- * dependencies for FTRACE_CALLSITE_SECTION's definition.
- *
- * Need to also make ftrace_stub_graph point to ftrace_stub
- * so that the same stub location may have different protocols
- * and not mess up with C verifiers.
- */
 #define MCOUNT_REC()	. = ALIGN(8);				\
 			__start_mcount_loc = .;			\
 			KEEP(*(__mcount_loc))			\
-			KEEP(*(__patchable_function_entries))	\
-			__stop_mcount_loc = .;			\
-			ftrace_stub_graph = ftrace_stub;
+			__stop_mcount_loc = .;
 #else
-# ifdef CONFIG_FUNCTION_TRACER
-#  define MCOUNT_REC()	ftrace_stub_graph = ftrace_stub;
-# else
-#  define MCOUNT_REC()
-# endif
+#define MCOUNT_REC()
 #endif
 
 #ifdef CONFIG_TRACE_BRANCH_PROFILING
@@ -245,20 +205,6 @@
 #define EARLYCON_TABLE()
 #endif
 
-#ifdef CONFIG_SECURITY
-#define LSM_TABLE()	. = ALIGN(8);					\
-			__start_lsm_info = .;				\
-			KEEP(*(.lsm_info.init))				\
-			__end_lsm_info = .;
-#define EARLY_LSM_TABLE()	. = ALIGN(8);				\
-			__start_early_lsm_info = .;			\
-			KEEP(*(.early_lsm_info.init))			\
-			__end_early_lsm_info = .;
-#else
-#define LSM_TABLE()
-#define EARLY_LSM_TABLE()
-#endif
-
 #define ___OF_TABLE(cfg, name)	_OF_TABLE_##cfg(name)
 #define __OF_TABLE(cfg, name)	___OF_TABLE(cfg, name)
 #define OF_TABLE(cfg, name)	__OF_TABLE(IS_ENABLED(cfg), name)
@@ -286,16 +232,6 @@
 #define ACPI_PROBE_TABLE(name)
 #endif
 
-#ifdef CONFIG_THERMAL
-#define THERMAL_TABLE(name)						\
-	. = ALIGN(8);							\
-	__##name##_thermal_table = .;					\
-	KEEP(*(__##name##_thermal_table))				\
-	__##name##_thermal_table_end = .;
-#else
-#define THERMAL_TABLE(name)
-#endif
-
 #define KERNEL_DTB()							\
 	STRUCT_ALIGN();							\
 	__dtb_start = .;						\
@@ -319,6 +255,10 @@
 	STRUCT_ALIGN();							\
 	*(__tracepoints)						\
 	/* implement dynamic printk debug */				\
+	. = ALIGN(8);                                                   \
+	__start___jump_table = .;					\
+	KEEP(*(__jump_table))                                           \
+	__stop___jump_table = .;					\
 	. = ALIGN(8);							\
 	__start___verbose = .;						\
 	KEEP(*(__verbose))                                              \
@@ -341,7 +281,8 @@
 
 #define PAGE_ALIGNED_DATA(page_align)					\
 	. = ALIGN(page_align);						\
-	*(.data..page_aligned)
+	*(.data..page_aligned)						\
+	. = ALIGN(page_align);
 
 #define READ_MOSTLY_DATA(align)						\
 	. = ALIGN(align);						\
@@ -362,33 +303,28 @@
 	. = __start_init_task + THREAD_SIZE;				\
 	__end_init_task = .;
 
-#define JUMP_TABLE_DATA							\
-	. = ALIGN(8);							\
-	__start___jump_table = .;					\
-	KEEP(*(__jump_table))						\
-	__stop___jump_table = .;
-
 /*
  * Allow architectures to handle ro_after_init data on their
  * own by defining an empty RO_AFTER_INIT_DATA.
  */
 #ifndef RO_AFTER_INIT_DATA
 #define RO_AFTER_INIT_DATA						\
+	. = ALIGN(8);							\
 	__start_ro_after_init = .;					\
 	*(.data..ro_after_init)						\
-	JUMP_TABLE_DATA							\
 	__end_ro_after_init = .;
 #endif
 
 /*
  * Read only Data
  */
-#define RO_DATA(align)							\
+#define RO_DATA_SECTION(align)						\
 	. = ALIGN((align));						\
 	.rodata           : AT(ADDR(.rodata) - LOAD_OFFSET) {		\
 		__start_rodata = .;					\
 		*(.rodata) *(.rodata.*)					\
 		RO_AFTER_INIT_DATA	/* Read only after init */	\
+		KEEP(*(__vermagic))	/* Kernel version magic */	\
 		. = ALIGN(8);						\
 		__start___tracepoints_ptrs = .;				\
 		KEEP(*(__tracepoints_ptrs)) /* Tracepoints: pointer array */ \
@@ -429,7 +365,7 @@
 	}								\
 									\
 	/* Built-in firmware blobs */					\
-	.builtin_fw        : AT(ADDR(.builtin_fw) - LOAD_OFFSET) {	\
+	.builtin_fw : AT(ADDR(.builtin_fw) - LOAD_OFFSET) ALIGN(8) {	\
 		__start_builtin_fw = .;					\
 		KEEP(*(.builtin_fw))					\
 		__end_builtin_fw = .;					\
@@ -531,13 +467,31 @@
 		__start___modver = .;					\
 		KEEP(*(__modver))					\
 		__stop___modver = .;					\
+		. = ALIGN((align));					\
+		__end_rodata = .;					\
 	}								\
-									\
-	RO_EXCEPTION_TABLE						\
-	NOTES								\
-									\
-	. = ALIGN((align));						\
-	__end_rodata = .;
+	. = ALIGN((align));
+
+/* RODATA & RO_DATA provided for backward compatibility.
+ * All archs are supposed to use RO_DATA() */
+#define RODATA          RO_DATA_SECTION(4096)
+#define RO_DATA(align)  RO_DATA_SECTION(align)
+
+#define SECURITY_INIT							\
+	.security_initcall.init : AT(ADDR(.security_initcall.init) - LOAD_OFFSET) { \
+		__security_initcall_start = .;				\
+		KEEP(*(.security_initcall.init))			\
+		__security_initcall_end = .;				\
+	}
+
+/*
+ * Non-instrumentable text section
+ */
+#define NOINSTR_TEXT							\
+		ALIGN_FUNCTION();					\
+		__noinstr_text_start = .;				\
+		*(.noinstr.text)					\
+		__noinstr_text_end = .;
 
 /*
  * .text section. Map to function alignment to avoid address changes
@@ -549,8 +503,14 @@
  */
 #define TEXT_TEXT							\
 		ALIGN_FUNCTION();					\
-		*(.text.hot TEXT_MAIN .text.fixup .text.unlikely)	\
+		*(.text.hot .text.hot.*)				\
+		*(TEXT_MAIN .text.fixup)				\
+		*(.text.unlikely .text.unlikely.*)			\
+		*(.text.unknown .text.unknown.*)			\
+		*(TEXT_CFI_MAIN) 					\
+		NOINSTR_TEXT						\
 		*(.text..refcount)					\
+		*(.text..ftrace)					\
 		*(.ref.text)						\
 	MEM_KEEP(init.text*)						\
 	MEM_KEEP(exit.text*)						\
@@ -663,10 +623,7 @@
 	IRQCHIP_OF_MATCH_TABLE()					\
 	ACPI_PROBE_TABLE(irqchip)					\
 	ACPI_PROBE_TABLE(timer)						\
-	THERMAL_TABLE(governor)						\
-	EARLYCON_TABLE()						\
-	LSM_TABLE()							\
-	EARLY_LSM_TABLE()
+	EARLYCON_TABLE()
 
 #define INIT_TEXT							\
 	*(.init.text .init.text.*)					\
@@ -712,7 +669,9 @@
 	. = ALIGN(bss_align);						\
 	.bss : AT(ADDR(.bss) - LOAD_OFFSET) {				\
 		BSS_FIRST_SECTIONS					\
+		. = ALIGN(PAGE_SIZE);					\
 		*(.bss..page_aligned)					\
+		. = ALIGN(PAGE_SIZE);					\
 		*(.dynbss)						\
 		*(BSS_MAIN)						\
 		*(COMMON)						\
@@ -756,8 +715,13 @@
 		/* DWARF 4 */						\
 		.debug_types	0 : { *(.debug_types) }			\
 		/* DWARF 5 */						\
+		.debug_addr	0 : { *(.debug_addr) }			\
+		.debug_line_str	0 : { *(.debug_line_str) }		\
+		.debug_loclists	0 : { *(.debug_loclists) }		\
 		.debug_macro	0 : { *(.debug_macro) }			\
-		.debug_addr	0 : { *(.debug_addr) }
+		.debug_names	0 : { *(.debug_names) }			\
+		.debug_rnglists	0 : { *(.debug_rnglists) }		\
+		.debug_str_offsets	0 : { *(.debug_str_offsets) }
 
 		/* Stabs debugging sections.  */
 #define STABS_DEBUG							\
@@ -823,8 +787,7 @@
 		__start_notes = .;					\
 		KEEP(*(.note.*))					\
 		__stop_notes = .;					\
-	} NOTES_HEADERS							\
-	NOTES_HEADERS_RESTORE
+	}
 
 #define INIT_SETUP(initsetup_align)					\
 		. = ALIGN(initsetup_align);				\
@@ -855,6 +818,11 @@
 		__con_initcall_start = .;				\
 		KEEP(*(.con_initcall.init))				\
 		__con_initcall_end = .;
+
+#define SECURITY_INITCALL						\
+		__security_initcall_start = .;				\
+		KEEP(*(.security_initcall.init))			\
+		__security_initcall_end = .;
 
 #ifdef CONFIG_BLK_DEV_INITRD
 #define INIT_RAM_FS							\
@@ -901,7 +869,6 @@
 	EXIT_CALL							\
 	*(.discard)							\
 	*(.discard.*)							\
-	*(.modinfo)							\
 	}
 
 /**
@@ -996,7 +963,7 @@
  * matches the requirement of PAGE_ALIGNED_DATA.
  *
  * use 0 as page_align if page_aligned data is not used */
-#define RW_DATA(cacheline, pagealigned, inittask)			\
+#define RW_DATA_SECTION(cacheline, pagealigned, inittask)		\
 	. = ALIGN(PAGE_SIZE);						\
 	.data : AT(ADDR(.data) - LOAD_OFFSET) {				\
 		INIT_TASK_DATA(inittask)				\
@@ -1023,6 +990,7 @@
 		INIT_SETUP(initsetup_align)				\
 		INIT_CALLS						\
 		CON_INITCALL						\
+		SECURITY_INITCALL					\
 		INIT_RAM_FS						\
 	}
 

@@ -4,31 +4,9 @@
  */
 #include "nvmem.h"
 
-static const char * const nvmem_type_str[] = {
-	[NVMEM_TYPE_UNKNOWN] = "Unknown",
-	[NVMEM_TYPE_EEPROM] = "EEPROM",
-	[NVMEM_TYPE_OTP] = "OTP",
-	[NVMEM_TYPE_BATTERY_BACKED] = "Battery backed",
-};
-
 #ifdef CONFIG_DEBUG_LOCK_ALLOC
 static struct lock_class_key eeprom_lock_key;
 #endif
-
-static ssize_t type_show(struct device *dev,
-			 struct device_attribute *attr, char *buf)
-{
-	struct nvmem_device *nvmem = to_nvmem_device(dev);
-
-	return sprintf(buf, "%s\n", nvmem_type_str[nvmem->type]);
-}
-
-static DEVICE_ATTR_RO(type);
-
-static struct attribute *nvmem_attrs[] = {
-	&dev_attr_type.attr,
-	NULL,
-};
 
 static ssize_t bin_attr_nvmem_read(struct file *filp, struct kobject *kobj,
 				    struct bin_attribute *attr,
@@ -55,9 +33,6 @@ static ssize_t bin_attr_nvmem_read(struct file *filp, struct kobject *kobj,
 		count = nvmem->size - pos;
 
 	count = round_down(count, nvmem->word_size);
-
-	if (!nvmem->reg_read)
-		return -EPERM;
 
 	rc = nvmem->reg_read(nvmem->priv, pos, buf, count);
 
@@ -93,9 +68,6 @@ static ssize_t bin_attr_nvmem_write(struct file *filp, struct kobject *kobj,
 
 	count = round_down(count, nvmem->word_size);
 
-	if (!nvmem->reg_write)
-		return -EPERM;
-
 	rc = nvmem->reg_write(nvmem->priv, pos, buf, count);
 
 	if (rc)
@@ -121,7 +93,6 @@ static struct bin_attribute *nvmem_bin_rw_attributes[] = {
 
 static const struct attribute_group nvmem_bin_rw_group = {
 	.bin_attrs	= nvmem_bin_rw_attributes,
-	.attrs		= nvmem_attrs,
 };
 
 static const struct attribute_group *nvmem_rw_dev_groups[] = {
@@ -145,7 +116,6 @@ static struct bin_attribute *nvmem_bin_ro_attributes[] = {
 
 static const struct attribute_group nvmem_bin_ro_group = {
 	.bin_attrs	= nvmem_bin_ro_attributes,
-	.attrs		= nvmem_attrs,
 };
 
 static const struct attribute_group *nvmem_ro_dev_groups[] = {
@@ -170,7 +140,6 @@ static struct bin_attribute *nvmem_bin_rw_root_attributes[] = {
 
 static const struct attribute_group nvmem_bin_rw_root_group = {
 	.bin_attrs	= nvmem_bin_rw_root_attributes,
-	.attrs		= nvmem_attrs,
 };
 
 static const struct attribute_group *nvmem_rw_root_dev_groups[] = {
@@ -194,7 +163,6 @@ static struct bin_attribute *nvmem_bin_ro_root_attributes[] = {
 
 static const struct attribute_group nvmem_bin_ro_root_group = {
 	.bin_attrs	= nvmem_bin_ro_root_attributes,
-	.attrs		= nvmem_attrs,
 };
 
 static const struct attribute_group *nvmem_ro_root_dev_groups[] = {
@@ -230,17 +198,10 @@ int nvmem_sysfs_setup_compat(struct nvmem_device *nvmem,
 	if (!config->base_dev)
 		return -EINVAL;
 
-	if (nvmem->read_only) {
-		if (config->root_only)
-			nvmem->eeprom = bin_attr_ro_root_nvmem;
-		else
-			nvmem->eeprom = bin_attr_ro_nvmem;
-	} else {
-		if (config->root_only)
-			nvmem->eeprom = bin_attr_rw_root_nvmem;
-		else
-			nvmem->eeprom = bin_attr_rw_nvmem;
-	}
+	if (nvmem->read_only)
+		nvmem->eeprom = bin_attr_ro_root_nvmem;
+	else
+		nvmem->eeprom = bin_attr_rw_root_nvmem;
 	nvmem->eeprom.attr.name = "eeprom";
 	nvmem->eeprom.size = nvmem->size;
 #ifdef CONFIG_DEBUG_LOCK_ALLOC

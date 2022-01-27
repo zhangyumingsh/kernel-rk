@@ -52,7 +52,6 @@ struct rcar_thermal_chip {
 	unsigned int irq_per_ch : 1;
 	unsigned int needs_suspend_resume : 1;
 	unsigned int nirqs;
-	unsigned int ctemp_bands;
 };
 
 static const struct rcar_thermal_chip rcar_thermal = {
@@ -61,7 +60,6 @@ static const struct rcar_thermal_chip rcar_thermal = {
 	.irq_per_ch = 0,
 	.needs_suspend_resume = 0,
 	.nirqs = 1,
-	.ctemp_bands = 1,
 };
 
 static const struct rcar_thermal_chip rcar_gen2_thermal = {
@@ -70,7 +68,6 @@ static const struct rcar_thermal_chip rcar_gen2_thermal = {
 	.irq_per_ch = 0,
 	.needs_suspend_resume = 0,
 	.nirqs = 1,
-	.ctemp_bands = 1,
 };
 
 static const struct rcar_thermal_chip rcar_gen3_thermal = {
@@ -83,7 +80,6 @@ static const struct rcar_thermal_chip rcar_gen3_thermal = {
 	 * interrupts to detect a temperature change, rise or fall.
 	 */
 	.nirqs = 2,
-	.ctemp_bands = 2,
 };
 
 struct rcar_thermal_priv {
@@ -115,18 +111,6 @@ static const struct of_device_id rcar_thermal_dt_ids[] = {
 	{
 		.compatible = "renesas,rcar-gen2-thermal",
 		 .data = &rcar_gen2_thermal,
-	},
-	{
-		.compatible = "renesas,thermal-r8a774c0",
-		.data = &rcar_gen3_thermal,
-	},
-	{
-		.compatible = "renesas,thermal-r8a77970",
-		.data = &rcar_gen3_thermal,
-	},
-	{
-		.compatible = "renesas,thermal-r8a77990",
-		.data = &rcar_gen3_thermal,
 	},
 	{
 		.compatible = "renesas,thermal-r8a77995",
@@ -219,7 +203,7 @@ static int rcar_thermal_update_temp(struct rcar_thermal_priv *priv)
 		 * to get stable temperature.
 		 * see "Usage Notes" on datasheet
 		 */
-		usleep_range(300, 400);
+		udelay(300);
 
 		new = rcar_thermal_read(priv, THSSR) & CTEMP;
 		if (new == old) {
@@ -267,15 +251,15 @@ static int rcar_thermal_get_current_temp(struct rcar_thermal_priv *priv,
 		return ret;
 
 	mutex_lock(&priv->lock);
-	if (priv->chip->ctemp_bands == 1)
-		tmp = MCELSIUS((priv->ctemp * 5) - 65);
-	else if (priv->ctemp < 24)
-		tmp = MCELSIUS(((priv->ctemp * 55) - 720) / 10);
-	else
-		tmp = MCELSIUS((priv->ctemp * 5) - 60);
+	tmp =  MCELSIUS((priv->ctemp * 5) - 65);
 	mutex_unlock(&priv->lock);
 
-	/* Guaranteed operating range is -45C to 125C. */
+	if ((tmp < MCELSIUS(-45)) || (tmp > MCELSIUS(125))) {
+		struct device *dev = rcar_priv_to_dev(priv);
+
+		dev_err(dev, "it couldn't measure temperature correctly\n");
+		return -EIO;
+	}
 
 	*temp = tmp;
 
@@ -521,8 +505,10 @@ static int rcar_thermal_probe(struct platform_device *pdev)
 			res = platform_get_resource(pdev, IORESOURCE_MEM,
 						    mres++);
 			common->base = devm_ioremap_resource(dev, res);
-			if (IS_ERR(common->base))
-				return PTR_ERR(common->base);
+			if (IS_ERR(common->base)) {
+				ret = PTR_ERR(common->base);
+				goto error_unregister;
+			}
 
 			idle = 0; /* polling delay is not needed */
 		}

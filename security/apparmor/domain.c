@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * AppArmor security module
  *
@@ -6,6 +5,11 @@
  *
  * Copyright (C) 2002-2008 Novell/SUSE
  * Copyright 2009-2010 Canonical Ltd.
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License as
+ * published by the Free Software Foundation, version 2 of the
+ * License.
  */
 
 #include <linux/errno.h>
@@ -524,7 +528,7 @@ struct aa_label *x_table_lookup(struct aa_profile *profile, u32 xindex,
 				label = &new_profile->label;
 			continue;
 		}
-		label = aa_label_parse(&profile->label, *name, GFP_KERNEL,
+		label = aa_label_parse(&profile->label, *name, GFP_ATOMIC,
 				       true, false);
 		if (IS_ERR(label))
 			label = NULL;
@@ -572,7 +576,7 @@ static struct aa_label *x_to_label(struct aa_profile *profile,
 			stack = NULL;
 			break;
 		}
-		/* fall through - to X_NAME */
+		/* fall through to X_NAME */
 	case AA_X_NAME:
 		if (xindex & AA_X_CHILD)
 			/* released by caller */
@@ -604,7 +608,7 @@ static struct aa_label *x_to_label(struct aa_profile *profile,
 		/* base the stack on post domain transition */
 		struct aa_label *base = new;
 
-		new = aa_label_parse(base, stack, GFP_KERNEL, true, false);
+		new = aa_label_parse(base, stack, GFP_ATOMIC, true, false);
 		if (IS_ERR(new))
 			new = NULL;
 		aa_put_label(base);
@@ -689,9 +693,20 @@ static struct aa_label *profile_transition(struct aa_profile *profile,
 	} else if (COMPLAIN_MODE(profile)) {
 		/* no exec permission - learning mode */
 		struct aa_profile *new_profile = NULL;
+		char *n = kstrdup(name, GFP_ATOMIC);
 
-		new_profile = aa_new_null_profile(profile, false, name,
-						  GFP_KERNEL);
+		if (n) {
+			/* name is ptr into buffer */
+			long pos = name - buffer;
+			/* break per cpu buffer hold */
+			put_buffers(buffer);
+			new_profile = aa_new_null_profile(profile, false, n,
+							  GFP_KERNEL);
+			get_buffers(buffer);
+			name = buffer + pos;
+			strcpy((char *)name, n);
+			kfree(n);
+		}
 		if (!new_profile) {
 			error = -ENOMEM;
 			info = "could not create null profile";
@@ -712,7 +727,7 @@ static struct aa_label *profile_transition(struct aa_profile *profile,
 		if (DEBUG_ON) {
 			dbg_printk("apparmor: scrubbing environment variables"
 				   " for %s profile=", name);
-			aa_label_printk(new, GFP_KERNEL);
+			aa_label_printk(new, GFP_ATOMIC);
 			dbg_printk("\n");
 		}
 		*secure_exec = true;
@@ -788,7 +803,7 @@ static int profile_onexec(struct aa_profile *profile, struct aa_label *onexec,
 		if (DEBUG_ON) {
 			dbg_printk("apparmor: scrubbing environment "
 				   "variables for %s label=", xname);
-			aa_label_printk(onexec, GFP_KERNEL);
+			aa_label_printk(onexec, GFP_ATOMIC);
 			dbg_printk("\n");
 		}
 		*secure_exec = true;
@@ -822,7 +837,7 @@ static struct aa_label *handle_onexec(struct aa_label *label,
 					       bprm, buffer, cond, unsafe));
 		if (error)
 			return ERR_PTR(error);
-		new = fn_label_build_in_ns(label, profile, GFP_KERNEL,
+		new = fn_label_build_in_ns(label, profile, GFP_ATOMIC,
 				aa_get_newest_label(onexec),
 				profile_transition(profile, bprm, buffer,
 						   cond, unsafe));
@@ -834,9 +849,9 @@ static struct aa_label *handle_onexec(struct aa_label *label,
 					       buffer, cond, unsafe));
 		if (error)
 			return ERR_PTR(error);
-		new = fn_label_build_in_ns(label, profile, GFP_KERNEL,
+		new = fn_label_build_in_ns(label, profile, GFP_ATOMIC,
 				aa_label_merge(&profile->label, onexec,
-					       GFP_KERNEL),
+					       GFP_ATOMIC),
 				profile_transition(profile, bprm, buffer,
 						   cond, unsafe));
 	}
@@ -896,18 +911,13 @@ int apparmor_bprm_set_creds(struct linux_binprm *bprm)
 		ctx->nnp = aa_get_label(label);
 
 	/* buffer freed below, name is pointer into buffer */
-	buffer = aa_get_buffer(false);
-	if (!buffer) {
-		error = -ENOMEM;
-		goto done;
-	}
-
+	get_buffers(buffer);
 	/* Test for onexec first as onexec override other x transitions. */
 	if (ctx->onexec)
 		new = handle_onexec(label, ctx->onexec, ctx->token,
 				    bprm, buffer, &cond, &unsafe);
 	else
-		new = fn_label_build(label, profile, GFP_KERNEL,
+		new = fn_label_build(label, profile, GFP_ATOMIC,
 				profile_transition(profile, bprm, buffer,
 						   &cond, &unsafe));
 
@@ -929,7 +939,8 @@ int apparmor_bprm_set_creds(struct linux_binprm *bprm)
 	 * aways results in a further reduction of permissions.
 	 */
 	if ((bprm->unsafe & LSM_UNSAFE_NO_NEW_PRIVS) &&
-	    !unconfined(label) && !aa_label_is_subset(new, ctx->nnp)) {
+	    !unconfined(label) &&
+	    !aa_label_is_unconfined_subset(new, ctx->nnp)) {
 		error = -EPERM;
 		info = "no new privs";
 		goto audit;
@@ -951,7 +962,7 @@ int apparmor_bprm_set_creds(struct linux_binprm *bprm)
 		if (DEBUG_ON) {
 			dbg_printk("scrubbing environment variables for %s "
 				   "label=", bprm->filename);
-			aa_label_printk(new, GFP_KERNEL);
+			aa_label_printk(new, GFP_ATOMIC);
 			dbg_printk("\n");
 		}
 		bprm->secureexec = 1;
@@ -962,18 +973,18 @@ int apparmor_bprm_set_creds(struct linux_binprm *bprm)
 		if (DEBUG_ON) {
 			dbg_printk("apparmor: clearing unsafe personality "
 				   "bits. %s label=", bprm->filename);
-			aa_label_printk(new, GFP_KERNEL);
+			aa_label_printk(new, GFP_ATOMIC);
 			dbg_printk("\n");
 		}
 		bprm->per_clear |= PER_CLEAR_ON_SETID;
 	}
 	aa_put_label(cred_label(bprm->cred));
 	/* transfer reference, released when cred is freed */
-	set_cred_label(bprm->cred, new);
+	cred_label(bprm->cred) = new;
 
 done:
 	aa_put_label(label);
-	aa_put_buffer(buffer);
+	put_buffers(buffer);
 
 	return error;
 
@@ -1207,7 +1218,7 @@ int aa_change_hat(const char *hats[], int count, u64 token, int flags)
 		 * reduce restrictions.
 		 */
 		if (task_no_new_privs(current) && !unconfined(label) &&
-		    !aa_label_is_subset(new, ctx->nnp)) {
+		    !aa_label_is_unconfined_subset(new, ctx->nnp)) {
 			/* not an apparmor denial per se, so don't log it */
 			AA_DEBUG("no_new_privs - change_hat denied");
 			error = -EPERM;
@@ -1228,7 +1239,7 @@ int aa_change_hat(const char *hats[], int count, u64 token, int flags)
 		 * reduce restrictions.
 		 */
 		if (task_no_new_privs(current) && !unconfined(label) &&
-		    !aa_label_is_subset(previous, ctx->nnp)) {
+		    !aa_label_is_unconfined_subset(previous, ctx->nnp)) {
 			/* not an apparmor denial per se, so don't log it */
 			AA_DEBUG("no_new_privs - change_hat denied");
 			error = -EPERM;
@@ -1328,6 +1339,7 @@ int aa_change_profile(const char *fqname, int flags)
 		ctx->nnp = aa_get_label(label);
 
 	if (!fqname || !*fqname) {
+		aa_put_label(label);
 		AA_DEBUG("no profile name");
 		return -EINVAL;
 	}
@@ -1345,8 +1357,6 @@ int aa_change_profile(const char *fqname, int flags)
 		else
 			op = OP_CHANGE_PROFILE;
 	}
-
-	label = aa_get_current_label();
 
 	if (*fqname == '&') {
 		stack = true;
@@ -1424,7 +1434,7 @@ check:
 		 * reduce restrictions.
 		 */
 		if (task_no_new_privs(current) && !unconfined(label) &&
-		    !aa_label_is_subset(new, ctx->nnp)) {
+		    !aa_label_is_unconfined_subset(new, ctx->nnp)) {
 			/* not an apparmor denial per se, so don't log it */
 			AA_DEBUG("no_new_privs - change_hat denied");
 			error = -EPERM;

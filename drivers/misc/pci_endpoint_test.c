@@ -1,9 +1,20 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /**
  * Host side test driver to test endpoint functionality
  *
  * Copyright (C) 2017 Texas Instruments
  * Author: Kishon Vijay Abraham I <kishon@ti.com>
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 of
+ * the License as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <linux/crc32.h>
@@ -94,7 +105,7 @@ enum pci_barno {
 struct pci_endpoint_test {
 	struct pci_dev	*pdev;
 	void __iomem	*base;
-	void __iomem	*bar[PCI_STD_NUM_BARS];
+	void __iomem	*bar[6];
 	struct completion irq_raised;
 	int		last_irq;
 	int		num_irqs;
@@ -693,7 +704,7 @@ static int pci_endpoint_test_probe(struct pci_dev *pdev,
 	if (!pci_endpoint_test_request_irq(test))
 		goto err_disable_irq;
 
-	for (bar = 0; bar < PCI_STD_NUM_BARS; bar++) {
+	for (bar = BAR_0; bar <= BAR_5; bar++) {
 		if (pci_resource_flags(pdev, bar) & IORESOURCE_MEM) {
 			base = pci_ioremap_bar(pdev, bar);
 			if (!base) {
@@ -746,7 +757,7 @@ err_ida_remove:
 	ida_simple_remove(&pci_endpoint_test_ida, id);
 
 err_iounmap:
-	for (bar = 0; bar < PCI_STD_NUM_BARS; bar++) {
+	for (bar = BAR_0; bar <= BAR_5; bar++) {
 		if (test->bar[bar])
 			pci_iounmap(pdev, test->bar[bar]);
 	}
@@ -777,7 +788,7 @@ static void pci_endpoint_test_remove(struct pci_dev *pdev)
 	misc_deregister(&test->miscdev);
 	kfree(misc_device->name);
 	ida_simple_remove(&pci_endpoint_test_ida, id);
-	for (bar = 0; bar < PCI_STD_NUM_BARS; bar++) {
+	for (bar = BAR_0; bar <= BAR_5; bar++) {
 		if (test->bar[bar])
 			pci_iounmap(pdev, test->bar[bar]);
 	}

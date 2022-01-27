@@ -10,8 +10,7 @@
 #include <uapi/linux/seccomp.h>
 #include <uapi/linux/unistd.h>
 #include "syscall_nrs.h"
-#include <bpf/bpf_helpers.h>
-#include <bpf/bpf_tracing.h>
+#include "bpf_helpers.h"
 
 #define PROG(F) SEC("kprobe/"__stringify(F)) int bpf_func_##F
 
@@ -69,25 +68,12 @@ PROG(SYS__NR_read)(struct pt_regs *ctx)
 	return 0;
 }
 
-#ifdef __NR_mmap2
-PROG(SYS__NR_mmap2)(struct pt_regs *ctx)
-{
-	char fmt[] = "mmap2\n";
-
-	bpf_trace_printk(fmt, sizeof(fmt));
-	return 0;
-}
-#endif
-
-#ifdef __NR_mmap
 PROG(SYS__NR_mmap)(struct pt_regs *ctx)
 {
 	char fmt[] = "mmap\n";
-
 	bpf_trace_printk(fmt, sizeof(fmt));
 	return 0;
 }
-#endif
 
 char _license[] SEC("license") = "GPL";
 u32 _version SEC("version") = LINUX_VERSION_CODE;

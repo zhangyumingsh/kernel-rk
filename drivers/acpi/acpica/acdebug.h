@@ -3,7 +3,7 @@
  *
  * Name: acdebug.h - ACPI/AML debugger
  *
- * Copyright (C) 2000 - 2020, Intel Corp.
+ * Copyright (C) 2000 - 2018, Intel Corp.
  *
  *****************************************************************************/
 
@@ -16,8 +16,7 @@
 #include "acdisasm.h"
 #endif
 
-#define ACPI_DEBUG_BUFFER_SIZE      0x4000	/* 16K buffer for return objects */
-#define ACPI_DEBUG_LENGTH_FORMAT    " (%.4X bits, %.3X bytes)"
+#define ACPI_DEBUG_BUFFER_SIZE  0x4000	/* 16K buffer for return objects */
 
 struct acpi_db_command_info {
 	const char *name;	/* Command Name */
@@ -147,8 +146,6 @@ void acpi_db_check_integrity(void);
 void acpi_db_find_references(char *object_arg);
 
 void acpi_db_get_bus_info(void);
-
-acpi_status acpi_db_display_fields(u32 address_space_id);
 
 /*
  * dbdisply - debug display commands

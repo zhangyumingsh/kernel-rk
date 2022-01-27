@@ -24,7 +24,7 @@
 #include <linux/console.h>
 #include <linux/sysrq.h>
 #include <linux/device.h>
-#include <linux/memblock.h>
+#include <linux/bootmem.h>
 #include <linux/dma-mapping.h>
 #include <linux/fs_uart_pd.h>
 #include <linux/of_address.h>
@@ -39,6 +39,10 @@
 #include <asm/delay.h>
 #include <asm/fs_pd.h>
 #include <asm/udbg.h>
+
+#if defined(CONFIG_SERIAL_CPM_CONSOLE) && defined(CONFIG_MAGIC_SYSRQ)
+#define SUPPORT_SYSRQ
+#endif
 
 #include <linux/serial_core.h>
 #include <linux/kernel.h>
@@ -343,7 +347,9 @@ static void cpm_uart_int_rx(struct uart_port *port)
 		/* ASSUMPTION: it contains nothing valid */
 		i = 0;
 	}
+#ifdef SUPPORT_SYSRQ
 	port->sysrq = 0;
+#endif
 	goto error_return;
 }
 
@@ -570,6 +576,8 @@ static void cpm_uart_set_termios(struct uart_port *port,
 	/*
 	 * Set up parity check flag
 	 */
+#define RELEVANT_IFLAG(iflag) (iflag & (IGNBRK|BRKINT|IGNPAR|PARMRK|INPCK))
+
 	port->read_status_mask = (BD_SC_EMPTY | BD_SC_OV);
 	if (termios->c_iflag & INPCK)
 		port->read_status_mask |= BD_SC_FR | BD_SC_PR;
@@ -1152,8 +1160,8 @@ static int cpm_uart_init_port(struct device_node *np,
 	if (!pinfo->clk) {
 		data = of_get_property(np, "fsl,cpm-brg", &len);
 		if (!data || len != 4) {
-			printk(KERN_ERR "CPM UART %pOFn has no/invalid "
-			                "fsl,cpm-brg property.\n", np);
+			printk(KERN_ERR "CPM UART %s has no/invalid "
+			                "fsl,cpm-brg property.\n", np->name);
 			return -EINVAL;
 		}
 		pinfo->brg = *data;
@@ -1161,8 +1169,8 @@ static int cpm_uart_init_port(struct device_node *np,
 
 	data = of_get_property(np, "fsl,cpm-command", &len);
 	if (!data || len != 4) {
-		printk(KERN_ERR "CPM UART %pOFn has no/invalid "
-		                "fsl,cpm-command property.\n", np);
+		printk(KERN_ERR "CPM UART %s has no/invalid "
+		                "fsl,cpm-command property.\n", np->name);
 		return -EINVAL;
 	}
 	pinfo->command = *data;
@@ -1198,8 +1206,7 @@ static int cpm_uart_init_port(struct device_node *np,
 	pinfo->port.uartclk = ppc_proc_freq;
 	pinfo->port.mapbase = (unsigned long)mem;
 	pinfo->port.type = PORT_CPM;
-	pinfo->port.ops = &cpm_uart_pops;
-	pinfo->port.has_sysrq = IS_ENABLED(CONFIG_SERIAL_CPM_CONSOLE);
+	pinfo->port.ops = &cpm_uart_pops,
 	pinfo->port.iotype = UPIO_MEM;
 	pinfo->port.fifosize = pinfo->tx_nrfifos * pinfo->tx_fifosize;
 	spin_lock_init(&pinfo->port.lock);
@@ -1373,7 +1380,6 @@ static struct console cpm_scc_uart_console = {
 
 static int __init cpm_uart_console_init(void)
 {
-	cpm_muram_init();
 	register_console(&cpm_scc_uart_console);
 	return 0;
 }

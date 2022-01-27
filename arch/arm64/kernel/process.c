@@ -1,10 +1,21 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Based on arch/arm/kernel/process.c
  *
  * Original Copyright (C) 1995  Linus Torvalds
  * Copyright (C) 1996-2000 Russell King - Converted to ARM.
  * Copyright (C) 2012 ARM Ltd.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <stdarg.h>
@@ -17,7 +28,6 @@
 #include <linux/sched/task.h>
 #include <linux/sched/task_stack.h>
 #include <linux/kernel.h>
-#include <linux/lockdep.h>
 #include <linux/mm.h>
 #include <linux/stddef.h>
 #include <linux/sysctl.h>
@@ -43,18 +53,16 @@
 #include <linux/prctl.h>
 
 #include <asm/alternative.h>
-#include <asm/arch_gicv3.h>
 #include <asm/compat.h>
-#include <asm/cpufeature.h>
 #include <asm/cacheflush.h>
 #include <asm/exec.h>
 #include <asm/fpsimd.h>
 #include <asm/mmu_context.h>
 #include <asm/processor.h>
-#include <asm/pointer_auth.h>
+#include <asm/scs.h>
 #include <asm/stacktrace.h>
 
-#if defined(CONFIG_STACKPROTECTOR) && !defined(CONFIG_STACKPROTECTOR_PER_TASK)
+#ifdef CONFIG_STACKPROTECTOR
 #include <linux/stackprotector.h>
 unsigned long __stack_chk_guard __read_mostly;
 EXPORT_SYMBOL(__stack_chk_guard);
@@ -67,50 +75,7 @@ void (*pm_power_off)(void);
 EXPORT_SYMBOL_GPL(pm_power_off);
 
 void (*arm_pm_restart)(enum reboot_mode reboot_mode, const char *cmd);
-
-static void __cpu_do_idle(void)
-{
-	dsb(sy);
-	wfi();
-}
-
-static void __cpu_do_idle_irqprio(void)
-{
-	unsigned long pmr;
-	unsigned long daif_bits;
-
-	daif_bits = read_sysreg(daif);
-	write_sysreg(daif_bits | PSR_I_BIT, daif);
-
-	/*
-	 * Unmask PMR before going idle to make sure interrupts can
-	 * be raised.
-	 */
-	pmr = gic_read_pmr();
-	gic_write_pmr(GIC_PRIO_IRQON | GIC_PRIO_PSR_I_SET);
-
-	__cpu_do_idle();
-
-	gic_write_pmr(pmr);
-	write_sysreg(daif_bits, daif);
-}
-
-/*
- *	cpu_do_idle()
- *
- *	Idle the processor (wait for interrupt).
- *
- *	If the CPU supports priority masking we must do additional work to
- *	ensure that interrupts are not masked at the PMR (because the core will
- *	not wake up if we block the wake up signal in the interrupt controller).
- */
-void cpu_do_idle(void)
-{
-	if (system_uses_irq_prio_masking())
-		__cpu_do_idle_irqprio();
-	else
-		__cpu_do_idle();
-}
+EXPORT_SYMBOL_GPL(arm_pm_restart);
 
 /*
  * This is our default idle handler.
@@ -270,9 +235,6 @@ void __show_regs(struct pt_regs *regs)
 
 	printk("sp : %016llx\n", sp);
 
-	if (system_uses_irq_prio_masking())
-		printk("pmr_save: %08llx\n", regs->pmr_save);
-
 	i = top_reg;
 
 	while (i >= 0) {
@@ -360,8 +322,8 @@ int arch_dup_task_struct(struct task_struct *dst, struct task_struct *src)
 
 asmlinkage void ret_from_fork(void) asm("ret_from_fork");
 
-int copy_thread_tls(unsigned long clone_flags, unsigned long stack_start,
-		unsigned long stk_sz, struct task_struct *p, unsigned long tls)
+int copy_thread(unsigned long clone_flags, unsigned long stack_start,
+		unsigned long stk_sz, struct task_struct *p)
 {
 	struct pt_regs *childregs = task_pt_regs(p);
 
@@ -394,11 +356,11 @@ int copy_thread_tls(unsigned long clone_flags, unsigned long stack_start,
 		}
 
 		/*
-		 * If a TLS pointer was passed to clone, use it for the new
-		 * thread.
+		 * If a TLS pointer was passed to clone (4th argument), use it
+		 * for the new thread.
 		 */
 		if (clone_flags & CLONE_SETTLS)
-			p->thread.uw.tp_value = tls;
+			p->thread.uw.tp_value = childregs->regs[3];
 	} else {
 		memset(childregs, 0, sizeof(struct pt_regs));
 		childregs->pstate = PSR_MODE_EL1h;
@@ -408,9 +370,6 @@ int copy_thread_tls(unsigned long clone_flags, unsigned long stack_start,
 
 		if (arm64_get_ssbd_state() == ARM64_SSBD_FORCE_DISABLE)
 			set_ssbs_bit(childregs);
-
-		if (system_uses_irq_prio_masking())
-			childregs->pmr_save = GIC_PRIO_IRQON;
 
 		p->thread.cpu_context.x19 = stack_start;
 		p->thread.cpu_context.x20 = stk_sz;
@@ -512,8 +471,8 @@ __notrace_funcgraph struct task_struct *__switch_to(struct task_struct *prev,
 	contextidr_thread_switch(next);
 	entry_task_switch(next);
 	uao_thread_switch(next);
-	ptrauth_thread_switch(next);
 	ssbs_thread_switch(next);
+	scs_overflow_check(next);
 
 	/*
 	 * Complete any pending TLB or cache maintenance on this CPU in case
@@ -541,8 +500,11 @@ unsigned long get_wchan(struct task_struct *p)
 	if (!stack_page)
 		return 0;
 
-	start_backtrace(&frame, thread_saved_fp(p), thread_saved_pc(p));
-
+	frame.fp = thread_saved_fp(p);
+	frame.pc = thread_saved_pc(p);
+#ifdef CONFIG_FUNCTION_GRAPH_TRACER
+	frame.graph = p->curr_ret_stack;
+#endif
 	do {
 		if (unwind_frame(p, &frame))
 			goto out;
@@ -564,15 +526,43 @@ unsigned long arch_align_stack(unsigned long sp)
 	return sp & ~0xf;
 }
 
+unsigned long arch_randomize_brk(struct mm_struct *mm)
+{
+	if (is_compat_task())
+		return randomize_page(mm->brk, SZ_32M);
+	else
+		return randomize_page(mm->brk, SZ_1G);
+}
+
 /*
  * Called from setup_new_exec() after (COMPAT_)SET_PERSONALITY.
  */
 void arch_setup_new_exec(void)
 {
 	current->mm->context.flags = is_compat_task() ? MMCF_AARCH32 : 0;
-
-	ptrauth_thread_init_user(current);
 }
+
+#ifdef CONFIG_GCC_PLUGIN_STACKLEAK
+void __used stackleak_check_alloca(unsigned long size)
+{
+	unsigned long stack_left;
+	unsigned long current_sp = current_stack_pointer;
+	struct stack_info info;
+
+	BUG_ON(!on_accessible_stack(current, current_sp, &info));
+
+	stack_left = current_sp - info.low;
+
+	/*
+	 * There's a good chance we're almost out of stack space if this
+	 * is true. Using panic() over BUG() is more likely to give
+	 * reliable debugging output.
+	 */
+	if (size >= stack_left)
+		panic("alloca() over the kernel stack boundary\n");
+}
+EXPORT_SYMBOL(stackleak_check_alloca);
+#endif
 
 #ifdef CONFIG_ARM64_TAGGED_ADDR_ABI
 /*
@@ -615,6 +605,8 @@ long get_tagged_addr_ctrl(void)
  * only prevents the tagged address ABI enabling via prctl() and does not
  * disable it for tasks that already opted in to the relaxed ABI.
  */
+static int zero;
+static int one = 1;
 
 static struct ctl_table tagged_addr_sysctl_table[] = {
 	{
@@ -623,8 +615,8 @@ static struct ctl_table tagged_addr_sysctl_table[] = {
 		.data		= &tagged_addr_disabled,
 		.maxlen		= sizeof(int),
 		.proc_handler	= proc_dointvec_minmax,
-		.extra1		= SYSCTL_ZERO,
-		.extra2		= SYSCTL_ONE,
+		.extra1		= &zero,
+		.extra2		= &one,
 	},
 	{ }
 };
@@ -638,19 +630,3 @@ static int __init tagged_addr_init(void)
 
 core_initcall(tagged_addr_init);
 #endif	/* CONFIG_ARM64_TAGGED_ADDR_ABI */
-
-asmlinkage void __sched arm64_preempt_schedule_irq(void)
-{
-	lockdep_assert_irqs_disabled();
-
-	/*
-	 * Preempting a task from an IRQ means we leave copies of PSTATE
-	 * on the stack. cpufeature's enable calls may modify PSTATE, but
-	 * resuming one of these preempted tasks would undo those changes.
-	 *
-	 * Only allow a task to be preempted once cpufeatures have been
-	 * enabled.
-	 */
-	if (system_capabilities_finalized())
-		preempt_schedule_irq();
-}

@@ -12,7 +12,6 @@
 #include <crypto/algapi.h>
 #include <crypto/internal/hash.h>
 #include <crypto/internal/poly1305.h>
-#include <crypto/internal/simd.h>
 #include <linux/cpufeature.h>
 #include <linux/crypto.h>
 #include <linux/jump_label.h>
@@ -20,6 +19,7 @@
 
 void poly1305_init_arm(void *state, const u8 *key);
 void poly1305_blocks_arm(void *state, const u8 *src, u32 len, u32 hibit);
+void poly1305_blocks_neon(void *state, const u8 *src, u32 len, u32 hibit);
 void poly1305_emit_arm(void *state, u8 *digest, const u32 *nonce);
 
 void __weak poly1305_blocks_neon(void *state, const u8 *src, u32 len, u32 hibit)
@@ -125,7 +125,7 @@ static int __maybe_unused arm_poly1305_update_neon(struct shash_desc *desc,
 						   unsigned int srclen)
 {
 	struct poly1305_desc_ctx *dctx = shash_desc_ctx(desc);
-	bool do_neon = crypto_simd_usable() && srclen > 128;
+	bool do_neon = may_use_simd() && srclen > 128;
 
 	if (static_branch_likely(&have_neon) && do_neon)
 		kernel_neon_begin();
@@ -139,7 +139,7 @@ void poly1305_update_arch(struct poly1305_desc_ctx *dctx, const u8 *src,
 			  unsigned int nbytes)
 {
 	bool do_neon = IS_ENABLED(CONFIG_KERNEL_MODE_NEON) &&
-		       crypto_simd_usable();
+		       may_use_simd();
 
 	if (unlikely(dctx->buflen)) {
 		u32 bytes = min(nbytes, POLY1305_BLOCK_SIZE - dctx->buflen);
@@ -160,13 +160,20 @@ void poly1305_update_arch(struct poly1305_desc_ctx *dctx, const u8 *src,
 		unsigned int len = round_down(nbytes, POLY1305_BLOCK_SIZE);
 
 		if (static_branch_likely(&have_neon) && do_neon) {
-			kernel_neon_begin();
-			poly1305_blocks_neon(&dctx->h, src, len, 1);
-			kernel_neon_end();
+			do {
+				unsigned int todo = min_t(unsigned int, len, SZ_4K);
+
+				kernel_neon_begin();
+				poly1305_blocks_neon(&dctx->h, src, todo, 1);
+				kernel_neon_end();
+
+				len -= todo;
+				src += todo;
+			} while (len);
 		} else {
 			poly1305_blocks_arm(&dctx->h, src, len, 1);
+			src += len;
 		}
-		src += len;
 		nbytes %= POLY1305_BLOCK_SIZE;
 	}
 

@@ -1,5 +1,27 @@
-// SPDX-License-Identifier: GPL-2.0
-/* Copyright(c) 2009-2012  Realtek Corporation.*/
+/******************************************************************************
+ *
+ * Copyright(c) 2009-2012  Realtek Corporation.
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of version 2 of the GNU General Public License as
+ * published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
+ * more details.
+ *
+ * The full GNU General Public License is included in this distribution in the
+ * file called LICENSE.
+ *
+ * Contact Information:
+ * wlanfae <wlanfae@realtek.com>
+ * Realtek Corporation, No. 2, Innovation Road II, Hsinchu Science Park,
+ * Hsinchu 300, Taiwan.
+ *
+ * Larry Finger <Larry.Finger@lwfinger.net>
+ *
+ *****************************************************************************/
 
 #include <linux/export.h>
 #include "dm_common.h"
@@ -8,11 +30,11 @@
 #include "../base.h"
 #include "../core.h"
 
-#define BT_RSSI_STATE_NORMAL_POWER	BIT(0)
-#define BT_RSSI_STATE_AMDPU_OFF		BIT(1)
-#define BT_RSSI_STATE_SPECIAL_LOW	BIT(2)
-#define BT_RSSI_STATE_BG_EDCA_LOW	BIT(3)
-#define BT_RSSI_STATE_TXPOWER_LOW	BIT(4)
+#define BT_RSSI_STATE_NORMAL_POWER	BIT_OFFSET_LEN_MASK_32(0, 1)
+#define BT_RSSI_STATE_AMDPU_OFF		BIT_OFFSET_LEN_MASK_32(1, 1)
+#define BT_RSSI_STATE_SPECIAL_LOW	BIT_OFFSET_LEN_MASK_32(2, 1)
+#define BT_RSSI_STATE_BG_EDCA_LOW	BIT_OFFSET_LEN_MASK_32(3, 1)
+#define BT_RSSI_STATE_TXPOWER_LOW	BIT_OFFSET_LEN_MASK_32(4, 1)
 #define BT_MASK				0x00ffffff
 
 #define RTLPRIV			(struct rtl_priv *)
@@ -425,6 +447,7 @@ static void rtl92c_dm_initial_gain_sta(struct ieee80211_hw *hw)
 	if (dm_digtable->presta_cstate == dm_digtable->cursta_cstate ||
 	    dm_digtable->cursta_cstate == DIG_STA_BEFORE_CONNECT ||
 	    dm_digtable->cursta_cstate == DIG_STA_CONNECT) {
+
 		if (dm_digtable->cursta_cstate != DIG_STA_DISCONNECT) {
 			dm_digtable->rssi_val_min =
 			    rtl92c_dm_initial_gain_min_pwdb(hw);
@@ -503,6 +526,7 @@ static void rtl92c_dm_ctrl_initgain_by_twoport(struct ieee80211_hw *hw)
 	rtl92c_dm_cck_packet_detection_thresh(hw);
 
 	dm_digtable->presta_cstate = dm_digtable->cursta_cstate;
+
 }
 
 static void rtl92c_dm_dig(struct ieee80211_hw *hw)
@@ -605,7 +629,6 @@ static void rtl92c_dm_pwdb_monitor(struct ieee80211_hw *hw)
 void rtl92c_dm_init_edca_turbo(struct ieee80211_hw *hw)
 {
 	struct rtl_priv *rtlpriv = rtl_priv(hw);
-
 	rtlpriv->dm.current_turbo_edca = false;
 	rtlpriv->dm.is_any_nonbepkts = false;
 	rtlpriv->dm.is_cur_rdlstate = false;
@@ -659,6 +682,7 @@ static void rtl92c_dm_check_edca_turbo(struct ieee80211_hw *hw)
 
 	if ((bt_change_edca) || ((!rtlpriv->dm.is_any_nonbepkts) &&
 	     (!rtlpriv->dm.disable_framebursting))) {
+
 		cur_txok_cnt = rtlpriv->stats.txbytesunicast - last_txok_cnt;
 		cur_rxok_cnt = rtlpriv->stats.rxbytesunicast - last_rxok_cnt;
 
@@ -683,7 +707,6 @@ static void rtl92c_dm_check_edca_turbo(struct ieee80211_hw *hw)
 	} else {
 		if (rtlpriv->dm.current_turbo_edca) {
 			u8 tmp = AC0_BE;
-
 			rtlpriv->cfg->ops->set_hw_reg(hw, HW_VAR_AC_PARAM,
 						      &tmp);
 			rtlpriv->dm.current_turbo_edca = false;
@@ -1515,7 +1538,7 @@ static bool rtl92c_bt_state_change(struct ieee80211_hw *hw)
 	    polling == 0xffffffff && bt_state == 0xff)
 		return false;
 
-	bt_state &= BIT(0);
+	bt_state &= BIT_OFFSET_LEN_MASK_32(0, 1);
 	if (bt_state != rtlpriv->btcoexist.bt_cur_state) {
 		rtlpriv->btcoexist.bt_cur_state = bt_state;
 
@@ -1524,7 +1547,8 @@ static bool rtl92c_bt_state_change(struct ieee80211_hw *hw)
 
 			bt_state = bt_state |
 			  ((rtlpriv->btcoexist.bt_ant_isolation == 1) ?
-			  0 : BIT(1)) | BIT(2);
+			  0 : BIT_OFFSET_LEN_MASK_32(1, 1)) |
+			  BIT_OFFSET_LEN_MASK_32(2, 1);
 			rtl_write_byte(rtlpriv, 0x4fd, bt_state);
 		}
 		return true;
@@ -1554,9 +1578,9 @@ static bool rtl92c_bt_state_change(struct ieee80211_hw *hw)
 			rtlpriv->btcoexist.bt_service = cur_service_type;
 			bt_state = bt_state |
 			   ((rtlpriv->btcoexist.bt_ant_isolation == 1) ?
-			   0 : BIT(1)) |
+			   0 : BIT_OFFSET_LEN_MASK_32(1, 1)) |
 			   ((rtlpriv->btcoexist.bt_service != BT_IDLE) ?
-			   0 : BIT(2));
+			   0 : BIT_OFFSET_LEN_MASK_32(2, 1));
 
 			/* Add interrupt migration when bt is not ini
 			 * idle state (no traffic). */
@@ -1633,6 +1657,7 @@ static void rtl92c_bt_ant_isolation(struct ieee80211_hw *hw, u8 tmp1byte)
 {
 	struct rtl_priv *rtlpriv = rtl_priv(hw);
 
+
 	/* Only enable HW BT coexist when BT in "Busy" state. */
 	if (rtlpriv->mac80211.vendor == PEER_CISCO &&
 	    rtlpriv->btcoexist.bt_service == BT_OTHER_ACTION) {
@@ -1648,6 +1673,8 @@ static void rtl92c_bt_ant_isolation(struct ieee80211_hw *hw, u8 tmp1byte)
 			    (rtlpriv->btcoexist.bt_rssi_state &
 			    BT_RSSI_STATE_SPECIAL_LOW)) {
 			rtl_write_byte(rtlpriv, REG_GPIO_MUXCFG, 0xa0);
+		} else if (rtlpriv->btcoexist.bt_service == BT_PAN) {
+			rtl_write_byte(rtlpriv, REG_GPIO_MUXCFG, tmp1byte);
 		} else {
 			rtl_write_byte(rtlpriv, REG_GPIO_MUXCFG, tmp1byte);
 		}

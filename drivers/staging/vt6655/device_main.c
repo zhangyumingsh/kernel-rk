@@ -295,8 +295,7 @@ static void device_init_registers(struct vnt_private *priv)
 	/* Get Desire Power Value */
 	priv->byCurPwr = 0xFF;
 	priv->byCCKPwr = SROMbyReadEmbedded(priv->PortOffset, EEP_OFS_PWR_CCK);
-	priv->byOFDMPwrG = SROMbyReadEmbedded(priv->PortOffset,
-					      EEP_OFS_PWR_OFDMG);
+	priv->byOFDMPwrG = SROMbyReadEmbedded(priv->PortOffset, EEP_OFS_PWR_OFDMG);
 
 	/* Load power Table */
 	for (ii = 0; ii < CB_MAX_CHANNEL_24G; ii++) {
@@ -374,7 +373,7 @@ static void device_init_registers(struct vnt_private *priv)
 	priv->bRadioOff = false;
 
 	priv->byRadioCtl = SROMbyReadEmbedded(priv->PortOffset,
-					      EEP_OFS_RADIOCTL);
+						 EEP_OFS_RADIOCTL);
 	priv->bHWRadioOff = false;
 
 	if (priv->byRadioCtl & EEP_RADIOCTL_ENABLE) {
@@ -441,9 +440,12 @@ static bool device_init_rings(struct vnt_private *priv)
 	void *vir_pool;
 
 	/*allocate all RD/TD rings a single pool*/
-	vir_pool = dma_alloc_coherent(&priv->pcid->dev,
-				      priv->opts.rx_descs0 * sizeof(struct vnt_rx_desc) + priv->opts.rx_descs1 * sizeof(struct vnt_rx_desc) + priv->opts.tx_descs[0] * sizeof(struct vnt_tx_desc) + priv->opts.tx_descs[1] * sizeof(struct vnt_tx_desc),
-				      &priv->pool_dma, GFP_ATOMIC);
+	vir_pool = dma_zalloc_coherent(&priv->pcid->dev,
+				       priv->opts.rx_descs0 * sizeof(struct vnt_rx_desc) +
+				       priv->opts.rx_descs1 * sizeof(struct vnt_rx_desc) +
+				       priv->opts.tx_descs[0] * sizeof(struct vnt_tx_desc) +
+				       priv->opts.tx_descs[1] * sizeof(struct vnt_tx_desc),
+				       &priv->pool_dma, GFP_ATOMIC);
 	if (!vir_pool) {
 		dev_err(&priv->pcid->dev, "allocate desc dma memory failed\n");
 		return false;
@@ -457,9 +459,13 @@ static bool device_init_rings(struct vnt_private *priv)
 	priv->rd1_pool_dma = priv->rd0_pool_dma +
 		priv->opts.rx_descs0 * sizeof(struct vnt_rx_desc);
 
-	priv->tx0_bufs = dma_alloc_coherent(&priv->pcid->dev,
-					    priv->opts.tx_descs[0] * PKT_BUF_SZ + priv->opts.tx_descs[1] * PKT_BUF_SZ + CB_BEACON_BUF_SIZE + CB_MAX_BUF_SIZE,
-					    &priv->tx_bufs_dma0, GFP_ATOMIC);
+	priv->tx0_bufs = dma_zalloc_coherent(&priv->pcid->dev,
+					     priv->opts.tx_descs[0] * PKT_BUF_SZ +
+					     priv->opts.tx_descs[1] * PKT_BUF_SZ +
+					     CB_BEACON_BUF_SIZE +
+					     CB_MAX_BUF_SIZE,
+					     &priv->tx_bufs_dma0,
+					     GFP_ATOMIC);
 	if (!priv->tx0_bufs) {
 		dev_err(&priv->pcid->dev, "allocate buf dma memory failed\n");
 
@@ -660,13 +666,12 @@ static int device_init_td0_ring(struct vnt_private *priv)
 		desc->td_info->buf = priv->tx0_bufs + i * PKT_BUF_SZ;
 		desc->td_info->buf_dma = priv->tx_bufs_dma0 + i * PKT_BUF_SZ;
 
-		desc->next = &(priv->apTD0Rings[(i + 1) % priv->opts.tx_descs[0]]);
-		desc->next_desc = cpu_to_le32(curr +
-					      sizeof(struct vnt_tx_desc));
+		desc->next = &(priv->apTD0Rings[(i+1) % priv->opts.tx_descs[0]]);
+		desc->next_desc = cpu_to_le32(curr + sizeof(struct vnt_tx_desc));
 	}
 
 	if (i > 0)
-		priv->apTD0Rings[i - 1].next_desc = cpu_to_le32(priv->td0_pool_dma);
+		priv->apTD0Rings[i-1].next_desc = cpu_to_le32(priv->td0_pool_dma);
 	priv->apTailTD[0] = priv->apCurrTD[0] = &priv->apTD0Rings[0];
 
 	return 0;
@@ -706,7 +711,7 @@ static int device_init_td1_ring(struct vnt_private *priv)
 	}
 
 	if (i > 0)
-		priv->apTD1Rings[i - 1].next_desc = cpu_to_le32(priv->td1_pool_dma);
+		priv->apTD1Rings[i-1].next_desc = cpu_to_le32(priv->td1_pool_dma);
 	priv->apTailTD[1] = priv->apCurrTD[1] = &priv->apTD1Rings[0];
 
 	return 0;
@@ -807,12 +812,12 @@ static bool device_alloc_rx_buf(struct vnt_private *priv,
 }
 
 static void device_free_rx_buf(struct vnt_private *priv,
-			       struct vnt_rx_desc *rd)
+				struct vnt_rx_desc *rd)
 {
 	struct vnt_rd_info *rd_info = rd->rd_info;
 
 	dma_unmap_single(&priv->pcid->dev, rd_info->skb_dma,
-			 priv->rx_buf_sz, DMA_FROM_DEVICE);
+			priv->rx_buf_sz, DMA_FROM_DEVICE);
 	dev_kfree_skb(rd_info->skb);
 }
 

@@ -585,6 +585,34 @@ static int omap_dm_timer_set_load(struct omap_dm_timer *timer, int autoreload,
 	return 0;
 }
 
+/* Optimized set_load which removes costly spin wait in timer_start */
+int omap_dm_timer_set_load_start(struct omap_dm_timer *timer, int autoreload,
+                            unsigned int load)
+{
+	u32 l;
+
+	if (unlikely(!timer))
+		return -EINVAL;
+
+	omap_dm_timer_enable(timer);
+
+	l = omap_dm_timer_read_reg(timer, OMAP_TIMER_CTRL_REG);
+	if (autoreload) {
+		l |= OMAP_TIMER_CTRL_AR;
+		omap_dm_timer_write_reg(timer, OMAP_TIMER_LOAD_REG, load);
+	} else {
+		l &= ~OMAP_TIMER_CTRL_AR;
+	}
+	l |= OMAP_TIMER_CTRL_ST;
+
+	__omap_dm_timer_load_start(timer, l, load, timer->posted);
+
+	/* Save the context */
+	timer->context.tclr = l;
+	timer->context.tldr = load;
+	timer->context.tcrr = load;
+	return 0;
+}
 static int omap_dm_timer_set_match(struct omap_dm_timer *timer, int enable,
 				   unsigned int match)
 {
@@ -780,6 +808,7 @@ static int omap_dm_timer_probe(struct platform_device *pdev)
 {
 	unsigned long flags;
 	struct omap_dm_timer *timer;
+	struct resource *mem, *irq;
 	struct device *dev = &pdev->dev;
 	const struct dmtimer_platform_data *pdata;
 	int ret;
@@ -795,16 +824,24 @@ static int omap_dm_timer_probe(struct platform_device *pdev)
 		return -ENODEV;
 	}
 
+	irq = platform_get_resource(pdev, IORESOURCE_IRQ, 0);
+	if (unlikely(!irq)) {
+		dev_err(dev, "%s: no IRQ resource.\n", __func__);
+		return -ENODEV;
+	}
+
+	mem = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	if (unlikely(!mem)) {
+		dev_err(dev, "%s: no memory resource.\n", __func__);
+		return -ENODEV;
+	}
+
 	timer = devm_kzalloc(dev, sizeof(*timer), GFP_KERNEL);
 	if (!timer)
 		return  -ENOMEM;
 
-	timer->irq = platform_get_irq(pdev, 0);
-	if (timer->irq < 0)
-		return timer->irq;
-
 	timer->fclk = ERR_PTR(-ENODEV);
-	timer->io_base = devm_platform_ioremap_resource(pdev, 0);
+	timer->io_base = devm_ioremap_resource(dev, mem);
 	if (IS_ERR(timer->io_base))
 		return PTR_ERR(timer->io_base);
 
@@ -827,6 +864,7 @@ static int omap_dm_timer_probe(struct platform_device *pdev)
 	if (pdata)
 		timer->errata = pdata->timer_errata;
 
+	timer->irq = irq->start;
 	timer->pdev = pdev;
 
 	pm_runtime_enable(dev);
@@ -886,7 +924,7 @@ static int omap_dm_timer_remove(struct platform_device *pdev)
 	return ret;
 }
 
-static const struct omap_dm_timer_ops dmtimer_ops = {
+const static struct omap_dm_timer_ops dmtimer_ops = {
 	.request_by_node = omap_dm_timer_request_by_node,
 	.request_specific = omap_dm_timer_request_specific,
 	.request = omap_dm_timer_request,
@@ -956,8 +994,10 @@ static struct platform_driver omap_dm_timer_driver = {
 	},
 };
 
+early_platform_init("earlytimer", &omap_dm_timer_driver);
 module_platform_driver(omap_dm_timer_driver);
 
 MODULE_DESCRIPTION("OMAP Dual-Mode Timer Driver");
 MODULE_LICENSE("GPL");
+MODULE_ALIAS("platform:" DRIVER_NAME);
 MODULE_AUTHOR("Texas Instruments Inc");

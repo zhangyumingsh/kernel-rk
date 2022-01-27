@@ -6,18 +6,13 @@
  *          Yannick Fertre <yannick.fertre@st.com>
  */
 
-#include <linux/backlight.h>
-#include <linux/delay.h>
-#include <linux/gpio/consumer.h>
-#include <linux/module.h>
-#include <linux/regulator/consumer.h>
-
-#include <video/mipi_display.h>
-
+#include <drm/drmP.h>
 #include <drm/drm_mipi_dsi.h>
-#include <drm/drm_modes.h>
 #include <drm/drm_panel.h>
-#include <drm/drm_print.h>
+#include <linux/backlight.h>
+#include <linux/gpio/consumer.h>
+#include <linux/regulator/consumer.h>
+#include <video/mipi_display.h>
 
 #define OTM8009A_BACKLIGHT_DEFAULT	240
 #define OTM8009A_BACKLIGHT_MAX		255
@@ -72,15 +67,15 @@ struct otm8009a {
 };
 
 static const struct drm_display_mode default_mode = {
-	.clock = 29700,
+	.clock = 32729,
 	.hdisplay = 480,
-	.hsync_start = 480 + 98,
-	.hsync_end = 480 + 98 + 32,
-	.htotal = 480 + 98 + 32 + 98,
+	.hsync_start = 480 + 120,
+	.hsync_end = 480 + 120 + 63,
+	.htotal = 480 + 120 + 63 + 120,
 	.vdisplay = 800,
-	.vsync_start = 800 + 15,
-	.vsync_end = 800 + 15 + 10,
-	.vtotal = 800 + 15 + 10 + 14,
+	.vsync_start = 800 + 12,
+	.vsync_end = 800 + 12 + 12,
+	.vtotal = 800 + 12 + 12 + 12,
 	.vrefresh = 50,
 	.flags = 0,
 	.width_mm = 52,
@@ -349,12 +344,11 @@ static int otm8009a_enable(struct drm_panel *panel)
 	return 0;
 }
 
-static int otm8009a_get_modes(struct drm_panel *panel,
-			      struct drm_connector *connector)
+static int otm8009a_get_modes(struct drm_panel *panel)
 {
 	struct drm_display_mode *mode;
 
-	mode = drm_mode_duplicate(connector->dev, &default_mode);
+	mode = drm_mode_duplicate(panel->drm, &default_mode);
 	if (!mode) {
 		DRM_ERROR("failed to add mode %ux%ux@%u\n",
 			  default_mode.hdisplay, default_mode.vdisplay,
@@ -365,10 +359,10 @@ static int otm8009a_get_modes(struct drm_panel *panel,
 	drm_mode_set_name(mode);
 
 	mode->type = DRM_MODE_TYPE_DRIVER | DRM_MODE_TYPE_PREFERRED;
-	drm_mode_probed_add(connector, mode);
+	drm_mode_probed_add(panel->connector, mode);
 
-	connector->display_info.width_mm = mode->width_mm;
-	connector->display_info.height_mm = mode->height_mm;
+	panel->connector->display_info.width_mm = mode->width_mm;
+	panel->connector->display_info.height_mm = mode->height_mm;
 
 	return 1;
 }
@@ -442,8 +436,7 @@ static int otm8009a_probe(struct mipi_dsi_device *dsi)
 	ctx->supply = devm_regulator_get(dev, "power");
 	if (IS_ERR(ctx->supply)) {
 		ret = PTR_ERR(ctx->supply);
-		if (ret != -EPROBE_DEFER)
-			dev_err(dev, "failed to request regulator: %d\n", ret);
+		dev_err(dev, "failed to request regulator: %d\n", ret);
 		return ret;
 	}
 
@@ -456,8 +449,9 @@ static int otm8009a_probe(struct mipi_dsi_device *dsi)
 	dsi->mode_flags = MIPI_DSI_MODE_VIDEO | MIPI_DSI_MODE_VIDEO_BURST |
 			  MIPI_DSI_MODE_LPM;
 
-	drm_panel_init(&ctx->panel, dev, &otm8009a_drm_funcs,
-		       DRM_MODE_CONNECTOR_DSI);
+	drm_panel_init(&ctx->panel);
+	ctx->panel.dev = dev;
+	ctx->panel.funcs = &otm8009a_drm_funcs;
 
 	ctx->bl_dev = devm_backlight_device_register(dev, dev_name(dev),
 						     dsi->host->dev, ctx,

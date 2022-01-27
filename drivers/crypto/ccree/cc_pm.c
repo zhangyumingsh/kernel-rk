@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
-/* Copyright (C) 2012-2019 ARM Limited (or its affiliates). */
+/* Copyright (C) 2012-2018 ARM Limited or its affiliates. */
 
 #include <linux/kernel.h>
 #include <linux/interrupt.h>
@@ -8,6 +8,7 @@
 #include "cc_buffer_mgr.h"
 #include "cc_request_mgr.h"
 #include "cc_sram_mgr.h"
+#include "cc_ivgen.h"
 #include "cc_hash.h"
 #include "cc_pm.h"
 #include "cc_fips.h"
@@ -42,11 +43,6 @@ int cc_pm_resume(struct device *dev)
 		dev_err(dev, "failed getting clock back on. We're toast.\n");
 		return rc;
 	}
-	/* wait for Cryptocell reset completion */
-	if (!cc_wait_for_reset_completion(drvdata)) {
-		dev_err(dev, "Cryptocell reset not completed");
-		return -EBUSY;
-	}
 
 	cc_iowrite(drvdata, CC_REG(HOST_POWER_DOWN_EN), POWER_DOWN_DISABLE);
 	rc = init_cc_regs(drvdata, false);
@@ -59,6 +55,7 @@ int cc_pm_resume(struct device *dev)
 
 	cc_init_hash_sram(drvdata);
 
+	cc_init_iv_sram(drvdata);
 	return 0;
 }
 
@@ -73,27 +70,24 @@ int cc_pm_get(struct device *dev)
 	return (rc == 1 ? 0 : rc);
 }
 
-void cc_pm_put_suspend(struct device *dev)
+int cc_pm_put_suspend(struct device *dev)
 {
+	int rc = 0;
 	struct cc_drvdata *drvdata = dev_get_drvdata(dev);
 
 	if (drvdata->pm_on) {
 		pm_runtime_mark_last_busy(dev);
-		pm_runtime_put_autosuspend(dev);
+		rc = pm_runtime_put_autosuspend(dev);
 	}
-}
 
-bool cc_pm_is_dev_suspended(struct device *dev)
-{
-	/* check device state using runtime api */
-	return pm_runtime_suspended(dev);
+	return rc;
 }
 
 int cc_pm_init(struct cc_drvdata *drvdata)
 {
 	struct device *dev = drvdata_to_dev(drvdata);
 
-	/* must be before the enabling to avoid redundant suspending */
+	/* must be before the enabling to avoid resdundent suspending */
 	pm_runtime_set_autosuspend_delay(dev, CC_SUSPEND_TIMEOUT);
 	pm_runtime_use_autosuspend(dev);
 	/* set us as active - note we won't do PM ops until cc_pm_go()! */

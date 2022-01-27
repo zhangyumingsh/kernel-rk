@@ -1,6 +1,17 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (c) 2012, NVIDIA Corporation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms and conditions of the GNU General Public License,
+ * version 2, as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
+ * more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <linux/linkage.h>
@@ -18,6 +29,7 @@
 #define EMC_CFG				0xc
 #define EMC_ADR_CFG			0x10
 #define EMC_TIMING_CONTROL		0x28
+#define EMC_REFRESH			0x70
 #define EMC_NOP				0xdc
 #define EMC_SELF_REF			0xe0
 #define EMC_MRW				0xe8
@@ -59,9 +71,6 @@
 #define CLK_RESET_PLLX_MISC3_IDDQ	3
 #define CLK_RESET_PLLM_MISC_IDDQ	5
 #define CLK_RESET_PLLC_MISC_IDDQ	26
-#define CLK_RESET_PLLP_RESHIFT		0x528
-#define CLK_RESET_PLLP_RESHIFT_DEFAULT	0x3b
-#define CLK_RESET_PLLP_RESHIFT_ENABLE	0x3
 
 #define CLK_RESET_CLK_SOURCE_MSELECT	0x3b4
 
@@ -376,13 +385,9 @@ _pll_m_c_x_done:
 	tegra_get_soc_id TEGRA_APB_MISC_BASE, r1
 	cmp	r1, #TEGRA30
 	beq	1f
-
 	ldr	r1, [r0, #CLK_RESET_PLLP_BASE]
 	bic	r1, r1, #(1<<31)	@ disable PllP bypass
 	str	r1, [r0, #CLK_RESET_PLLP_BASE]
-
-	mov	r1, #CLK_RESET_PLLP_RESHIFT_DEFAULT
-	str	r1, [r0, #CLK_RESET_PLLP_RESHIFT]
 1:
 
 	mov32	r7, TEGRA_TMRUS_BASE
@@ -462,6 +467,7 @@ emc_wait_auto_cal_onetime:
 	cmp	r10, #TEGRA30
 	streq	r1, [r0, #EMC_NOP]
 	streq	r1, [r0, #EMC_NOP]
+	streq	r1, [r0, #EMC_REFRESH]
 
 	emc_device_mask r1, r0
 
@@ -522,8 +528,6 @@ zcal_done:
 	str	r1, [r0, #EMC_ZCAL_INTERVAL]
 	ldr	r1, [r5, #0x0]		@ restore EMC_CFG
 	str	r1, [r0, #EMC_CFG]
-
-	emc_timing_update r1, r0
 
 	/* Tegra114 had dual EMC channel, now config the other one */
 	cmp	r10, #TEGRA114
@@ -651,10 +655,6 @@ tegra30_switch_cpu_to_clk32k:
 	orrne	r0, r0, #(1 << 31)	@ enable PllP bypass on fast cluster
 	bic	r0, r0, #(1 << 30)
 	str	r0, [r5, #CLK_RESET_PLLP_BASE]
-	beq	1f
-	mov	r0, #CLK_RESET_PLLP_RESHIFT_ENABLE
-	str	r0, [r5, #CLK_RESET_PLLP_RESHIFT]
-1:
 	ldr	r0, [r5, #CLK_RESET_PLLA_BASE]
 	bic	r0, r0, #(1 << 30)
 	str	r0, [r5, #CLK_RESET_PLLA_BASE]
@@ -670,12 +670,8 @@ tegra30_switch_cpu_to_clk32k:
 	pll_iddq_entry r1, r5, CLK_RESET_PLLX_MISC3, CLK_RESET_PLLX_MISC3_IDDQ
 _no_pll_in_iddq:
 
-	/*
-	 * Switch to clk_s (32KHz); bits 28:31=0
-	 * Enable burst on CPU IRQ; bit 24=1
-	 * Set IRQ burst clock source to clk_m; bits 10:8=0
-	 */
-	mov	r0, #(1 << 24)
+	/* switch to CLKS */
+	mov	r0, #0	/* brust policy = 32KHz */
 	str	r0, [r5, #CLK_RESET_SCLK_BURST]
 
 	ret	lr
@@ -708,12 +704,10 @@ tegra30_enter_sleep:
 	dsb
 	ldr	r0, [r6, r2] /* memory barrier */
 
-	cmp	r10, #TEGRA30
 halted:
 	isb
 	dsb
-	wfine	/* CPU should be power gated here */
-	wfeeq
+	wfi	/* CPU should be power gated here */
 
 	/* !!!FIXME!!! Implement halt failure handler */
 	b	halted

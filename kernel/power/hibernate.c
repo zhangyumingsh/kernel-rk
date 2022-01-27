@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * kernel/power/hibernate.c - Hibernation (a.k.a suspend-to-disk) support.
  *
@@ -7,12 +6,15 @@
  * Copyright (c) 2004 Pavel Machek <pavel@ucw.cz>
  * Copyright (c) 2009 Rafael J. Wysocki, Novell Inc.
  * Copyright (C) 2012 Bojan Smojver <bojan@rexursive.com>
+ *
+ * This file is released under the GPLv2.
  */
 
-#define pr_fmt(fmt) "PM: hibernation: " fmt
+#define pr_fmt(fmt) "PM: " fmt
 
 #include <linux/export.h>
 #include <linux/suspend.h>
+#include <linux/syscalls.h>
 #include <linux/reboot.h>
 #include <linux/string.h>
 #include <linux/device.h>
@@ -30,7 +32,6 @@
 #include <linux/ctype.h>
 #include <linux/genhd.h>
 #include <linux/ktime.h>
-#include <linux/security.h>
 #include <trace/events/power.h>
 
 #include "power.h"
@@ -69,7 +70,7 @@ static const struct platform_hibernation_ops *hibernation_ops;
 
 bool hibernation_available(void)
 {
-	return nohibernate == 0 && !security_locked_down(LOCKDOWN_HIBERNATION);
+	return (nohibernate == 0);
 }
 
 /**
@@ -106,7 +107,7 @@ EXPORT_SYMBOL(system_entering_hibernation);
 #ifdef CONFIG_PM_DEBUG
 static void hibernation_debug_sleep(void)
 {
-	pr_info("debug: Waiting for 5 seconds.\n");
+	pr_info("hibernation debug: Waiting for 5 seconds.\n");
 	mdelay(5000);
 }
 
@@ -129,7 +130,7 @@ static int hibernation_test(int level) { return 0; }
 static int platform_begin(int platform_mode)
 {
 	return (platform_mode && hibernation_ops) ?
-		hibernation_ops->begin(PMSG_FREEZE) : 0;
+		hibernation_ops->begin() : 0;
 }
 
 /**
@@ -277,7 +278,7 @@ static int create_image(int platform_mode)
 
 	error = dpm_suspend_end(PMSG_FREEZE);
 	if (error) {
-		pr_err("Some devices failed to power down, aborting\n");
+		pr_err("Some devices failed to power down, aborting hibernation\n");
 		return error;
 	}
 
@@ -285,7 +286,7 @@ static int create_image(int platform_mode)
 	if (error || hibernation_test(TEST_PLATFORM))
 		goto Platform_finish;
 
-	error = suspend_disable_secondary_cpus();
+	error = disable_nonboot_cpus();
 	if (error || hibernation_test(TEST_CPUS))
 		goto Enable_cpus;
 
@@ -295,7 +296,7 @@ static int create_image(int platform_mode)
 
 	error = syscore_suspend();
 	if (error) {
-		pr_err("Some system devices failed to power down, aborting\n");
+		pr_err("Some system devices failed to power down, aborting hibernation\n");
 		goto Enable_irqs;
 	}
 
@@ -310,7 +311,7 @@ static int create_image(int platform_mode)
 	restore_processor_state();
 	trace_suspend_resume(TPS("machine_suspend"), PM_EVENT_HIBERNATE, false);
 	if (error)
-		pr_err("Error %d creating image\n", error);
+		pr_err("Error %d creating hibernation image\n", error);
 
 	if (!in_suspend) {
 		events_check_enabled = false;
@@ -327,7 +328,7 @@ static int create_image(int platform_mode)
 	local_irq_enable();
 
  Enable_cpus:
-	suspend_enable_secondary_cpus();
+	enable_nonboot_cpus();
 
 	/* Allow architectures to do nosmt-specific post-resume dances */
 	if (!in_suspend)
@@ -425,7 +426,7 @@ int hibernation_snapshot(int platform_mode)
 
 int __weak hibernate_resume_nonboot_cpu_disable(void)
 {
-	return suspend_disable_secondary_cpus();
+	return disable_nonboot_cpus();
 }
 
 /**
@@ -494,7 +495,7 @@ static int resume_target_kernel(bool platform_mode)
 	local_irq_enable();
 
  Enable_cpus:
-	suspend_enable_secondary_cpus();
+	enable_nonboot_cpus();
 
  Cleanup:
 	platform_restore_cleanup(platform_mode);
@@ -551,7 +552,7 @@ int hibernation_platform_enter(void)
 	 * hibernation_ops->finish() before saving the image, so we should let
 	 * the firmware know that we're going to enter the sleep state after all
 	 */
-	error = hibernation_ops->begin(PMSG_HIBERNATE);
+	error = hibernation_ops->begin();
 	if (error)
 		goto Close;
 
@@ -572,7 +573,7 @@ int hibernation_platform_enter(void)
 	if (error)
 		goto Platform_finish;
 
-	error = suspend_disable_secondary_cpus();
+	error = disable_nonboot_cpus();
 	if (error)
 		goto Enable_cpus;
 
@@ -594,7 +595,7 @@ int hibernation_platform_enter(void)
 	local_irq_enable();
 
  Enable_cpus:
-	suspend_enable_secondary_cpus();
+	enable_nonboot_cpus();
 
  Platform_finish:
 	hibernation_ops->finish();
@@ -680,7 +681,7 @@ static int load_image_and_restore(void)
 	if (!error)
 		hibernation_restore(flags & SF_PLATFORM_MODE);
 
-	pr_err("Failed to load image, recovering.\n");
+	pr_err("Failed to load hibernation image, recovering.\n");
 	swsusp_free();
 	free_basic_memory_bitmaps();
  Unlock:
@@ -717,7 +718,9 @@ int hibernate(void)
 		goto Exit;
 	}
 
-	ksys_sync_helper();
+	pr_info("Syncing filesystems ... \n");
+	ksys_sync();
+	pr_info("done.\n");
 
 	error = freeze_processes();
 	if (error)
@@ -743,7 +746,7 @@ int hibernate(void)
 		else
 		        flags |= SF_CRC32_MODE;
 
-		pm_pr_dbg("Writing hibernation image.\n");
+		pm_pr_dbg("Writing image.\n");
 		error = swsusp_write(flags);
 		swsusp_free();
 		if (!error) {
@@ -755,7 +758,7 @@ int hibernate(void)
 		in_suspend = 0;
 		pm_restore_gfp_mask();
 	} else {
-		pm_pr_dbg("Hibernation image restored successfully.\n");
+		pm_pr_dbg("Image restored successfully.\n");
 	}
 
  Free_bitmaps:
@@ -839,17 +842,6 @@ static int software_resume(void)
 
 	/* Check if the device is there */
 	swsusp_resume_device = name_to_dev_t(resume_file);
-
-	/*
-	 * name_to_dev_t is ineffective to verify parition if resume_file is in
-	 * integer format. (e.g. major:minor)
-	 */
-	if (isdigit(resume_file[0]) && resume_wait) {
-		int partno;
-		while (!get_gendisk(swsusp_resume_device, &partno))
-			msleep(10);
-	}
-
 	if (!swsusp_resume_device) {
 		/*
 		 * Some device discovery might still be in progress; we need
@@ -894,16 +886,23 @@ static int software_resume(void)
 		goto Close_Finish;
 	}
 
-	pm_pr_dbg("Preparing processes for hibernation restore.\n");
+	pm_pr_dbg("Preparing processes for restore.\n");
 	error = freeze_processes();
 	if (error)
 		goto Close_Finish;
+
+	error = freeze_kernel_threads();
+	if (error) {
+		thaw_processes();
+		goto Close_Finish;
+	}
+
 	error = load_image_and_restore();
 	thaw_processes();
  Finish:
 	__pm_notifier_call_chain(PM_POST_RESTORE, nr_calls, NULL);
 	pm_restore_console();
-	pr_info("resume failed (%d)\n", error);
+	pr_info("resume from hibernation failed (%d)\n", error);
 	atomic_inc(&snapshot_device_available);
 	/* For success case, the suspend path will release the lock */
  Unlock:
@@ -1068,8 +1067,7 @@ static ssize_t resume_store(struct kobject *kobj, struct kobj_attribute *attr,
 	lock_system_sleep();
 	swsusp_resume_device = res;
 	unlock_system_sleep();
-	pm_pr_dbg("Configured hibernation resume from disk to %u\n",
-		  swsusp_resume_device);
+	pm_pr_dbg("Configured resume from disk to %u\n", swsusp_resume_device);
 	noresume = 0;
 	software_resume();
 	return n;

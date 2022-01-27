@@ -12,7 +12,6 @@
 #include <crypto/algapi.h>
 #include <crypto/internal/hash.h>
 #include <crypto/internal/poly1305.h>
-#include <crypto/internal/simd.h>
 #include <linux/cpufeature.h>
 #include <linux/crypto.h>
 #include <linux/jump_label.h>
@@ -111,7 +110,7 @@ static void neon_poly1305_do_update(struct poly1305_desc_ctx *dctx,
 static int neon_poly1305_update(struct shash_desc *desc,
 				const u8 *src, unsigned int srclen)
 {
-	bool do_neon = crypto_simd_usable() && srclen > 128;
+	bool do_neon = may_use_simd() && srclen > 128;
 	struct poly1305_desc_ctx *dctx = shash_desc_ctx(desc);
 
 	if (static_branch_likely(&have_neon) && do_neon)
@@ -142,14 +141,21 @@ void poly1305_update_arch(struct poly1305_desc_ctx *dctx, const u8 *src,
 	if (likely(nbytes >= POLY1305_BLOCK_SIZE)) {
 		unsigned int len = round_down(nbytes, POLY1305_BLOCK_SIZE);
 
-		if (static_branch_likely(&have_neon) && crypto_simd_usable()) {
-			kernel_neon_begin();
-			poly1305_blocks_neon(&dctx->h, src, len, 1);
-			kernel_neon_end();
+		if (static_branch_likely(&have_neon) && may_use_simd()) {
+			do {
+				unsigned int todo = min_t(unsigned int, len, SZ_4K);
+
+				kernel_neon_begin();
+				poly1305_blocks_neon(&dctx->h, src, todo, 1);
+				kernel_neon_end();
+
+				len -= todo;
+				src += todo;
+			} while (len);
 		} else {
 			poly1305_blocks(&dctx->h, src, len, 1);
+			src += len;
 		}
-		src += len;
 		nbytes %= POLY1305_BLOCK_SIZE;
 	}
 
@@ -201,7 +207,7 @@ static struct shash_alg neon_poly1305_alg = {
 
 static int __init neon_poly1305_mod_init(void)
 {
-	if (!cpu_have_named_feature(ASIMD))
+	if (!(elf_hwcap & HWCAP_ASIMD))
 		return 0;
 
 	static_branch_enable(&have_neon);
@@ -212,7 +218,7 @@ static int __init neon_poly1305_mod_init(void)
 
 static void __exit neon_poly1305_mod_exit(void)
 {
-	if (IS_REACHABLE(CONFIG_CRYPTO_HASH) && cpu_have_named_feature(ASIMD))
+	if (IS_REACHABLE(CONFIG_CRYPTO_HASH) && (elf_hwcap & HWCAP_ASIMD))
 		crypto_unregister_shash(&neon_poly1305_alg);
 }
 

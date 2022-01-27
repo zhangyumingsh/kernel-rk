@@ -37,10 +37,8 @@
 #include <asm/irq.h>
 #include <asm/nmi.h>
 #include <asm/smp.h>
-#include <asm/stacktrace.h>
 #include <asm/switch_to.h>
 #include <asm/runtime_instr.h>
-#include <asm/unwind.h>
 #include "entry.h"
 
 asmlinkage void ret_from_fork(void) asm ("ret_from_fork");
@@ -106,7 +104,6 @@ int copy_thread_tls(unsigned long clone_flags, unsigned long new_stackp,
 	p->thread.system_timer = 0;
 	p->thread.hardirq_timer = 0;
 	p->thread.softirq_timer = 0;
-	p->thread.last_break = 1;
 
 	frame->sf.back_chain = 0;
 	/* new return point is ret_from_fork */
@@ -180,8 +177,9 @@ EXPORT_SYMBOL(dump_fpu);
 
 unsigned long get_wchan(struct task_struct *p)
 {
-	struct unwind_state state;
-	unsigned long ip = 0;
+	struct stack_frame *sf, *low, *high;
+	unsigned long return_address;
+	int count;
 
 	if (!p || p == current || p->state == TASK_RUNNING || !task_stack_page(p))
 		return 0;
@@ -189,22 +187,26 @@ unsigned long get_wchan(struct task_struct *p)
 	if (!try_get_task_stack(p))
 		return 0;
 
-	unwind_for_each_frame(&state, p, NULL, 0) {
-		if (state.stack_info.type != STACK_TYPE_TASK) {
-			ip = 0;
-			break;
-		}
-
-		ip = unwind_get_return_address(&state);
-		if (!ip)
-			break;
-
-		if (!in_sched_functions(ip))
-			break;
+	low = task_stack_page(p);
+	high = (struct stack_frame *) task_pt_regs(p);
+	sf = (struct stack_frame *) p->thread.ksp;
+	if (sf <= low || sf > high) {
+		return_address = 0;
+		goto out;
 	}
-
+	for (count = 0; count < 16; count++) {
+		sf = (struct stack_frame *) sf->back_chain;
+		if (sf <= low || sf > high) {
+			return_address = 0;
+			goto out;
+		}
+		return_address = sf->gprs[8];
+		if (!in_sched_functions(return_address))
+			goto out;
+	}
+out:
 	put_task_stack(p);
-	return ip;
+	return return_address;
 }
 
 unsigned long arch_align_stack(unsigned long sp)

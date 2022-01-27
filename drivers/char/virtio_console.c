@@ -1,8 +1,21 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Copyright (C) 2006, 2007, 2009 Rusty Russell, IBM Corporation
  * Copyright (C) 2009, 2010, 2011 Red Hat, Inc.
  * Copyright (C) 2009, 2010, 2011 Amit Shah <amit.shah@redhat.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 #include <linux/cdev.h>
 #include <linux/debugfs.h>
@@ -919,7 +932,6 @@ static ssize_t port_fops_splice_write(struct pipe_inode_info *pipe,
 		.pos = *ppos,
 		.u.data = &sgl,
 	};
-	unsigned int occupancy;
 
 	/*
 	 * Rproc_serial does not yet support splice. To support splice
@@ -930,18 +942,21 @@ static ssize_t port_fops_splice_write(struct pipe_inode_info *pipe,
 	if (is_rproc_serial(port->out_vq->vdev))
 		return -EINVAL;
 
+	/*
+	 * pipe->nrbufs == 0 means there are no data to transfer,
+	 * so this returns just 0 for no data.
+	 */
 	pipe_lock(pipe);
-	ret = 0;
-	if (pipe_empty(pipe->head, pipe->tail))
+	if (!pipe->nrbufs) {
+		ret = 0;
 		goto error_out;
+	}
 
 	ret = wait_port_writable(port, filp->f_flags & O_NONBLOCK);
 	if (ret < 0)
 		goto error_out;
 
-	occupancy = pipe_occupancy(pipe->head, pipe->tail);
-	buf = alloc_buf(port->portdev->vdev, 0, occupancy);
-
+	buf = alloc_buf(port->portdev->vdev, 0, pipe->nrbufs);
 	if (!buf) {
 		ret = -ENOMEM;
 		goto error_out;
@@ -949,7 +964,7 @@ static ssize_t port_fops_splice_write(struct pipe_inode_info *pipe,
 
 	sgl.n = 0;
 	sgl.len = 0;
-	sgl.size = occupancy;
+	sgl.size = pipe->nrbufs;
 	sgl.sg = buf->sg;
 	sg_init_table(sgl.sg, sgl.size);
 	ret = __splice_from_pipe(pipe, &sd, pipe_to_sg);
@@ -1294,7 +1309,7 @@ static const struct attribute_group port_attribute_group = {
 	.attrs = port_sysfs_entries,
 };
 
-static int port_debugfs_show(struct seq_file *s, void *data)
+static int debugfs_show(struct seq_file *s, void *data)
 {
 	struct port *port = s->private;
 
@@ -1312,7 +1327,18 @@ static int port_debugfs_show(struct seq_file *s, void *data)
 	return 0;
 }
 
-DEFINE_SHOW_ATTRIBUTE(port_debugfs);
+static int debugfs_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, debugfs_show, inode->i_private);
+}
+
+static const struct file_operations port_debugfs_ops = {
+	.owner = THIS_MODULE,
+	.open = debugfs_open,
+	.read = seq_read,
+	.llseek = seq_lseek,
+	.release = single_release,
+};
 
 static void set_console_size(struct port *port, u16 rows, u16 cols)
 {
@@ -1466,7 +1492,7 @@ static int add_port(struct ports_device *portdev, u32 id)
 		port->debugfs_file = debugfs_create_file(debugfs_name, 0444,
 							 pdrvdata.debugfs_dir,
 							 port,
-							 &port_debugfs_fops);
+							 &port_debugfs_ops);
 	}
 	return 0;
 
@@ -2116,6 +2142,7 @@ static struct virtio_device_id id_table[] = {
 	{ VIRTIO_ID_CONSOLE, VIRTIO_DEV_ANY_ID },
 	{ 0 },
 };
+MODULE_DEVICE_TABLE(virtio, id_table);
 
 static unsigned int features[] = {
 	VIRTIO_CONSOLE_F_SIZE,
@@ -2128,6 +2155,7 @@ static struct virtio_device_id rproc_serial_id_table[] = {
 #endif
 	{ 0 },
 };
+MODULE_DEVICE_TABLE(virtio, rproc_serial_id_table);
 
 static unsigned int rproc_serial_features[] = {
 };
@@ -2280,6 +2308,5 @@ static void __exit fini(void)
 module_init(init);
 module_exit(fini);
 
-MODULE_DEVICE_TABLE(virtio, id_table);
 MODULE_DESCRIPTION("Virtio console driver");
 MODULE_LICENSE("GPL");

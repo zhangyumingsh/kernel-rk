@@ -20,7 +20,7 @@
 #include <linux/of_irq.h>
 #include <linux/regmap.h>
 
-#include "realtek-smi-core.h"
+#include "realtek-smi.h"
 
 #define RTL8366RB_PORT_NUM_CPU		5
 #define RTL8366RB_NUM_PORTS		6
@@ -964,8 +964,7 @@ static int rtl8366rb_setup(struct dsa_switch *ds)
 }
 
 static enum dsa_tag_protocol rtl8366_get_tag_protocol(struct dsa_switch *ds,
-						      int port,
-						      enum dsa_tag_protocol mp)
+						      int port)
 {
 	/* For now, the RTL switches are handled without any custom tags.
 	 *
@@ -1078,7 +1077,8 @@ rtl8366rb_port_enable(struct dsa_switch *ds, int port,
 }
 
 static void
-rtl8366rb_port_disable(struct dsa_switch *ds, int port)
+rtl8366rb_port_disable(struct dsa_switch *ds, int port,
+		       struct phy_device *phy)
 {
 	struct realtek_smi *smi = ds->priv;
 	int ret;
@@ -1270,7 +1270,7 @@ static bool rtl8366rb_is_vlan_valid(struct realtek_smi *smi, unsigned int vlan)
 	if (smi->vlan4k_enabled)
 		max = RTL8366RB_NUM_VIDS - 1;
 
-	if (vlan == 0 || vlan >= max)
+	if (vlan == 0 || vlan > max)
 		return false;
 
 	return true;

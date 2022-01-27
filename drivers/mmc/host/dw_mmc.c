@@ -1,10 +1,14 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Synopsys DesignWare Multimedia Card Interface driver
  *  (Based on NXP driver for lpc 31xx)
  *
  * Copyright (C) 2009 NXP Semiconductors
  * Copyright (C) 2009, 2010 Imagination Technologies Ltd.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  */
 
 #include <linux/blkdev.h>
@@ -169,18 +173,40 @@ static void dw_mci_init_debugfs(struct dw_mci_slot *slot)
 	struct mmc_host	*mmc = slot->mmc;
 	struct dw_mci *host = slot->host;
 	struct dentry *root;
+	struct dentry *node;
 
 	root = mmc->debugfs_root;
 	if (!root)
 		return;
 
-	debugfs_create_file("regs", S_IRUSR, root, host, &dw_mci_regs_fops);
-	debugfs_create_file("req", S_IRUSR, root, slot, &dw_mci_req_fops);
-	debugfs_create_u32("state", S_IRUSR, root, &host->state);
-	debugfs_create_xul("pending_events", S_IRUSR, root,
-			   &host->pending_events);
-	debugfs_create_xul("completed_events", S_IRUSR, root,
-			   &host->completed_events);
+	node = debugfs_create_file("regs", S_IRUSR, root, host,
+				   &dw_mci_regs_fops);
+	if (!node)
+		goto err;
+
+	node = debugfs_create_file("req", S_IRUSR, root, slot,
+				   &dw_mci_req_fops);
+	if (!node)
+		goto err;
+
+	node = debugfs_create_u32("state", S_IRUSR, root, (u32 *)&host->state);
+	if (!node)
+		goto err;
+
+	node = debugfs_create_x32("pending_events", S_IRUSR, root,
+				  (u32 *)&host->pending_events);
+	if (!node)
+		goto err;
+
+	node = debugfs_create_x32("completed_events", S_IRUSR, root,
+				  (u32 *)&host->completed_events);
+	if (!node)
+		goto err;
+
+	return;
+
+err:
+	dev_err(&mmc->class_dev, "failed to initialize debugfs for slot\n");
 }
 #endif /* defined(CONFIG_DEBUG_FS) */
 
@@ -833,14 +859,12 @@ static int dw_mci_edmac_init(struct dw_mci *host)
 	if (!host->dms)
 		return -ENOMEM;
 
-	host->dms->ch = dma_request_chan(host->dev, "rx-tx");
-	if (IS_ERR(host->dms->ch)) {
-		int ret = PTR_ERR(host->dms->ch);
-
+	host->dms->ch = dma_request_slave_channel(host->dev, "rx-tx");
+	if (!host->dms->ch) {
 		dev_err(host->dev, "Failed to get external DMA channel.\n");
 		kfree(host->dms);
 		host->dms = NULL;
-		return ret;
+		return -ENXIO;
 	}
 
 	return 0;
@@ -1494,9 +1518,6 @@ static void dw_mci_set_ios(struct mmc_host *mmc, struct mmc_ios *ios)
 		if (!IS_ERR(mmc->supply.vqmmc) && slot->host->vqmmc_enabled)
 			regulator_disable(mmc->supply.vqmmc);
 		slot->host->vqmmc_enabled = false;
-
-		if (drv_data && drv_data->power_off)
-			drv_data->power_off(slot->host);
 
 		regs = mci_readl(slot->host, PWREN);
 		regs &= ~(1 << slot->id);
@@ -3446,8 +3467,8 @@ int dw_mci_runtime_resume(struct device *dev)
 	 * Restore the initial value at FIFOTH register
 	 * And Invalidate the prev_blksz with zero
 	 */
-	mci_writel(host, FIFOTH, host->fifoth_val);
-	host->prev_blksz = 0;
+	 mci_writel(host, FIFOTH, host->fifoth_val);
+	 host->prev_blksz = 0;
 
 	/* Put in max timeout */
 	mci_writel(host, TMOUT, 0xFFFFFFFF);

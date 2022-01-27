@@ -47,7 +47,7 @@
 #define EN_ETHTOOL_SHORT_MASK cpu_to_be16(0xffff)
 #define EN_ETHTOOL_WORD_MASK  cpu_to_be32(0xffffffff)
 
-static int mlx4_en_moderation_update(struct mlx4_en_priv *priv)
+int mlx4_en_moderation_update(struct mlx4_en_priv *priv)
 {
 	int i, t;
 	int err = 0;
@@ -611,7 +611,7 @@ static u32 ptys_get_active_port(struct mlx4_ptys_reg *ptys_reg)
 }
 
 #define MLX4_LINK_MODES_SZ \
-	(sizeof_field(struct mlx4_ptys_reg, eth_proto_cap) * 8)
+	(FIELD_SIZEOF(struct mlx4_ptys_reg, eth_proto_cap) * 8)
 
 enum ethtool_report {
 	SUPPORTED = 0,
@@ -639,7 +639,7 @@ static unsigned long *ptys2ethtool_link_mode(struct ptys2ethtool_config *cfg,
 #define MLX4_BUILD_PTYS2ETHTOOL_CONFIG(reg_, speed_, ...)		\
 	({								\
 		struct ptys2ethtool_config *cfg;			\
-		static const unsigned int modes[] = { __VA_ARGS__ };	\
+		const unsigned int modes[] = { __VA_ARGS__ };		\
 		unsigned int i;						\
 		cfg = &ptys2ethtool_map[reg_];				\
 		cfg->speed = speed_;					\
@@ -2011,8 +2011,6 @@ static int mlx4_en_set_tunable(struct net_device *dev,
 	return ret;
 }
 
-#define MLX4_EEPROM_PAGE_LEN 256
-
 static int mlx4_en_get_module_info(struct net_device *dev,
 				   struct ethtool_modinfo *modinfo)
 {
@@ -2047,7 +2045,7 @@ static int mlx4_en_get_module_info(struct net_device *dev,
 		break;
 	case MLX4_MODULE_ID_SFP:
 		modinfo->type = ETH_MODULE_SFF_8472;
-		modinfo->eeprom_len = MLX4_EEPROM_PAGE_LEN;
+		modinfo->eeprom_len = ETH_MODULE_SFF_8472_LEN;
 		break;
 	default:
 		return -EINVAL;

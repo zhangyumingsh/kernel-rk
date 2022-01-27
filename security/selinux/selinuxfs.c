@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /* Updated: Karl MacMillan <kmacmillan@tresys.com>
  *
  *	Added conditional policy language extensions
@@ -10,6 +9,9 @@
  * Copyright (C) 2007 Hewlett-Packard Development Company, L.P.
  * Copyright (C) 2003 - 2004 Tresys Technology, LLC
  * Copyright (C) 2004 Red Hat, Inc., James Morris <jmorris@redhat.com>
+ *	This program is free software; you can redistribute it and/or modify
+ *	it under the terms of the GNU General Public License as published by
+ *	the Free Software Foundation, version 2.
  */
 
 #include <linux/kernel.h>
@@ -17,7 +19,6 @@
 #include <linux/slab.h>
 #include <linux/vmalloc.h>
 #include <linux/fs.h>
-#include <linux/fs_context.h>
 #include <linux/mount.h>
 #include <linux/mutex.h>
 #include <linux/init.h>
@@ -168,17 +169,18 @@ static ssize_t sel_write_enforce(struct file *file, const char __user *buf,
 			goto out;
 		audit_log(audit_context(), GFP_KERNEL, AUDIT_MAC_STATUS,
 			"enforcing=%d old_enforcing=%d auid=%u ses=%u"
-			" enabled=1 old-enabled=1 lsm=selinux res=1",
+			" enabled=%d old-enabled=%d lsm=selinux res=1",
 			new_value, old_value,
 			from_kuid(&init_user_ns, audit_get_loginuid(current)),
-			audit_get_sessionid(current));
+			audit_get_sessionid(current),
+			selinux_enabled, selinux_enabled);
 		enforcing_set(state, new_value);
 		if (new_value)
 			avc_ss_reset(state->avc, 0);
 		selnl_notify_setenforce(new_value);
 		selinux_status_update_setenforce(state, new_value);
 		if (!new_value)
-			call_blocking_lsm_notifier(LSM_POLICY_CHANGE, NULL);
+			call_lsm_notifier(LSM_POLICY_CHANGE, NULL);
 	}
 	length = count;
 out:
@@ -281,13 +283,6 @@ static ssize_t sel_write_disable(struct file *file, const char __user *buf,
 	int new_value;
 	int enforcing;
 
-	/* NOTE: we are now officially considering runtime disable as
-	 *       deprecated, and using it will become increasingly painful
-	 *       (e.g. sleeping/blocking) as we progress through future
-	 *       kernel releases until eventually it is removed
-	 */
-	pr_err("SELinux:  Runtime disable is deprecated, use selinux=0 on the kernel cmdline.\n");
-
 	if (count >= PAGE_SIZE)
 		return -ENOMEM;
 
@@ -310,10 +305,10 @@ static ssize_t sel_write_disable(struct file *file, const char __user *buf,
 			goto out;
 		audit_log(audit_context(), GFP_KERNEL, AUDIT_MAC_STATUS,
 			"enforcing=%d old_enforcing=%d auid=%u ses=%u"
-			" enabled=0 old-enabled=1 lsm=selinux res=1",
+			" enabled=%d old-enabled=%d lsm=selinux res=1",
 			enforcing, enforcing,
 			from_kuid(&init_user_ns, audit_get_loginuid(current)),
-			audit_get_sessionid(current));
+			audit_get_sessionid(current), 0, 1);
 	}
 
 	length = count;
@@ -552,6 +547,10 @@ static ssize_t sel_write_load(struct file *file, const char __user *buf,
 	/* No partial writes. */
 	length = -EINVAL;
 	if (*ppos != 0)
+		goto out;
+
+	length = -EFBIG;
+	if (count > 64 * 1024 * 1024)
 		goto out;
 
 	length = -ENOMEM;
@@ -1379,7 +1378,7 @@ static int sel_make_bools(struct selinux_fs_info *fsi)
 			goto out;
 		}
 
-		isec = selinux_inode(inode);
+		isec = (struct inode_security_struct *)inode->i_security;
 		ret = security_genfs_sid(fsi->state, "selinuxfs", page,
 					 SECCLASS_FILE, &sid);
 		if (ret) {
@@ -1536,6 +1535,7 @@ static struct avc_cache_stats *sel_avc_get_stat_idx(loff_t *idx)
 		*idx = cpu + 1;
 		return &per_cpu(avc_cache_stats, cpu);
 	}
+	(*idx)++;
 	return NULL;
 }
 
@@ -1735,7 +1735,7 @@ static ssize_t sel_read_class(struct file *file, char __user *buf,
 {
 	unsigned long ino = file_inode(file)->i_ino;
 	char res[TMPBUFLEN];
-	ssize_t len = scnprintf(res, sizeof(res), "%d", sel_ino_to_class(ino));
+	ssize_t len = snprintf(res, sizeof(res), "%d", sel_ino_to_class(ino));
 	return simple_read_from_buffer(buf, count, ppos, res, len);
 }
 
@@ -1749,7 +1749,7 @@ static ssize_t sel_read_perm(struct file *file, char __user *buf,
 {
 	unsigned long ino = file_inode(file)->i_ino;
 	char res[TMPBUFLEN];
-	ssize_t len = scnprintf(res, sizeof(res), "%d", sel_ino_to_perm(ino));
+	ssize_t len = snprintf(res, sizeof(res), "%d", sel_ino_to_perm(ino));
 	return simple_read_from_buffer(buf, count, ppos, res, len);
 }
 
@@ -1951,7 +1951,7 @@ static struct dentry *sel_make_dir(struct dentry *dir, const char *name,
 
 #define NULL_FILE_NAME "null"
 
-static int sel_fill_super(struct super_block *sb, struct fs_context *fc)
+static int sel_fill_super(struct super_block *sb, void *data, int silent)
 {
 	struct selinux_fs_info *fsi;
 	int ret;
@@ -2011,7 +2011,7 @@ static int sel_fill_super(struct super_block *sb, struct fs_context *fc)
 	}
 
 	inode->i_ino = ++fsi->last_ino;
-	isec = selinux_inode(inode);
+	isec = (struct inode_security_struct *)inode->i_security;
 	isec->sid = SECINITSID_DEVNULL;
 	isec->sclass = SECCLASS_CHR_FILE;
 	isec->initialized = LABEL_INITIALIZED;
@@ -2075,19 +2075,10 @@ err:
 	return ret;
 }
 
-static int sel_get_tree(struct fs_context *fc)
+static struct dentry *sel_mount(struct file_system_type *fs_type,
+		      int flags, const char *dev_name, void *data)
 {
-	return get_tree_single(fc, sel_fill_super);
-}
-
-static const struct fs_context_operations sel_context_ops = {
-	.get_tree	= sel_get_tree,
-};
-
-static int sel_init_fs_context(struct fs_context *fc)
-{
-	fc->ops = &sel_context_ops;
-	return 0;
+	return mount_single(fs_type, flags, data, sel_fill_super);
 }
 
 static void sel_kill_sb(struct super_block *sb)
@@ -2098,7 +2089,7 @@ static void sel_kill_sb(struct super_block *sb)
 
 static struct file_system_type sel_fs_type = {
 	.name		= "selinuxfs",
-	.init_fs_context = sel_init_fs_context,
+	.mount		= sel_mount,
 	.kill_sb	= sel_kill_sb,
 };
 
@@ -2111,7 +2102,7 @@ static int __init init_sel_fs(void)
 					  sizeof(NULL_FILE_NAME)-1);
 	int err;
 
-	if (!selinux_enabled_boot)
+	if (!selinux_enabled)
 		return 0;
 
 	err = sysfs_create_mount_point(fs_kobj, "selinux");

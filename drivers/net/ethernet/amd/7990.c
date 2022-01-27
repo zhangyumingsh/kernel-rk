@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * 7990.c -- LANCE ethernet IC generic routines.
  * This is an attempt to separate out the bits of various ethernet
@@ -527,7 +526,7 @@ int lance_close(struct net_device *dev)
 }
 EXPORT_SYMBOL_GPL(lance_close);
 
-void lance_tx_timeout(struct net_device *dev, unsigned int txqueue)
+void lance_tx_timeout(struct net_device *dev)
 {
 	printk("lance_tx_timeout\n");
 	lance_reset(dev);

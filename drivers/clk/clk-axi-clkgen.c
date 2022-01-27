@@ -1,9 +1,11 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * AXI clkgen driver
  *
  * Copyright 2012-2013 Analog Devices Inc.
  *  Author: Lars-Peter Clausen <lars@metafoo.de>
+ *
+ * Licensed under the GPL-2.
+ *
  */
 
 #include <linux/platform_device.h>
@@ -409,7 +411,7 @@ static int axi_clkgen_probe(struct platform_device *pdev)
 {
 	const struct of_device_id *id;
 	struct axi_clkgen *axi_clkgen;
-	struct clk_init_data init;
+	struct clk_init_data init = {};
 	const char *parent_names[2];
 	const char *clk_name;
 	struct resource *mem;

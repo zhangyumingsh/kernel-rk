@@ -691,7 +691,7 @@ static void cp_tx (struct cp_private *cp)
 			}
 			bytes_compl += skb->len;
 			pkts_compl++;
-			dev_consume_skb_irq(skb);
+			dev_kfree_skb_irq(skb);
 		}
 
 		cp->tx_skb[tx_tail] = NULL;
@@ -1235,7 +1235,7 @@ static int cp_close (struct net_device *dev)
 	return 0;
 }
 
-static void cp_tx_timeout(struct net_device *dev, unsigned int txqueue)
+static void cp_tx_timeout(struct net_device *dev)
 {
 	struct cp_private *cp = netdev_priv(dev);
 	unsigned long flags;

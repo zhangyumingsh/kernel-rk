@@ -1,10 +1,19 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /* Copyright (c) 2015-2018, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 #include "dpu_hwio.h"
 #include "dpu_hw_catalog.h"
 #include "dpu_hw_intf.h"
+#include "dpu_dbg.h"
 #include "dpu_kms.h"
 
 #define INTF_TIMING_ENGINE_EN           0x000
@@ -56,10 +65,11 @@
 #define   INTF_FRAME_COUNT              0x0AC
 #define   INTF_LINE_COUNT               0x0B0
 
-#define   INTF_MUX                      0x25C
+#define INTF_MISR_CTRL			0x180
+#define INTF_MISR_SIGNATURE		0x184
 
-static const struct dpu_intf_cfg *_intf_offset(enum dpu_intf intf,
-		const struct dpu_mdss_cfg *m,
+static struct dpu_intf_cfg *_intf_offset(enum dpu_intf intf,
+		struct dpu_mdss_cfg *m,
 		void __iomem *addr,
 		struct dpu_hw_blk_reg_map *b)
 {
@@ -220,30 +230,6 @@ static void dpu_hw_intf_setup_prg_fetch(
 	DPU_REG_WRITE(c, INTF_CONFIG, fetch_enable);
 }
 
-static void dpu_hw_intf_bind_pingpong_blk(
-		struct dpu_hw_intf *intf,
-		bool enable,
-		const enum dpu_pingpong pp)
-{
-	struct dpu_hw_blk_reg_map *c;
-	u32 mux_cfg;
-
-	if (!intf)
-		return;
-
-	c = &intf->hw;
-
-	mux_cfg = DPU_REG_READ(c, INTF_MUX);
-	mux_cfg &= ~0xf;
-
-	if (enable)
-		mux_cfg |= (pp - PINGPONG_0) & 0x7;
-	else
-		mux_cfg |= 0xf;
-
-	DPU_REG_WRITE(c, INTF_MUX, mux_cfg);
-}
-
 static void dpu_hw_intf_get_status(
 		struct dpu_hw_intf *intf,
 		struct intf_status *s)
@@ -258,6 +244,30 @@ static void dpu_hw_intf_get_status(
 		s->line_count = 0;
 		s->frame_count = 0;
 	}
+}
+
+static void dpu_hw_intf_setup_misr(struct dpu_hw_intf *intf,
+						bool enable, u32 frame_count)
+{
+	struct dpu_hw_blk_reg_map *c = &intf->hw;
+	u32 config = 0;
+
+	DPU_REG_WRITE(c, INTF_MISR_CTRL, MISR_CTRL_STATUS_CLEAR);
+	/* clear misr data */
+	wmb();
+
+	if (enable)
+		config = (frame_count & MISR_FRAME_COUNT_MASK) |
+			MISR_CTRL_ENABLE | INTF_MISR_CTRL_FREE_RUN_MASK;
+
+	DPU_REG_WRITE(c, INTF_MISR_CTRL, config);
+}
+
+static u32 dpu_hw_intf_collect_misr(struct dpu_hw_intf *intf)
+{
+	struct dpu_hw_blk_reg_map *c = &intf->hw;
+
+	return DPU_REG_READ(c, INTF_MISR_SIGNATURE);
 }
 
 static u32 dpu_hw_intf_get_line_count(struct dpu_hw_intf *intf)
@@ -279,19 +289,23 @@ static void _setup_intf_ops(struct dpu_hw_intf_ops *ops,
 	ops->setup_prg_fetch  = dpu_hw_intf_setup_prg_fetch;
 	ops->get_status = dpu_hw_intf_get_status;
 	ops->enable_timing = dpu_hw_intf_enable_timing_engine;
+	ops->setup_misr = dpu_hw_intf_setup_misr;
+	ops->collect_misr = dpu_hw_intf_collect_misr;
 	ops->get_line_count = dpu_hw_intf_get_line_count;
-	if (cap & BIT(DPU_CTL_ACTIVE_CFG))
-		ops->bind_pingpong_blk = dpu_hw_intf_bind_pingpong_blk;
 }
 
-static struct dpu_hw_blk_ops dpu_hw_ops;
+static struct dpu_hw_blk_ops dpu_hw_ops = {
+	.start = NULL,
+	.stop = NULL,
+};
 
 struct dpu_hw_intf *dpu_hw_intf_init(enum dpu_intf idx,
 		void __iomem *addr,
-		const struct dpu_mdss_cfg *m)
+		struct dpu_mdss_cfg *m)
 {
 	struct dpu_hw_intf *c;
-	const struct dpu_intf_cfg *cfg;
+	struct dpu_intf_cfg *cfg;
+	int rc;
 
 	c = kzalloc(sizeof(*c), GFP_KERNEL);
 	if (!c)
@@ -312,9 +326,18 @@ struct dpu_hw_intf *dpu_hw_intf_init(enum dpu_intf idx,
 	c->mdss = m;
 	_setup_intf_ops(&c->ops, c->cap->features);
 
-	dpu_hw_blk_init(&c->base, DPU_HW_BLK_INTF, idx, &dpu_hw_ops);
+	rc = dpu_hw_blk_init(&c->base, DPU_HW_BLK_INTF, idx, &dpu_hw_ops);
+	if (rc) {
+		DPU_ERROR("failed to init hw blk %d\n", rc);
+		goto blk_init_error;
+	}
 
 	return c;
+
+blk_init_error:
+	kzfree(c);
+
+	return ERR_PTR(rc);
 }
 
 void dpu_hw_intf_destroy(struct dpu_hw_intf *intf)

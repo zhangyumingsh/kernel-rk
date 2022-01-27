@@ -300,20 +300,13 @@
 #define BTRFS_CSUM_SIZE 32
 
 /* csum types */
-enum btrfs_csum_type {
-	BTRFS_CSUM_TYPE_CRC32	= 0,
-	BTRFS_CSUM_TYPE_XXHASH	= 1,
-	BTRFS_CSUM_TYPE_SHA256	= 2,
-	BTRFS_CSUM_TYPE_BLAKE2	= 3,
-};
+#define BTRFS_CSUM_TYPE_CRC32	0
 
 /*
  * flags definitions for directory entry item type
  *
  * Used by:
  * struct btrfs_dir_item.type
- *
- * Values 0..7 must match common file type values in fs_types.h.
  */
 #define BTRFS_FT_UNKNOWN	0
 #define BTRFS_FT_REG_FILE	1
@@ -465,7 +458,6 @@ struct btrfs_free_space_header {
 #define BTRFS_SUPER_FLAG_METADUMP	(1ULL << 33)
 #define BTRFS_SUPER_FLAG_METADUMP_V2	(1ULL << 34)
 #define BTRFS_SUPER_FLAG_CHANGING_FSID	(1ULL << 35)
-#define BTRFS_SUPER_FLAG_CHANGING_FSID_V2 (1ULL << 36)
 
 
 /*
@@ -740,12 +732,10 @@ struct btrfs_balance_item {
 	__le64 unused[4];
 } __attribute__ ((__packed__));
 
-enum {
-	BTRFS_FILE_EXTENT_INLINE   = 0,
-	BTRFS_FILE_EXTENT_REG      = 1,
-	BTRFS_FILE_EXTENT_PREALLOC = 2,
-	BTRFS_NR_FILE_EXTENT_TYPES = 3,
-};
+#define BTRFS_FILE_EXTENT_INLINE 0
+#define BTRFS_FILE_EXTENT_REG 1
+#define BTRFS_FILE_EXTENT_PREALLOC 2
+#define BTRFS_FILE_EXTENT_TYPES	2
 
 struct btrfs_file_extent_item {
 	/*
@@ -813,6 +803,11 @@ struct btrfs_dev_stats_item {
 
 #define BTRFS_DEV_REPLACE_ITEM_CONT_READING_FROM_SRCDEV_MODE_ALWAYS	0
 #define BTRFS_DEV_REPLACE_ITEM_CONT_READING_FROM_SRCDEV_MODE_AVOID	1
+#define BTRFS_DEV_REPLACE_ITEM_STATE_NEVER_STARTED	0
+#define BTRFS_DEV_REPLACE_ITEM_STATE_STARTED		1
+#define BTRFS_DEV_REPLACE_ITEM_STATE_SUSPENDED		2
+#define BTRFS_DEV_REPLACE_ITEM_STATE_FINISHED		3
+#define BTRFS_DEV_REPLACE_ITEM_STATE_CANCELED		4
 
 struct btrfs_dev_replace_item {
 	/*
@@ -841,8 +836,6 @@ struct btrfs_dev_replace_item {
 #define BTRFS_BLOCK_GROUP_RAID10	(1ULL << 6)
 #define BTRFS_BLOCK_GROUP_RAID5         (1ULL << 7)
 #define BTRFS_BLOCK_GROUP_RAID6         (1ULL << 8)
-#define BTRFS_BLOCK_GROUP_RAID1C3       (1ULL << 9)
-#define BTRFS_BLOCK_GROUP_RAID1C4       (1ULL << 10)
 #define BTRFS_BLOCK_GROUP_RESERVED	(BTRFS_AVAIL_ALLOC_BIT_SINGLE | \
 					 BTRFS_SPACE_INFO_GLOBAL_RSV)
 
@@ -854,8 +847,6 @@ enum btrfs_raid_types {
 	BTRFS_RAID_SINGLE,
 	BTRFS_RAID_RAID5,
 	BTRFS_RAID_RAID6,
-	BTRFS_RAID_RAID1C3,
-	BTRFS_RAID_RAID1C4,
 	BTRFS_NR_RAID_TYPES
 };
 
@@ -865,18 +856,12 @@ enum btrfs_raid_types {
 
 #define BTRFS_BLOCK_GROUP_PROFILE_MASK	(BTRFS_BLOCK_GROUP_RAID0 |   \
 					 BTRFS_BLOCK_GROUP_RAID1 |   \
-					 BTRFS_BLOCK_GROUP_RAID1C3 | \
-					 BTRFS_BLOCK_GROUP_RAID1C4 | \
 					 BTRFS_BLOCK_GROUP_RAID5 |   \
 					 BTRFS_BLOCK_GROUP_RAID6 |   \
 					 BTRFS_BLOCK_GROUP_DUP |     \
 					 BTRFS_BLOCK_GROUP_RAID10)
 #define BTRFS_BLOCK_GROUP_RAID56_MASK	(BTRFS_BLOCK_GROUP_RAID5 |   \
 					 BTRFS_BLOCK_GROUP_RAID6)
-
-#define BTRFS_BLOCK_GROUP_RAID1_MASK	(BTRFS_BLOCK_GROUP_RAID1 |   \
-					 BTRFS_BLOCK_GROUP_RAID1C3 | \
-					 BTRFS_BLOCK_GROUP_RAID1C4)
 
 /*
  * We need a bit for restriper to be able to tell when chunks of type

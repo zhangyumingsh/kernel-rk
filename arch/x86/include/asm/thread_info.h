@@ -88,7 +88,6 @@ struct thread_info {
 #define TIF_USER_RETURN_NOTIFY	11	/* notify kernel of userspace return */
 #define TIF_UPROBE		12	/* breakpointed or singlestepping */
 #define TIF_PATCH_PENDING	13	/* pending live patching update */
-#define TIF_NEED_FPU_LOAD	14	/* load FPU on return to userspace */
 #define TIF_NOCPUID		15	/* CPUID is not accessible in userland */
 #define TIF_NOTSC		16	/* TSC is not accessible in userland */
 #define TIF_IA32		17	/* IA32 compatibility process */
@@ -118,7 +117,6 @@ struct thread_info {
 #define _TIF_USER_RETURN_NOTIFY	(1 << TIF_USER_RETURN_NOTIFY)
 #define _TIF_UPROBE		(1 << TIF_UPROBE)
 #define _TIF_PATCH_PENDING	(1 << TIF_PATCH_PENDING)
-#define _TIF_NEED_FPU_LOAD	(1 << TIF_NEED_FPU_LOAD)
 #define _TIF_NOCPUID		(1 << TIF_NOCPUID)
 #define _TIF_NOTSC		(1 << TIF_NOTSC)
 #define _TIF_IA32		(1 << TIF_IA32)
@@ -142,9 +140,17 @@ struct thread_info {
 	 _TIF_SECCOMP | _TIF_SYSCALL_TRACEPOINT |	\
 	 _TIF_NOHZ)
 
+/* work to do on any return to user space */
+#define _TIF_ALLWORK_MASK						\
+	(_TIF_SYSCALL_TRACE | _TIF_NOTIFY_RESUME | _TIF_SIGPENDING |	\
+	 _TIF_NEED_RESCHED | _TIF_SINGLESTEP | _TIF_SYSCALL_EMU |	\
+	 _TIF_SYSCALL_AUDIT | _TIF_USER_RETURN_NOTIFY | _TIF_UPROBE |	\
+	 _TIF_PATCH_PENDING | _TIF_NOHZ | _TIF_SYSCALL_TRACEPOINT |	\
+	 _TIF_FSCHECK)
+
 /* flags to check in __switch_to() */
-#define _TIF_WORK_CTXSW_BASE					\
-	(_TIF_NOCPUID | _TIF_NOTSC | _TIF_BLOCKSTEP |		\
+#define _TIF_WORK_CTXSW_BASE						\
+	(_TIF_IO_BITMAP|_TIF_NOCPUID|_TIF_NOTSC|_TIF_BLOCKSTEP|		\
 	 _TIF_SSBD | _TIF_SPEC_FORCE_UPDATE)
 
 /*
@@ -156,14 +162,8 @@ struct thread_info {
 # define _TIF_WORK_CTXSW	(_TIF_WORK_CTXSW_BASE)
 #endif
 
-#ifdef CONFIG_X86_IOPL_IOPERM
-# define _TIF_WORK_CTXSW_PREV	(_TIF_WORK_CTXSW| _TIF_USER_RETURN_NOTIFY | \
-				 _TIF_IO_BITMAP)
-#else
-# define _TIF_WORK_CTXSW_PREV	(_TIF_WORK_CTXSW| _TIF_USER_RETURN_NOTIFY)
-#endif
-
-#define _TIF_WORK_CTXSW_NEXT	(_TIF_WORK_CTXSW)
+#define _TIF_WORK_CTXSW_PREV (_TIF_WORK_CTXSW|_TIF_USER_RETURN_NOTIFY)
+#define _TIF_WORK_CTXSW_NEXT (_TIF_WORK_CTXSW)
 
 #define STACK_WARN		(THREAD_SIZE/8)
 
@@ -227,10 +227,31 @@ static inline int arch_within_stack_frames(const void * const stack,
 
 #endif
 
+/*
+ * Thread-synchronous status.
+ *
+ * This is different from the flags in that nobody else
+ * ever touches our thread-synchronous status, so we don't
+ * have to worry about atomic accesses.
+ */
+#define TS_COMPAT		0x0002	/* 32bit syscall active (64BIT)*/
+
+#ifndef __ASSEMBLY__
 #ifdef CONFIG_COMPAT
 #define TS_I386_REGS_POKED	0x0004	/* regs poked by 32-bit ptracer */
+#define TS_COMPAT_RESTART	0x0008
+
+#define arch_set_restart_data	arch_set_restart_data
+
+static inline void arch_set_restart_data(struct restart_block *restart)
+{
+	struct thread_info *ti = current_thread_info();
+	if (ti->status & TS_COMPAT)
+		ti->status |= TS_COMPAT_RESTART;
+	else
+		ti->status &= ~TS_COMPAT_RESTART;
+}
 #endif
-#ifndef __ASSEMBLY__
 
 #ifdef CONFIG_X86_32
 #define in_ia32_syscall() true
@@ -238,6 +259,15 @@ static inline int arch_within_stack_frames(const void * const stack,
 #define in_ia32_syscall() (IS_ENABLED(CONFIG_IA32_EMULATION) && \
 			   current_thread_info()->status & TS_COMPAT)
 #endif
+
+/*
+ * Force syscall return via IRET by making it look as if there was
+ * some work pending. IRET is our most capable (but slowest) syscall
+ * return path, which is able to restore modified SS, CS and certain
+ * EFLAGS values that other (fast) syscall return instructions
+ * are not able to restore properly.
+ */
+#define force_iret() set_thread_flag(TIF_NOTIFY_RESUME)
 
 extern void arch_task_cache_init(void);
 extern int arch_dup_task_struct(struct task_struct *dst, struct task_struct *src);

@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * EMIF driver
  *
@@ -6,6 +5,10 @@
  *
  * Aneesh V <aneesh@ti.com>
  * Santosh Shilimkar <santosh.shilimkar@ti.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  */
 #include <linux/err.h>
 #include <linux/kernel.h>
@@ -23,9 +26,8 @@
 #include <linux/list.h>
 #include <linux/spinlock.h>
 #include <linux/pm.h>
-
+#include <memory/jedec_ddr.h>
 #include "emif.h"
-#include "jedec_ddr.h"
 #include "of_memory.h"
 
 /**
@@ -163,35 +165,12 @@ static const struct file_operations emif_mr4_fops = {
 
 static int __init_or_module emif_debugfs_init(struct emif_data *emif)
 {
-	struct dentry	*dentry;
-	int		ret;
-
-	dentry = debugfs_create_dir(dev_name(emif->dev), NULL);
-	if (!dentry) {
-		ret = -ENOMEM;
-		goto err0;
-	}
-	emif->debugfs_root = dentry;
-
-	dentry = debugfs_create_file("regcache_dump", S_IRUGO,
-			emif->debugfs_root, emif, &emif_regdump_fops);
-	if (!dentry) {
-		ret = -ENOMEM;
-		goto err1;
-	}
-
-	dentry = debugfs_create_file("mr4", S_IRUGO,
-			emif->debugfs_root, emif, &emif_mr4_fops);
-	if (!dentry) {
-		ret = -ENOMEM;
-		goto err1;
-	}
-
+	emif->debugfs_root = debugfs_create_dir(dev_name(emif->dev), NULL);
+	debugfs_create_file("regcache_dump", S_IRUGO, emif->debugfs_root, emif,
+			    &emif_regdump_fops);
+	debugfs_create_file("mr4", S_IRUGO, emif->debugfs_root, emif,
+			    &emif_mr4_fops);
 	return 0;
-err1:
-	debugfs_remove_recursive(emif->debugfs_root);
-err0:
-	return ret;
 }
 
 static void __exit emif_debugfs_exit(struct emif_data *emif)
@@ -1613,7 +1592,7 @@ static void emif_shutdown(struct platform_device *pdev)
 static int get_emif_reg_values(struct emif_data *emif, u32 freq,
 		struct emif_regs *regs)
 {
-	u32				ip_rev, phy_type;
+	u32				cs1_used, ip_rev, phy_type;
 	u32				cl, type;
 	const struct lpddr2_timings	*timings;
 	const struct lpddr2_min_tck	*min_tck;
@@ -1621,6 +1600,7 @@ static int get_emif_reg_values(struct emif_data *emif, u32 freq,
 	const struct lpddr2_addressing	*addressing;
 	struct emif_data		*emif_for_calc;
 	struct device			*dev;
+	const struct emif_custom_configs *custom_configs;
 
 	dev = emif->dev;
 	/*
@@ -1638,10 +1618,12 @@ static int get_emif_reg_values(struct emif_data *emif, u32 freq,
 
 	device_info	= emif_for_calc->plat_data->device_info;
 	type		= device_info->type;
+	cs1_used	= device_info->cs1_used;
 	ip_rev		= emif_for_calc->plat_data->ip_rev;
 	phy_type	= emif_for_calc->plat_data->phy_type;
 
 	min_tck		= emif_for_calc->plat_data->min_tck;
+	custom_configs	= emif_for_calc->plat_data->custom_configs;
 
 	set_ddr_clk_period(freq);
 

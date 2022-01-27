@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
  /*
   * Copyright (c) 1997-2000 LAN Media Corporation (LMC)
   * All rights reserved.  www.lanmedia.com
@@ -14,6 +13,9 @@
   * David Boggs
   * Ron Crane
   * Alan Cox
+  *
+  * This software may be used and distributed according to the terms
+  * of the GNU General Public License version 2, incorporated herein by reference.
   *
   * Driver for the LanMedia LMC5200, LMC5245, LMC1000, LMC1200 cards.
   *
@@ -32,6 +34,7 @@
   * we still have link, and that the timing source is what we expected
   * it to be.  If link is lost, the interface is marked down, and
   * we no longer can transmit.
+  *
   */
 
 #include <linux/kernel.h>
@@ -99,7 +102,7 @@ static int lmc_ifdown(struct net_device * const);
 static void lmc_watchdog(struct timer_list *t);
 static void lmc_reset(lmc_softc_t * const sc);
 static void lmc_dec_reset(lmc_softc_t * const sc);
-static void lmc_driver_timeout(struct net_device *dev, unsigned int txqueue);
+static void lmc_driver_timeout(struct net_device *dev);
 
 /*
  * linux reserves 16 device specific IOCTLs.  We call them
@@ -912,6 +915,8 @@ static int lmc_init_one(struct pci_dev *pdev, const struct pci_device_id *ent)
         break;
     default:
 	printk(KERN_WARNING "%s: LMC UNKNOWN CARD!\n", dev->name);
+	unregister_hdlc_device(dev);
+	return -EIO;
         break;
     }
 
@@ -1115,7 +1120,7 @@ static void lmc_running_reset (struct net_device *dev) /*fold00*/
     sc->lmc_cmdmode |= (TULIP_CMD_TXRUN | TULIP_CMD_RXRUN);
     LMC_CSR_WRITE (sc, csr_command, sc->lmc_cmdmode);
 
-    lmc_trace(dev, "lmc_running_reset_out");
+    lmc_trace(dev, "lmc_runnin_reset_out");
 }
 
 
@@ -1317,7 +1322,8 @@ static irqreturn_t lmc_interrupt (int irq, void *dev_instance) /*fold00*/
 			sc->lmc_device->stats.tx_packets++;
                 }
 
-		dev_consume_skb_irq(sc->lmc_txq[i]);
+                //                dev_kfree_skb(sc->lmc_txq[i]);
+                dev_kfree_skb_irq(sc->lmc_txq[i]);
                 sc->lmc_txq[i] = NULL;
 
                 badtx++;
@@ -2044,7 +2050,7 @@ static void lmc_initcsrs(lmc_softc_t * const sc, lmc_csrptr_t csr_base, /*fold00
     lmc_trace(sc->lmc_device, "lmc_initcsrs out");
 }
 
-static void lmc_driver_timeout(struct net_device *dev, unsigned int txqueue)
+static void lmc_driver_timeout(struct net_device *dev)
 {
     lmc_softc_t *sc = dev_to_sc(dev);
     u32 csr6;

@@ -198,7 +198,7 @@ struct ib_sa_hdr {
 	__be16			attr_offset;
 	__be16			reserved;
 	ib_sa_comp_mask		comp_mask;
-} __packed;
+} __attribute__ ((packed));
 
 struct ib_mad {
 	struct ib_mad_hdr	mad_hdr;
@@ -227,7 +227,7 @@ struct ib_sa_mad {
 	struct ib_rmpp_hdr	rmpp_hdr;
 	struct ib_sa_hdr	sa_hdr;
 	u8			data[IB_MGMT_SA_DATA];
-} __packed;
+} __attribute__ ((packed));
 
 struct ib_vendor_mad {
 	struct ib_mad_hdr	mad_hdr;
@@ -277,7 +277,6 @@ enum ib_port_capability_mask_bits {
 	IB_PORT_SYS_IMAGE_GUID_SUP = 1 << 11,
 	IB_PORT_PKEY_SW_EXT_PORT_TRAP_SUP = 1 << 12,
 	IB_PORT_EXTENDED_SPEEDS_SUP = 1 << 14,
-	IB_PORT_CAP_MASK2_SUP = 1 << 15,
 	IB_PORT_CM_SUP = 1 << 16,
 	IB_PORT_SNMP_TUNNEL_SUP = 1 << 17,
 	IB_PORT_REINIT_SUP = 1 << 18,
@@ -294,15 +293,6 @@ enum ib_port_capability_mask_bits {
 	IB_PORT_MCAST_PKEY_TRAP_SUPPRESSION_SUP = 1 << 29,
 	IB_PORT_MCAST_FDB_TOP_SUP = 1 << 30,
 	IB_PORT_HIERARCHY_INFO_SUP = 1ULL << 31,
-};
-
-enum ib_port_capability_mask2_bits {
-	IB_PORT_SET_NODE_DESC_SUP		= 1 << 0,
-	IB_PORT_EX_PORT_INFO_EX_SUP		= 1 << 1,
-	IB_PORT_VIRT_SUP			= 1 << 2,
-	IB_PORT_SWITCH_PORT_STATE_TABLE_SUP	= 1 << 3,
-	IB_PORT_LINK_WIDTH_2X_SUP		= 1 << 4,
-	IB_PORT_LINK_SPEED_HDR_SUP		= 1 << 5,
 };
 
 #define OPA_CLASS_PORT_INFO_PR_SUPPORT BIT(26)
@@ -616,11 +606,12 @@ struct ib_mad_agent {
 	void			*context;
 	u32			hi_tid;
 	u32			flags;
-	void			*security;
-	struct list_head	mad_agent_sec_list;
 	u8			port_num;
 	u8			rmpp_version;
+	void			*security;
 	bool			smp_allowed;
+	bool			lsm_nb_reg;
+	struct notifier_block   lsm_nb;
 };
 
 /**
@@ -813,6 +804,46 @@ void ib_cancel_mad(struct ib_mad_agent *mad_agent,
  */
 int ib_modify_mad(struct ib_mad_agent *mad_agent,
 		  struct ib_mad_send_buf *send_buf, u32 timeout_ms);
+
+/**
+ * ib_redirect_mad_qp - Registers a QP for MAD services.
+ * @qp: Reference to a QP that requires MAD services.
+ * @rmpp_version: If set, indicates that the client will send
+ *   and receive MADs that contain the RMPP header for the given version.
+ *   If set to 0, indicates that RMPP is not used by this client.
+ * @send_handler: The completion callback routine invoked after a send
+ *   request has completed.
+ * @recv_handler: The completion callback routine invoked for a received
+ *   MAD.
+ * @context: User specified context associated with the registration.
+ *
+ * Use of this call allows clients to use MAD services, such as RMPP,
+ * on user-owned QPs.  After calling this routine, users may send
+ * MADs on the specified QP by calling ib_mad_post_send.
+ */
+struct ib_mad_agent *ib_redirect_mad_qp(struct ib_qp *qp,
+					u8 rmpp_version,
+					ib_mad_send_handler send_handler,
+					ib_mad_recv_handler recv_handler,
+					void *context);
+
+/**
+ * ib_process_mad_wc - Processes a work completion associated with a
+ *   MAD sent or received on a redirected QP.
+ * @mad_agent: Specifies the registered MAD service using the redirected QP.
+ * @wc: References a work completion associated with a sent or received
+ *   MAD segment.
+ *
+ * This routine is used to complete or continue processing on a MAD request.
+ * If the work completion is associated with a send operation, calling
+ * this routine is required to continue an RMPP transfer or to wait for a
+ * corresponding response, if it is a request.  If the work completion is
+ * associated with a receive operation, calling this routine is required to
+ * process an inbound or outbound RMPP transfer, or to match a response MAD
+ * with its corresponding request.
+ */
+int ib_process_mad_wc(struct ib_mad_agent *mad_agent,
+		      struct ib_wc *wc);
 
 /**
  * ib_create_send_mad - Allocate and initialize a data buffer and work request

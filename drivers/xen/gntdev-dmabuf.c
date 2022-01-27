@@ -342,12 +342,35 @@ static void dmabuf_exp_ops_release(struct dma_buf *dma_buf)
 	mutex_unlock(&priv->lock);
 }
 
+static void *dmabuf_exp_ops_kmap(struct dma_buf *dma_buf,
+				 unsigned long page_num)
+{
+	/* Not implemented. */
+	return NULL;
+}
+
+static void dmabuf_exp_ops_kunmap(struct dma_buf *dma_buf,
+				  unsigned long page_num, void *addr)
+{
+	/* Not implemented. */
+}
+
+static int dmabuf_exp_ops_mmap(struct dma_buf *dma_buf,
+			       struct vm_area_struct *vma)
+{
+	/* Not implemented. */
+	return 0;
+}
+
 static const struct dma_buf_ops dmabuf_exp_ops =  {
 	.attach = dmabuf_exp_ops_attach,
 	.detach = dmabuf_exp_ops_detach,
 	.map_dma_buf = dmabuf_exp_ops_map_dma_buf,
 	.unmap_dma_buf = dmabuf_exp_ops_unmap_dma_buf,
 	.release = dmabuf_exp_ops_release,
+	.map = dmabuf_exp_ops_kmap,
+	.unmap = dmabuf_exp_ops_kunmap,
+	.mmap = dmabuf_exp_ops_mmap,
 };
 
 struct gntdev_dmabuf_export_args {
@@ -423,7 +446,7 @@ dmabuf_exp_alloc_backing_storage(struct gntdev_priv *priv, int dmabuf_flags,
 {
 	struct gntdev_grant_map *map;
 
-	if (unlikely(gntdev_test_page_count(count)))
+	if (unlikely(count <= 0))
 		return ERR_PTR(-EINVAL);
 
 	if ((dmabuf_flags & GNTDEV_DMA_FLAG_WC) &&
@@ -436,6 +459,11 @@ dmabuf_exp_alloc_backing_storage(struct gntdev_priv *priv, int dmabuf_flags,
 	if (!map)
 		return ERR_PTR(-ENOMEM);
 
+	if (unlikely(gntdev_account_mapped_pages(count))) {
+		pr_debug("can't map %d pages: over limit\n", count);
+		gntdev_put_map(NULL, map);
+		return ERR_PTR(-ENOMEM);
+	}
 	return map;
 }
 
@@ -613,6 +641,14 @@ dmabuf_imp_to_refs(struct gntdev_dmabuf_priv *priv, struct device *dev,
 		goto fail_detach;
 	}
 
+	/* Check that we have zero offset. */
+	if (sgt->sgl->offset) {
+		ret = ERR_PTR(-EINVAL);
+		pr_debug("DMA buffer has %d bytes offset, user-space expects 0\n",
+			 sgt->sgl->offset);
+		goto fail_unmap;
+	}
+
 	/* Check number of pages that imported buffer has. */
 	if (attach->dmabuf->size != gntdev_dmabuf->nr_pages << PAGE_SHIFT) {
 		ret = ERR_PTR(-EINVAL);
@@ -717,14 +753,6 @@ static int dmabuf_imp_release(struct gntdev_dmabuf_priv *priv, u32 fd)
 	return 0;
 }
 
-static void dmabuf_imp_release_all(struct gntdev_dmabuf_priv *priv)
-{
-	struct gntdev_dmabuf *q, *gntdev_dmabuf;
-
-	list_for_each_entry_safe(gntdev_dmabuf, q, &priv->imp_list, next)
-		dmabuf_imp_release(priv, gntdev_dmabuf->fd);
-}
-
 /* DMA buffer IOCTL support. */
 
 long gntdev_ioctl_dmabuf_exp_from_refs(struct gntdev_priv *priv, int use_ptemod,
@@ -743,7 +771,7 @@ long gntdev_ioctl_dmabuf_exp_from_refs(struct gntdev_priv *priv, int use_ptemod,
 	if (copy_from_user(&op, u, sizeof(op)) != 0)
 		return -EFAULT;
 
-	if (unlikely(gntdev_test_page_count(op.count)))
+	if (unlikely(op.count <= 0))
 		return -EINVAL;
 
 	refs = kcalloc(op.count, sizeof(*refs), GFP_KERNEL);
@@ -790,7 +818,7 @@ long gntdev_ioctl_dmabuf_imp_to_refs(struct gntdev_priv *priv,
 	if (copy_from_user(&op, u, sizeof(op)) != 0)
 		return -EFAULT;
 
-	if (unlikely(gntdev_test_page_count(op.count)))
+	if (unlikely(op.count <= 0))
 		return -EINVAL;
 
 	gntdev_dmabuf = dmabuf_imp_to_refs(priv->dmabuf_priv,
@@ -842,6 +870,5 @@ struct gntdev_dmabuf_priv *gntdev_dmabuf_init(struct file *filp)
 
 void gntdev_dmabuf_fini(struct gntdev_dmabuf_priv *priv)
 {
-	dmabuf_imp_release_all(priv);
 	kfree(priv);
 }

@@ -15,6 +15,7 @@
 #include <linux/of.h>
 #include <linux/of_address.h>
 #include <linux/of_device.h>
+#include <linux/of_irq.h>
 #include <linux/pinctrl/pinconf-generic.h>
 #include <linux/pinctrl/pinconf.h>
 #include <linux/pinctrl/pinctrl.h>
@@ -169,8 +170,8 @@ static struct armada_37xx_pin_group armada_37xx_nb_groups[] = {
 	PIN_GRP_GPIO("pwm1", 12, 1, BIT(4), "pwm"),
 	PIN_GRP_GPIO("pwm2", 13, 1, BIT(5), "pwm"),
 	PIN_GRP_GPIO("pwm3", 14, 1, BIT(6), "pwm"),
-	PIN_GRP_GPIO("pmic1", 7, 1, BIT(7), "pmic"),
-	PIN_GRP_GPIO("pmic0", 6, 1, BIT(8), "pmic"),
+	PIN_GRP_GPIO("pmic1", 17, 1, BIT(7), "pmic"),
+	PIN_GRP_GPIO("pmic0", 16, 1, BIT(8), "pmic"),
 	PIN_GRP_GPIO("i2c2", 2, 2, BIT(9), "i2c"),
 	PIN_GRP_GPIO("i2c1", 0, 2, BIT(10), "i2c"),
 	PIN_GRP_GPIO("spi_cs1", 17, 1, BIT(12), "spi"),
@@ -194,11 +195,8 @@ static struct armada_37xx_pin_group armada_37xx_sb_groups[] = {
 	PIN_GRP_GPIO("usb2_drvvbus1", 1, 1, BIT(1), "drvbus"),
 	PIN_GRP_GPIO("sdio_sb", 24, 6, BIT(2), "sdio"),
 	PIN_GRP_GPIO("rgmii", 6, 12, BIT(3), "mii"),
-	PIN_GRP_GPIO("smi", 18, 2, BIT(4), "smi"),
-	PIN_GRP_GPIO("pcie1", 3, 1, BIT(5), "pcie"),
-	PIN_GRP_GPIO("pcie1_clkreq", 4, 1, BIT(9), "pcie"),
-	PIN_GRP_GPIO("pcie1_wakeup", 5, 1, BIT(10), "pcie"),
-	PIN_GRP_GPIO("ptp", 20, 3, BIT(11) | BIT(12) | BIT(13), "ptp"),
+	PIN_GRP_GPIO("pcie1", 3, 2, BIT(4), "pcie"),
+	PIN_GRP_GPIO("ptp", 20, 3, BIT(5), "ptp"),
 	PIN_GRP("ptp_clk", 21, 1, BIT(6), "ptp", "mii"),
 	PIN_GRP("ptp_trig", 22, 1, BIT(7), "ptp", "mii"),
 	PIN_GRP_GPIO_3("mii_col", 23, 1, BIT(8) | BIT(14), 0, BIT(8), BIT(14),
@@ -721,8 +719,6 @@ static int armada_37xx_irqchip_register(struct platform_device *pdev,
 	struct device_node *np = info->dev->of_node;
 	struct gpio_chip *gc = &info->gpio_chip;
 	struct irq_chip *irqchip = &info->irq_chip;
-	struct gpio_irq_chip *girq = &gc->irq;
-	struct device *dev = &pdev->dev;
 	struct resource res;
 	int ret = -ENODEV, i, nr_irq_parent;
 
@@ -732,29 +728,20 @@ static int armada_37xx_irqchip_register(struct platform_device *pdev,
 			ret = 0;
 			break;
 		}
-	}
-	if (ret) {
-		dev_err(dev, "no gpio-controller child node\n");
+	};
+	if (ret)
 		return ret;
-	}
 
-	nr_irq_parent = platform_irq_count(pdev);
-	if (nr_irq_parent < 0) {
-		if (nr_irq_parent != -EPROBE_DEFER)
-			dev_err(dev, "Couldn't determine irq count: %pe\n",
-				ERR_PTR(nr_irq_parent));
-		return nr_irq_parent;
-	}
-
+	nr_irq_parent = of_irq_count(np);
 	spin_lock_init(&info->irq_lock);
 
 	if (!nr_irq_parent) {
-		dev_err(dev, "invalid or no IRQ\n");
+		dev_err(&pdev->dev, "Invalid or no IRQ\n");
 		return 0;
 	}
 
 	if (of_address_to_resource(info->dev->of_node, 1, &res)) {
-		dev_err(dev, "cannot find IO resource\n");
+		dev_err(info->dev, "cannot find IO resource\n");
 		return -ENOENT;
 	}
 
@@ -769,27 +756,27 @@ static int armada_37xx_irqchip_register(struct platform_device *pdev,
 	irqchip->irq_set_type = armada_37xx_irq_set_type;
 	irqchip->irq_startup = armada_37xx_irq_startup;
 	irqchip->name = info->data->name;
-	girq->chip = irqchip;
-	girq->parent_handler = armada_37xx_irq_handler;
+	ret = gpiochip_irqchip_add(gc, irqchip, 0,
+				   handle_edge_irq, IRQ_TYPE_NONE);
+	if (ret) {
+		dev_info(&pdev->dev, "could not add irqchip\n");
+		return ret;
+	}
+
 	/*
 	 * Many interrupts are connected to the parent interrupt
 	 * controller. But we do not take advantage of this and use
 	 * the chained irq with all of them.
 	 */
-	girq->num_parents = nr_irq_parent;
-	girq->parents = devm_kcalloc(&pdev->dev, nr_irq_parent,
-				     sizeof(*girq->parents), GFP_KERNEL);
-	if (!girq->parents)
-		return -ENOMEM;
 	for (i = 0; i < nr_irq_parent; i++) {
-		int irq = platform_get_irq(pdev, i);
+		int irq = irq_of_parse_and_map(np, i);
 
 		if (irq < 0)
 			continue;
-		girq->parents[i] = irq;
+
+		gpiochip_set_chained_irqchip(gc, irqchip, irq,
+					     armada_37xx_irq_handler);
 	}
-	girq->default_type = IRQ_TYPE_NONE;
-	girq->handler = handle_edge_irq;
 
 	return 0;
 }
@@ -806,7 +793,7 @@ static int armada_37xx_gpiochip_register(struct platform_device *pdev,
 			ret = 0;
 			break;
 		}
-	}
+	};
 	if (ret)
 		return ret;
 
@@ -819,10 +806,10 @@ static int armada_37xx_gpiochip_register(struct platform_device *pdev,
 	gc->of_node = np;
 	gc->label = info->data->name;
 
-	ret = armada_37xx_irqchip_register(pdev, info);
+	ret = devm_gpiochip_add_data(&pdev->dev, gc, info);
 	if (ret)
 		return ret;
-	ret = devm_gpiochip_add_data(&pdev->dev, gc, info);
+	ret = armada_37xx_irqchip_register(pdev, info);
 	if (ret)
 		return ret;
 
@@ -1117,8 +1104,8 @@ static int armada_3700_pinctrl_resume(struct device *dev)
  * to other IO drivers.
  */
 static const struct dev_pm_ops armada_3700_pinctrl_pm_ops = {
-	.suspend_noirq = armada_3700_pinctrl_suspend,
-	.resume_noirq = armada_3700_pinctrl_resume,
+	.suspend_late = armada_3700_pinctrl_suspend,
+	.resume_early = armada_3700_pinctrl_resume,
 };
 
 #define PINCTRL_ARMADA_37XX_DEV_PM_OPS (&armada_3700_pinctrl_pm_ops)

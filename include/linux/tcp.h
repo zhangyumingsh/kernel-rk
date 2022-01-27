@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * INET		An implementation of the TCP/IP protocol suite for the LINUX
  *		operating system.  INET is implemented using the  BSD Socket
@@ -9,6 +8,11 @@
  * Version:	@(#)tcp.h	1.0.2	04/28/93
  *
  * Author:	Fred N. van Kempen, <waltje@uWalt.NL.Mugnet.ORG>
+ *
+ *		This program is free software; you can redistribute it and/or
+ *		modify it under the terms of the GNU General Public License
+ *		as published by the Free Software Foundation; either version
+ *		2 of the License, or (at your option) any later version.
  */
 #ifndef _LINUX_TCP_H
 #define _LINUX_TCP_H
@@ -58,7 +62,12 @@ static inline unsigned int tcp_optlen(const struct sk_buff *skb)
 
 /* TCP Fast Open Cookie as stored in memory */
 struct tcp_fastopen_cookie {
-	__le64	val[DIV_ROUND_UP(TCP_FASTOPEN_COOKIE_MAX, sizeof(u64))];
+	union {
+		u8	val[TCP_FASTOPEN_COOKIE_MAX];
+#if IS_ENABLED(CONFIG_IPV6)
+		struct in6_addr addr;
+#endif
+	};
 	s8	len;
 	bool	exp;	/* In RFC6994 experimental option format */
 };
@@ -78,27 +87,6 @@ struct tcp_sack_block {
 #define TCP_SACK_SEEN     (1 << 0)   /*1 = peer is SACK capable, */
 #define TCP_DSACK_SEEN    (1 << 2)   /*1 = DSACK was received from peer*/
 
-#if IS_ENABLED(CONFIG_MPTCP)
-struct mptcp_options_received {
-	u64	sndr_key;
-	u64	rcvr_key;
-	u64	data_ack;
-	u64	data_seq;
-	u32	subflow_seq;
-	u16	data_len;
-	u8	mp_capable : 1,
-		mp_join : 1,
-		dss : 1;
-	u8	use_map:1,
-		dsn64:1,
-		data_fin:1,
-		use_ack:1,
-		ack64:1,
-		mpc_map:1,
-		__unused:2;
-};
-#endif
-
 struct tcp_options_received {
 /*	PAWS/RTTM data	*/
 	int	ts_recent_stamp;/* Time we stored ts_recent (for aging) */
@@ -116,9 +104,6 @@ struct tcp_options_received {
 	u8	num_sacks;	/* Number of SACK blocks		*/
 	u16	user_mss;	/* mss requested by user in ioctl	*/
 	u16	mss_clamp;	/* Maximal mss, negotiated at connection setup */
-#if IS_ENABLED(CONFIG_MPTCP)
-	struct mptcp_options_received	mptcp;
-#endif
 };
 
 static inline void tcp_clear_options(struct tcp_options_received *rx_opt)
@@ -127,11 +112,6 @@ static inline void tcp_clear_options(struct tcp_options_received *rx_opt)
 	rx_opt->wscale_ok = rx_opt->snd_wscale = 0;
 #if IS_ENABLED(CONFIG_SMC)
 	rx_opt->smc_ok = 0;
-#endif
-#if IS_ENABLED(CONFIG_MPTCP)
-	rx_opt->mptcp.mp_capable = 0;
-	rx_opt->mptcp.mp_join = 0;
-	rx_opt->mptcp.dss = 0;
 #endif
 }
 
@@ -148,7 +128,6 @@ struct tcp_request_sock {
 	const struct tcp_request_sock_ops *af_specific;
 	u64				snt_synack; /* first SYNACK sent time */
 	bool				tfo_listener;
-	bool				is_mptcp;
 	u32				txhash;
 	u32				rcv_isn;
 	u32				snt_isn;
@@ -246,6 +225,8 @@ struct tcp_sock {
 	} rack;
 	u16	advmss;		/* Advertised MSS			*/
 	u8	compressed_ack;
+	u8	tlp_retrans:1,	/* TLP is a retransmission */
+		unused_1:7;
 	u32	chrono_start;	/* Start time in jiffies of a TCP chrono */
 	u32	chrono_stat[3];	/* Time in jiffies for chrono_stat stats */
 	u8	chrono_type:2,	/* current chronograph type */
@@ -253,7 +234,7 @@ struct tcp_sock {
 		fastopen_connect:1, /* FASTOPEN_CONNECT sockopt */
 		fastopen_no_cookie:1, /* Allow send/recv SYN+data without a cookie */
 		is_sack_reneg:1,    /* in recovery from loss with SACK reneg? */
-		fastopen_client_fail:2; /* reason why fastopen failed */
+		unused:2;
 	u8	nonagle     : 4,/* Disable Nagle algorithm?             */
 		thin_lto    : 1,/* Use linear timeouts for thin streams */
 		recvmsg_inq : 1,/* Indicate # of bytes in queue upon recvmsg */
@@ -268,11 +249,7 @@ struct tcp_sock {
 		save_syn:1,	/* Save headers of SYN packet */
 		is_cwnd_limited:1,/* forward progress limited by snd_cwnd? */
 		syn_smc:1;	/* SYN includes SMC */
-	u32	tlp_high_seq;	/* snd_nxt at the time of TLP retransmit. */
-
-	u32	tcp_tx_delay;	/* delay (in usec) added to TX packets */
-	u64	tcp_wstamp_ns;	/* departure time for next sent data packet */
-	u64	tcp_clock_cache; /* cache last tcp_clock_ns() (see tcp_mstamp_refresh()) */
+	u32	tlp_high_seq;	/* snd_nxt at the time of TLP */
 
 /* RTT measurement */
 	u64	tcp_mstamp;	/* most recent packet received/sent */
@@ -384,10 +361,6 @@ struct tcp_sock {
 #define BPF_SOCK_OPS_TEST_FLAG(TP, ARG) 0
 #endif
 
-	u16 timeout_rehash;	/* Timeout-triggered rehash attempts */
-
-	u32 rcv_ooopack; /* Received out-of-order packets, for tcpinfo */
-
 /* Receiver side RTT estimation */
 	u32 rcv_rtt_last_tsecr;
 	struct {
@@ -411,9 +384,6 @@ struct tcp_sock {
 	u32	mtu_info; /* We received an ICMP_FRAG_NEEDED / ICMPV6_PKT_TOOBIG
 			   * while socket was owned by user.
 			   */
-#if IS_ENABLED(CONFIG_MPTCP)
-	bool	is_mptcp;
-#endif
 
 #ifdef CONFIG_TCP_MD5SIG
 /* TCP AF-Specific parts; only used by MD5 Signature support so far */
@@ -428,7 +398,7 @@ struct tcp_sock {
 	/* fastopen_rsk points to request_sock that resulted in this big
 	 * socket. Used to retransmit SYNACKs etc.
 	 */
-	struct request_sock __rcu *fastopen_rsk;
+	struct request_sock *fastopen_rsk;
 	u32	*saved_syn;
 };
 
@@ -469,7 +439,6 @@ struct tcp_timewait_sock {
 	u32			  tw_last_oow_ack_time;
 
 	int			  tw_ts_recent_stamp;
-	u32			  tw_tx_delay;
 #ifdef CONFIG_TCP_MD5SIG
 	struct tcp_md5sig_key	  *tw_md5_key;
 #endif
@@ -482,8 +451,8 @@ static inline struct tcp_timewait_sock *tcp_twsk(const struct sock *sk)
 
 static inline bool tcp_passive_fastopen(const struct sock *sk)
 {
-	return sk->sk_state == TCP_SYN_RECV &&
-	       rcu_access_pointer(tcp_sk(sk)->fastopen_rsk) != NULL;
+	return (sk->sk_state == TCP_SYN_RECV &&
+		tcp_sk(sk)->fastopen_rsk != NULL);
 }
 
 static inline void fastopen_queue_tune(struct sock *sk, int backlog)

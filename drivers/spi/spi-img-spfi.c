@@ -1,9 +1,12 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * IMG SPFI controller driver
  *
  * Copyright (C) 2007,2008,2013 Imagination Technologies Ltd.
  * Copyright (C) 2014 Google, Inc.
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms and conditions of the GNU General Public License,
+ * version 2, as published by the Free Software Foundation.
  */
 
 #include <linux/clk.h>
@@ -666,22 +669,8 @@ static int img_spfi_probe(struct platform_device *pdev)
 	master->unprepare_message = img_spfi_unprepare;
 	master->handle_err = img_spfi_handle_err;
 
-	spfi->tx_ch = dma_request_chan(spfi->dev, "tx");
-	if (IS_ERR(spfi->tx_ch)) {
-		ret = PTR_ERR(spfi->tx_ch);
-		spfi->tx_ch = NULL;
-		if (ret == -EPROBE_DEFER)
-			goto disable_pm;
-	}
-
-	spfi->rx_ch = dma_request_chan(spfi->dev, "rx");
-	if (IS_ERR(spfi->rx_ch)) {
-		ret = PTR_ERR(spfi->rx_ch);
-		spfi->rx_ch = NULL;
-		if (ret == -EPROBE_DEFER)
-			goto disable_pm;
-	}
-
+	spfi->tx_ch = dma_request_slave_channel(spfi->dev, "tx");
+	spfi->rx_ch = dma_request_slave_channel(spfi->dev, "rx");
 	if (!spfi->tx_ch || !spfi->rx_ch) {
 		if (spfi->tx_ch)
 			dma_release_channel(spfi->tx_ch);
@@ -785,8 +774,10 @@ static int img_spfi_resume(struct device *dev)
 	int ret;
 
 	ret = pm_runtime_get_sync(dev);
-	if (ret)
+	if (ret) {
+		pm_runtime_put_noidle(dev);
 		return ret;
+	}
 	spfi_reset(spfi);
 	pm_runtime_put(dev);
 

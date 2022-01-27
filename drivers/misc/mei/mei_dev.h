@@ -1,7 +1,17 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /*
- * Copyright (c) 2003-2019, Intel Corporation. All rights reserved.
+ *
  * Intel Management Engine Interface (Intel MEI) Linux driver
+ * Copyright (c) 2003-2018, Intel Corporation.
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms and conditions of the GNU General Public License,
+ * version 2, as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
+ * more details.
+ *
  */
 
 #ifndef _MEI_DEV_H_
@@ -110,19 +120,6 @@ enum mei_cl_io_mode {
 struct mei_msg_data {
 	size_t size;
 	unsigned char *data;
-};
-
-/**
- * struct mei_dma_dscr - dma address descriptor
- *
- * @vaddr: dma buffer virtual address
- * @daddr: dma buffer physical address
- * @size : dma buffer size
- */
-struct mei_dma_dscr {
-	void *vaddr;
-	dma_addr_t daddr;
-	size_t size;
 };
 
 /* Maximum number of processed FW status registers */
@@ -260,7 +257,6 @@ struct mei_cl {
  * @hw_config        : configure hw
  *
  * @fw_status        : get fw status registers
- * @trc_status       : get trc status register
  * @pg_state         : power gating state of the device
  * @pg_in_transition : is device now in pg transition
  * @pg_is_enabled    : is power gating enabled
@@ -288,11 +284,9 @@ struct mei_hw_ops {
 	bool (*hw_is_ready)(struct mei_device *dev);
 	int (*hw_reset)(struct mei_device *dev, bool enable);
 	int (*hw_start)(struct mei_device *dev);
-	int (*hw_config)(struct mei_device *dev);
+	void (*hw_config)(struct mei_device *dev);
 
 	int (*fw_status)(struct mei_device *dev, struct mei_fw_status *fw_sts);
-	int (*trc_status)(struct mei_device *dev, u32 *trc);
-
 	enum mei_pg_state (*pg_state)(struct mei_device *dev);
 	bool (*pg_in_transition)(struct mei_device *dev);
 	bool (*pg_is_enabled)(struct mei_device *dev);
@@ -415,7 +409,6 @@ struct mei_fw_version {
  * @rd_msg_hdr  : read message header storage
  *
  * @hbuf_is_ready : query if the host host/write buffer is ready
- * @dr_dscr: DMA ring descriptors: TX, RX, and CTRL
  *
  * @version     : HBM protocol version in use
  * @hbm_f_pg_supported  : hbm feature pgi protocol
@@ -492,12 +485,10 @@ struct mei_device {
 #endif /* CONFIG_PM */
 
 	unsigned char rd_msg_buf[MEI_RD_MSG_BUF_SIZE];
-	u32 rd_msg_hdr[MEI_MSG_HDR_MAX];
+	u32 rd_msg_hdr;
 
 	/* write buffer */
 	bool hbuf_is_ready;
-
-	struct mei_dma_dscr dr_dscr[DMA_DSCR_NUM];
 
 	struct hbm_version version;
 	unsigned int hbm_f_pg_supported:1;
@@ -531,6 +522,7 @@ struct mei_device {
 #if IS_ENABLED(CONFIG_DEBUG_FS)
 	struct dentry *dbgfs_dir;
 #endif /* CONFIG_DEBUG_FS */
+
 
 	const struct mei_hw_ops *ops;
 	char hw[0] __aligned(sizeof(void *));
@@ -590,16 +582,6 @@ int mei_restart(struct mei_device *dev);
 void mei_stop(struct mei_device *dev);
 void mei_cancel_work(struct mei_device *dev);
 
-void mei_set_devstate(struct mei_device *dev, enum mei_dev_state state);
-
-int mei_dmam_ring_alloc(struct mei_device *dev);
-void mei_dmam_ring_free(struct mei_device *dev);
-bool mei_dma_ring_is_allocated(struct mei_device *dev);
-void mei_dma_ring_reset(struct mei_device *dev);
-void mei_dma_ring_read(struct mei_device *dev, unsigned char *buf, u32 len);
-void mei_dma_ring_write(struct mei_device *dev, unsigned char *buf, u32 len);
-u32 mei_dma_ring_empty_slots(struct mei_device *dev);
-
 /*
  *  MEI interrupt functions prototype
  */
@@ -617,9 +599,9 @@ void mei_irq_compl_handler(struct mei_device *dev, struct list_head *cmpl_list);
  */
 
 
-static inline int mei_hw_config(struct mei_device *dev)
+static inline void mei_hw_config(struct mei_device *dev)
 {
-	return dev->ops->hw_config(dev);
+	dev->ops->hw_config(dev);
 }
 
 static inline enum mei_pg_state mei_pg_state(struct mei_device *dev)
@@ -714,13 +696,6 @@ static inline int mei_count_full_read_slots(struct mei_device *dev)
 	return dev->ops->rdbuf_full_slots(dev);
 }
 
-static inline int mei_trc_status(struct mei_device *dev, u32 *trc)
-{
-	if (dev->ops->trc_status)
-		return dev->ops->trc_status(dev, trc);
-	return -EOPNOTSUPP;
-}
-
 static inline int mei_fw_status(struct mei_device *dev,
 				struct mei_fw_status *fw_status)
 {
@@ -732,10 +707,13 @@ bool mei_hbuf_acquire(struct mei_device *dev);
 bool mei_write_is_idle(struct mei_device *dev);
 
 #if IS_ENABLED(CONFIG_DEBUG_FS)
-void mei_dbgfs_register(struct mei_device *dev, const char *name);
+int mei_dbgfs_register(struct mei_device *dev, const char *name);
 void mei_dbgfs_deregister(struct mei_device *dev);
 #else
-static inline void mei_dbgfs_register(struct mei_device *dev, const char *name) {}
+static inline int mei_dbgfs_register(struct mei_device *dev, const char *name)
+{
+	return 0;
+}
 static inline void mei_dbgfs_deregister(struct mei_device *dev) {}
 #endif /* CONFIG_DEBUG_FS */
 

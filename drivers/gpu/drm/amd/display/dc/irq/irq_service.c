@@ -23,8 +23,6 @@
  *
  */
 
-#include <linux/slab.h>
-
 #include "dm_services.h"
 
 #include "include/irq_service_interface.h"
@@ -38,7 +36,7 @@
 #include "dce120/irq_service_dce120.h"
 
 
-#if defined(CONFIG_DRM_AMD_DC_DCN)
+#if defined(CONFIG_DRM_AMD_DC_DCN1_0)
 #include "dcn10/irq_service_dcn10.h"
 #endif
 

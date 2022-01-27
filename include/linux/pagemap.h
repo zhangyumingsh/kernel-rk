@@ -164,7 +164,7 @@ void release_pages(struct page **pages, int nr);
  * will find the page or it will not. Likewise, the old find_get_page could run
  * either before the insertion or afterwards, depending on timing.
  */
-static inline int __page_cache_add_speculative(struct page *page, int count)
+static inline int page_cache_get_speculative(struct page *page)
 {
 #ifdef CONFIG_TINY_RCU
 # ifdef CONFIG_PREEMPT_COUNT
@@ -180,10 +180,10 @@ static inline int __page_cache_add_speculative(struct page *page, int count)
 	 * SMP requires.
 	 */
 	VM_BUG_ON_PAGE(page_count(page) == 0, page);
-	page_ref_add(page, count);
+	page_ref_inc(page);
 
 #else
-	if (unlikely(!page_ref_add_unless(page, count, 0))) {
+	if (unlikely(!get_page_unless_zero(page))) {
 		/*
 		 * Either the page has been freed, or will be freed.
 		 * In either case, retry here and the caller should
@@ -197,14 +197,27 @@ static inline int __page_cache_add_speculative(struct page *page, int count)
 	return 1;
 }
 
-static inline int page_cache_get_speculative(struct page *page)
-{
-	return __page_cache_add_speculative(page, 1);
-}
-
+/*
+ * Same as above, but add instead of inc (could just be merged)
+ */
 static inline int page_cache_add_speculative(struct page *page, int count)
 {
-	return __page_cache_add_speculative(page, count);
+	VM_BUG_ON(in_interrupt());
+
+#if !defined(CONFIG_SMP) && defined(CONFIG_TREE_RCU)
+# ifdef CONFIG_PREEMPT_COUNT
+	VM_BUG_ON(!in_atomic() && !irqs_disabled());
+# endif
+	VM_BUG_ON_PAGE(page_count(page) == 0, page);
+	page_ref_add(page, count);
+
+#else
+	if (unlikely(!page_ref_add_unless(page, count, 0)))
+		return 0;
+#endif
+	VM_BUG_ON_PAGE(PageCompound(page) && page != compound_head(page), page);
+
+	return 1;
 }
 
 #ifdef CONFIG_NUMA
@@ -228,9 +241,9 @@ static inline gfp_t readahead_gfp_mask(struct address_space *x)
 
 typedef int filler_t(void *, struct page *);
 
-pgoff_t page_cache_next_miss(struct address_space *mapping,
+pgoff_t page_cache_next_hole(struct address_space *mapping,
 			     pgoff_t index, unsigned long max_scan);
-pgoff_t page_cache_prev_miss(struct address_space *mapping,
+pgoff_t page_cache_prev_hole(struct address_space *mapping,
 			     pgoff_t index, unsigned long max_scan);
 
 #define FGP_ACCESSED		0x00000001
@@ -333,16 +346,6 @@ static inline struct page *grab_cache_page_nowait(struct address_space *mapping,
 			mapping_gfp_mask(mapping));
 }
 
-static inline struct page *find_subpage(struct page *page, pgoff_t offset)
-{
-	if (PageHuge(page))
-		return page;
-
-	VM_BUG_ON_PAGE(PageTail(page), page);
-
-	return page + (offset & (compound_nr(page) - 1));
-}
-
 struct page *find_get_entry(struct address_space *mapping, pgoff_t offset);
 struct page *find_lock_entry(struct address_space *mapping, pgoff_t offset);
 unsigned find_get_entries(struct address_space *mapping, pgoff_t start,
@@ -361,15 +364,18 @@ static inline unsigned find_get_pages(struct address_space *mapping,
 unsigned find_get_pages_contig(struct address_space *mapping, pgoff_t start,
 			       unsigned int nr_pages, struct page **pages);
 unsigned find_get_pages_range_tag(struct address_space *mapping, pgoff_t *index,
-			pgoff_t end, xa_mark_t tag, unsigned int nr_pages,
+			pgoff_t end, int tag, unsigned int nr_pages,
 			struct page **pages);
 static inline unsigned find_get_pages_tag(struct address_space *mapping,
-			pgoff_t *index, xa_mark_t tag, unsigned int nr_pages,
+			pgoff_t *index, int tag, unsigned int nr_pages,
 			struct page **pages)
 {
 	return find_get_pages_range_tag(mapping, index, (pgoff_t)-1, tag,
 					nr_pages, pages);
 }
+unsigned find_get_entries_tag(struct address_space *mapping, pgoff_t start,
+			int tag, unsigned int nr_entries,
+			struct page **entries, pgoff_t *indices);
 
 struct page *grab_cache_page_write_begin(struct address_space *mapping,
 			pgoff_t index, unsigned flags);
@@ -455,15 +461,12 @@ static inline pgoff_t linear_page_index(struct vm_area_struct *vma,
 	return pgoff;
 }
 
-extern void __lock_page(struct page *page);
-extern int __lock_page_killable(struct page *page);
-extern int __lock_page_or_retry(struct page *page, struct mm_struct *mm,
+extern void __sched __lock_page(struct page *page);
+extern int __sched __lock_page_killable(struct page *page);
+extern int __sched __lock_page_or_retry(struct page *page, struct mm_struct *mm,
 				unsigned int flags);
 extern void unlock_page(struct page *page);
 
-/*
- * Return true if the page was successfully locked
- */
 static inline int trylock_page(struct page *page)
 {
 	page = compound_head(page);
@@ -473,7 +476,7 @@ static inline int trylock_page(struct page *page)
 /*
  * lock_page may only be called if we have the page's inode pinned.
  */
-static inline void lock_page(struct page *page)
+static inline __sched void lock_page(struct page *page)
 {
 	might_sleep();
 	if (!trylock_page(page))
@@ -485,7 +488,7 @@ static inline void lock_page(struct page *page)
  * signals.  It returns 0 if it locked the page and -EINTR if it was
  * killed while waiting.
  */
-static inline int lock_page_killable(struct page *page)
+static inline __sched int lock_page_killable(struct page *page)
 {
 	might_sleep();
 	if (!trylock_page(page))
@@ -500,8 +503,9 @@ static inline int lock_page_killable(struct page *page)
  * Return value and mmap_sem implications depend on flags; see
  * __lock_page_or_retry().
  */
-static inline int lock_page_or_retry(struct page *page, struct mm_struct *mm,
-				     unsigned int flags)
+static inline __sched int lock_page_or_retry(struct page *page,
+					     struct mm_struct *mm,
+					     unsigned int flags)
 {
 	might_sleep();
 	return trylock_page(page) || __lock_page_or_retry(page, mm, flags);
@@ -511,8 +515,8 @@ static inline int lock_page_or_retry(struct page *page, struct mm_struct *mm,
  * This is exported only for wait_on_page_locked/wait_on_page_writeback, etc.,
  * and should not be used directly.
  */
-extern void wait_on_page_bit(struct page *page, int bit_nr);
-extern int wait_on_page_bit_killable(struct page *page, int bit_nr);
+extern void __sched wait_on_page_bit(struct page *page, int bit_nr);
+extern int __sched wait_on_page_bit_killable(struct page *page, int bit_nr);
 
 /* 
  * Wait for a page to be unlocked.
@@ -521,22 +525,28 @@ extern int wait_on_page_bit_killable(struct page *page, int bit_nr);
  * ie with increased "page->count" so that the page won't
  * go away during the wait..
  */
-static inline void wait_on_page_locked(struct page *page)
+static inline __sched void wait_on_page_locked(struct page *page)
 {
 	if (PageLocked(page))
 		wait_on_page_bit(compound_head(page), PG_locked);
 }
 
-static inline int wait_on_page_locked_killable(struct page *page)
+static inline __sched int wait_on_page_locked_killable(struct page *page)
 {
 	if (!PageLocked(page))
 		return 0;
 	return wait_on_page_bit_killable(compound_head(page), PG_locked);
 }
 
-extern void put_and_wait_on_page_locked(struct page *page);
+/* 
+ * Wait for a page to complete writeback
+ */
+static inline __sched void wait_on_page_writeback(struct page *page)
+{
+	if (PageWriteback(page))
+		wait_on_page_bit(page, PG_writeback);
+}
 
-void wait_on_page_writeback(struct page *page);
 extern void end_page_writeback(struct page *page);
 void wait_for_stable_page(struct page *page);
 
@@ -634,34 +644,6 @@ static inline unsigned long dir_pages(struct inode *inode)
 {
 	return (unsigned long)(inode->i_size + PAGE_SIZE - 1) >>
 			       PAGE_SHIFT;
-}
-
-/**
- * page_mkwrite_check_truncate - check if page was truncated
- * @page: the page to check
- * @inode: the inode to check the page against
- *
- * Returns the number of bytes in the page up to EOF,
- * or -EFAULT if the page was truncated.
- */
-static inline int page_mkwrite_check_truncate(struct page *page,
-					      struct inode *inode)
-{
-	loff_t size = i_size_read(inode);
-	pgoff_t index = size >> PAGE_SHIFT;
-	int offset = offset_in_page(size);
-
-	if (page->mapping != inode->i_mapping)
-		return -EFAULT;
-
-	/* page is wholly inside EOF */
-	if (page->index < index)
-		return PAGE_SIZE;
-	/* page is wholly past EOF */
-	if (page->index > index || !offset)
-		return -EFAULT;
-	/* page is partially inside EOF */
-	return offset;
 }
 
 #endif /* _LINUX_PAGEMAP_H */

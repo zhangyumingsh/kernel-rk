@@ -45,7 +45,6 @@ void specification_exception(struct pt_regs *regs);
 void transaction_exception(struct pt_regs *regs);
 void translation_exception(struct pt_regs *regs);
 void vector_exception(struct pt_regs *regs);
-void monitor_event_exception(struct pt_regs *regs);
 
 void do_per_trap(struct pt_regs *regs);
 void do_report_trap(struct pt_regs *regs, int si_signo, int si_code, char *str);
@@ -64,8 +63,9 @@ void __init startup_init(void);
 void die(struct pt_regs *regs, const char *str);
 int setup_profiling_timer(unsigned int multiplier);
 void __init time_init(void);
+int pfn_is_nosave(unsigned long);
 void s390_early_resume(void);
-unsigned long prepare_ftrace_return(unsigned long parent, unsigned long sp, unsigned long ip);
+unsigned long prepare_ftrace_return(unsigned long parent, unsigned long ip);
 
 struct s390_mmap_arg_struct;
 struct fadvise64_64_args;
@@ -85,8 +85,5 @@ DECLARE_PER_CPU(u64, mt_cycles[8]);
 
 void gs_load_bc_cb(struct pt_regs *regs);
 void set_fs_fixup(void);
-
-unsigned long stack_alloc(void);
-void stack_free(unsigned long stack);
 
 #endif /* _ENTRY_H */

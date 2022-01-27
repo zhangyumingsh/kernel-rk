@@ -119,7 +119,7 @@ static void dprintk(int level, const char *fmt, ...)
 }
 #endif
 
-static int s3c2410_udc_debugfs_show(struct seq_file *m, void *p)
+static int s3c2410_udc_debugfs_seq_show(struct seq_file *m, void *p)
 {
 	u32 addr_reg, pwr_reg, ep_int_reg, usb_int_reg;
 	u32 ep_int_en_reg, usb_int_en_reg, ep0_csr;
@@ -168,7 +168,20 @@ static int s3c2410_udc_debugfs_show(struct seq_file *m, void *p)
 
 	return 0;
 }
-DEFINE_SHOW_ATTRIBUTE(s3c2410_udc_debugfs);
+
+static int s3c2410_udc_debugfs_fops_open(struct inode *inode,
+					 struct file *file)
+{
+	return single_open(file, s3c2410_udc_debugfs_seq_show, NULL);
+}
+
+static const struct file_operations s3c2410_udc_debugfs_fops = {
+	.open		= s3c2410_udc_debugfs_fops_open,
+	.read		= seq_read,
+	.llseek		= seq_lseek,
+	.release	= single_release,
+	.owner		= THIS_MODULE,
+};
 
 /* io macros */
 
@@ -251,10 +264,6 @@ static void s3c2410_udc_done(struct s3c2410_ep *ep,
 static void s3c2410_udc_nuke(struct s3c2410_udc *udc,
 		struct s3c2410_ep *ep, int status)
 {
-	/* Sanity check */
-	if (&ep->queue == NULL)
-		return;
-
 	while (!list_empty(&ep->queue)) {
 		struct s3c2410_request *req;
 		req = list_entry(ep->queue.next, struct s3c2410_request,
@@ -312,7 +321,6 @@ static int s3c2410_udc_write_fifo(struct s3c2410_ep *ep,
 	switch (idx) {
 	default:
 		idx = 0;
-		/* fall through */
 	case 0:
 		fifo_reg = S3C2410_UDC_EP0_FIFO_REG;
 		break;
@@ -417,7 +425,6 @@ static int s3c2410_udc_read_fifo(struct s3c2410_ep *ep,
 	switch (idx) {
 	default:
 		idx = 0;
-		/* fall through */
 	case 0:
 		fifo_reg = S3C2410_UDC_EP0_FIFO_REG;
 		break;
@@ -1978,8 +1985,7 @@ static int __init udc_init(void)
 
 	dprintk(DEBUG_NORMAL, "%s\n", gadget_name);
 
-	s3c2410_udc_debugfs_root = debugfs_create_dir(gadget_name,
-						      usb_debug_root);
+	s3c2410_udc_debugfs_root = debugfs_create_dir(gadget_name, NULL);
 
 	retval = platform_driver_register(&udc_driver_24x0);
 	if (retval)

@@ -325,8 +325,8 @@ static int mtk_hsdma_alloc_pchan(struct mtk_hsdma_device *hsdma,
 	 * and [MTK_DMA_SIZE ... 2 * MTK_DMA_SIZE - 1] is for RX ring.
 	 */
 	pc->sz_ring = 2 * MTK_DMA_SIZE * sizeof(*ring->txd);
-	ring->txd = dma_alloc_coherent(hsdma2dev(hsdma), pc->sz_ring,
-				       &ring->tphys, GFP_NOWAIT);
+	ring->txd = dma_zalloc_coherent(hsdma2dev(hsdma), pc->sz_ring,
+					&ring->tphys, GFP_NOWAIT);
 	if (!ring->txd)
 		return -ENOMEM;
 
@@ -1007,6 +1007,7 @@ static int mtk_hsdma_probe(struct platform_device *pdev)
 	return 0;
 
 err_free:
+	mtk_hsdma_hw_deinit(hsdma);
 	of_dma_controller_free(pdev->dev.of_node);
 err_unregister:
 	dma_async_device_unregister(dd);

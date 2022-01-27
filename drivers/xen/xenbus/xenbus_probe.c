@@ -136,6 +136,7 @@ static int watch_otherend(struct xenbus_device *dev)
 		container_of(dev->dev.bus, struct xen_bus_type, bus);
 
 	return xenbus_watch_pathfmt(dev, &dev->otherend_watch,
+				    bus->otherend_will_handle,
 				    bus->otherend_changed,
 				    "%s/%s", dev->otherend, "state");
 }
@@ -232,18 +233,9 @@ int xenbus_dev_probe(struct device *_dev)
 		return err;
 	}
 
-	if (!try_module_get(drv->driver.owner)) {
-		dev_warn(&dev->dev, "failed to acquire module reference on '%s'\n",
-			 drv->driver.name);
-		err = -ESRCH;
-		goto fail;
-	}
-
-	down(&dev->reclaim_sem);
 	err = drv->probe(dev, id);
-	up(&dev->reclaim_sem);
 	if (err)
-		goto fail_put;
+		goto fail;
 
 	err = watch_otherend(dev);
 	if (err) {
@@ -253,10 +245,9 @@ int xenbus_dev_probe(struct device *_dev)
 	}
 
 	return 0;
-fail_put:
-	module_put(drv->driver.owner);
 fail:
 	xenbus_dev_error(dev, err, "xenbus_dev_probe on %s", dev->nodename);
+	xenbus_switch_state(dev, XenbusStateClosed);
 	return err;
 }
 EXPORT_SYMBOL_GPL(xenbus_dev_probe);
@@ -270,29 +261,38 @@ int xenbus_dev_remove(struct device *_dev)
 
 	free_otherend_watch(dev);
 
-	if (drv->remove) {
-		down(&dev->reclaim_sem);
+	if (drv->remove)
 		drv->remove(dev);
-		up(&dev->reclaim_sem);
-	}
-
-	module_put(drv->driver.owner);
 
 	free_otherend_details(dev);
 
-	/*
-	 * If the toolstack has forced the device state to closing then set
-	 * the state to closed now to allow it to be cleaned up.
-	 * Similarly, if the driver does not support re-bind, set the
-	 * closed.
-	 */
-	if (!drv->allow_rebind ||
-	    xenbus_read_driver_state(dev->nodename) == XenbusStateClosing)
-		xenbus_switch_state(dev, XenbusStateClosed);
-
+	xenbus_switch_state(dev, XenbusStateClosed);
 	return 0;
 }
 EXPORT_SYMBOL_GPL(xenbus_dev_remove);
+
+void xenbus_dev_shutdown(struct device *_dev)
+{
+	struct xenbus_device *dev = to_xenbus_device(_dev);
+	unsigned long timeout = 5*HZ;
+
+	DPRINTK("%s", dev->nodename);
+
+	get_device(&dev->dev);
+	if (dev->state != XenbusStateConnected) {
+		pr_info("%s: %s: %s != Connected, skipping\n",
+			__func__, dev->nodename, xenbus_strstate(dev->state));
+		goto out;
+	}
+	xenbus_switch_state(dev, XenbusStateClosing);
+	timeout = wait_for_completion_timeout(&dev->down, timeout);
+	if (!timeout)
+		pr_info("%s: %s timeout closing device\n",
+			__func__, dev->nodename);
+ out:
+	put_device(&dev->dev);
+}
+EXPORT_SYMBOL_GPL(xenbus_dev_shutdown);
 
 int xenbus_register_driver_common(struct xenbus_driver *drv,
 				  struct xen_bus_type *bus,
@@ -473,7 +473,6 @@ int xenbus_probe_node(struct xen_bus_type *bus,
 		goto fail;
 
 	dev_set_name(&xendev->dev, "%s", devname);
-	sema_init(&xendev->reclaim_sem, 1);
 
 	/* Register with generic device framework. */
 	err = device_register(&xendev->dev);
@@ -684,28 +683,106 @@ void unregister_xenstore_notifier(struct notifier_block *nb)
 }
 EXPORT_SYMBOL_GPL(unregister_xenstore_notifier);
 
-void xenbus_probe(struct work_struct *unused)
+static void xenbus_probe(void)
 {
 	xenstored_ready = 1;
+
+	/*
+	 * In the HVM case, xenbus_init() deferred its call to
+	 * xs_init() in case callbacks were not operational yet.
+	 * So do it now.
+	 */
+	if (xen_store_domain_type == XS_HVM)
+		xs_init();
 
 	/* Notify others that xenstore is up */
 	blocking_notifier_call_chain(&xenstore_chain, 0, NULL);
 }
-EXPORT_SYMBOL_GPL(xenbus_probe);
 
-static int __init xenbus_probe_initcall(void)
+/*
+ * Returns true when XenStore init must be deferred in order to
+ * allow the PCI platform device to be initialised, before we
+ * can actually have event channel interrupts working.
+ */
+static bool xs_hvm_defer_init_for_callback(void)
 {
-	if (!xen_domain())
-		return -ENODEV;
+#ifdef CONFIG_XEN_PVHVM
+	return xen_store_domain_type == XS_HVM &&
+		!xen_have_vector_callback;
+#else
+	return false;
+#endif
+}
 
-	if (xen_initial_domain() || xen_hvm_domain())
-		return 0;
+static int xenbus_probe_thread(void *unused)
+{
+	DEFINE_WAIT(w);
 
-	xenbus_probe(NULL);
+	/*
+	 * We actually just want to wait for *any* trigger of xb_waitq,
+	 * and run xenbus_probe() the moment it occurs.
+	 */
+	prepare_to_wait(&xb_waitq, &w, TASK_INTERRUPTIBLE);
+	schedule();
+	finish_wait(&xb_waitq, &w);
+
+	DPRINTK("probing");
+	xenbus_probe();
 	return 0;
 }
 
+static int __init xenbus_probe_initcall(void)
+{
+	/*
+	 * Probe XenBus here in the XS_PV case, and also XS_HVM unless we
+	 * need to wait for the platform PCI device to come up.
+	 */
+	if (xen_store_domain_type == XS_PV ||
+	    (xen_store_domain_type == XS_HVM &&
+	     !xs_hvm_defer_init_for_callback()))
+		xenbus_probe();
+
+	/*
+	 * For XS_LOCAL, spawn a thread which will wait for xenstored
+	 * or a xenstore-stubdom to be started, then probe. It will be
+	 * triggered when communication starts happening, by waiting
+	 * on xb_waitq.
+	 */
+	if (xen_store_domain_type == XS_LOCAL) {
+		struct task_struct *probe_task;
+
+		probe_task = kthread_run(xenbus_probe_thread, NULL,
+					 "xenbus_probe");
+		if (IS_ERR(probe_task))
+			return PTR_ERR(probe_task);
+	}
+	return 0;
+}
 device_initcall(xenbus_probe_initcall);
+
+int xen_set_callback_via(uint64_t via)
+{
+	struct xen_hvm_param a;
+	int ret;
+
+	a.domid = DOMID_SELF;
+	a.index = HVM_PARAM_CALLBACK_IRQ;
+	a.value = via;
+
+	ret = HYPERVISOR_hvm_op(HVMOP_set_param, &a);
+	if (ret)
+		return ret;
+
+	/*
+	 * If xenbus_probe_initcall() deferred the xenbus_probe()
+	 * due to the callback not functioning yet, we can do it now.
+	 */
+	if (!xenstored_ready && xs_hvm_defer_init_for_callback())
+		xenbus_probe();
+
+	return ret;
+}
+EXPORT_SYMBOL_GPL(xen_set_callback_via);
 
 /* Set up event channel for xenstored which is run as a local process
  * (this is normally used only in dom0)
@@ -819,11 +896,17 @@ static int __init xenbus_init(void)
 		break;
 	}
 
-	/* Initialize the interface to xenstore. */
-	err = xs_init();
-	if (err) {
-		pr_warn("Error initializing xenstore comms: %i\n", err);
-		goto out_error;
+	/*
+	 * HVM domains may not have a functional callback yet. In that
+	 * case let xs_init() be called from xenbus_probe(), which will
+	 * get invoked at an appropriate time.
+	 */
+	if (xen_store_domain_type != XS_HVM) {
+		err = xs_init();
+		if (err) {
+			pr_warn("Error initializing xenstore comms: %i\n", err);
+			goto out_error;
+		}
 	}
 
 	if ((xen_store_domain_type != XS_LOCAL) &&

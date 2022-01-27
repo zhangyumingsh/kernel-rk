@@ -1,6 +1,10 @@
-/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Copyright (C) 2016 Noralf Trønnes
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  */
 
 #ifndef __LINUX_DRM_SIMPLE_KMS_HELPER_H
@@ -49,7 +53,7 @@ struct drm_simple_display_pipe_funcs {
 	 *
 	 * drm_mode_status Enum
 	 */
-	enum drm_mode_status (*mode_valid)(struct drm_simple_display_pipe *pipe,
+	enum drm_mode_status (*mode_valid)(struct drm_crtc *crtc,
 					   const struct drm_display_mode *mode);
 
 	/**

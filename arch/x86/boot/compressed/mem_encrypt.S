@@ -1,10 +1,13 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * AMD Memory Encryption Support
  *
  * Copyright (C) 2017 Advanced Micro Devices, Inc.
  *
  * Author: Tom Lendacky <thomas.lendacky@amd.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  */
 
 #include <linux/linkage.h>
@@ -15,7 +18,7 @@
 
 	.text
 	.code32
-SYM_FUNC_START(get_sev_encryption_bit)
+ENTRY(get_sev_encryption_bit)
 	xor	%eax, %eax
 
 #ifdef CONFIG_AMD_MEM_ENCRYPT
@@ -65,10 +68,10 @@ SYM_FUNC_START(get_sev_encryption_bit)
 #endif	/* CONFIG_AMD_MEM_ENCRYPT */
 
 	ret
-SYM_FUNC_END(get_sev_encryption_bit)
+ENDPROC(get_sev_encryption_bit)
 
 	.code64
-SYM_FUNC_START(set_sev_encryption_mask)
+ENTRY(set_sev_encryption_mask)
 #ifdef CONFIG_AMD_MEM_ENCRYPT
 	push	%rbp
 	push	%rdx
@@ -90,11 +93,12 @@ SYM_FUNC_START(set_sev_encryption_mask)
 
 	xor	%rax, %rax
 	ret
-SYM_FUNC_END(set_sev_encryption_mask)
+ENDPROC(set_sev_encryption_mask)
 
 	.data
 
 #ifdef CONFIG_AMD_MEM_ENCRYPT
 	.balign	8
-SYM_DATA(sme_me_mask, .quad 0)
+GLOBAL(sme_me_mask)
+	.quad	0
 #endif

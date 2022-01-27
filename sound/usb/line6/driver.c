@@ -1,8 +1,12 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Line 6 Linux USB driver
  *
  * Copyright (C) 2004-2010 Markus Grabner (grabner@icg.tugraz.at)
+ *
+ *	This program is free software; you can redistribute it and/or
+ *	modify it under the terms of the GNU General Public License as
+ *	published by the Free Software Foundation, version 2.
+ *
  */
 
 #include <linux/kernel.h>
@@ -192,6 +196,17 @@ static int line6_send_raw_message_async_part(struct message *msg,
 }
 
 /*
+	Setup and start timer.
+*/
+void line6_start_timer(struct timer_list *timer, unsigned long msecs,
+		       void (*function)(struct timer_list *t))
+{
+	timer->function = function;
+	mod_timer(timer, jiffies + msecs_to_jiffies(msecs));
+}
+EXPORT_SYMBOL_GPL(line6_start_timer);
+
+/*
 	Asynchronously send raw message.
 */
 int line6_send_raw_message_async(struct usb_line6 *line6, const char *buffer,
@@ -342,7 +357,7 @@ int line6_read_data(struct usb_line6 *line6, unsigned address, void *data,
 	if (address > 0xffff || datalen > 0xff)
 		return -EINVAL;
 
-	len = kmalloc(1, GFP_KERNEL);
+	len = kmalloc(sizeof(*len), GFP_KERNEL);
 	if (!len)
 		return -ENOMEM;
 
@@ -418,7 +433,7 @@ int line6_write_data(struct usb_line6 *line6, unsigned address, void *data,
 	if (address > 0xffff || datalen > 0xffff)
 		return -EINVAL;
 
-	status = kmalloc(1, GFP_KERNEL);
+	status = kmalloc(sizeof(*status), GFP_KERNEL);
 	if (!status)
 		return -ENOMEM;
 
@@ -690,6 +705,10 @@ static int line6_init_cap_control(struct usb_line6 *line6)
 		line6->buffer_message = kmalloc(LINE6_MIDI_MESSAGE_MAXLEN, GFP_KERNEL);
 		if (!line6->buffer_message)
 			return -ENOMEM;
+
+		ret = line6_init_midi(line6);
+		if (ret < 0)
+			return ret;
 	} else {
 		ret = line6_hwdep_init(line6);
 		if (ret < 0)
@@ -820,7 +839,7 @@ void line6_disconnect(struct usb_interface *interface)
 	if (WARN_ON(usbdev != line6->usbdev))
 		return;
 
-	cancel_delayed_work(&line6->startup_work);
+	cancel_delayed_work_sync(&line6->startup_work);
 
 	if (line6->urb_listen != NULL)
 		line6_stop_listen(line6);
@@ -856,8 +875,10 @@ int line6_suspend(struct usb_interface *interface, pm_message_t message)
 	if (line6->properties->capabilities & LINE6_CAP_CONTROL)
 		line6_stop_listen(line6);
 
-	if (line6pcm != NULL)
+	if (line6pcm != NULL) {
+		snd_pcm_suspend_all(line6pcm->pcm);
 		line6pcm->flags = 0;
+	}
 
 	return 0;
 }

@@ -799,6 +799,7 @@ static int at91_wakeup(struct usb_gadget *gadget)
 {
 	struct at91_udc	*udc = to_udc(gadget);
 	u32		glbstate;
+	int		status = -EINVAL;
 	unsigned long	flags;
 
 	DBG("%s\n", __func__ );
@@ -817,7 +818,7 @@ static int at91_wakeup(struct usb_gadget *gadget)
 
 done:
 	spin_unlock_irqrestore(&udc->lock, flags);
-	return 0;
+	return status;
 }
 
 /* reinit == restore initial software state */
@@ -1808,6 +1809,7 @@ static int at91udc_probe(struct platform_device *pdev)
 	struct device	*dev = &pdev->dev;
 	struct at91_udc	*udc;
 	int		retval;
+	struct resource	*res;
 	struct at91_ep	*ep;
 	int		i;
 
@@ -1838,7 +1840,8 @@ static int at91udc_probe(struct platform_device *pdev)
 			ep->is_pingpong = 1;
 	}
 
-	udc->udp_baseaddr = devm_platform_ioremap_resource(pdev, 0);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	udc->udp_baseaddr = devm_ioremap_resource(dev, res);
 	if (IS_ERR(udc->udp_baseaddr))
 		return PTR_ERR(udc->udp_baseaddr);
 

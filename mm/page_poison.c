@@ -27,7 +27,7 @@ bool page_poisoning_enabled(void)
 {
 	/*
 	 * Assumes that debug_pagealloc_enabled is set before
-	 * memblock_free_all.
+	 * free_all_bootmem.
 	 * Page poisoning is debug page alloc for some arches. If
 	 * either of those options are enabled, enable poisoning.
 	 */
@@ -101,7 +101,7 @@ static void unpoison_page(struct page *page)
 	/*
 	 * Page poisoning when enabled poisons each and every page
 	 * that is freed to buddy. Thus no extra check is done to
-	 * see if a page was poisoned.
+	 * see if a page was posioned.
 	 */
 	check_poison_mem(addr, PAGE_SIZE);
 	kunmap_atomic(addr);

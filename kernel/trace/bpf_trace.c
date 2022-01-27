@@ -14,50 +14,8 @@
 #include <linux/syscalls.h>
 #include <linux/error-injection.h>
 
-#include <asm/tlb.h>
-
 #include "trace_probe.h"
 #include "trace.h"
-
-#define bpf_event_rcu_dereference(p)					\
-	rcu_dereference_protected(p, lockdep_is_held(&bpf_event_mutex))
-
-#ifdef CONFIG_MODULES
-struct bpf_trace_module {
-	struct module *module;
-	struct list_head list;
-};
-
-static LIST_HEAD(bpf_trace_modules);
-static DEFINE_MUTEX(bpf_module_mutex);
-
-static struct bpf_raw_event_map *bpf_get_raw_tracepoint_module(const char *name)
-{
-	struct bpf_raw_event_map *btp, *ret = NULL;
-	struct bpf_trace_module *btm;
-	unsigned int i;
-
-	mutex_lock(&bpf_module_mutex);
-	list_for_each_entry(btm, &bpf_trace_modules, list) {
-		for (i = 0; i < btm->module->num_bpf_raw_events; ++i) {
-			btp = &btm->module->bpf_raw_events[i];
-			if (!strcmp(btp->tp->name, name)) {
-				if (try_module_get(btm->module))
-					ret = btp;
-				goto out;
-			}
-		}
-	}
-out:
-	mutex_unlock(&bpf_module_mutex);
-	return ret;
-}
-#else
-static struct bpf_raw_event_map *bpf_get_raw_tracepoint_module(const char *name)
-{
-	return NULL;
-}
-#endif /* CONFIG_MODULES */
 
 u64 bpf_get_stackid(u64 r1, u64 r2, u64 r3, u64 r4, u64 r5);
 u64 bpf_get_stack(u64 r1, u64 r2, u64 r3, u64 r4, u64 r5);
@@ -138,19 +96,19 @@ static const struct bpf_func_proto bpf_override_return_proto = {
 };
 #endif
 
-BPF_CALL_3(bpf_probe_read_user, void *, dst, u32, size,
-	   const void __user *, unsafe_ptr)
+BPF_CALL_3(bpf_probe_read, void *, dst, u32, size, const void *, unsafe_ptr)
 {
-	int ret = probe_user_read(dst, unsafe_ptr, size);
+	int ret;
 
+	ret = probe_kernel_read(dst, unsafe_ptr, size);
 	if (unlikely(ret < 0))
 		memset(dst, 0, size);
 
 	return ret;
 }
 
-static const struct bpf_func_proto bpf_probe_read_user_proto = {
-	.func		= bpf_probe_read_user,
+static const struct bpf_func_proto bpf_probe_read_proto = {
+	.func		= bpf_probe_read,
 	.gpl_only	= true,
 	.ret_type	= RET_INTEGER,
 	.arg1_type	= ARG_PTR_TO_UNINIT_MEM,
@@ -158,128 +116,7 @@ static const struct bpf_func_proto bpf_probe_read_user_proto = {
 	.arg3_type	= ARG_ANYTHING,
 };
 
-BPF_CALL_3(bpf_probe_read_user_str, void *, dst, u32, size,
-	   const void __user *, unsafe_ptr)
-{
-	int ret = strncpy_from_unsafe_user(dst, unsafe_ptr, size);
-
-	if (unlikely(ret < 0))
-		memset(dst, 0, size);
-
-	return ret;
-}
-
-static const struct bpf_func_proto bpf_probe_read_user_str_proto = {
-	.func		= bpf_probe_read_user_str,
-	.gpl_only	= true,
-	.ret_type	= RET_INTEGER,
-	.arg1_type	= ARG_PTR_TO_UNINIT_MEM,
-	.arg2_type	= ARG_CONST_SIZE_OR_ZERO,
-	.arg3_type	= ARG_ANYTHING,
-};
-
-static __always_inline int
-bpf_probe_read_kernel_common(void *dst, u32 size, const void *unsafe_ptr,
-			     const bool compat)
-{
-	int ret = security_locked_down(LOCKDOWN_BPF_READ);
-
-	if (unlikely(ret < 0))
-		goto out;
-	ret = compat ? probe_kernel_read(dst, unsafe_ptr, size) :
-	      probe_kernel_read_strict(dst, unsafe_ptr, size);
-	if (unlikely(ret < 0))
-out:
-		memset(dst, 0, size);
-	return ret;
-}
-
-BPF_CALL_3(bpf_probe_read_kernel, void *, dst, u32, size,
-	   const void *, unsafe_ptr)
-{
-	return bpf_probe_read_kernel_common(dst, size, unsafe_ptr, false);
-}
-
-static const struct bpf_func_proto bpf_probe_read_kernel_proto = {
-	.func		= bpf_probe_read_kernel,
-	.gpl_only	= true,
-	.ret_type	= RET_INTEGER,
-	.arg1_type	= ARG_PTR_TO_UNINIT_MEM,
-	.arg2_type	= ARG_CONST_SIZE_OR_ZERO,
-	.arg3_type	= ARG_ANYTHING,
-};
-
-BPF_CALL_3(bpf_probe_read_compat, void *, dst, u32, size,
-	   const void *, unsafe_ptr)
-{
-	return bpf_probe_read_kernel_common(dst, size, unsafe_ptr, true);
-}
-
-static const struct bpf_func_proto bpf_probe_read_compat_proto = {
-	.func		= bpf_probe_read_compat,
-	.gpl_only	= true,
-	.ret_type	= RET_INTEGER,
-	.arg1_type	= ARG_PTR_TO_UNINIT_MEM,
-	.arg2_type	= ARG_CONST_SIZE_OR_ZERO,
-	.arg3_type	= ARG_ANYTHING,
-};
-
-static __always_inline int
-bpf_probe_read_kernel_str_common(void *dst, u32 size, const void *unsafe_ptr,
-				 const bool compat)
-{
-	int ret = security_locked_down(LOCKDOWN_BPF_READ);
-
-	if (unlikely(ret < 0))
-		goto out;
-	/*
-	 * The strncpy_from_unsafe_*() call will likely not fill the entire
-	 * buffer, but that's okay in this circumstance as we're probing
-	 * arbitrary memory anyway similar to bpf_probe_read_*() and might
-	 * as well probe the stack. Thus, memory is explicitly cleared
-	 * only in error case, so that improper users ignoring return
-	 * code altogether don't copy garbage; otherwise length of string
-	 * is returned that can be used for bpf_perf_event_output() et al.
-	 */
-	ret = compat ? strncpy_from_unsafe(dst, unsafe_ptr, size) :
-	      strncpy_from_unsafe_strict(dst, unsafe_ptr, size);
-	if (unlikely(ret < 0))
-out:
-		memset(dst, 0, size);
-	return ret;
-}
-
-BPF_CALL_3(bpf_probe_read_kernel_str, void *, dst, u32, size,
-	   const void *, unsafe_ptr)
-{
-	return bpf_probe_read_kernel_str_common(dst, size, unsafe_ptr, false);
-}
-
-static const struct bpf_func_proto bpf_probe_read_kernel_str_proto = {
-	.func		= bpf_probe_read_kernel_str,
-	.gpl_only	= true,
-	.ret_type	= RET_INTEGER,
-	.arg1_type	= ARG_PTR_TO_UNINIT_MEM,
-	.arg2_type	= ARG_CONST_SIZE_OR_ZERO,
-	.arg3_type	= ARG_ANYTHING,
-};
-
-BPF_CALL_3(bpf_probe_read_compat_str, void *, dst, u32, size,
-	   const void *, unsafe_ptr)
-{
-	return bpf_probe_read_kernel_str_common(dst, size, unsafe_ptr, true);
-}
-
-static const struct bpf_func_proto bpf_probe_read_compat_str_proto = {
-	.func		= bpf_probe_read_compat_str,
-	.gpl_only	= true,
-	.ret_type	= RET_INTEGER,
-	.arg1_type	= ARG_PTR_TO_UNINIT_MEM,
-	.arg2_type	= ARG_CONST_SIZE_OR_ZERO,
-	.arg3_type	= ARG_ANYTHING,
-};
-
-BPF_CALL_3(bpf_probe_write_user, void __user *, unsafe_ptr, const void *, src,
+BPF_CALL_3(bpf_probe_write_user, void *, unsafe_ptr, const void *, src,
 	   u32, size)
 {
 	/*
@@ -289,10 +126,6 @@ BPF_CALL_3(bpf_probe_write_user, void __user *, unsafe_ptr, const void *, src,
 	 * access_ok() should prevent writing to non-user memory, but in
 	 * some situations (nommu, temporary switch, etc) access_ok() does
 	 * not provide enough validation, hence the check on KERNEL_DS.
-	 *
-	 * nmi_uaccess_okay() ensures the probe is not run in an interim
-	 * state, when the task or mm are switched. This is specifically
-	 * required to prevent the use of temporary mm.
 	 */
 
 	if (unlikely(in_interrupt() ||
@@ -300,10 +133,10 @@ BPF_CALL_3(bpf_probe_write_user, void __user *, unsafe_ptr, const void *, src,
 		return -EPERM;
 	if (unlikely(uaccess_kernel()))
 		return -EPERM;
-	if (unlikely(!nmi_uaccess_okay()))
+	if (!access_ok(VERIFY_WRITE, unsafe_ptr, size))
 		return -EPERM;
 
-	return probe_user_write(unsafe_ptr, src, size);
+	return probe_kernel_write(unsafe_ptr, src, size);
 }
 
 static const struct bpf_func_proto bpf_probe_write_user_proto = {
@@ -559,7 +392,8 @@ __bpf_perf_event_output(struct pt_regs *regs, struct bpf_map *map,
 	if (unlikely(event->oncpu != cpu))
 		return -EOPNOTSUPP;
 
-	return perf_event_output(event, sd, regs);
+	perf_event_output(event, sd, regs);
+	return 0;
 }
 
 /*
@@ -619,17 +453,14 @@ static const struct bpf_func_proto bpf_perf_event_output_proto = {
 	.arg5_type	= ARG_CONST_SIZE_OR_ZERO,
 };
 
-static DEFINE_PER_CPU(int, bpf_event_output_nest_level);
-struct bpf_nested_pt_regs {
-	struct pt_regs regs[3];
-};
-static DEFINE_PER_CPU(struct bpf_nested_pt_regs, bpf_pt_regs);
-static DEFINE_PER_CPU(struct bpf_trace_sample_data, bpf_misc_sds);
+static DEFINE_PER_CPU(struct pt_regs, bpf_pt_regs);
+static DEFINE_PER_CPU(struct perf_sample_data, bpf_misc_sd);
 
 u64 bpf_event_output(struct bpf_map *map, u64 flags, void *meta, u64 meta_size,
 		     void *ctx, u64 ctx_size, bpf_ctx_copy_t ctx_copy)
 {
-	int nest_level = this_cpu_inc_return(bpf_event_output_nest_level);
+	struct perf_sample_data *sd = this_cpu_ptr(&bpf_misc_sd);
+	struct pt_regs *regs = this_cpu_ptr(&bpf_pt_regs);
 	struct perf_raw_frag frag = {
 		.copy		= ctx_copy,
 		.size		= ctx_size,
@@ -644,25 +475,12 @@ u64 bpf_event_output(struct bpf_map *map, u64 flags, void *meta, u64 meta_size,
 			.data	= meta,
 		},
 	};
-	struct perf_sample_data *sd;
-	struct pt_regs *regs;
-	u64 ret;
-
-	if (WARN_ON_ONCE(nest_level > ARRAY_SIZE(bpf_misc_sds.sds))) {
-		ret = -EBUSY;
-		goto out;
-	}
-	sd = this_cpu_ptr(&bpf_misc_sds.sds[nest_level - 1]);
-	regs = this_cpu_ptr(&bpf_pt_regs.regs[nest_level - 1]);
 
 	perf_fetch_caller_regs(regs);
 	perf_sample_data_init(sd, 0, 0);
 	sd->raw = &raw;
 
-	ret = __bpf_perf_event_output(regs, map, flags, sd);
-out:
-	this_cpu_dec(bpf_event_output_nest_level);
-	return ret;
+	return __bpf_perf_event_output(regs, map, flags, sd);
 }
 
 BPF_CALL_0(bpf_get_current_task)
@@ -699,86 +517,34 @@ static const struct bpf_func_proto bpf_current_task_under_cgroup_proto = {
 	.arg2_type      = ARG_ANYTHING,
 };
 
-struct send_signal_irq_work {
-	struct irq_work irq_work;
-	struct task_struct *task;
-	u32 sig;
-	enum pid_type type;
-};
-
-static DEFINE_PER_CPU(struct send_signal_irq_work, send_signal_work);
-
-static void do_bpf_send_signal(struct irq_work *entry)
+BPF_CALL_3(bpf_probe_read_str, void *, dst, u32, size,
+	   const void *, unsafe_ptr)
 {
-	struct send_signal_irq_work *work;
+	int ret;
 
-	work = container_of(entry, struct send_signal_irq_work, irq_work);
-	group_send_sig_info(work->sig, SEND_SIG_PRIV, work->task, work->type);
-}
-
-static int bpf_send_signal_common(u32 sig, enum pid_type type)
-{
-	struct send_signal_irq_work *work = NULL;
-
-	/* Similar to bpf_probe_write_user, task needs to be
-	 * in a sound condition and kernel memory access be
-	 * permitted in order to send signal to the current
-	 * task.
+	/*
+	 * The strncpy_from_unsafe() call will likely not fill the entire
+	 * buffer, but that's okay in this circumstance as we're probing
+	 * arbitrary memory anyway similar to bpf_probe_read() and might
+	 * as well probe the stack. Thus, memory is explicitly cleared
+	 * only in error case, so that improper users ignoring return
+	 * code altogether don't copy garbage; otherwise length of string
+	 * is returned that can be used for bpf_perf_event_output() et al.
 	 */
-	if (unlikely(current->flags & (PF_KTHREAD | PF_EXITING)))
-		return -EPERM;
-	if (unlikely(uaccess_kernel()))
-		return -EPERM;
-	if (unlikely(!nmi_uaccess_okay()))
-		return -EPERM;
+	ret = strncpy_from_unsafe(dst, unsafe_ptr, size);
+	if (unlikely(ret < 0))
+		memset(dst, 0, size);
 
-	if (irqs_disabled()) {
-		/* Do an early check on signal validity. Otherwise,
-		 * the error is lost in deferred irq_work.
-		 */
-		if (unlikely(!valid_signal(sig)))
-			return -EINVAL;
-
-		work = this_cpu_ptr(&send_signal_work);
-		if (atomic_read(&work->irq_work.flags) & IRQ_WORK_BUSY)
-			return -EBUSY;
-
-		/* Add the current task, which is the target of sending signal,
-		 * to the irq_work. The current task may change when queued
-		 * irq works get executed.
-		 */
-		work->task = current;
-		work->sig = sig;
-		work->type = type;
-		irq_work_queue(&work->irq_work);
-		return 0;
-	}
-
-	return group_send_sig_info(sig, SEND_SIG_PRIV, current, type);
+	return ret;
 }
 
-BPF_CALL_1(bpf_send_signal, u32, sig)
-{
-	return bpf_send_signal_common(sig, PIDTYPE_TGID);
-}
-
-static const struct bpf_func_proto bpf_send_signal_proto = {
-	.func		= bpf_send_signal,
-	.gpl_only	= false,
+static const struct bpf_func_proto bpf_probe_read_str_proto = {
+	.func		= bpf_probe_read_str,
+	.gpl_only	= true,
 	.ret_type	= RET_INTEGER,
-	.arg1_type	= ARG_ANYTHING,
-};
-
-BPF_CALL_1(bpf_send_signal_thread, u32, sig)
-{
-	return bpf_send_signal_common(sig, PIDTYPE_PID);
-}
-
-static const struct bpf_func_proto bpf_send_signal_thread_proto = {
-	.func		= bpf_send_signal_thread,
-	.gpl_only	= false,
-	.ret_type	= RET_INTEGER,
-	.arg1_type	= ARG_ANYTHING,
+	.arg1_type	= ARG_PTR_TO_UNINIT_MEM,
+	.arg2_type	= ARG_CONST_SIZE_OR_ZERO,
+	.arg3_type	= ARG_ANYTHING,
 };
 
 static const struct bpf_func_proto *
@@ -791,14 +557,12 @@ tracing_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_map_update_elem_proto;
 	case BPF_FUNC_map_delete_elem:
 		return &bpf_map_delete_elem_proto;
-	case BPF_FUNC_map_push_elem:
-		return &bpf_map_push_elem_proto;
-	case BPF_FUNC_map_pop_elem:
-		return &bpf_map_pop_elem_proto;
-	case BPF_FUNC_map_peek_elem:
-		return &bpf_map_peek_elem_proto;
+	case BPF_FUNC_probe_read:
+		return &bpf_probe_read_proto;
 	case BPF_FUNC_ktime_get_ns:
 		return &bpf_ktime_get_ns_proto;
+	case BPF_FUNC_ktime_get_boot_ns:
+		return &bpf_ktime_get_boot_ns_proto;
 	case BPF_FUNC_tail_call:
 		return &bpf_tail_call_proto;
 	case BPF_FUNC_get_current_pid_tgid:
@@ -823,26 +587,12 @@ tracing_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 		return &bpf_current_task_under_cgroup_proto;
 	case BPF_FUNC_get_prandom_u32:
 		return &bpf_get_prandom_u32_proto;
-	case BPF_FUNC_probe_read_user:
-		return &bpf_probe_read_user_proto;
-	case BPF_FUNC_probe_read_kernel:
-		return &bpf_probe_read_kernel_proto;
-	case BPF_FUNC_probe_read:
-		return &bpf_probe_read_compat_proto;
-	case BPF_FUNC_probe_read_user_str:
-		return &bpf_probe_read_user_str_proto;
-	case BPF_FUNC_probe_read_kernel_str:
-		return &bpf_probe_read_kernel_str_proto;
 	case BPF_FUNC_probe_read_str:
-		return &bpf_probe_read_compat_str_proto;
+		return &bpf_probe_read_str_proto;
 #ifdef CONFIG_CGROUPS
 	case BPF_FUNC_get_current_cgroup_id:
 		return &bpf_get_current_cgroup_id_proto;
 #endif
-	case BPF_FUNC_send_signal:
-		return &bpf_send_signal_proto;
-	case BPF_FUNC_send_signal_thread:
-		return &bpf_send_signal_thread_proto;
 	default:
 		return NULL;
 	}
@@ -1103,8 +853,6 @@ static const struct bpf_func_proto bpf_perf_event_output_proto_raw_tp = {
 	.arg5_type	= ARG_CONST_SIZE_OR_ZERO,
 };
 
-extern const struct bpf_func_proto bpf_skb_output_proto;
-
 BPF_CALL_3(bpf_get_stackid_raw_tp, struct bpf_raw_tracepoint_args *, args,
 	   struct bpf_map *, map, u64, flags)
 {
@@ -1172,25 +920,13 @@ raw_tp_prog_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
 	}
 }
 
-static const struct bpf_func_proto *
-tracing_prog_func_proto(enum bpf_func_id func_id, const struct bpf_prog *prog)
-{
-	switch (func_id) {
-#ifdef CONFIG_NET
-	case BPF_FUNC_skb_output:
-		return &bpf_skb_output_proto;
-#endif
-	default:
-		return raw_tp_prog_func_proto(func_id, prog);
-	}
-}
-
 static bool raw_tp_prog_is_valid_access(int off, int size,
 					enum bpf_access_type type,
 					const struct bpf_prog *prog,
 					struct bpf_insn_access_aux *info)
 {
-	if (off < 0 || off >= sizeof(__u64) * MAX_BPF_FUNC_ARGS)
+	/* largest tracepoint in the kernel has 12 args */
+	if (off < 0 || off >= sizeof(__u64) * 12)
 		return false;
 	if (type != BPF_READ)
 		return false;
@@ -1199,55 +935,12 @@ static bool raw_tp_prog_is_valid_access(int off, int size,
 	return true;
 }
 
-static bool tracing_prog_is_valid_access(int off, int size,
-					 enum bpf_access_type type,
-					 const struct bpf_prog *prog,
-					 struct bpf_insn_access_aux *info)
-{
-	if (off < 0 || off >= sizeof(__u64) * MAX_BPF_FUNC_ARGS)
-		return false;
-	if (type != BPF_READ)
-		return false;
-	if (off % size != 0)
-		return false;
-	return btf_ctx_access(off, size, type, prog, info);
-}
-
 const struct bpf_verifier_ops raw_tracepoint_verifier_ops = {
 	.get_func_proto  = raw_tp_prog_func_proto,
 	.is_valid_access = raw_tp_prog_is_valid_access,
 };
 
 const struct bpf_prog_ops raw_tracepoint_prog_ops = {
-};
-
-const struct bpf_verifier_ops tracing_verifier_ops = {
-	.get_func_proto  = tracing_prog_func_proto,
-	.is_valid_access = tracing_prog_is_valid_access,
-};
-
-const struct bpf_prog_ops tracing_prog_ops = {
-};
-
-static bool raw_tp_writable_prog_is_valid_access(int off, int size,
-						 enum bpf_access_type type,
-						 const struct bpf_prog *prog,
-						 struct bpf_insn_access_aux *info)
-{
-	if (off == 0) {
-		if (size != sizeof(u64) || type != BPF_READ)
-			return false;
-		info->reg_type = PTR_TO_TP_BUFFER;
-	}
-	return raw_tp_prog_is_valid_access(off, size, type, prog, info);
-}
-
-const struct bpf_verifier_ops raw_tracepoint_writable_verifier_ops = {
-	.get_func_proto  = raw_tp_prog_func_proto,
-	.is_valid_access = raw_tp_writable_prog_is_valid_access,
-};
-
-const struct bpf_prog_ops raw_tracepoint_writable_prog_ops = {
 };
 
 static bool pe_prog_is_valid_access(int off, int size, enum bpf_access_type type,
@@ -1340,7 +1033,7 @@ static DEFINE_MUTEX(bpf_event_mutex);
 int perf_event_attach_bpf_prog(struct perf_event *event,
 			       struct bpf_prog *prog)
 {
-	struct bpf_prog_array *old_array;
+	struct bpf_prog_array __rcu *old_array;
 	struct bpf_prog_array *new_array;
 	int ret = -EEXIST;
 
@@ -1358,7 +1051,7 @@ int perf_event_attach_bpf_prog(struct perf_event *event,
 	if (event->prog)
 		goto unlock;
 
-	old_array = bpf_event_rcu_dereference(event->tp_event->prog_array);
+	old_array = event->tp_event->prog_array;
 	if (old_array &&
 	    bpf_prog_array_length(old_array) >= BPF_TRACE_MAX_PROGS) {
 		ret = -E2BIG;
@@ -1381,7 +1074,7 @@ unlock:
 
 void perf_event_detach_bpf_prog(struct perf_event *event)
 {
-	struct bpf_prog_array *old_array;
+	struct bpf_prog_array __rcu *old_array;
 	struct bpf_prog_array *new_array;
 	int ret;
 
@@ -1390,7 +1083,7 @@ void perf_event_detach_bpf_prog(struct perf_event *event)
 	if (!event->prog)
 		goto unlock;
 
-	old_array = bpf_event_rcu_dereference(event->tp_event->prog_array);
+	old_array = event->tp_event->prog_array;
 	ret = bpf_prog_array_copy(old_array, event->prog, NULL, &new_array);
 	if (ret == -ENOENT)
 		goto unlock;
@@ -1412,7 +1105,6 @@ int perf_event_query_prog_array(struct perf_event *event, void __user *info)
 {
 	struct perf_event_query_bpf __user *uquery = info;
 	struct perf_event_query_bpf query = {};
-	struct bpf_prog_array *progs;
 	u32 *ids, prog_cnt, ids_len;
 	int ret;
 
@@ -1437,8 +1129,10 @@ int perf_event_query_prog_array(struct perf_event *event, void __user *info)
 	 */
 
 	mutex_lock(&bpf_event_mutex);
-	progs = bpf_event_rcu_dereference(event->tp_event->prog_array);
-	ret = bpf_prog_array_copy_info(progs, ids, ids_len, &prog_cnt);
+	ret = bpf_prog_array_copy_info(event->tp_event->prog_array,
+				       ids,
+				       ids_len,
+				       &prog_cnt);
 	mutex_unlock(&bpf_event_mutex);
 
 	if (copy_to_user(&uquery->prog_cnt, &prog_cnt, sizeof(prog_cnt)) ||
@@ -1452,7 +1146,7 @@ int perf_event_query_prog_array(struct perf_event *event, void __user *info)
 extern struct bpf_raw_event_map __start__bpf_raw_tp[];
 extern struct bpf_raw_event_map __stop__bpf_raw_tp[];
 
-struct bpf_raw_event_map *bpf_get_raw_tracepoint(const char *name)
+struct bpf_raw_event_map *bpf_find_raw_tracepoint(const char *name)
 {
 	struct bpf_raw_event_map *btp = __start__bpf_raw_tp;
 
@@ -1460,16 +1154,7 @@ struct bpf_raw_event_map *bpf_get_raw_tracepoint(const char *name)
 		if (!strcmp(btp->tp->name, name))
 			return btp;
 	}
-
-	return bpf_get_raw_tracepoint_module(name);
-}
-
-void bpf_put_raw_tracepoint(struct bpf_raw_event_map *btp)
-{
-	struct module *mod = __module_address((unsigned long)btp);
-
-	if (mod)
-		module_put(mod);
+	return NULL;
 }
 
 static __always_inline
@@ -1538,9 +1223,6 @@ static int __bpf_probe_register(struct bpf_raw_event_map *btp, struct bpf_prog *
 	if (prog->aux->max_ctx_offset > btp->num_args * sizeof(u64))
 		return -EINVAL;
 
-	if (prog->aux->max_tp_access > btp->writable_size)
-		return -EINVAL;
-
 	return tracepoint_probe_register(tp, (void *)btp->bpf_func, prog);
 }
 
@@ -1600,67 +1282,3 @@ int bpf_get_perf_event_info(const struct perf_event *event, u32 *prog_id,
 
 	return err;
 }
-
-static int __init send_signal_irq_work_init(void)
-{
-	int cpu;
-	struct send_signal_irq_work *work;
-
-	for_each_possible_cpu(cpu) {
-		work = per_cpu_ptr(&send_signal_work, cpu);
-		init_irq_work(&work->irq_work, do_bpf_send_signal);
-	}
-	return 0;
-}
-
-subsys_initcall(send_signal_irq_work_init);
-
-#ifdef CONFIG_MODULES
-static int bpf_event_notify(struct notifier_block *nb, unsigned long op,
-			    void *module)
-{
-	struct bpf_trace_module *btm, *tmp;
-	struct module *mod = module;
-
-	if (mod->num_bpf_raw_events == 0 ||
-	    (op != MODULE_STATE_COMING && op != MODULE_STATE_GOING))
-		return 0;
-
-	mutex_lock(&bpf_module_mutex);
-
-	switch (op) {
-	case MODULE_STATE_COMING:
-		btm = kzalloc(sizeof(*btm), GFP_KERNEL);
-		if (btm) {
-			btm->module = module;
-			list_add(&btm->list, &bpf_trace_modules);
-		}
-		break;
-	case MODULE_STATE_GOING:
-		list_for_each_entry_safe(btm, tmp, &bpf_trace_modules, list) {
-			if (btm->module == module) {
-				list_del(&btm->list);
-				kfree(btm);
-				break;
-			}
-		}
-		break;
-	}
-
-	mutex_unlock(&bpf_module_mutex);
-
-	return 0;
-}
-
-static struct notifier_block bpf_module_nb = {
-	.notifier_call = bpf_event_notify,
-};
-
-static int __init bpf_event_init(void)
-{
-	register_module_notifier(&bpf_module_nb);
-	return 0;
-}
-
-fs_initcall(bpf_event_init);
-#endif /* CONFIG_MODULES */

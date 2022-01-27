@@ -1,9 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Driver for BCM6328 memory-mapped LEDs, based on leds-syscon.c
  *
  * Copyright 2015 Álvaro Fernández Rojas <noltari@gmail.com>
  * Copyright 2015 Jonas Gorski <jogo@openwrt.org>
+ *
+ * This program is free software; you can redistribute  it and/or modify it
+ * under  the terms of  the GNU General  Public License as published by the
+ * Free Software Foundation;  either version 2 of the  License, or (at your
+ * option) any later version.
  */
 #include <linux/io.h>
 #include <linux/leds.h>
@@ -332,7 +336,7 @@ static int bcm6328_led(struct device *dev, struct device_node *nc, u32 reg,
 	led->cdev.brightness_set = bcm6328_led_set;
 	led->cdev.blink_set = bcm6328_blink_set;
 
-	rc = led_classdev_register(dev, &led->cdev);
+	rc = devm_led_classdev_register(dev, &led->cdev);
 	if (rc < 0)
 		return rc;
 
@@ -346,11 +350,16 @@ static int bcm6328_leds_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	struct device_node *np = pdev->dev.of_node;
 	struct device_node *child;
+	struct resource *mem_r;
 	void __iomem *mem;
 	spinlock_t *lock; /* memory lock */
 	unsigned long val, *blink_leds, *blink_delay;
 
-	mem = devm_platform_ioremap_resource(pdev, 0);
+	mem_r = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	if (!mem_r)
+		return -EINVAL;
+
+	mem = devm_ioremap_resource(dev, mem_r);
 	if (IS_ERR(mem))
 		return PTR_ERR(mem);
 

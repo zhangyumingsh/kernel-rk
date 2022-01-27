@@ -107,10 +107,12 @@ static struct sock_reuseport *reuseport_grow(struct sock_reuseport *reuse)
 	if (!more_reuse)
 		return NULL;
 
+	more_reuse->max_socks = more_socks_size;
 	more_reuse->num_socks = reuse->num_socks;
 	more_reuse->prog = reuse->prog;
 	more_reuse->reuseport_id = reuse->reuseport_id;
 	more_reuse->bind_inany = reuse->bind_inany;
+	more_reuse->has_conns = reuse->has_conns;
 
 	memcpy(more_reuse->socks, reuse->socks,
 	       reuse->num_socks * sizeof(struct sock *));
@@ -143,8 +145,6 @@ static void reuseport_free_rcu(struct rcu_head *head)
  *  reuseport_add_sock - Add a socket to the reuseport group of another.
  *  @sk:  New socket to add to the group.
  *  @sk2: Socket belonging to the existing reuseport group.
- *  @bind_inany: Whether or not the group is bound to a local INANY address.
- *
  *  May return ENOMEM and not add socket to group under memory pressure.
  */
 int reuseport_add_sock(struct sock *sk, struct sock *sk2, bool bind_inany)
@@ -188,7 +188,6 @@ int reuseport_add_sock(struct sock *sk, struct sock *sk2, bool bind_inany)
 		call_rcu(&old_reuse->rcu, reuseport_free_rcu);
 	return 0;
 }
-EXPORT_SYMBOL(reuseport_add_sock);
 
 void reuseport_detach_sock(struct sock *sk)
 {
@@ -300,7 +299,7 @@ select_by_hash:
 			i = j = reciprocal_scale(hash, socks);
 			while (reuse->socks[i]->sk_state == TCP_ESTABLISHED) {
 				i++;
-				if (i >= reuse->num_socks)
+				if (i >= socks)
 					i = 0;
 				if (i == j)
 					goto out;
@@ -342,27 +341,3 @@ int reuseport_attach_prog(struct sock *sk, struct bpf_prog *prog)
 	return 0;
 }
 EXPORT_SYMBOL(reuseport_attach_prog);
-
-int reuseport_detach_prog(struct sock *sk)
-{
-	struct sock_reuseport *reuse;
-	struct bpf_prog *old_prog;
-
-	if (!rcu_access_pointer(sk->sk_reuseport_cb))
-		return sk->sk_reuseport ? -ENOENT : -EINVAL;
-
-	old_prog = NULL;
-	spin_lock_bh(&reuseport_lock);
-	reuse = rcu_dereference_protected(sk->sk_reuseport_cb,
-					  lockdep_is_held(&reuseport_lock));
-	old_prog = rcu_replace_pointer(reuse->prog, old_prog,
-				       lockdep_is_held(&reuseport_lock));
-	spin_unlock_bh(&reuseport_lock);
-
-	if (!old_prog)
-		return -ENOENT;
-
-	sk_reuseport_prog_free(old_prog);
-	return 0;
-}
-EXPORT_SYMBOL(reuseport_detach_prog);

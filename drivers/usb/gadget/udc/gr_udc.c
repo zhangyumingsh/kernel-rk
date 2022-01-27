@@ -29,7 +29,6 @@
 #include <linux/list.h>
 #include <linux/interrupt.h>
 #include <linux/device.h>
-#include <linux/usb.h>
 #include <linux/usb/ch9.h>
 #include <linux/usb/gadget.h>
 #include <linux/dma-mapping.h>
@@ -209,7 +208,7 @@ static void gr_dfs_create(struct gr_udc *dev)
 {
 	const char *name = "gr_udc_state";
 
-	dev->dfs_root = debugfs_create_dir(dev_name(dev->dev), usb_debug_root);
+	dev->dfs_root = debugfs_create_dir(dev_name(dev->dev), NULL);
 	debugfs_create_file(name, 0444, dev->dfs_root, dev, &gr_dfs_fops);
 }
 
@@ -1981,9 +1980,12 @@ static int gr_ep_init(struct gr_udc *dev, int num, int is_in, u32 maxplimit)
 
 	if (num == 0) {
 		_req = gr_alloc_request(&ep->ep, GFP_ATOMIC);
+		if (!_req)
+			return -ENOMEM;
+
 		buf = devm_kzalloc(dev->dev, PAGE_SIZE, GFP_DMA | GFP_ATOMIC);
-		if (!_req || !buf) {
-			/* possible _req freed by gr_probe via gr_remove */
+		if (!buf) {
+			gr_free_request(&ep->ep, _req);
 			return -ENOMEM;
 		}
 
@@ -2119,6 +2121,7 @@ static int gr_request_irq(struct gr_udc *dev, int irq)
 static int gr_probe(struct platform_device *pdev)
 {
 	struct gr_udc *dev;
+	struct resource *res;
 	struct gr_regs __iomem *regs;
 	int retval;
 	u32 status;
@@ -2128,20 +2131,25 @@ static int gr_probe(struct platform_device *pdev)
 		return -ENOMEM;
 	dev->dev = &pdev->dev;
 
-	regs = devm_platform_ioremap_resource(pdev, 0);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	regs = devm_ioremap_resource(dev->dev, res);
 	if (IS_ERR(regs))
 		return PTR_ERR(regs);
 
 	dev->irq = platform_get_irq(pdev, 0);
-	if (dev->irq <= 0)
+	if (dev->irq <= 0) {
+		dev_err(dev->dev, "No irq found\n");
 		return -ENODEV;
+	}
 
 	/* Some core configurations has separate irqs for IN and OUT events */
 	dev->irqi = platform_get_irq(pdev, 1);
 	if (dev->irqi > 0) {
 		dev->irqo = platform_get_irq(pdev, 2);
-		if (dev->irqo <= 0)
+		if (dev->irqo <= 0) {
+			dev_err(dev->dev, "Found irqi but not irqo\n");
 			return -ENODEV;
+		}
 	} else {
 		dev->irqi = 0;
 	}

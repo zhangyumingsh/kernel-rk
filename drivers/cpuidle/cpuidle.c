@@ -28,6 +28,7 @@
 
 DEFINE_PER_CPU(struct cpuidle_device *, cpuidle_devices);
 DEFINE_PER_CPU(struct cpuidle_device, cpuidle_dev);
+EXPORT_SYMBOL_GPL(cpuidle_dev);
 
 DEFINE_MUTEX(cpuidle_lock);
 LIST_HEAD(cpuidle_detected_devices);
@@ -75,45 +76,44 @@ int cpuidle_play_dead(void)
 
 static int find_deepest_state(struct cpuidle_driver *drv,
 			      struct cpuidle_device *dev,
-			      u64 max_latency_ns,
+			      unsigned int max_latency,
 			      unsigned int forbidden_flags,
 			      bool s2idle)
 {
-	u64 latency_req = 0;
+	unsigned int latency_req = 0;
 	int i, ret = 0;
 
 	for (i = 1; i < drv->state_count; i++) {
 		struct cpuidle_state *s = &drv->states[i];
+		struct cpuidle_state_usage *su = &dev->states_usage[i];
 
-		if (dev->states_usage[i].disable ||
-		    s->exit_latency_ns <= latency_req ||
-		    s->exit_latency_ns > max_latency_ns ||
-		    (s->flags & forbidden_flags) ||
-		    (s2idle && !s->enter_s2idle))
+		if (s->disabled || su->disable || s->exit_latency <= latency_req
+		    || s->exit_latency > max_latency
+		    || (s->flags & forbidden_flags)
+		    || (s2idle && !s->enter_s2idle))
 			continue;
 
-		latency_req = s->exit_latency_ns;
+		latency_req = s->exit_latency;
 		ret = i;
 	}
 	return ret;
 }
 
 /**
- * cpuidle_use_deepest_state - Set/unset governor override mode.
- * @latency_limit_ns: Idle state exit latency limit (or no override if 0).
+ * cpuidle_use_deepest_state - Set/clear governor override flag.
+ * @enable: New value of the flag.
  *
- * If @latency_limit_ns is nonzero, set the current CPU to use the deepest idle
- * state with exit latency within @latency_limit_ns (override governors going
- * forward), or do not override governors if it is zero.
+ * Set/unset the current CPU to use the deepest idle state (override governors
+ * going forward if set).
  */
-void cpuidle_use_deepest_state(u64 latency_limit_ns)
+void cpuidle_use_deepest_state(bool enable)
 {
 	struct cpuidle_device *dev;
 
 	preempt_disable();
 	dev = cpuidle_get_device();
 	if (dev)
-		dev->forced_idle_latency_limit_ns = latency_limit_ns;
+		dev->use_deepest_state = enable;
 	preempt_enable();
 }
 
@@ -121,15 +121,11 @@ void cpuidle_use_deepest_state(u64 latency_limit_ns)
  * cpuidle_find_deepest_state - Find the deepest available idle state.
  * @drv: cpuidle driver for the given CPU.
  * @dev: cpuidle device for the given CPU.
- * @latency_limit_ns: Idle state exit latency limit
- *
- * Return: the index of the deepest available idle state.
  */
 int cpuidle_find_deepest_state(struct cpuidle_driver *drv,
-			       struct cpuidle_device *dev,
-			       u64 latency_limit_ns)
+			       struct cpuidle_device *dev)
 {
-	return find_deepest_state(drv, dev, latency_limit_ns, 0, false);
+	return find_deepest_state(drv, dev, UINT_MAX, 0, false);
 }
 
 #ifdef CONFIG_SUSPEND
@@ -153,7 +149,8 @@ static void enter_s2idle_proper(struct cpuidle_driver *drv,
 	 */
 	stop_critical_timings();
 	drv->states[index].enter_s2idle(dev, drv, index);
-	WARN_ON(!irqs_disabled());
+	if (WARN_ON_ONCE(!irqs_disabled()))
+		local_irq_disable();
 	/*
 	 * timekeeping_resume() that will be called by tick_unfreeze() for the
 	 * first CPU executing it calls functions containing RCU read-side
@@ -185,7 +182,7 @@ int cpuidle_enter_s2idle(struct cpuidle_driver *drv, struct cpuidle_device *dev)
 	 * that interrupts won't be enabled when it exits and allows the tick to
 	 * be frozen safely.
 	 */
-	index = find_deepest_state(drv, dev, U64_MAX, 0, true);
+	index = find_deepest_state(drv, dev, UINT_MAX, 0, true);
 	if (index > 0)
 		enter_s2idle_proper(drv, dev, index);
 
@@ -207,6 +204,7 @@ int cpuidle_enter_state(struct cpuidle_device *dev, struct cpuidle_driver *drv,
 	struct cpuidle_state *target_state = &drv->states[index];
 	bool broadcast = !!(target_state->flags & CPUIDLE_FLAG_TIMER_STOP);
 	ktime_t time_start, time_end;
+	s64 diff;
 
 	/*
 	 * Tell the time framework to switch to a broadcast timer because our
@@ -214,7 +212,7 @@ int cpuidle_enter_state(struct cpuidle_device *dev, struct cpuidle_driver *drv,
 	 * CPU as a broadcast timer, this call may fail if it is not available.
 	 */
 	if (broadcast && tick_broadcast_enter()) {
-		index = find_deepest_state(drv, dev, target_state->exit_latency_ns,
+		index = find_deepest_state(drv, dev, target_state->exit_latency,
 					   CPUIDLE_FLAG_TIMER_STOP, false);
 		if (index < 0) {
 			default_idle_call();
@@ -225,7 +223,7 @@ int cpuidle_enter_state(struct cpuidle_device *dev, struct cpuidle_driver *drv,
 	}
 
 	/* Take note of the planned idle state. */
-	sched_idle_set_state(target_state);
+	sched_idle_set_state(target_state, index);
 
 	trace_cpu_idle_rcuidle(index, dev->cpu);
 	time_start = ns_to_ktime(local_clock());
@@ -239,7 +237,7 @@ int cpuidle_enter_state(struct cpuidle_device *dev, struct cpuidle_driver *drv,
 	trace_cpu_idle_rcuidle(PWR_EVENT_EXIT, dev->cpu);
 
 	/* The cpu is no longer idle or about to enter idle. */
-	sched_idle_set_state(NULL);
+	sched_idle_set_state(NULL, -1);
 
 	if (broadcast) {
 		if (WARN_ON_ONCE(!irqs_disabled()))
@@ -251,47 +249,21 @@ int cpuidle_enter_state(struct cpuidle_device *dev, struct cpuidle_driver *drv,
 	if (!cpuidle_state_is_coupled(drv, index))
 		local_irq_enable();
 
-	if (entered_state >= 0) {
-		s64 diff, delay = drv->states[entered_state].exit_latency_ns;
-		int i;
+	diff = ktime_us_delta(time_end, time_start);
+	if (diff > INT_MAX)
+		diff = INT_MAX;
 
-		/*
-		 * Update cpuidle counters
-		 * This can be moved to within driver enter routine,
+	dev->last_residency = (int) diff;
+
+	if (entered_state >= 0) {
+		/* Update cpuidle counters */
+		/* This can be moved to within driver enter routine
 		 * but that results in multiple copies of same code.
 		 */
-		diff = ktime_sub(time_end, time_start);
-
-		dev->last_residency_ns = diff;
-		dev->states_usage[entered_state].time_ns += diff;
+		dev->states_usage[entered_state].time += dev->last_residency;
 		dev->states_usage[entered_state].usage++;
-
-		if (diff < drv->states[entered_state].target_residency_ns) {
-			for (i = entered_state - 1; i >= 0; i--) {
-				if (dev->states_usage[i].disable)
-					continue;
-
-				/* Shallower states are enabled, so update. */
-				dev->states_usage[entered_state].above++;
-				break;
-			}
-		} else if (diff > delay) {
-			for (i = entered_state + 1; i < drv->state_count; i++) {
-				if (dev->states_usage[i].disable)
-					continue;
-
-				/*
-				 * Update if a deeper state would have been a
-				 * better match for the observed idle duration.
-				 */
-				if (diff - delay >= drv->states[i].target_residency_ns)
-					dev->states_usage[entered_state].below++;
-
-				break;
-			}
-		}
 	} else {
-		dev->last_residency_ns = 0;
+		dev->last_residency = 0;
 	}
 
 	return entered_state;
@@ -329,23 +301,9 @@ int cpuidle_select(struct cpuidle_driver *drv, struct cpuidle_device *dev,
 int cpuidle_enter(struct cpuidle_driver *drv, struct cpuidle_device *dev,
 		  int index)
 {
-	int ret = 0;
-
-	/*
-	 * Store the next hrtimer, which becomes either next tick or the next
-	 * timer event, whatever expires first. Additionally, to make this data
-	 * useful for consumers outside cpuidle, we rely on that the governor's
-	 * ->select() callback have decided, whether to stop the tick or not.
-	 */
-	WRITE_ONCE(dev->next_hrtimer, tick_nohz_get_next_hrtimer());
-
 	if (cpuidle_state_is_coupled(drv, index))
-		ret = cpuidle_enter_state_coupled(dev, drv, index);
-	else
-		ret = cpuidle_enter_state(dev, drv, index);
-
-	WRITE_ONCE(dev->next_hrtimer, 0);
-	return ret;
+		return cpuidle_enter_state_coupled(dev, drv, index);
+	return cpuidle_enter_state(dev, drv, index);
 }
 
 /**
@@ -360,37 +318,6 @@ void cpuidle_reflect(struct cpuidle_device *dev, int index)
 {
 	if (cpuidle_curr_governor->reflect && index >= 0)
 		cpuidle_curr_governor->reflect(dev, index);
-}
-
-/**
- * cpuidle_poll_time - return amount of time to poll for,
- * governors can override dev->poll_limit_ns if necessary
- *
- * @drv:   the cpuidle driver tied with the cpu
- * @dev:   the cpuidle device
- *
- */
-u64 cpuidle_poll_time(struct cpuidle_driver *drv,
-		      struct cpuidle_device *dev)
-{
-	int i;
-	u64 limit_ns;
-
-	if (dev->poll_limit_ns)
-		return dev->poll_limit_ns;
-
-	limit_ns = TICK_NSEC;
-	for (i = 1; i < drv->state_count; i++) {
-		if (dev->states_usage[i].disable)
-			continue;
-
-		limit_ns = drv->states[i].target_residency_ns;
-		break;
-	}
-
-	dev->poll_limit_ns = limit_ns;
-
-	return dev->poll_limit_ns;
 }
 
 /**
@@ -556,8 +483,7 @@ static void __cpuidle_unregister_device(struct cpuidle_device *dev)
 static void __cpuidle_device_init(struct cpuidle_device *dev)
 {
 	memset(dev->states_usage, 0, sizeof(dev->states_usage));
-	dev->last_residency_ns = 0;
-	dev->next_hrtimer = 0;
+	dev->last_residency = 0;
 }
 
 /**
@@ -569,19 +495,11 @@ static void __cpuidle_device_init(struct cpuidle_device *dev)
  */
 static int __cpuidle_register_device(struct cpuidle_device *dev)
 {
+	int ret;
 	struct cpuidle_driver *drv = cpuidle_get_cpu_driver(dev);
-	int i, ret;
 
 	if (!try_module_get(drv->owner))
 		return -EINVAL;
-
-	for (i = 0; i < drv->state_count; i++) {
-		if (drv->states[i].flags & CPUIDLE_FLAG_UNUSABLE)
-			dev->states_usage[i].disable |= CPUIDLE_STATE_DISABLED_BY_DRIVER;
-
-		if (drv->states[i].flags & CPUIDLE_FLAG_OFF)
-			dev->states_usage[i].disable |= CPUIDLE_STATE_DISABLED_BY_USER;
-	}
 
 	per_cpu(cpuidle_devices, dev->cpu) = dev;
 	list_add(&dev->device_list, &cpuidle_detected_devices);
@@ -786,5 +704,4 @@ static int __init cpuidle_init(void)
 }
 
 module_param(off, int, 0444);
-module_param_string(governor, param_governor, CPUIDLE_NAME_LEN, 0444);
 core_initcall(cpuidle_init);

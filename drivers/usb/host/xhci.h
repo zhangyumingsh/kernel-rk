@@ -716,7 +716,7 @@ struct xhci_ep_ctx {
  * 4 - TRB error
  * 5-7 - reserved
  */
-#define EP_STATE_MASK		(0xf)
+#define EP_STATE_MASK		(0x7)
 #define EP_STATE_DISABLED	0
 #define EP_STATE_RUNNING	1
 #define EP_STATE_HALTED		2
@@ -936,8 +936,6 @@ struct xhci_virt_ep {
 #define EP_GETTING_NO_STREAMS	(1 << 5)
 #define EP_HARD_CLEAR_TOGGLE	(1 << 6)
 #define EP_SOFT_CLEAR_TOGGLE	(1 << 7)
-/* usb_hub_clear_tt_buffer is in progress */
-#define EP_CLEARING_TT		(1 << 8)
 	/* ----  Related to URB cancellation ---- */
 	struct list_head	cancelled_td_list;
 	/* Watchdog timer for stop endpoint command to cancel URBs */
@@ -1314,8 +1312,6 @@ enum xhci_setup_dev {
 #define TRB_IOC			(1<<5)
 /* The buffer pointer contains immediate data */
 #define TRB_IDT			(1<<6)
-/* TDs smaller than this might use IDT */
-#define TRB_IDT_MAX_SIZE	8
 
 /* Block Event Interrupt */
 #define	TRB_BEI			(1<<9)
@@ -1517,7 +1513,6 @@ static inline const char *xhci_trb_type_string(u8 type)
 /* How much data is left before the 64KB boundary? */
 #define TRB_BUFF_LEN_UP_TO_BOUNDARY(addr)	(TRB_MAX_BUFF_SIZE - \
 					(addr & (TRB_MAX_BUFF_SIZE - 1)))
-#define MAX_SOFT_RETRY		3
 
 struct xhci_segment {
 	union xhci_trb		*trbs;
@@ -1605,7 +1600,6 @@ struct xhci_ring {
 	 * if we own the TRB (if we are the consumer).  See section 4.9.1.
 	 */
 	u32			cycle_state;
-	unsigned int            err_count;
 	unsigned int		stream_id;
 	unsigned int		num_segs;
 	unsigned int		num_trbs_free;
@@ -1702,6 +1696,15 @@ struct xhci_bus_state {
  * Intel Lynx Point LP xHCI host.
  */
 #define	XHCI_MAX_REXIT_TIMEOUT_MS	20
+
+static inline unsigned int hcd_index(struct usb_hcd *hcd)
+{
+	if (hcd->speed >= HCD_USB3)
+		return 0;
+	else
+		return 1;
+}
+
 struct xhci_port_cap {
 	u32			*psi;	/* array of protocol speed ID entries */
 	u8			psi_count;
@@ -1722,8 +1725,6 @@ struct xhci_hub {
 	struct xhci_port	**ports;
 	unsigned int		num_ports;
 	struct usb_hcd		*hcd;
-	/* keep track of bus suspend info */
-	struct xhci_bus_state   bus_state;
 	/* supported prococol extended capabiliy values */
 	u8			maj_rev;
 	u8			min_rev;
@@ -1740,6 +1741,10 @@ struct xhci_hcd {
 	struct xhci_doorbell_array __iomem *dba;
 	/* Our HCD's current interrupter register set */
 	struct	xhci_intr_reg __iomem *ir_set;
+	/* secondary interrupter */
+	struct	xhci_intr_reg __iomem **sec_ir_set;
+
+	int		core_id;
 
 	/* Cached register copies of read-only HC data */
 	__u32		hcs_params1;
@@ -1783,6 +1788,11 @@ struct xhci_hcd {
 	struct xhci_command	*current_cmd;
 	struct xhci_ring	*event_ring;
 	struct xhci_erst	erst;
+
+	/* secondary event ring and erst */
+	struct xhci_ring	**sec_event_ring;
+	struct xhci_erst	*sec_erst;
+
 	/* Scratchpad */
 	struct xhci_scratchpad  *scratchpad;
 	/* Store LPM test failed devices' information */
@@ -1869,15 +1879,19 @@ struct xhci_hcd {
 #define XHCI_SUSPEND_DELAY	BIT_ULL(30)
 #define XHCI_INTEL_USB_ROLE_SW	BIT_ULL(31)
 #define XHCI_ZERO_64B_REGS	BIT_ULL(32)
-#define XHCI_DEFAULT_PM_RUNTIME_ALLOW	BIT_ULL(33)
 #define XHCI_RESET_PLL_ON_DISCONNECT	BIT_ULL(34)
 #define XHCI_SNPS_BROKEN_SUSPEND    BIT_ULL(35)
+#define XHCI_DISABLE_SPARSE	BIT_ULL(38)
 
 	unsigned int		num_active_eps;
 	unsigned int		limit_active_eps;
+	/* There are two roothubs to keep track of bus suspend info for */
+	struct xhci_bus_state   bus_state[2];
 	struct xhci_port	*hw_ports;
 	struct xhci_hub		usb2_rhub;
 	struct xhci_hub		usb3_rhub;
+	/* support xHCI 0.96 spec USB2 software LPM */
+	unsigned		sw_lpm_support:1;
 	/* support xHCI 1.0 spec USB2 hardware LPM */
 	unsigned		hw_lpm_support:1;
 	/* Broken Suspend flag for SNPS Suspend resume issue */
@@ -2048,6 +2062,8 @@ struct xhci_container_ctx *xhci_alloc_container_ctx(struct xhci_hcd *xhci,
 		int type, gfp_t flags);
 void xhci_free_container_ctx(struct xhci_hcd *xhci,
 		struct xhci_container_ctx *ctx);
+int xhci_sec_event_ring_setup(struct usb_hcd *hcd, unsigned int intr_num);
+int xhci_sec_event_ring_cleanup(struct usb_hcd *hcd, unsigned int intr_num);
 
 /* xHCI host controller glue */
 typedef void (*xhci_get_quirks_t)(struct device *, struct xhci_hcd *);
@@ -2122,9 +2138,6 @@ void xhci_handle_command_timeout(struct work_struct *work);
 
 void xhci_ring_ep_doorbell(struct xhci_hcd *xhci, unsigned int slot_id,
 		unsigned int ep_index, unsigned int stream_id);
-void xhci_ring_doorbell_for_active_rings(struct xhci_hcd *xhci,
-		unsigned int slot_id,
-		unsigned int ep_index);
 void xhci_cleanup_command_queue(struct xhci_hcd *xhci);
 void inc_deq(struct xhci_hcd *xhci, struct xhci_ring *ring);
 unsigned int count_trbs(u64 addr, u64 len);
@@ -2172,23 +2185,6 @@ static inline struct xhci_ring *xhci_urb_to_transfer_ring(struct xhci_hcd *xhci,
 	return xhci_triad_to_transfer_ring(xhci, urb->dev->slot_id,
 					xhci_get_endpoint_index(&urb->ep->desc),
 					urb->stream_id);
-}
-
-/*
- * TODO: As per spec Isochronous IDT transmissions are supported. We bypass
- * them anyways as we where unable to find a device that matches the
- * constraints.
- */
-static inline bool xhci_urb_suitable_for_idt(struct urb *urb)
-{
-	if (!usb_endpoint_xfer_isoc(&urb->ep->desc) && usb_urb_dir_out(urb) &&
-	    usb_endpoint_maxp(&urb->ep->desc) >= TRB_IDT_MAX_SIZE &&
-	    urb->transfer_buffer_length <= TRB_IDT_MAX_SIZE &&
-	    !(urb->transfer_flags & URB_NO_TRANSFER_DMA_MAP) &&
-	    !urb->num_sgs)
-		return true;
-
-	return false;
 }
 
 static inline char *xhci_slot_state_string(u32 state)
@@ -2346,13 +2342,12 @@ static inline const char *xhci_decode_trb(u32 field0, u32 field1, u32 field2,
 		break;
 	case TRB_RESET_EP:
 		sprintf(str,
-			"%s: ctx %08x%08x slot %d ep %d flags %c:%c",
+			"%s: ctx %08x%08x slot %d ep %d flags %c",
 			xhci_trb_type_string(type),
 			field1, field0,
 			TRB_TO_SLOT_ID(field3),
 			/* Macro decrements 1, maybe it shouldn't?!? */
 			TRB_TO_EP_INDEX(field3) + 1,
-			field3 & TRB_TSP ? 'T' : 't',
 			field3 & TRB_CYCLE ? 'C' : 'c');
 		break;
 	case TRB_STOP_RING:
@@ -2424,35 +2419,6 @@ static inline const char *xhci_decode_trb(u32 field0, u32 field1, u32 field2,
 			field0, field1, field2, field3);
 	}
 
-	return str;
-}
-
-static inline const char *xhci_decode_ctrl_ctx(unsigned long drop,
-					       unsigned long add)
-{
-	static char	str[1024];
-	unsigned int	bit;
-	int		ret = 0;
-
-	if (drop) {
-		ret = sprintf(str, "Drop:");
-		for_each_set_bit(bit, &drop, 32)
-			ret += sprintf(str + ret, " %d%s",
-				       bit / 2,
-				       bit % 2 ? "in":"out");
-		ret += sprintf(str + ret, ", ");
-	}
-
-	if (add) {
-		ret += sprintf(str + ret, "Add:%s%s",
-			       (add & SLOT_FLAG) ? " slot":"",
-			       (add & EP0_FLAG) ? " ep0":"");
-		add &= ~(SLOT_FLAG | EP0_FLAG);
-		for_each_set_bit(bit, &add, 32)
-			ret += sprintf(str + ret, " %d%s",
-				       bit / 2,
-				       bit % 2 ? "in":"out");
-	}
 	return str;
 }
 
@@ -2585,35 +2551,6 @@ static inline const char *xhci_decode_portsc(u32 portsc)
 		ret += sprintf(str + ret, "WDE ");
 	if (portsc & PORT_WKOC_E)
 		ret += sprintf(str + ret, "WOE ");
-
-	return str;
-}
-
-static inline const char *xhci_decode_doorbell(u32 slot, u32 doorbell)
-{
-	static char str[256];
-	u8 ep;
-	u16 stream;
-	int ret;
-
-	ep = (doorbell & 0xff);
-	stream = doorbell >> 16;
-
-	if (slot == 0) {
-		sprintf(str, "Command Ring %d", doorbell);
-		return str;
-	}
-	ret = sprintf(str, "Slot %d ", slot);
-	if (ep > 0 && ep < 32)
-		ret = sprintf(str + ret, "ep%d%s",
-			      ep / 2,
-			      ep % 2 ? "in" : "out");
-	else if (ep == 0 || ep < 248)
-		ret = sprintf(str + ret, "Reserved %d", ep);
-	else
-		ret = sprintf(str + ret, "Vendor Defined %d", ep);
-	if (stream)
-		ret = sprintf(str + ret, " Stream %d", stream);
 
 	return str;
 }

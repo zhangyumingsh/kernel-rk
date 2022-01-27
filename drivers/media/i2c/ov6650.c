@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * V4L2 subdevice driver for OmniVision OV6650 Camera Sensor
  *
@@ -16,9 +15,13 @@
  * Copyright (C) 2008 Magnus Damm
  * Copyright (C) 2008, Guennadi Liakhovetski <kernel@pengutronix.de>
  *
- * Hardware specific bits initially based on former work by Matt Callow
+ * Hardware specific bits initialy based on former work by Matt Callow
  * drivers/media/video/omap/sensor_ov6650.c
  * Copyright (C) 2006 Matt Callow
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  */
 
 #include <linux/bitops.h>
@@ -124,13 +127,12 @@
 
 #define DEF_AECH		0x4D
 
-#define CLKRC_8MHz		0x00
+#define CLKRC_6MHz		0x00
 #define CLKRC_12MHz		0x40
 #define CLKRC_16MHz		0x80
 #define CLKRC_24MHz		0xc0
 #define CLKRC_DIV_MASK		0x3f
 #define GET_CLKRC_DIV(x)	(((x) & CLKRC_DIV_MASK) + 1)
-#define DEF_CLKRC		0x00
 
 #define COMA_RESET		BIT(7)
 #define COMA_QCIF		BIT(5)
@@ -197,33 +199,12 @@ struct ov6650 {
 	struct v4l2_clk		*clk;
 	bool			half_scale;	/* scale down output by 2 */
 	struct v4l2_rect	rect;		/* sensor cropping window */
+	unsigned long		pclk_limit;	/* from host */
+	unsigned long		pclk_max;	/* from resolution and format */
 	struct v4l2_fract	tpf;		/* as requested with s_frame_interval */
 	u32 code;
 };
 
-struct ov6650_xclk {
-	unsigned long	rate;
-	u8		clkrc;
-};
-
-static const struct ov6650_xclk ov6650_xclk[] = {
-{
-	.rate	= 8000000,
-	.clkrc	= CLKRC_8MHz,
-},
-{
-	.rate	= 12000000,
-	.clkrc	= CLKRC_12MHz,
-},
-{
-	.rate	= 16000000,
-	.clkrc	= CLKRC_16MHz,
-},
-{
-	.rate	= 24000000,
-	.clkrc	= CLKRC_24MHz,
-},
-};
 
 static u32 ov6650_codes[] = {
 	MEDIA_BUS_FMT_YUYV8_2X8,
@@ -478,6 +459,7 @@ static int ov6650_get_selection(struct v4l2_subdev *sd,
 
 	switch (sel->target) {
 	case V4L2_SEL_TGT_CROP_BOUNDS:
+	case V4L2_SEL_TGT_CROP_DEFAULT:
 		sel->r.left = DEF_HSTRT << 1;
 		sel->r.top = DEF_VSTRT << 1;
 		sel->r.width = W_CIF;
@@ -567,7 +549,22 @@ static bool is_unscaled_ok(int width, int height, struct v4l2_rect *rect)
 	return width > rect->width >> 1 || height > rect->height >> 1;
 }
 
-#define to_clkrc(div)	((div) - 1)
+static u8 to_clkrc(struct v4l2_fract *timeperframe,
+		unsigned long pclk_limit, unsigned long pclk_max)
+{
+	unsigned long pclk;
+
+	if (timeperframe->numerator && timeperframe->denominator)
+		pclk = pclk_max * timeperframe->denominator /
+				(FRAME_RATE_MAX * timeperframe->numerator);
+	else
+		pclk = pclk_max;
+
+	if (pclk_limit && pclk_limit < pclk)
+		pclk = pclk_limit;
+
+	return (pclk_max - 1) / pclk;
+}
 
 /* set the format we will capture in */
 static int ov6650_s_fmt(struct v4l2_subdev *sd, struct v4l2_mbus_framefmt *mf)
@@ -586,7 +583,8 @@ static int ov6650_s_fmt(struct v4l2_subdev *sd, struct v4l2_mbus_framefmt *mf)
 		.r.height = mf->height << half_scale,
 	};
 	u32 code = mf->code;
-	u8 coma_set = 0, coma_mask = 0, coml_set, coml_mask;
+	unsigned long mclk, pclk;
+	u8 coma_set = 0, coma_mask = 0, coml_set, coml_mask, clkrc;
 	int ret;
 
 	/* select color matrix configuration for given color encoding */
@@ -640,22 +638,38 @@ static int ov6650_s_fmt(struct v4l2_subdev *sd, struct v4l2_mbus_framefmt *mf)
 			code == MEDIA_BUS_FMT_SBGGR8_1X8) {
 		coml_mask = COML_ONE_CHANNEL;
 		coml_set = 0;
+		priv->pclk_max = 4000000;
 	} else {
 		coml_mask = 0;
 		coml_set = COML_ONE_CHANNEL;
+		priv->pclk_max = 8000000;
 	}
 
 	if (half_scale) {
 		dev_dbg(&client->dev, "max resolution: QCIF\n");
 		coma_set |= COMA_QCIF;
+		priv->pclk_max /= 2;
 	} else {
 		dev_dbg(&client->dev, "max resolution: CIF\n");
 		coma_mask |= COMA_QCIF;
 	}
 
+	clkrc = CLKRC_12MHz;
+	mclk = 12000000;
+	priv->pclk_limit = 1334000;
+	dev_dbg(&client->dev, "using 12MHz input clock\n");
+
+	clkrc |= to_clkrc(&priv->tpf, priv->pclk_limit, priv->pclk_max);
+
+	pclk = priv->pclk_max / GET_CLKRC_DIV(clkrc);
+	dev_dbg(&client->dev, "pixel clock divider: %ld.%ld\n",
+			mclk / pclk, 10 * mclk % pclk / pclk);
+
 	ret = ov6650_set_selection(sd, NULL, &sel);
 	if (!ret)
 		ret = ov6650_reg_rmw(client, REG_COMA, coma_set, coma_mask);
+	if (!ret)
+		ret = ov6650_reg_write(client, REG_CLKRC, clkrc);
 	if (!ret) {
 		priv->half_scale = half_scale;
 
@@ -744,7 +758,9 @@ static int ov6650_g_frame_interval(struct v4l2_subdev *sd,
 	struct i2c_client *client = v4l2_get_subdevdata(sd);
 	struct ov6650 *priv = to_ov6650(client);
 
-	ival->interval = priv->tpf;
+	ival->interval.numerator = GET_CLKRC_DIV(to_clkrc(&priv->tpf,
+			priv->pclk_limit, priv->pclk_max));
+	ival->interval.denominator = FRAME_RATE_MAX;
 
 	dev_dbg(&client->dev, "Frame interval: %u/%u s\n",
 		ival->interval.numerator, ival->interval.denominator);
@@ -759,6 +775,7 @@ static int ov6650_s_frame_interval(struct v4l2_subdev *sd,
 	struct ov6650 *priv = to_ov6650(client);
 	struct v4l2_fract *tpf = &ival->interval;
 	int div, ret;
+	u8 clkrc;
 
 	if (tpf->numerator == 0 || tpf->denominator == 0)
 		div = 1;  /* Reset to full rate */
@@ -770,12 +787,19 @@ static int ov6650_s_frame_interval(struct v4l2_subdev *sd,
 	else if (div > GET_CLKRC_DIV(CLKRC_DIV_MASK))
 		div = GET_CLKRC_DIV(CLKRC_DIV_MASK);
 
-	ret = ov6650_reg_rmw(client, REG_CLKRC, to_clkrc(div), CLKRC_DIV_MASK);
-	if (!ret) {
-		priv->tpf.numerator = div;
-		priv->tpf.denominator = FRAME_RATE_MAX;
+	/*
+	 * Keep result to be used as tpf limit
+	 * for subseqent clock divider calculations
+	 */
+	priv->tpf.numerator = div;
+	priv->tpf.denominator = FRAME_RATE_MAX;
 
-		*tpf = priv->tpf;
+	clkrc = to_clkrc(&priv->tpf, priv->pclk_limit, priv->pclk_max);
+
+	ret = ov6650_reg_rmw(client, REG_CLKRC, clkrc, CLKRC_DIV_MASK);
+	if (!ret) {
+		tpf->numerator = GET_CLKRC_DIV(clkrc);
+		tpf->denominator = FRAME_RATE_MAX;
 	}
 
 	return ret;
@@ -797,7 +821,7 @@ static int ov6650_reset(struct i2c_client *client)
 }
 
 /* program default register values */
-static int ov6650_prog_dflt(struct i2c_client *client, u8 clkrc)
+static int ov6650_prog_dflt(struct i2c_client *client)
 {
 	int ret;
 
@@ -805,21 +829,16 @@ static int ov6650_prog_dflt(struct i2c_client *client, u8 clkrc)
 
 	ret = ov6650_reg_write(client, REG_COMA, 0);	/* ~COMA_RESET */
 	if (!ret)
-		ret = ov6650_reg_write(client, REG_CLKRC, clkrc);
-	if (!ret)
 		ret = ov6650_reg_rmw(client, REG_COMB, 0, COMB_BAND_FILTER);
 
 	return ret;
 }
 
-static int ov6650_video_probe(struct v4l2_subdev *sd)
+static int ov6650_video_probe(struct i2c_client *client)
 {
-	struct i2c_client *client = v4l2_get_subdevdata(sd);
 	struct ov6650 *priv = to_ov6650(client);
-	const struct ov6650_xclk *xclk = NULL;
-	unsigned long rate;
-	u8 pidh, pidl, midh, midl;
-	int i, ret = 0;
+	u8		pidh, pidl, midh, midl;
+	int		ret;
 
 	priv->clk = v4l2_clk_get(&client->dev, NULL);
 	if (IS_ERR(priv->clk)) {
@@ -828,34 +847,7 @@ static int ov6650_video_probe(struct v4l2_subdev *sd)
 		return ret;
 	}
 
-	rate = v4l2_clk_get_rate(priv->clk);
-	for (i = 0; rate && i < ARRAY_SIZE(ov6650_xclk); i++) {
-		if (rate != ov6650_xclk[i].rate)
-			continue;
-
-		xclk = &ov6650_xclk[i];
-		dev_info(&client->dev, "using host default clock rate %lukHz\n",
-			 rate / 1000);
-		break;
-	}
-	for (i = 0; !xclk && i < ARRAY_SIZE(ov6650_xclk); i++) {
-		ret = v4l2_clk_set_rate(priv->clk, ov6650_xclk[i].rate);
-		if (ret || v4l2_clk_get_rate(priv->clk) != ov6650_xclk[i].rate)
-			continue;
-
-		xclk = &ov6650_xclk[i];
-		dev_info(&client->dev, "using negotiated clock rate %lukHz\n",
-			 xclk->rate / 1000);
-		break;
-	}
-	if (!xclk) {
-		dev_err(&client->dev, "unable to get supported clock rate\n");
-		if (!ret)
-			ret = -EINVAL;
-		goto eclkput;
-	}
-
-	ret = ov6650_s_power(sd, 1);
+	ret = ov6650_s_power(&priv->subdev, 1);
 	if (ret < 0)
 		goto eclkput;
 
@@ -888,17 +880,12 @@ static int ov6650_video_probe(struct v4l2_subdev *sd)
 
 	ret = ov6650_reset(client);
 	if (!ret)
-		ret = ov6650_prog_dflt(client, xclk->clkrc);
-	if (!ret) {
-		struct v4l2_mbus_framefmt mf = ov6650_def_fmt;
-
-		ret = ov6650_s_fmt(sd, &mf);
-	}
+		ret = ov6650_prog_dflt(client);
 	if (!ret)
 		ret = v4l2_ctrl_handler_setup(&priv->hdl);
 
 done:
-	ov6650_s_power(sd, 0);
+	ov6650_s_power(&priv->subdev, 0);
 	if (!ret)
 		return 0;
 eclkput:
@@ -986,10 +973,6 @@ static const struct v4l2_subdev_ops ov6650_subdev_ops = {
 	.pad	= &ov6650_pad_ops,
 };
 
-static const struct v4l2_subdev_internal_ops ov6650_internal_ops = {
-	.registered = ov6650_video_probe,
-};
-
 /*
  * i2c_driver function
  */
@@ -1034,10 +1017,8 @@ static int ov6650_probe(struct i2c_client *client,
 			V4L2_CID_GAMMA, 0, 0xff, 1, 0x12);
 
 	priv->subdev.ctrl_handler = &priv->hdl;
-	if (priv->hdl.error) {
-		ret = priv->hdl.error;
-		goto ectlhdlfree;
-	}
+	if (priv->hdl.error)
+		return priv->hdl.error;
 
 	v4l2_ctrl_auto_cluster(2, &priv->autogain, 0, true);
 	v4l2_ctrl_auto_cluster(3, &priv->autowb, 0, true);
@@ -1048,18 +1029,12 @@ static int ov6650_probe(struct i2c_client *client,
 	priv->rect.top	  = DEF_VSTRT << 1;
 	priv->rect.width  = W_CIF;
 	priv->rect.height = H_CIF;
+	priv->half_scale  = false;
+	priv->code	  = MEDIA_BUS_FMT_YUYV8_2X8;
 
-	/* Hardware default frame interval */
-	priv->tpf.numerator   = GET_CLKRC_DIV(DEF_CLKRC);
-	priv->tpf.denominator = FRAME_RATE_MAX;
-
-	priv->subdev.internal_ops = &ov6650_internal_ops;
-
-	ret = v4l2_async_register_subdev(&priv->subdev);
-	if (!ret)
-		return 0;
-ectlhdlfree:
-	v4l2_ctrl_handler_free(&priv->hdl);
+	ret = ov6650_video_probe(client);
+	if (ret)
+		v4l2_ctrl_handler_free(&priv->hdl);
 
 	return ret;
 }
@@ -1069,7 +1044,7 @@ static int ov6650_remove(struct i2c_client *client)
 	struct ov6650 *priv = to_ov6650(client);
 
 	v4l2_clk_put(priv->clk);
-	v4l2_async_unregister_subdev(&priv->subdev);
+	v4l2_device_unregister_subdev(&priv->subdev);
 	v4l2_ctrl_handler_free(&priv->hdl);
 	return 0;
 }
@@ -1091,6 +1066,6 @@ static struct i2c_driver ov6650_i2c_driver = {
 
 module_i2c_driver(ov6650_i2c_driver);
 
-MODULE_DESCRIPTION("V4L2 subdevice driver for OmniVision OV6650 camera sensor");
-MODULE_AUTHOR("Janusz Krzysztofik <jmkrzyszt@gmail.com");
+MODULE_DESCRIPTION("SoC Camera driver for OmniVision OV6650");
+MODULE_AUTHOR("Janusz Krzysztofik <jkrzyszt@tis.icnet.pl>");
 MODULE_LICENSE("GPL v2");

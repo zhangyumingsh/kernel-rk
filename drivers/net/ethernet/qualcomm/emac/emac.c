@@ -1,5 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /* Copyright (c) 2013-2016, The Linux Foundation. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 and
+ * only version 2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  */
 
 /* Qualcomm Technologies, Inc. EMAC Gigabit Ethernet Driver */
@@ -213,9 +221,9 @@ static int emac_change_mtu(struct net_device *netdev, int new_mtu)
 {
 	struct emac_adapter *adpt = netdev_priv(netdev);
 
-	netif_dbg(adpt, hw, adpt->netdev,
-		  "changing MTU from %d to %d\n", netdev->mtu,
-		  new_mtu);
+	netif_info(adpt, hw, adpt->netdev,
+		   "changing MTU from %d to %d\n", netdev->mtu,
+		   new_mtu);
 	netdev->mtu = new_mtu;
 
 	if (netif_running(netdev))
@@ -282,11 +290,23 @@ static int emac_close(struct net_device *netdev)
 }
 
 /* Respond to a TX hang */
-static void emac_tx_timeout(struct net_device *netdev, unsigned int txqueue)
+static void emac_tx_timeout(struct net_device *netdev)
 {
 	struct emac_adapter *adpt = netdev_priv(netdev);
 
 	schedule_work(&adpt->work_thread);
+}
+
+/* IOCTL support for the interface */
+static int emac_ioctl(struct net_device *netdev, struct ifreq *ifr, int cmd)
+{
+	if (!netif_running(netdev))
+		return -EINVAL;
+
+	if (!netdev->phydev)
+		return -ENODEV;
+
+	return phy_mii_ioctl(netdev->phydev, ifr, cmd);
 }
 
 /**
@@ -375,7 +395,7 @@ static const struct net_device_ops emac_netdev_ops = {
 	.ndo_start_xmit		= emac_start_xmit,
 	.ndo_set_mac_address	= eth_mac_addr,
 	.ndo_change_mtu		= emac_change_mtu,
-	.ndo_do_ioctl		= phy_do_ioctl_running,
+	.ndo_do_ioctl		= emac_ioctl,
 	.ndo_tx_timeout		= emac_tx_timeout,
 	.ndo_get_stats64	= emac_get_stats64,
 	.ndo_set_features       = emac_set_features,
@@ -473,13 +493,24 @@ static int emac_clks_phase1_init(struct platform_device *pdev,
 
 	ret = clk_prepare_enable(adpt->clk[EMAC_CLK_CFG_AHB]);
 	if (ret)
-		return ret;
+		goto disable_clk_axi;
 
 	ret = clk_set_rate(adpt->clk[EMAC_CLK_HIGH_SPEED], 19200000);
 	if (ret)
-		return ret;
+		goto disable_clk_cfg_ahb;
 
-	return clk_prepare_enable(adpt->clk[EMAC_CLK_HIGH_SPEED]);
+	ret = clk_prepare_enable(adpt->clk[EMAC_CLK_HIGH_SPEED]);
+	if (ret)
+		goto disable_clk_cfg_ahb;
+
+	return 0;
+
+disable_clk_cfg_ahb:
+	clk_disable_unprepare(adpt->clk[EMAC_CLK_CFG_AHB]);
+disable_clk_axi:
+	clk_disable_unprepare(adpt->clk[EMAC_CLK_AXI]);
+
+	return ret;
 }
 
 /* Enable clocks; needs emac_clks_phase1_init to be called before */
@@ -532,6 +563,7 @@ static int emac_probe_resources(struct platform_device *pdev,
 				struct emac_adapter *adpt)
 {
 	struct net_device *netdev = adpt->netdev;
+	struct resource *res;
 	char maddr[ETH_ALEN];
 	int ret = 0;
 
@@ -543,17 +575,22 @@ static int emac_probe_resources(struct platform_device *pdev,
 
 	/* Core 0 interrupt */
 	ret = platform_get_irq(pdev, 0);
-	if (ret < 0)
+	if (ret < 0) {
+		dev_err(&pdev->dev,
+			"error: missing core0 irq resource (error=%i)\n", ret);
 		return ret;
+	}
 	adpt->irq.irq = ret;
 
 	/* base register address */
-	adpt->base = devm_platform_ioremap_resource(pdev, 0);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	adpt->base = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(adpt->base))
 		return PTR_ERR(adpt->base);
 
 	/* CSR register address */
-	adpt->csr = devm_platform_ioremap_resource(pdev, 1);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 1);
+	adpt->csr = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(adpt->csr))
 		return PTR_ERR(adpt->csr);
 

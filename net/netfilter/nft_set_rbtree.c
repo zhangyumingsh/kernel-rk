@@ -1,6 +1,9 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2008-2009 Patrick McHardy <kaber@trash.net>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  *
  * Development of this code funded by Astaro AG (http://www.astaro.com/)
  */
@@ -13,7 +16,7 @@
 #include <linux/netlink.h>
 #include <linux/netfilter.h>
 #include <linux/netfilter/nf_tables.h>
-#include <net/netfilter/nf_tables_core.h>
+#include <net/netfilter/nf_tables.h>
 
 struct nft_rbtree {
 	struct rb_root		root;
@@ -142,12 +145,9 @@ static bool __nft_rbtree_get(const struct net *net, const struct nft_set *set,
 		d = memcmp(this, key, set->klen);
 		if (d < 0) {
 			parent = rcu_dereference_raw(parent->rb_left);
-			if (!(flags & NFT_SET_ELEM_INTERVAL_END))
-				interval = rbe;
+			interval = rbe;
 		} else if (d > 0) {
 			parent = rcu_dereference_raw(parent->rb_right);
-			if (flags & NFT_SET_ELEM_INTERVAL_END)
-				interval = rbe;
 		} else {
 			if (!nft_set_elem_active(&rbe->ext, genmask)) {
 				parent = rcu_dereference_raw(parent->rb_left);
@@ -170,10 +170,7 @@ static bool __nft_rbtree_get(const struct net *net, const struct nft_set *set,
 
 	if (set->flags & NFT_SET_INTERVAL && interval != NULL &&
 	    nft_set_elem_active(&interval->ext, genmask) &&
-	    ((!nft_rbtree_interval_end(interval) &&
-	      !(flags & NFT_SET_ELEM_INTERVAL_END)) ||
-	     (nft_rbtree_interval_end(interval) &&
-	      (flags & NFT_SET_ELEM_INTERVAL_END)))) {
+	    !nft_rbtree_interval_end(interval)) {
 		*elem = interval;
 		return true;
 	}
@@ -213,42 +210,7 @@ static int __nft_rbtree_insert(const struct net *net, const struct nft_set *set,
 	u8 genmask = nft_genmask_next(net);
 	struct nft_rbtree_elem *rbe;
 	struct rb_node *parent, **p;
-	bool overlap = false;
 	int d;
-
-	/* Detect overlaps as we descend the tree. Set the flag in these cases:
-	 *
-	 * a1. |__ _ _?  >|__ _ _  (insert start after existing start)
-	 * a2. _ _ __>|  ?_ _ __|  (insert end before existing end)
-	 * a3. _ _ ___|  ?_ _ _>|  (insert end after existing end)
-	 * a4. >|__ _ _   _ _ __|  (insert start before existing end)
-	 *
-	 * and clear it later on, as we eventually reach the points indicated by
-	 * '?' above, in the cases described below. We'll always meet these
-	 * later, locally, due to tree ordering, and overlaps for the intervals
-	 * that are the closest together are always evaluated last.
-	 *
-	 * b1. |__ _ _!  >|__ _ _  (insert start after existing end)
-	 * b2. _ _ __>|  !_ _ __|  (insert end before existing start)
-	 * b3. !_____>|            (insert end after existing start)
-	 *
-	 * Case a4. resolves to b1.:
-	 * - if the inserted start element is the leftmost, because the '0'
-	 *   element in the tree serves as end element
-	 * - otherwise, if an existing end is found. Note that end elements are
-	 *   always inserted after corresponding start elements.
-	 *
-	 * For a new, rightmost pair of elements, we'll hit cases b1. and b3.,
-	 * in that order.
-	 *
-	 * The flag is also cleared in two special cases:
-	 *
-	 * b4. |__ _ _!|<_ _ _   (insert start right before existing end)
-	 * b5. |__ _ >|!__ _ _   (insert end right after existing start)
-	 *
-	 * which always happen as last step and imply that no further
-	 * overlapping is possible.
-	 */
 
 	parent = NULL;
 	p = &priv->root.rb_node;
@@ -258,42 +220,17 @@ static int __nft_rbtree_insert(const struct net *net, const struct nft_set *set,
 		d = memcmp(nft_set_ext_key(&rbe->ext),
 			   nft_set_ext_key(&new->ext),
 			   set->klen);
-		if (d < 0) {
+		if (d < 0)
 			p = &parent->rb_left;
-
-			if (nft_rbtree_interval_start(new)) {
-				overlap = nft_rbtree_interval_start(rbe) &&
-					  nft_set_elem_active(&rbe->ext,
-							      genmask);
-			} else {
-				overlap = nft_rbtree_interval_end(rbe) &&
-					  nft_set_elem_active(&rbe->ext,
-							      genmask);
-			}
-		} else if (d > 0) {
+		else if (d > 0)
 			p = &parent->rb_right;
-
-			if (nft_rbtree_interval_end(new)) {
-				overlap = nft_rbtree_interval_end(rbe) &&
-					  nft_set_elem_active(&rbe->ext,
-							      genmask);
-			} else if (nft_rbtree_interval_end(rbe) &&
-				   nft_set_elem_active(&rbe->ext, genmask)) {
-				overlap = true;
-			}
-		} else {
+		else {
 			if (nft_rbtree_interval_end(rbe) &&
 			    nft_rbtree_interval_start(new)) {
 				p = &parent->rb_left;
-
-				if (nft_set_elem_active(&rbe->ext, genmask))
-					overlap = false;
 			} else if (nft_rbtree_interval_start(rbe) &&
 				   nft_rbtree_interval_end(new)) {
 				p = &parent->rb_right;
-
-				if (nft_set_elem_active(&rbe->ext, genmask))
-					overlap = false;
 			} else if (nft_set_elem_active(&rbe->ext, genmask)) {
 				*ext = &rbe->ext;
 				return -EEXIST;
@@ -302,10 +239,6 @@ static int __nft_rbtree_insert(const struct net *net, const struct nft_set *set,
 			}
 		}
 	}
-
-	if (overlap)
-		return -ENOTEMPTY;
-
 	rb_link_node_rcu(&new->node, parent, p);
 	rb_insert_color(&new->node, &priv->root);
 	return 0;
@@ -535,9 +468,6 @@ static void nft_rbtree_destroy(const struct nft_set *set)
 static bool nft_rbtree_estimate(const struct nft_set_desc *desc, u32 features,
 				struct nft_set_estimate *est)
 {
-	if (desc->field_count > 1)
-		return false;
-
 	if (desc->size)
 		est->size = sizeof(struct nft_rbtree) +
 			    desc->size * sizeof(struct nft_rbtree_elem);

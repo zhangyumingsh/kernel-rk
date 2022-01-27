@@ -1,7 +1,10 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  *
  * Copyright (C) 2011 Novell Inc.
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License version 2 as published by
+ * the Free Software Foundation.
  */
 
 #include <linux/fs.h>
@@ -286,7 +289,7 @@ static int ovl_check_whiteouts(struct dentry *dir, struct ovl_readdir_data *rdd)
 		}
 		inode_unlock(dir->d_inode);
 	}
-	revert_creds(old_cred);
+	ovl_revert_creds(old_cred);
 
 	return err;
 }
@@ -441,7 +444,7 @@ static u64 ovl_remap_lower_ino(u64 ino, int xinobits, int fsid,
 			       const char *name, int namelen)
 {
 	if (ino >> (64 - xinobits)) {
-		pr_warn_ratelimited("d_ino too big (%.*s, ino=%llu, xinobits=%d)\n",
+		pr_warn_ratelimited("overlayfs: d_ino too big (%.*s, ino=%llu, xinobits=%d)\n",
 				    namelen, name, ino, xinobits);
 		return ino;
 	}
@@ -469,7 +472,7 @@ static int ovl_cache_update_ino(struct path *path, struct ovl_cache_entry *p)
 	int xinobits = ovl_xino_bits(dir->d_sb);
 	int err = 0;
 
-	if (!ovl_same_dev(dir->d_sb))
+	if (!ovl_same_sb(dir->d_sb) && !xinobits)
 		goto out;
 
 	if (p->name[0] == '.') {
@@ -524,7 +527,7 @@ out:
 	return err;
 
 fail:
-	pr_warn_ratelimited("failed to look up (%s) for ino (%i)\n",
+	pr_warn_ratelimited("overlayfs: failed to look up (%s) for ino (%i)\n",
 			    p->name, err);
 	goto out;
 }
@@ -691,7 +694,7 @@ static int ovl_iterate_real(struct file *file, struct dir_context *ctx)
 	int err;
 	struct ovl_dir_file *od = file->private_data;
 	struct dentry *dir = file->f_path.dentry;
-	const struct ovl_layer *lower_layer = ovl_layer_lower(dir);
+	struct ovl_layer *lower_layer = ovl_layer_lower(dir);
 	struct ovl_readdir_translate rdt = {
 		.ctx.actor = ovl_fill_real,
 		.orig_ctx = ctx,
@@ -744,7 +747,7 @@ static int ovl_iterate(struct file *file, struct dir_context *ctx)
 		 * entries.
 		 */
 		if (ovl_xino_bits(dentry->d_sb) ||
-		    (ovl_same_fs(dentry->d_sb) &&
+		    (ovl_same_sb(dentry->d_sb) &&
 		     (ovl_is_impure_dir(file) ||
 		      OVL_TYPE_MERGE(ovl_path_type(dentry->d_parent))))) {
 			return ovl_iterate_real(file, ctx);
@@ -924,7 +927,7 @@ int ovl_check_empty_dir(struct dentry *dentry, struct list_head *list)
 
 	old_cred = ovl_override_creds(dentry->d_sb);
 	err = ovl_dir_read_merged(dentry, list, &root);
-	revert_creds(old_cred);
+	ovl_revert_creds(old_cred);
 	if (err)
 		return err;
 
@@ -971,7 +974,7 @@ void ovl_cleanup_whiteouts(struct dentry *upper, struct list_head *list)
 
 		dentry = lookup_one_len(p->name, upper, p->len);
 		if (IS_ERR(dentry)) {
-			pr_err("lookup '%s/%.*s' failed (%i)\n",
+			pr_err("overlayfs: lookup '%s/%.*s' failed (%i)\n",
 			       upper->d_name.name, p->len, p->name,
 			       (int) PTR_ERR(dentry));
 			continue;
@@ -1153,6 +1156,6 @@ next:
 out:
 	ovl_cache_free(&list);
 	if (err)
-		pr_err("failed index dir cleanup (%i)\n", err);
+		pr_err("overlayfs: failed index dir cleanup (%i)\n", err);
 	return err;
 }

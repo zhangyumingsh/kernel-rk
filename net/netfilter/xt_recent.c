@@ -1,7 +1,10 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (c) 2006 Patrick McHardy <kaber@trash.net>
  * Copyright © CC Computer Consultants GmbH, 2007 - 2008
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  *
  * This is a replacement of the old ipt_recent module, which carried the
  * following copyright notice:
@@ -103,7 +106,7 @@ static DEFINE_SPINLOCK(recent_lock);
 static DEFINE_MUTEX(recent_mutex);
 
 #ifdef CONFIG_PROC_FS
-static const struct proc_ops recent_mt_proc_ops;
+static const struct file_operations recent_mt_fops;
 #endif
 
 static u_int32_t hash_rnd __read_mostly;
@@ -152,7 +155,8 @@ static void recent_entry_remove(struct recent_table *t, struct recent_entry *e)
 /*
  * Drop entries with timestamps older then 'time'.
  */
-static void recent_entry_reap(struct recent_table *t, unsigned long time)
+static void recent_entry_reap(struct recent_table *t, unsigned long time,
+			      struct recent_entry *working, bool update)
 {
 	struct recent_entry *e;
 
@@ -160,6 +164,12 @@ static void recent_entry_reap(struct recent_table *t, unsigned long time)
 	 * The head of the LRU list is always the oldest entry.
 	 */
 	e = list_entry(t->lru_list.next, struct recent_entry, lru_list);
+
+	/*
+	 * Do not reap the entry which are going to be updated.
+	 */
+	if (e == working && update)
+		return;
 
 	/*
 	 * The last time stamp is the most recent.
@@ -303,7 +313,8 @@ recent_mt(const struct sk_buff *skb, struct xt_action_param *par)
 
 		/* info->seconds must be non-zero */
 		if (info->check_set & XT_RECENT_REAP)
-			recent_entry_reap(t, time);
+			recent_entry_reap(t, time, e,
+				info->check_set & XT_RECENT_UPDATE && ret);
 	}
 
 	if (info->check_set & XT_RECENT_SET ||
@@ -334,6 +345,7 @@ static int recent_mt_check(const struct xt_mtchk_param *par,
 	unsigned int nstamp_mask;
 	unsigned int i;
 	int ret = -EINVAL;
+	size_t sz;
 
 	net_get_random_once(&hash_rnd, sizeof(hash_rnd));
 
@@ -383,7 +395,8 @@ static int recent_mt_check(const struct xt_mtchk_param *par,
 		goto out;
 	}
 
-	t = kvzalloc(struct_size(t, iphash, ip_list_hash_size), GFP_KERNEL);
+	sz = sizeof(*t) + sizeof(t->iphash[0]) * ip_list_hash_size;
+	t = kvzalloc(sz, GFP_KERNEL);
 	if (t == NULL) {
 		ret = -ENOMEM;
 		goto out;
@@ -405,7 +418,7 @@ static int recent_mt_check(const struct xt_mtchk_param *par,
 		goto out;
 	}
 	pde = proc_create_data(t->name, ip_list_perms, recent_net->xt_recent,
-			       &recent_mt_proc_ops, t);
+		  &recent_mt_fops, t);
 	if (pde == NULL) {
 		recent_table_free(t);
 		ret = -ENOMEM;
@@ -616,12 +629,13 @@ recent_mt_proc_write(struct file *file, const char __user *input,
 	return size + 1;
 }
 
-static const struct proc_ops recent_mt_proc_ops = {
-	.proc_open	= recent_seq_open,
-	.proc_read	= seq_read,
-	.proc_write	= recent_mt_proc_write,
-	.proc_release	= seq_release_private,
-	.proc_lseek	= seq_lseek,
+static const struct file_operations recent_mt_fops = {
+	.open    = recent_seq_open,
+	.read    = seq_read,
+	.write   = recent_mt_proc_write,
+	.release = seq_release_private,
+	.owner   = THIS_MODULE,
+	.llseek = seq_lseek,
 };
 
 static int __net_init recent_proc_net_init(struct net *net)

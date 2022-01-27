@@ -1,9 +1,23 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /* hfcsusb.c
  * mISDN driver for Colognechip HFC-S USB chip
  *
  * Copyright 2001 by Peter Sprenger (sprenger@moving-bytes.de)
  * Copyright 2008 by Martin Bachem (info@bachem-it.com)
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2, or (at your option)
+ * any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ *
  *
  * module params
  *   debug=<n>, default=0, with n=0xHHHHGGGG
@@ -248,10 +262,8 @@ hfcsusb_ph_info(struct hfcsusb *hw)
 	struct dchannel *dch = &hw->dch;
 	int i;
 
-	phi = kzalloc(struct_size(phi, bch, dch->dev.nrbchan), GFP_ATOMIC);
-	if (!phi)
-		return;
-
+	phi = kzalloc(sizeof(struct ph_info) +
+		      dch->dev.nrbchan * sizeof(struct ph_info_ch), GFP_ATOMIC);
 	phi->dch.ch.protocol = hw->protocol;
 	phi->dch.ch.Flags = dch->Flags;
 	phi->dch.state = dch->state;
@@ -841,8 +853,8 @@ hfcsusb_rx_frame(struct usb_fifo *fifo, __u8 *data, unsigned int len,
 		if (maxlen < 0) {
 			if (rx_skb)
 				skb_trim(rx_skb, 0);
-			pr_warn("%s.B%d: No bufferspace for %d bytes\n",
-				hw->name, fifo->bch->nr, len);
+			pr_warning("%s.B%d: No bufferspace for %d bytes\n",
+				   hw->name, fifo->bch->nr, len);
 			spin_unlock_irqrestore(&hw->lock, flags);
 			return;
 		}

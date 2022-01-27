@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * fs/verity/verify.c: data verification functions, i.e. hooks for ->readpages()
+ * Data verification functions, i.e. hooks for ->readpages()
  *
  * Copyright 2019 Google LLC
  */
@@ -179,6 +179,7 @@ out:
 
 /**
  * fsverity_verify_page() - verify a data page
+ * @page: the page to verity
  *
  * Verify a page that has just been read from a verity file.  The page must be a
  * pagecache page that is still locked and not yet uptodate.
@@ -206,6 +207,7 @@ EXPORT_SYMBOL_GPL(fsverity_verify_page);
 #ifdef CONFIG_BLOCK
 /**
  * fsverity_verify_bio() - verify a 'read' bio that has just completed
+ * @bio: the bio to verify
  *
  * Verify a set of pages that have just been read from a verity file.  The pages
  * must be pagecache pages that are still locked and not yet uptodate.  Pages
@@ -225,7 +227,7 @@ void fsverity_verify_bio(struct bio *bio)
 	const struct merkle_tree_params *params = &vi->tree_params;
 	struct ahash_request *req;
 	struct bio_vec *bv;
-	struct bvec_iter_all iter_all;
+	int i;
 	unsigned long max_ra_pages = 0;
 
 	/* This allocation never fails, since it's mempool-backed. */
@@ -241,12 +243,12 @@ void fsverity_verify_bio(struct bio *bio)
 		 * This improves sequential read performance, as it greatly
 		 * reduces the number of I/O requests made to the Merkle tree.
 		 */
-		bio_for_each_segment_all(bv, bio, iter_all)
+		bio_for_each_segment_all(bv, bio, i)
 			max_ra_pages++;
 		max_ra_pages /= 4;
 	}
 
-	bio_for_each_segment_all(bv, bio, iter_all) {
+	bio_for_each_segment_all(bv, bio, i) {
 		struct page *page = bv->bv_page;
 		unsigned long level0_index = page->index >> params->log_arity;
 		unsigned long level0_ra_pages =
@@ -264,6 +266,7 @@ EXPORT_SYMBOL_GPL(fsverity_verify_bio);
 
 /**
  * fsverity_enqueue_verify_work() - enqueue work on the fs-verity workqueue
+ * @work: the work to enqueue
  *
  * Enqueue verification work for asynchronous processing.
  */

@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * drivers/hwmon/applesmc.c - driver for Apple's SMC (accelerometer, temperature
  * sensors, fan control, keyboard backlight control) used in Intel-based Apple
@@ -13,13 +12,26 @@
  *
  * Fan control based on smcFanControl:
  * Copyright (C) 2006 Hendrik Holtmann <holtmann@mac.com>
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License v2 as published by the
+ * Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
+ * more details.
+ *
+ * You should have received a copy of the GNU General Public License along with
+ * this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 #include <linux/delay.h>
 #include <linux/platform_device.h>
-#include <linux/input.h>
+#include <linux/input-polldev.h>
 #include <linux/kernel.h>
 #include <linux/slab.h>
 #include <linux/module.h>
@@ -140,7 +152,7 @@ static s16 rest_y;
 static u8 backlight_state[2];
 
 static struct device *hwmon_dev;
-static struct input_dev *applesmc_idev;
+static struct input_polled_dev *applesmc_idev;
 
 /*
  * Last index written to key_at_index sysfs file, and value to use for all other
@@ -681,8 +693,9 @@ static void applesmc_calibrate(void)
 	rest_x = -rest_x;
 }
 
-static void applesmc_idev_poll(struct input_dev *idev)
+static void applesmc_idev_poll(struct input_polled_dev *dev)
 {
+	struct input_dev *idev = dev->input;
 	s16 x, y;
 
 	if (applesmc_read_s16(MOTION_SENSOR_X_KEY, &x))
@@ -747,15 +760,18 @@ static ssize_t applesmc_light_show(struct device *dev,
 	}
 
 	ret = applesmc_read_key(LIGHT_SENSOR_LEFT_KEY, buffer, data_length);
+	if (ret)
+		goto out;
 	/* newer macbooks report a single 10-bit bigendian value */
 	if (data_length == 10) {
 		left = be16_to_cpu(*(__be16 *)(buffer + 6)) >> 2;
 		goto out;
 	}
 	left = buffer[2];
+
+	ret = applesmc_read_key(LIGHT_SENSOR_RIGHT_KEY, buffer, data_length);
 	if (ret)
 		goto out;
-	ret = applesmc_read_key(LIGHT_SENSOR_RIGHT_KEY, buffer, data_length);
 	right = buffer[2];
 
 out:
@@ -804,12 +820,11 @@ static ssize_t applesmc_show_fan_speed(struct device *dev,
 		  to_index(attr));
 
 	ret = applesmc_read_key(newkey, buffer, 2);
-	speed = ((buffer[0] << 8 | buffer[1]) >> 2);
-
 	if (ret)
 		return ret;
-	else
-		return snprintf(sysfsbuf, PAGE_SIZE, "%u\n", speed);
+
+	speed = ((buffer[0] << 8 | buffer[1]) >> 2);
+	return snprintf(sysfsbuf, PAGE_SIZE, "%u\n", speed);
 }
 
 static ssize_t applesmc_store_fan_speed(struct device *dev,
@@ -845,12 +860,11 @@ static ssize_t applesmc_show_fan_manual(struct device *dev,
 	u8 buffer[2];
 
 	ret = applesmc_read_key(FANS_MANUAL, buffer, 2);
-	manual = ((buffer[0] << 8 | buffer[1]) >> to_index(attr)) & 0x01;
-
 	if (ret)
 		return ret;
-	else
-		return snprintf(sysfsbuf, PAGE_SIZE, "%d\n", manual);
+
+	manual = ((buffer[0] << 8 | buffer[1]) >> to_index(attr)) & 0x01;
+	return snprintf(sysfsbuf, PAGE_SIZE, "%d\n", manual);
 }
 
 static ssize_t applesmc_store_fan_manual(struct device *dev,
@@ -866,9 +880,10 @@ static ssize_t applesmc_store_fan_manual(struct device *dev,
 		return -EINVAL;
 
 	ret = applesmc_read_key(FANS_MANUAL, buffer, 2);
-	val = (buffer[0] << 8 | buffer[1]);
 	if (ret)
 		goto out;
+
+	val = (buffer[0] << 8 | buffer[1]);
 
 	if (input)
 		val = val | (0x01 << to_index(attr));
@@ -945,13 +960,12 @@ static ssize_t applesmc_key_count_show(struct device *dev,
 	u32 count;
 
 	ret = applesmc_read_key(KEY_COUNT_KEY, buffer, 4);
-	count = ((u32)buffer[0]<<24) + ((u32)buffer[1]<<16) +
-						((u32)buffer[2]<<8) + buffer[3];
-
 	if (ret)
 		return ret;
-	else
-		return snprintf(sysfsbuf, PAGE_SIZE, "%d\n", count);
+
+	count = ((u32)buffer[0]<<24) + ((u32)buffer[1]<<16) +
+						((u32)buffer[2]<<8) + buffer[3];
+	return snprintf(sysfsbuf, PAGE_SIZE, "%d\n", count);
 }
 
 static ssize_t applesmc_key_at_index_read_show(struct device *dev,
@@ -1115,7 +1129,7 @@ static int applesmc_create_nodes(struct applesmc_node_group *groups, int num)
 			attr = &node->sda.dev_attr.attr;
 			sysfs_attr_init(attr);
 			attr->name = node->name;
-			attr->mode = 0444 | (grp->store ? 0200 : 0);
+			attr->mode = S_IRUGO | (grp->store ? S_IWUSR : 0);
 			ret = sysfs_create_file(&pdev->dev.kobj, attr);
 			if (ret) {
 				attr->name = NULL;
@@ -1133,6 +1147,7 @@ out:
 /* Create accelerometer resources */
 static int applesmc_create_accelerometer(void)
 {
+	struct input_dev *idev;
 	int ret;
 
 	if (!smcreg.has_accelerometer)
@@ -1142,38 +1157,37 @@ static int applesmc_create_accelerometer(void)
 	if (ret)
 		goto out;
 
-	applesmc_idev = input_allocate_device();
+	applesmc_idev = input_allocate_polled_device();
 	if (!applesmc_idev) {
 		ret = -ENOMEM;
 		goto out_sysfs;
 	}
 
+	applesmc_idev->poll = applesmc_idev_poll;
+	applesmc_idev->poll_interval = APPLESMC_POLL_INTERVAL;
+
 	/* initial calibrate for the input device */
 	applesmc_calibrate();
 
 	/* initialize the input device */
-	applesmc_idev->name = "applesmc";
-	applesmc_idev->id.bustype = BUS_HOST;
-	applesmc_idev->dev.parent = &pdev->dev;
-	input_set_abs_params(applesmc_idev, ABS_X,
+	idev = applesmc_idev->input;
+	idev->name = "applesmc";
+	idev->id.bustype = BUS_HOST;
+	idev->dev.parent = &pdev->dev;
+	idev->evbit[0] = BIT_MASK(EV_ABS);
+	input_set_abs_params(idev, ABS_X,
 			-256, 256, APPLESMC_INPUT_FUZZ, APPLESMC_INPUT_FLAT);
-	input_set_abs_params(applesmc_idev, ABS_Y,
+	input_set_abs_params(idev, ABS_Y,
 			-256, 256, APPLESMC_INPUT_FUZZ, APPLESMC_INPUT_FLAT);
 
-	ret = input_setup_polling(applesmc_idev, applesmc_idev_poll);
-	if (ret)
-		goto out_idev;
-
-	input_set_poll_interval(applesmc_idev, APPLESMC_POLL_INTERVAL);
-
-	ret = input_register_device(applesmc_idev);
+	ret = input_register_polled_device(applesmc_idev);
 	if (ret)
 		goto out_idev;
 
 	return 0;
 
 out_idev:
-	input_free_device(applesmc_idev);
+	input_free_polled_device(applesmc_idev);
 
 out_sysfs:
 	applesmc_destroy_nodes(accelerometer_group);
@@ -1188,7 +1202,8 @@ static void applesmc_release_accelerometer(void)
 {
 	if (!smcreg.has_accelerometer)
 		return;
-	input_unregister_device(applesmc_idev);
+	input_unregister_polled_device(applesmc_idev);
+	input_free_polled_device(applesmc_idev);
 	applesmc_destroy_nodes(accelerometer_group);
 }
 

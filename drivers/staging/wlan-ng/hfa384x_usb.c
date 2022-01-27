@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: (GPL-2.0 OR MPL-1.1)
 /* src/prism2/driver/hfa384x_usb.c
  *
- * Functions that talk to the USB variant of the Intersil hfa384x MAC
+ * Functions that talk to the USB variantof the Intersil hfa384x MAC
  *
  * Copyright (C) 1999 AbsoluteValue Systems, Inc.  All Rights Reserved.
  * --------------------------------------------------------------------
@@ -226,9 +226,11 @@ usbctlx_get_rridresult(const struct hfa384x_usb_rridresp *rridresp,
 
 /*---------------------------------------------------*/
 /* Low level req/resp CTLX formatters and submitters */
-static inline int
+static int
 hfa384x_docmd(struct hfa384x *hw,
-	      struct hfa384x_metacmd *cmd);
+	      enum cmd_mode mode,
+	      struct hfa384x_metacmd *cmd,
+	      ctlx_cmdcb_t cmdcb, ctlx_usercb_t usercb, void *usercb_data);
 
 static int
 hfa384x_dorrid(struct hfa384x *hw,
@@ -248,17 +250,21 @@ hfa384x_dowrid(struct hfa384x *hw,
 
 static int
 hfa384x_dormem(struct hfa384x *hw,
+	       enum cmd_mode mode,
 	       u16 page,
 	       u16 offset,
 	       void *data,
-	       unsigned int len);
+	       unsigned int len,
+	       ctlx_cmdcb_t cmdcb, ctlx_usercb_t usercb, void *usercb_data);
 
 static int
 hfa384x_dowmem(struct hfa384x *hw,
+	       enum cmd_mode mode,
 	       u16 page,
 	       u16 offset,
 	       void *data,
-	       unsigned int len);
+	       unsigned int len,
+	       ctlx_cmdcb_t cmdcb, ctlx_usercb_t usercb, void *usercb_data);
 
 static int hfa384x_isgood_pdrcode(u16 pdrcode);
 
@@ -293,11 +299,13 @@ void dbprint_urb(struct urb *urb)
 	pr_debug("urb->transfer_buffer_length=0x%08x\n",
 		 urb->transfer_buffer_length);
 	pr_debug("urb->actual_length=0x%08x\n", urb->actual_length);
+	pr_debug("urb->bandwidth=0x%08x\n", urb->bandwidth);
 	pr_debug("urb->setup_packet(ctl)=0x%08x\n",
 		 (unsigned int)urb->setup_packet);
 	pr_debug("urb->start_frame(iso/irq)=0x%08x\n", urb->start_frame);
 	pr_debug("urb->interval(irq)=0x%08x\n", urb->interval);
 	pr_debug("urb->error_count(iso)=0x%08x\n", urb->error_count);
+	pr_debug("urb->timeout=0x%08x\n", urb->timeout);
 	pr_debug("urb->context=0x%08x\n", (unsigned int)urb->context);
 	pr_debug("urb->complete=0x%08x\n", (unsigned int)urb->complete);
 }
@@ -524,12 +532,7 @@ static void hfa384x_usb_defer(struct work_struct *data)
  */
 void hfa384x_create(struct hfa384x *hw, struct usb_device *usb)
 {
-	memset(hw, 0, sizeof(*hw));
 	hw->usb = usb;
-
-	/* set up the endpoints */
-	hw->endp_in = usb_rcvbulkpipe(usb, 1);
-	hw->endp_out = usb_sndbulkpipe(usb, 2);
 
 	/* Set up the waitq */
 	init_waitqueue_head(&hw->cmdq);
@@ -812,6 +815,99 @@ static void hfa384x_cb_status(struct hfa384x *hw,
 	}
 }
 
+static inline int hfa384x_docmd_wait(struct hfa384x *hw,
+				     struct hfa384x_metacmd *cmd)
+{
+	return hfa384x_docmd(hw, DOWAIT, cmd, NULL, NULL, NULL);
+}
+
+static inline int
+hfa384x_docmd_async(struct hfa384x *hw,
+		    struct hfa384x_metacmd *cmd,
+		    ctlx_cmdcb_t cmdcb, ctlx_usercb_t usercb, void *usercb_data)
+{
+	return hfa384x_docmd(hw, DOASYNC, cmd, cmdcb, usercb, usercb_data);
+}
+
+static inline int
+hfa384x_dorrid_wait(struct hfa384x *hw, u16 rid, void *riddata,
+		    unsigned int riddatalen)
+{
+	return hfa384x_dorrid(hw, DOWAIT,
+			      rid, riddata, riddatalen, NULL, NULL, NULL);
+}
+
+static inline int
+hfa384x_dorrid_async(struct hfa384x *hw,
+		     u16 rid, void *riddata, unsigned int riddatalen,
+		     ctlx_cmdcb_t cmdcb,
+		     ctlx_usercb_t usercb, void *usercb_data)
+{
+	return hfa384x_dorrid(hw, DOASYNC,
+			      rid, riddata, riddatalen,
+			      cmdcb, usercb, usercb_data);
+}
+
+static inline int
+hfa384x_dowrid_wait(struct hfa384x *hw, u16 rid, void *riddata,
+		    unsigned int riddatalen)
+{
+	return hfa384x_dowrid(hw, DOWAIT,
+			      rid, riddata, riddatalen, NULL, NULL, NULL);
+}
+
+static inline int
+hfa384x_dowrid_async(struct hfa384x *hw,
+		     u16 rid, void *riddata, unsigned int riddatalen,
+		     ctlx_cmdcb_t cmdcb,
+		     ctlx_usercb_t usercb, void *usercb_data)
+{
+	return hfa384x_dowrid(hw, DOASYNC,
+			      rid, riddata, riddatalen,
+			      cmdcb, usercb, usercb_data);
+}
+
+static inline int
+hfa384x_dormem_wait(struct hfa384x *hw,
+		    u16 page, u16 offset, void *data, unsigned int len)
+{
+	return hfa384x_dormem(hw, DOWAIT,
+			      page, offset, data, len, NULL, NULL, NULL);
+}
+
+static inline int
+hfa384x_dormem_async(struct hfa384x *hw,
+		     u16 page, u16 offset, void *data, unsigned int len,
+		     ctlx_cmdcb_t cmdcb,
+		     ctlx_usercb_t usercb, void *usercb_data)
+{
+	return hfa384x_dormem(hw, DOASYNC,
+			      page, offset, data, len,
+			      cmdcb, usercb, usercb_data);
+}
+
+static inline int
+hfa384x_dowmem_wait(struct hfa384x *hw,
+		    u16 page, u16 offset, void *data, unsigned int len)
+{
+	return hfa384x_dowmem(hw, DOWAIT,
+			      page, offset, data, len, NULL, NULL, NULL);
+}
+
+static inline int
+hfa384x_dowmem_async(struct hfa384x *hw,
+		     u16 page,
+		     u16 offset,
+		     void *data,
+		     unsigned int len,
+		     ctlx_cmdcb_t cmdcb,
+		     ctlx_usercb_t usercb, void *usercb_data)
+{
+	return hfa384x_dowmem(hw, DOASYNC,
+			      page, offset, data, len,
+			      cmdcb, usercb, usercb_data);
+}
+
 /*----------------------------------------------------------------
  * hfa384x_cmd_initialize
  *
@@ -843,7 +939,7 @@ int hfa384x_cmd_initialize(struct hfa384x *hw)
 	cmd.parm1 = 0;
 	cmd.parm2 = 0;
 
-	result = hfa384x_docmd(hw, &cmd);
+	result = hfa384x_docmd_wait(hw, &cmd);
 
 	pr_debug("cmdresp.init: status=0x%04x, resp0=0x%04x, resp1=0x%04x, resp2=0x%04x\n",
 		 cmd.result.status,
@@ -889,7 +985,7 @@ int hfa384x_cmd_disable(struct hfa384x *hw, u16 macport)
 	cmd.parm1 = 0;
 	cmd.parm2 = 0;
 
-	return hfa384x_docmd(hw, &cmd);
+	return hfa384x_docmd_wait(hw, &cmd);
 }
 
 /*----------------------------------------------------------------
@@ -923,7 +1019,7 @@ int hfa384x_cmd_enable(struct hfa384x *hw, u16 macport)
 	cmd.parm1 = 0;
 	cmd.parm2 = 0;
 
-	return hfa384x_docmd(hw, &cmd);
+	return hfa384x_docmd_wait(hw, &cmd);
 }
 
 /*----------------------------------------------------------------
@@ -966,7 +1062,7 @@ int hfa384x_cmd_monitor(struct hfa384x *hw, u16 enable)
 	cmd.parm1 = 0;
 	cmd.parm2 = 0;
 
-	return hfa384x_docmd(hw, &cmd);
+	return hfa384x_docmd_wait(hw, &cmd);
 }
 
 /*----------------------------------------------------------------
@@ -1023,7 +1119,7 @@ int hfa384x_cmd_download(struct hfa384x *hw, u16 mode, u16 lowaddr,
 	cmd.parm1 = highaddr;
 	cmd.parm2 = codelen;
 
-	return hfa384x_docmd(hw, &cmd);
+	return hfa384x_docmd_wait(hw, &cmd);
 }
 
 /*----------------------------------------------------------------
@@ -1183,8 +1279,13 @@ cleanup:
  *
  * Arguments:
  *	hw		device structure
+ *	mode		DOWAIT or DOASYNC
  *       cmd             cmd structure.  Includes all arguments and result
  *                       data points.  All in host order. in host order
+ *	cmdcb		command-specific callback
+ *	usercb		user callback for async calls, NULL for DOWAIT calls
+ *	usercb_data	user supplied data pointer for async calls, NULL
+ *			for DOWAIT calls
  *
  * Returns:
  *	0		success
@@ -1200,9 +1301,11 @@ cleanup:
  *	process
  *----------------------------------------------------------------
  */
-static inline int
+static int
 hfa384x_docmd(struct hfa384x *hw,
-	      struct hfa384x_metacmd *cmd)
+	      enum cmd_mode mode,
+	      struct hfa384x_metacmd *cmd,
+	      ctlx_cmdcb_t cmdcb, ctlx_usercb_t usercb, void *usercb_data)
 {
 	int result;
 	struct hfa384x_usbctlx *ctlx;
@@ -1225,15 +1328,15 @@ hfa384x_docmd(struct hfa384x *hw,
 	pr_debug("cmdreq: cmd=0x%04x parm0=0x%04x parm1=0x%04x parm2=0x%04x\n",
 		 cmd->cmd, cmd->parm0, cmd->parm1, cmd->parm2);
 
-	ctlx->reapable = DOWAIT;
-	ctlx->cmdcb = NULL;
-	ctlx->usercb = NULL;
-	ctlx->usercb_data = NULL;
+	ctlx->reapable = mode;
+	ctlx->cmdcb = cmdcb;
+	ctlx->usercb = usercb;
+	ctlx->usercb_data = usercb_data;
 
 	result = hfa384x_usbctlx_submit(hw, ctlx);
 	if (result != 0) {
 		kfree(ctlx);
-	} else {
+	} else if (mode == DOWAIT) {
 		struct usbctlx_cmd_completor cmd_completor;
 		struct usbctlx_completor *completor;
 
@@ -1432,10 +1535,14 @@ done:
  *
  * Arguments:
  *	hw		device structure
+ *	mode		DOWAIT or DOASYNC
  *	page		MAC address space page (CMD format)
  *	offset		MAC address space offset
  *	data		Ptr to data buffer to receive read
  *	len		Length of the data to read (max == 2048)
+ *	cmdcb		command callback for async calls, NULL for DOWAIT calls
+ *	usercb		user callback for async calls, NULL for DOWAIT calls
+ *	usercb_data	user supplied data pointer for async calls
  *
  * Returns:
  *	0		success
@@ -1447,15 +1554,18 @@ done:
  * Side effects:
  *
  * Call context:
- *	process (DOWAIT)
+ *	interrupt (DOASYNC)
+ *	process (DOWAIT or DOASYNC)
  *----------------------------------------------------------------
  */
 static int
 hfa384x_dormem(struct hfa384x *hw,
+	       enum cmd_mode mode,
 	       u16 page,
 	       u16 offset,
 	       void *data,
-	       unsigned int len)
+	       unsigned int len,
+	       ctlx_cmdcb_t cmdcb, ctlx_usercb_t usercb, void *usercb_data)
 {
 	int result;
 	struct hfa384x_usbctlx *ctlx;
@@ -1483,15 +1593,15 @@ hfa384x_dormem(struct hfa384x *hw,
 
 	pr_debug("pktsize=%zd\n", ROUNDUP64(sizeof(ctlx->outbuf.rmemreq)));
 
-	ctlx->reapable = DOWAIT;
-	ctlx->cmdcb = NULL;
-	ctlx->usercb = NULL;
-	ctlx->usercb_data = NULL;
+	ctlx->reapable = mode;
+	ctlx->cmdcb = cmdcb;
+	ctlx->usercb = usercb;
+	ctlx->usercb_data = usercb_data;
 
 	result = hfa384x_usbctlx_submit(hw, ctlx);
 	if (result != 0) {
 		kfree(ctlx);
-	} else {
+	} else if (mode == DOWAIT) {
 		struct usbctlx_rmem_completor completor;
 
 		result =
@@ -1517,10 +1627,14 @@ done:
  *
  * Arguments:
  *	hw		device structure
+ *	mode		DOWAIT or DOASYNC
  *	page		MAC address space page (CMD format)
  *	offset		MAC address space offset
  *	data		Ptr to data buffer containing write data
  *	len		Length of the data to read (max == 2048)
+ *	cmdcb		command callback for async calls, NULL for DOWAIT calls
+ *	usercb		user callback for async calls, NULL for DOWAIT calls
+ *	usercb_data	user supplied data pointer for async calls.
  *
  * Returns:
  *	0		success
@@ -1533,15 +1647,17 @@ done:
  *
  * Call context:
  *	interrupt (DOWAIT)
- *	process (DOWAIT)
+ *	process (DOWAIT or DOASYNC)
  *----------------------------------------------------------------
  */
 static int
 hfa384x_dowmem(struct hfa384x *hw,
+	       enum cmd_mode mode,
 	       u16 page,
 	       u16 offset,
 	       void *data,
-	       unsigned int len)
+	       unsigned int len,
+	       ctlx_cmdcb_t cmdcb, ctlx_usercb_t usercb, void *usercb_data)
 {
 	int result;
 	struct hfa384x_usbctlx *ctlx;
@@ -1568,15 +1684,15 @@ hfa384x_dowmem(struct hfa384x *hw,
 	    sizeof(ctlx->outbuf.wmemreq.offset) +
 	    sizeof(ctlx->outbuf.wmemreq.page) + len;
 
-	ctlx->reapable = DOWAIT;
-	ctlx->cmdcb = NULL;
-	ctlx->usercb = NULL;
-	ctlx->usercb_data = NULL;
+	ctlx->reapable = mode;
+	ctlx->cmdcb = cmdcb;
+	ctlx->usercb = usercb;
+	ctlx->usercb_data = usercb_data;
 
 	result = hfa384x_usbctlx_submit(hw, ctlx);
 	if (result != 0) {
 		kfree(ctlx);
-	} else {
+	} else if (mode == DOWAIT) {
 		struct usbctlx_cmd_completor completor;
 		struct hfa384x_cmdresult wmemresult;
 
@@ -1883,10 +1999,10 @@ int hfa384x_drvr_flashdl_write(struct hfa384x *hw, u32 daddr,
 			writelen = writelen > HFA384x_USB_RWMEM_MAXLEN ?
 			    HFA384x_USB_RWMEM_MAXLEN : writelen;
 
-			result = hfa384x_dowmem(hw,
-						writepage,
-						writeoffset,
-						writebuf, writelen);
+			result = hfa384x_dowmem_wait(hw,
+						     writepage,
+						     writeoffset,
+						     writebuf, writelen);
 		}
 
 		/* set the download 'write flash' mode */
@@ -1940,7 +2056,7 @@ exit_proc:
  */
 int hfa384x_drvr_getconfig(struct hfa384x *hw, u16 rid, void *buf, u16 len)
 {
-	return hfa384x_dorrid(hw, DOWAIT, rid, buf, len, NULL, NULL, NULL);
+	return hfa384x_dorrid_wait(hw, rid, buf, len);
 }
 
 /*----------------------------------------------------------------
@@ -1973,8 +2089,8 @@ hfa384x_drvr_setconfig_async(struct hfa384x *hw,
 			     void *buf,
 			     u16 len, ctlx_usercb_t usercb, void *usercb_data)
 {
-	return hfa384x_dowrid(hw, DOASYNC, rid, buf, len, hfa384x_cb_status,
-			      usercb, usercb_data);
+	return hfa384x_dowrid_async(hw, rid, buf, len,
+				    hfa384x_cb_status, usercb, usercb_data);
 }
 
 /*----------------------------------------------------------------
@@ -2140,11 +2256,12 @@ int hfa384x_drvr_ramdl_write(struct hfa384x *hw, u32 daddr, void *buf, u32 len)
 			currlen = HFA384x_USB_RWMEM_MAXLEN;
 
 		/* Do blocking ctlx */
-		result = hfa384x_dowmem(hw,
-					currpage,
-					curroffset,
-					data + (i * HFA384x_USB_RWMEM_MAXLEN),
-					currlen);
+		result = hfa384x_dowmem_wait(hw,
+					     currpage,
+					     curroffset,
+					     data +
+					     (i * HFA384x_USB_RWMEM_MAXLEN),
+					     currlen);
 
 		if (result)
 			break;
@@ -2216,8 +2333,8 @@ int hfa384x_drvr_readpda(struct hfa384x *hw, void *buf, unsigned int len)
 		curroffset = HFA384x_ADDR_CMD_MKOFF(pdaloc[i].cardaddr);
 
 		/* units of bytes */
-		result = hfa384x_dormem(hw, currpage, curroffset, buf,
-					len);
+		result = hfa384x_dormem_wait(hw, currpage, curroffset, buf,
+					     len);
 
 		if (result) {
 			netdev_warn(hw->wlandev->netdev,
@@ -2300,7 +2417,7 @@ int hfa384x_drvr_readpda(struct hfa384x *hw, void *buf, unsigned int len)
  */
 int hfa384x_drvr_setconfig(struct hfa384x *hw, u16 rid, void *buf, u16 len)
 {
-	return hfa384x_dowrid(hw, DOWAIT, rid, buf, len, NULL, NULL, NULL);
+	return hfa384x_dowrid_wait(hw, rid, buf, len);
 }
 
 /*----------------------------------------------------------------
@@ -3486,32 +3603,36 @@ static void hfa384x_usbout_callback(struct urb *urb)
 			prism2sta_ev_alloc(wlandev);
 			break;
 
-		case -EPIPE: {
-			struct hfa384x *hw = wlandev->priv;
+		case -EPIPE:
+			{
+				struct hfa384x *hw = wlandev->priv;
 
-			netdev_warn(hw->wlandev->netdev,
-				    "%s tx pipe stalled: requesting reset\n",
-				    wlandev->netdev->name);
-			if (!test_and_set_bit(WORK_TX_HALT, &hw->usb_flags))
-				schedule_work(&hw->usb_work);
-			wlandev->netdev->stats.tx_errors++;
-			break;
-		}
+				netdev_warn(hw->wlandev->netdev,
+					    "%s tx pipe stalled: requesting reset\n",
+					    wlandev->netdev->name);
+				if (!test_and_set_bit
+				    (WORK_TX_HALT, &hw->usb_flags))
+					schedule_work(&hw->usb_work);
+				wlandev->netdev->stats.tx_errors++;
+				break;
+			}
 
 		case -EPROTO:
 		case -ETIMEDOUT:
-		case -EILSEQ: {
-			struct hfa384x *hw = wlandev->priv;
+		case -EILSEQ:
+			{
+				struct hfa384x *hw = wlandev->priv;
 
-			if (!test_and_set_bit(THROTTLE_TX, &hw->usb_flags) &&
-			    !timer_pending(&hw->throttle)) {
-				mod_timer(&hw->throttle,
-					  jiffies + THROTTLE_JIFFIES);
+				if (!test_and_set_bit
+				    (THROTTLE_TX, &hw->usb_flags) &&
+				    !timer_pending(&hw->throttle)) {
+					mod_timer(&hw->throttle,
+						  jiffies + THROTTLE_JIFFIES);
+				}
+				wlandev->netdev->stats.tx_errors++;
+				netif_stop_queue(wlandev->netdev);
+				break;
 			}
-			wlandev->netdev->stats.tx_errors++;
-			netif_stop_queue(wlandev->netdev);
-			break;
-		}
 
 		case -ENOENT:
 		case -ESHUTDOWN:

@@ -1,7 +1,10 @@
-// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) Sistina Software, Inc.  1997-2003 All rights reserved.
  * Copyright (C) 2004-2011 Red Hat, Inc.  All rights reserved.
+ *
+ * This copyrighted material is made available to anyone wishing to use,
+ * modify, copy, or redistribute it subject to the terms and conditions
+ * of the GNU General Public License version 2.
  */
 
 #include <linux/slab.h>
@@ -136,6 +139,7 @@ struct inode *gfs2_inode_lookup(struct super_block *sb, unsigned int type,
 
 	if (inode->i_state & I_NEW) {
 		struct gfs2_sbd *sdp = GFS2_SB(inode);
+		ip->i_no_formal_ino = no_formal_ino;
 
 		error = gfs2_glock_get(sdp, no_addr, &gfs2_inode_glops, CREATE, &ip->i_gl);
 		if (unlikely(error))
@@ -174,21 +178,20 @@ struct inode *gfs2_inode_lookup(struct super_block *sb, unsigned int type,
 		gfs2_glock_put(io_gl);
 		io_gl = NULL;
 
-		/* Lowest possible timestamp; will be overwritten in gfs2_dinode_in. */
-		inode->i_atime.tv_sec = 1LL << (8 * sizeof(inode->i_atime.tv_sec) - 1);
-		inode->i_atime.tv_nsec = 0;
-
 		if (type == DT_UNKNOWN) {
 			/* Inode glock must be locked already */
 			error = gfs2_inode_refresh(GFS2_I(inode));
 			if (error)
 				goto fail_refresh;
 		} else {
-			ip->i_no_formal_ino = no_formal_ino;
 			inode->i_mode = DT2IF(type);
 		}
 
 		gfs2_set_iop(inode);
+
+		/* Lowest possible timestamp; will be overwritten in gfs2_dinode_in. */
+		inode->i_atime.tv_sec = 1LL << (8 * sizeof(inode->i_atime.tv_sec) - 1);
+		inode->i_atime.tv_nsec = 0;
 
 		unlock_new_inode(inode);
 	}
@@ -656,6 +659,7 @@ static int gfs2_create_inode(struct inode *dir, struct dentry *dentry,
 	inode->i_rdev = dev;
 	inode->i_size = size;
 	inode->i_atime = inode->i_mtime = inode->i_ctime = current_time(inode);
+	gfs2_set_inode_blocks(inode, 1);
 	munge_mode_uid_gid(dip, inode);
 	check_and_update_goal(dip);
 	ip->i_goal = dip->i_goal;
@@ -793,7 +797,7 @@ fail_free_acls:
 fail_gunlock:
 	gfs2_dir_no_add(&da);
 	gfs2_glock_dq_uninit(ghs);
-	if (!IS_ERR_OR_NULL(inode)) {
+	if (inode && !IS_ERR(inode)) {
 		clear_nlink(inode);
 		if (!free_vfs_inode)
 			mark_inode_dirty(inode);
@@ -1348,7 +1352,7 @@ static int gfs2_rename(struct inode *odir, struct dentry *odentry,
 	struct gfs2_inode *ip = GFS2_I(d_inode(odentry));
 	struct gfs2_inode *nip = NULL;
 	struct gfs2_sbd *sdp = GFS2_SB(odir);
-	struct gfs2_holder ghs[4], r_gh, rd_gh;
+	struct gfs2_holder ghs[5], r_gh;
 	struct gfs2_rgrpd *nrgd;
 	unsigned int num_gh;
 	int dir_rename = 0;
@@ -1357,7 +1361,6 @@ static int gfs2_rename(struct inode *odir, struct dentry *odentry,
 	int error;
 
 	gfs2_holder_mark_uninitialized(&r_gh);
-	gfs2_holder_mark_uninitialized(&rd_gh);
 	if (d_really_is_positive(ndentry)) {
 		nip = GFS2_I(d_inode(ndentry));
 		if (ip == nip)
@@ -1388,42 +1391,28 @@ static int gfs2_rename(struct inode *odir, struct dentry *odentry,
 	}
 
 	num_gh = 1;
-	gfs2_holder_init(odip->i_gl, LM_ST_EXCLUSIVE, GL_ASYNC, ghs);
+	gfs2_holder_init(odip->i_gl, LM_ST_EXCLUSIVE, 0, ghs);
 	if (odip != ndip) {
-		gfs2_holder_init(ndip->i_gl, LM_ST_EXCLUSIVE,GL_ASYNC,
-				 ghs + num_gh);
+		gfs2_holder_init(ndip->i_gl, LM_ST_EXCLUSIVE, 0, ghs + num_gh);
 		num_gh++;
 	}
-	gfs2_holder_init(ip->i_gl, LM_ST_EXCLUSIVE, GL_ASYNC, ghs + num_gh);
+	gfs2_holder_init(ip->i_gl, LM_ST_EXCLUSIVE, 0, ghs + num_gh);
 	num_gh++;
 
 	if (nip) {
-		gfs2_holder_init(nip->i_gl, LM_ST_EXCLUSIVE, GL_ASYNC,
-				 ghs + num_gh);
+		gfs2_holder_init(nip->i_gl, LM_ST_EXCLUSIVE, 0, ghs + num_gh);
 		num_gh++;
+		/* grab the resource lock for unlink flag twiddling 
+		 * this is the case of the target file already existing
+		 * so we unlink before doing the rename
+		 */
+		nrgd = gfs2_blk2rgrpd(sdp, nip->i_no_addr, 1);
+		if (nrgd)
+			gfs2_holder_init(nrgd->rd_gl, LM_ST_EXCLUSIVE, 0, ghs + num_gh++);
 	}
 
 	for (x = 0; x < num_gh; x++) {
 		error = gfs2_glock_nq(ghs + x);
-		if (error)
-			goto out_gunlock;
-	}
-	error = gfs2_glock_async_wait(num_gh, ghs);
-	if (error)
-		goto out_gunlock;
-
-	if (nip) {
-		/* Grab the resource group glock for unlink flag twiddling.
-		 * This is the case where the target dinode already exists
-		 * so we unlink before doing the rename.
-		 */
-		nrgd = gfs2_blk2rgrpd(sdp, nip->i_no_addr, 1);
-		if (!nrgd) {
-			error = -ENOENT;
-			goto out_gunlock;
-		}
-		error = gfs2_glock_nq_init(nrgd->rd_gl, LM_ST_EXCLUSIVE, 0,
-					   &rd_gh);
 		if (error)
 			goto out_gunlock;
 	}
@@ -1475,7 +1464,7 @@ static int gfs2_rename(struct inode *odir, struct dentry *odentry,
 			error = -EEXIST;
 		default:
 			goto out_gunlock;
-		}
+		};
 
 		if (odip != ndip) {
 			if (!ndip->i_inode.i_nlink) {
@@ -1556,12 +1545,8 @@ out_gunlock_q:
 		gfs2_quota_unlock(ndip);
 out_gunlock:
 	gfs2_dir_no_add(&da);
-	if (gfs2_holder_initialized(&rd_gh))
-		gfs2_glock_dq_uninit(&rd_gh);
-
 	while (x--) {
-		if (gfs2_holder_queued(ghs + x))
-			gfs2_glock_dq(ghs + x);
+		gfs2_glock_dq(ghs + x);
 		gfs2_holder_uninit(ghs + x);
 	}
 out_gunlock_r:
@@ -1591,7 +1576,7 @@ static int gfs2_exchange(struct inode *odir, struct dentry *odentry,
 	struct gfs2_inode *oip = GFS2_I(odentry->d_inode);
 	struct gfs2_inode *nip = GFS2_I(ndentry->d_inode);
 	struct gfs2_sbd *sdp = GFS2_SB(odir);
-	struct gfs2_holder ghs[4], r_gh;
+	struct gfs2_holder ghs[5], r_gh;
 	unsigned int num_gh;
 	unsigned int x;
 	umode_t old_mode = oip->i_inode.i_mode;
@@ -1625,16 +1610,15 @@ static int gfs2_exchange(struct inode *odir, struct dentry *odentry,
 	}
 
 	num_gh = 1;
-	gfs2_holder_init(odip->i_gl, LM_ST_EXCLUSIVE, GL_ASYNC, ghs);
+	gfs2_holder_init(odip->i_gl, LM_ST_EXCLUSIVE, 0, ghs);
 	if (odip != ndip) {
-		gfs2_holder_init(ndip->i_gl, LM_ST_EXCLUSIVE, GL_ASYNC,
-				 ghs + num_gh);
+		gfs2_holder_init(ndip->i_gl, LM_ST_EXCLUSIVE, 0, ghs + num_gh);
 		num_gh++;
 	}
-	gfs2_holder_init(oip->i_gl, LM_ST_EXCLUSIVE, GL_ASYNC, ghs + num_gh);
+	gfs2_holder_init(oip->i_gl, LM_ST_EXCLUSIVE, 0, ghs + num_gh);
 	num_gh++;
 
-	gfs2_holder_init(nip->i_gl, LM_ST_EXCLUSIVE, GL_ASYNC, ghs + num_gh);
+	gfs2_holder_init(nip->i_gl, LM_ST_EXCLUSIVE, 0, ghs + num_gh);
 	num_gh++;
 
 	for (x = 0; x < num_gh; x++) {
@@ -1642,10 +1626,6 @@ static int gfs2_exchange(struct inode *odir, struct dentry *odentry,
 		if (error)
 			goto out_gunlock;
 	}
-
-	error = gfs2_glock_async_wait(num_gh, ghs);
-	if (error)
-		goto out_gunlock;
 
 	error = -ENOENT;
 	if (oip->i_inode.i_nlink == 0 || nip->i_inode.i_nlink == 0)
@@ -1707,8 +1687,7 @@ out_end_trans:
 	gfs2_trans_end(sdp);
 out_gunlock:
 	while (x--) {
-		if (gfs2_holder_queued(ghs + x))
-			gfs2_glock_dq(ghs + x);
+		gfs2_glock_dq(ghs + x);
 		gfs2_holder_uninit(ghs + x);
 	}
 out_gunlock_r:

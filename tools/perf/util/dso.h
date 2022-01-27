@@ -2,22 +2,17 @@
 #ifndef __PERF_DSO
 #define __PERF_DSO
 
-#include <pthread.h>
 #include <linux/refcount.h>
 #include <linux/types.h>
 #include <linux/rbtree.h>
 #include <sys/types.h>
 #include <stdbool.h>
-#include <stdio.h>
+#include "rwsem.h"
+#include <linux/types.h>
 #include <linux/bitops.h>
+#include "map.h"
+#include "namespaces.h"
 #include "build-id.h"
-
-struct machine;
-struct map;
-struct perf_env;
-
-#define DSO__NAME_KALLSYMS	"[kernel.kallsyms]"
-#define DSO__NAME_KCORE		"[kernel.kcore]"
 
 enum dso_binary_type {
 	DSO_BINARY_TYPE__KALLSYMS = 0,
@@ -30,6 +25,7 @@ enum dso_binary_type {
 	DSO_BINARY_TYPE__BUILD_ID_CACHE_DEBUGINFO,
 	DSO_BINARY_TYPE__FEDORA_DEBUGINFO,
 	DSO_BINARY_TYPE__UBUNTU_DEBUGINFO,
+	DSO_BINARY_TYPE__MIXEDUP_UBUNTU_DEBUGINFO,
 	DSO_BINARY_TYPE__BUILDID_DEBUGINFO,
 	DSO_BINARY_TYPE__SYSTEM_PATH_DSO,
 	DSO_BINARY_TYPE__GUEST_KMODULE,
@@ -39,7 +35,6 @@ enum dso_binary_type {
 	DSO_BINARY_TYPE__KCORE,
 	DSO_BINARY_TYPE__GUEST_KCORE,
 	DSO_BINARY_TYPE__OPENEMBEDDED_DEBUGINFO,
-	DSO_BINARY_TYPE__BPF_PROG_INFO,
 	DSO_BINARY_TYPE__NOT_FOUND,
 };
 
@@ -122,21 +117,21 @@ enum dso_load_errno {
 #define DSO__DATA_CACHE_SIZE 4096
 #define DSO__DATA_CACHE_MASK ~(DSO__DATA_CACHE_SIZE - 1)
 
-/*
- * Data about backing storage DSO, comes from PERF_RECORD_MMAP2 meta events
- */
-struct dso_id {
-	u32	maj;
-	u32	min;
-	u64	ino;
-	u64	ino_generation;
-};
-
 struct dso_cache {
 	struct rb_node	rb_node;
 	u64 offset;
 	u64 size;
 	char data[0];
+};
+
+/*
+ * DSOs are put into both a list for fast iteration and rbtree for fast
+ * long name lookup.
+ */
+struct dsos {
+	struct list_head head;
+	struct rb_root	 root;	/* rbtree root sorted by long name */
+	struct rw_semaphore lock;
 };
 
 struct auxtrace_cache;
@@ -146,10 +141,10 @@ struct dso {
 	struct list_head node;
 	struct rb_node	 rb_node;	/* rbtree node sorted by long name */
 	struct rb_root	 *root;		/* root of rbtree that rb_node is in */
-	struct rb_root_cached symbols;
-	struct rb_root_cached symbol_names;
-	struct rb_root_cached inlined_nodes;
-	struct rb_root_cached srclines;
+	struct rb_root	 symbols;
+	struct rb_root	 symbol_names;
+	struct rb_root	 inlined_nodes;
+	struct rb_root	 srclines;
 	struct {
 		u64		addr;
 		struct symbol	*symbol;
@@ -194,19 +189,12 @@ struct dso {
 		u64		 debug_frame_offset;
 		u64		 eh_frame_hdr_offset;
 	} data;
-	/* bpf prog information */
-	struct {
-		u32		id;
-		u32		sub_id;
-		struct perf_env	*env;
-	} bpf_prog;
 
 	union { /* Tool specific area */
 		void	 *priv;
 		u64	 db_id;
 	};
 	struct nsinfo	*nsinfo;
-	struct dso_id	 id;
 	refcount_t	 refcnt;
 	char		 name[0];
 };
@@ -225,11 +213,9 @@ static inline void dso__set_loaded(struct dso *dso)
 	dso->loaded = true;
 }
 
-struct dso *dso__new_id(const char *name, struct dso_id *id);
 struct dso *dso__new(const char *name);
 void dso__delete(struct dso *dso);
 
-int dso__cmp_id(struct dso *a, struct dso *b);
 void dso__set_short_name(struct dso *dso, const char *name, bool name_allocated);
 void dso__set_long_name(struct dso *dso, const char *name, bool name_allocated);
 
@@ -250,7 +236,7 @@ bool dso__loaded(const struct dso *dso);
 
 static inline bool dso__has_symbols(const struct dso *dso)
 {
-	return !RB_EMPTY_ROOT(&dso->symbols.rb_root);
+	return !RB_EMPTY_ROOT(&dso->symbols);
 }
 
 bool dso__sorted_by_name(const struct dso *dso);
@@ -298,8 +284,6 @@ void dso__set_module_info(struct dso *dso, struct kmod_path *m,
  *   dso__data_size
  *   dso__data_read_offset
  *   dso__data_read_addr
- *   dso__data_write_cache_offs
- *   dso__data_write_cache_addr
  *
  * Please refer to the dso.c object code for each function and
  * arguments documentation. Following text tries to explain the
@@ -339,7 +323,6 @@ int dso__data_get_fd(struct dso *dso, struct machine *machine);
 void dso__data_put_fd(struct dso *dso);
 void dso__data_close(struct dso *dso);
 
-int dso__data_file_size(struct dso *dso, struct machine *machine);
 off_t dso__data_size(struct dso *dso, struct machine *machine);
 ssize_t dso__data_read_offset(struct dso *dso, struct machine *machine,
 			      u64 offset, u8 *data, ssize_t size);
@@ -347,17 +330,25 @@ ssize_t dso__data_read_addr(struct dso *dso, struct map *map,
 			    struct machine *machine, u64 addr,
 			    u8 *data, ssize_t size);
 bool dso__data_status_seen(struct dso *dso, enum dso_data_status_seen by);
-ssize_t dso__data_write_cache_offs(struct dso *dso, struct machine *machine,
-				   u64 offset, const u8 *data, ssize_t size);
-ssize_t dso__data_write_cache_addr(struct dso *dso, struct map *map,
-				   struct machine *machine, u64 addr,
-				   const u8 *data, ssize_t size);
 
 struct map *dso__new_map(const char *name);
 struct dso *machine__findnew_kernel(struct machine *machine, const char *name,
 				    const char *short_name, int dso_type);
 
+void __dsos__add(struct dsos *dsos, struct dso *dso);
+void dsos__add(struct dsos *dsos, struct dso *dso);
+struct dso *__dsos__addnew(struct dsos *dsos, const char *name);
+struct dso *__dsos__find(struct dsos *dsos, const char *name, bool cmp_short);
+struct dso *dsos__find(struct dsos *dsos, const char *name, bool cmp_short);
+struct dso *__dsos__findnew(struct dsos *dsos, const char *name);
+struct dso *dsos__findnew(struct dsos *dsos, const char *name);
+bool __dsos__read_build_ids(struct list_head *head, bool with_hits);
+
 void dso__reset_find_symbol_cache(struct dso *dso);
+
+size_t __dsos__fprintf_buildid(struct list_head *head, FILE *fp,
+			       bool (skip)(struct dso *dso, int parm), int parm);
+size_t __dsos__fprintf(struct list_head *head, FILE *fp);
 
 size_t dso__fprintf_buildid(struct dso *dso, FILE *fp);
 size_t dso__fprintf_symbols_by_name(struct dso *dso, FILE *fp);

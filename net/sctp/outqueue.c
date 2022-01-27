@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0-or-later
 /* SCTP kernel implementation
  * (C) Copyright IBM Corp. 2001, 2004
  * Copyright (c) 1999-2000 Cisco, Inc.
@@ -9,6 +8,22 @@
  *
  * These functions implement the sctp_outq class.   The outqueue handles
  * bundling and queueing of outgoing SCTP chunks.
+ *
+ * This SCTP implementation is free software;
+ * you can redistribute it and/or modify it under the terms of
+ * the GNU General Public License as published by
+ * the Free Software Foundation; either version 2, or (at your option)
+ * any later version.
+ *
+ * This SCTP implementation is distributed in the hope that it
+ * will be useful, but WITHOUT ANY WARRANTY; without even the implied
+ *                 ************************
+ * warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+ * See the GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with GNU CC; see the file COPYING.  If not, see
+ * <http://www.gnu.org/licenses/>.
  *
  * Please send any bug reports or fixes you make to the
  * email address(es):
@@ -198,7 +213,7 @@ void sctp_outq_init(struct sctp_association *asoc, struct sctp_outq *q)
 	INIT_LIST_HEAD(&q->retransmit);
 	INIT_LIST_HEAD(&q->sacked);
 	INIT_LIST_HEAD(&q->abandoned);
-	sctp_sched_set_sched(asoc, sctp_sk(asoc->base.sk)->default_ss);
+	sctp_sched_set_sched(asoc, SCTP_SS_DEFAULT);
 }
 
 /* Free the outqueue structure and any related pending chunks.
@@ -280,7 +295,7 @@ void sctp_outq_free(struct sctp_outq *q)
 /* Put a new chunk in an sctp_outq.  */
 void sctp_outq_tail(struct sctp_outq *q, struct sctp_chunk *chunk, gfp_t gfp)
 {
-	struct net *net = q->asoc->base.net;
+	struct net *net = sock_net(q->asoc->base.sk);
 
 	pr_debug("%s: outq:%p, chunk:%p[%s]\n", __func__, q, chunk,
 		 chunk && chunk->chunk_hdr ?
@@ -371,7 +386,9 @@ static int sctp_prsctp_prune_sent(struct sctp_association *asoc,
 			asoc->outqueue.outstanding_bytes -= sctp_data_size(chk);
 		}
 
-		msg_len -= chk->skb->truesize + sizeof(struct sctp_chunk);
+		msg_len -= SCTP_DATA_SNDSIZE(chk) +
+			   sizeof(struct sk_buff) +
+			   sizeof(struct sctp_chunk);
 		if (msg_len <= 0)
 			break;
 	}
@@ -405,7 +422,9 @@ static int sctp_prsctp_prune_unsent(struct sctp_association *asoc,
 			streamout->ext->abandoned_unsent[SCTP_PR_INDEX(PRIO)]++;
 		}
 
-		msg_len -= chk->skb->truesize + sizeof(struct sctp_chunk);
+		msg_len -= SCTP_DATA_SNDSIZE(chk) +
+			   sizeof(struct sk_buff) +
+			   sizeof(struct sctp_chunk);
 		sctp_chunk_free(chk);
 		if (msg_len <= 0)
 			break;
@@ -534,7 +553,7 @@ void sctp_retransmit_mark(struct sctp_outq *q,
 void sctp_retransmit(struct sctp_outq *q, struct sctp_transport *transport,
 		     enum sctp_retransmit_reason reason)
 {
-	struct net *net = q->asoc->base.net;
+	struct net *net = sock_net(q->asoc->base.sk);
 
 	switch (reason) {
 	case SCTP_RTXR_T3_RTX:
@@ -1240,9 +1259,8 @@ int sctp_outq_sack(struct sctp_outq *q, struct sctp_chunk *chunk)
 	transport_list = &asoc->peer.transport_addr_list;
 
 	/* SCTP path tracepoint for congestion control debugging. */
-	if (trace_sctp_probe_path_enabled()) {
-		list_for_each_entry(transport, transport_list, transports)
-			trace_sctp_probe_path(transport, asoc);
+	list_for_each_entry(transport, transport_list, transports) {
+		trace_sctp_probe_path(transport, asoc);
 	}
 
 	sack_ctsn = ntohl(sack->cum_tsn_ack);
@@ -1891,6 +1909,6 @@ void sctp_generate_fwdtsn(struct sctp_outq *q, __u32 ctsn)
 
 	if (ftsn_chunk) {
 		list_add_tail(&ftsn_chunk->list, &q->control_chunk_list);
-		SCTP_INC_STATS(asoc->base.net, SCTP_MIB_OUTCTRLCHUNKS);
+		SCTP_INC_STATS(sock_net(asoc->base.sk), SCTP_MIB_OUTCTRLCHUNKS);
 	}
 }

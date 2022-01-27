@@ -94,7 +94,7 @@ nfsd_proc_setattr(struct svc_rqst *rqstp)
 		 * Solaris, at least, doesn't seem to care what the time
 		 * request is.  We require it be within 30 minutes of now.
 		 */
-		time64_t delta = iap->ia_atime.tv_sec - ktime_get_real_seconds();
+		time_t delta = iap->ia_atime.tv_sec - get_seconds();
 
 		nfserr = fh_verify(rqstp, fhp, 0, NFSD_MAY_NOP);
 		if (nfserr)
@@ -113,9 +113,16 @@ nfsd_proc_setattr(struct svc_rqst *rqstp)
 		}
 	}
 
-	nfserr = nfsd_setattr(rqstp, fhp, iap, 0, (time64_t)0);
+	nfserr = nfsd_setattr(rqstp, fhp, iap, 0, (time_t)0);
 done:
 	return nfsd_return_attrs(nfserr, resp);
+}
+
+/* Obsolete, replaced by MNTPROC_MNT. */
+static __be32
+nfsd_proc_root(struct svc_rqst *rqstp)
+{
+	return nfs_ok;
 }
 
 /*
@@ -172,7 +179,6 @@ nfsd_proc_read(struct svc_rqst *rqstp)
 	struct nfsd_readargs *argp = rqstp->rq_argp;
 	struct nfsd_readres *resp = rqstp->rq_resp;
 	__be32	nfserr;
-	u32 eof;
 
 	dprintk("nfsd: READ    %s %d bytes at %d\n",
 		SVCFH_fmt(&argp->fh),
@@ -196,11 +202,17 @@ nfsd_proc_read(struct svc_rqst *rqstp)
 	nfserr = nfsd_read(rqstp, fh_copy(&resp->fh, &argp->fh),
 				  argp->offset,
 			   	  rqstp->rq_vec, argp->vlen,
-				  &resp->count,
-				  &eof);
+				  &resp->count);
 
 	if (nfserr) return nfserr;
 	return fh_getattr(&resp->fh, &resp->stat);
+}
+
+/* Reserved */
+static __be32
+nfsd_proc_writecache(struct svc_rqst *rqstp)
+{
+	return nfs_ok;
 }
 
 /*
@@ -226,7 +238,7 @@ nfsd_proc_write(struct svc_rqst *rqstp)
 		return nfserr_io;
 	nfserr = nfsd_write(rqstp, fh_copy(&resp->fh, &argp->fh),
 			    argp->offset, rqstp->rq_vec, nvecs,
-			    &cnt, NFS_DATA_SYNC, NULL);
+			    &cnt, NFS_DATA_SYNC);
 	return nfsd_return_attrs(nfserr, resp);
 }
 
@@ -380,7 +392,7 @@ nfsd_proc_create(struct svc_rqst *rqstp)
 		 */
 		attr->ia_valid &= ATTR_SIZE;
 		if (attr->ia_valid)
-			nfserr = nfsd_setattr(rqstp, newfhp, attr, 0, (time64_t)0);
+			nfserr = nfsd_setattr(rqstp, newfhp, attr, 0, (time_t)0);
 	}
 
 out_unlock:
@@ -617,6 +629,7 @@ static const struct svc_procedure nfsd_procedures2[18] = {
 		.pc_xdrressize = ST+AT,
 	},
 	[NFSPROC_ROOT] = {
+		.pc_func = nfsd_proc_root,
 		.pc_decode = nfssvc_decode_void,
 		.pc_encode = nfssvc_encode_void,
 		.pc_argsize = sizeof(struct nfsd_void),
@@ -654,6 +667,7 @@ static const struct svc_procedure nfsd_procedures2[18] = {
 		.pc_xdrressize = ST+AT+1+NFSSVC_MAXBLKSIZE_V2/4,
 	},
 	[NFSPROC_WRITECACHE] = {
+		.pc_func = nfsd_proc_writecache,
 		.pc_decode = nfssvc_decode_void,
 		.pc_encode = nfssvc_encode_void,
 		.pc_argsize = sizeof(struct nfsd_void),

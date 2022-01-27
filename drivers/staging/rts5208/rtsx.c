@@ -1,8 +1,19 @@
-// SPDX-License-Identifier: GPL-2.0+
-/*
- * Driver for Realtek PCI-Express card reader
+/* Driver for Realtek PCI-Express card reader
  *
  * Copyright(c) 2009-2013 Realtek Semiconductor Corp. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify it
+ * under the terms of the GNU General Public License as published by the
+ * Free Software Foundation; either version 2, or (at your option) any
+ * later version.
+ *
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, see <http://www.gnu.org/licenses/>.
  *
  * Author:
  *   Wei WANG (wei_wang@realsil.com.cn)
@@ -225,6 +236,12 @@ static struct scsi_host_template rtsx_host_template = {
 
 	/* limit the total size of a transfer to 120 KB */
 	.max_sectors =                  240,
+
+	/* merge commands... this seems to help performance, but
+	 * periodically someone should test to see which setting is more
+	 * optimal.
+	 */
+	.use_clustering =		1,
 
 	/* emulated HBA */
 	.emulated =			1,
@@ -831,8 +848,7 @@ static int rtsx_probe(struct pci_dev *pci,
 	host = scsi_host_alloc(&rtsx_host_template, sizeof(*dev));
 	if (!host) {
 		dev_err(&pci->dev, "Unable to allocate the scsi host\n");
-		err = -ENOMEM;
-		goto scsi_host_alloc_fail;
+		return -ENOMEM;
 	}
 
 	dev = host_to_rtsx(host);
@@ -859,7 +875,7 @@ static int rtsx_probe(struct pci_dev *pci,
 	dev_info(&pci->dev, "Resource length: 0x%x\n",
 		 (unsigned int)pci_resource_len(pci, 0));
 	dev->addr = pci_resource_start(pci, 0);
-	dev->remap_addr = ioremap(dev->addr, pci_resource_len(pci, 0));
+	dev->remap_addr = ioremap_nocache(dev->addr, pci_resource_len(pci, 0));
 	if (!dev->remap_addr) {
 		dev_err(&pci->dev, "ioremap error\n");
 		err = -ENXIO;
@@ -874,8 +890,7 @@ static int rtsx_probe(struct pci_dev *pci,
 		 (unsigned long)(dev->addr), (unsigned long)(dev->remap_addr));
 
 	dev->rtsx_resv_buf = dmam_alloc_coherent(&pci->dev, RTSX_RESV_BUF_LEN,
-						 &dev->rtsx_resv_buf_addr,
-						 GFP_KERNEL);
+			&dev->rtsx_resv_buf_addr, GFP_KERNEL);
 	if (!dev->rtsx_resv_buf) {
 		dev_err(&pci->dev, "alloc dma buffer fail\n");
 		err = -ENXIO;
@@ -972,8 +987,7 @@ ioremap_fail:
 	kfree(dev->chip);
 chip_alloc_fail:
 	dev_err(&pci->dev, "%s failed\n", __func__);
-scsi_host_alloc_fail:
-	pci_release_regions(pci);
+
 	return err;
 }
 
@@ -985,7 +999,6 @@ static void rtsx_remove(struct pci_dev *pci)
 
 	quiesce_and_remove_host(dev);
 	release_everything(dev);
-	pci_release_regions(pci);
 }
 
 /* PCI IDs */

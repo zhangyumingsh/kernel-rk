@@ -1,10 +1,10 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * drivers/base/power/wakeup.c - System wakeup events framework
  *
  * Copyright (c) 2010 Rafael J. Wysocki <rjw@sisk.pl>, Novell Inc.
+ *
+ * This file is released under the GPLv2.
  */
-#define pr_fmt(fmt) "PM: " fmt
 
 #include <linux/device.h>
 #include <linux/slab.h>
@@ -15,6 +15,9 @@
 #include <linux/seq_file.h>
 #include <linux/debugfs.h>
 #include <linux/pm_wakeirq.h>
+#include <linux/irq.h>
+#include <linux/irqdesc.h>
+#include <linux/wakeup_reason.h>
 #include <trace/events/power.h>
 
 #include "power.h"
@@ -248,60 +251,6 @@ void wakeup_source_unregister(struct wakeup_source *ws)
 	}
 }
 EXPORT_SYMBOL_GPL(wakeup_source_unregister);
-
-/**
- * wakeup_sources_read_lock - Lock wakeup source list for read.
- *
- * Returns an index of srcu lock for struct wakeup_srcu.
- * This index must be passed to the matching wakeup_sources_read_unlock().
- */
-int wakeup_sources_read_lock(void)
-{
-	return srcu_read_lock(&wakeup_srcu);
-}
-EXPORT_SYMBOL_GPL(wakeup_sources_read_lock);
-
-/**
- * wakeup_sources_read_unlock - Unlock wakeup source list.
- * @idx: return value from corresponding wakeup_sources_read_lock()
- */
-void wakeup_sources_read_unlock(int idx)
-{
-	srcu_read_unlock(&wakeup_srcu, idx);
-}
-EXPORT_SYMBOL_GPL(wakeup_sources_read_unlock);
-
-/**
- * wakeup_sources_walk_start - Begin a walk on wakeup source list
- *
- * Returns first object of the list of wakeup sources.
- *
- * Note that to be safe, wakeup sources list needs to be locked by calling
- * wakeup_source_read_lock() for this.
- */
-struct wakeup_source *wakeup_sources_walk_start(void)
-{
-	struct list_head *ws_head = &wakeup_sources;
-
-	return list_entry_rcu(ws_head->next, struct wakeup_source, entry);
-}
-EXPORT_SYMBOL_GPL(wakeup_sources_walk_start);
-
-/**
- * wakeup_sources_walk_next - Get next wakeup source from the list
- * @ws: Previous wakeup source object
- *
- * Note that to be safe, wakeup sources list needs to be locked by calling
- * wakeup_source_read_lock() for this.
- */
-struct wakeup_source *wakeup_sources_walk_next(struct wakeup_source *ws)
-{
-	struct list_head *ws_head = &wakeup_sources;
-
-	return list_next_or_null_rcu(ws_head, &ws->entry,
-				struct wakeup_source, entry);
-}
-EXPORT_SYMBOL_GPL(wakeup_sources_walk_next);
 
 /**
  * device_wakeup_attach - Attach a wakeup source object to a device object.
@@ -849,7 +798,7 @@ void pm_wakeup_ws_event(struct wakeup_source *ws, unsigned int msec, bool hard)
 EXPORT_SYMBOL_GPL(pm_wakeup_ws_event);
 
 /**
- * pm_wakeup_dev_event - Notify the PM core of a wakeup event.
+ * pm_wakeup_event - Notify the PM core of a wakeup event.
  * @dev: Device the wakeup event is related to.
  * @msec: Anticipated event processing time (in milliseconds).
  * @hard: If set, abort suspends in progress and wake up from suspend-to-idle.
@@ -869,6 +818,37 @@ void pm_wakeup_dev_event(struct device *dev, unsigned int msec, bool hard)
 }
 EXPORT_SYMBOL_GPL(pm_wakeup_dev_event);
 
+void pm_get_active_wakeup_sources(char *pending_wakeup_source, size_t max)
+{
+	struct wakeup_source *ws, *last_active_ws = NULL;
+	int len = 0;
+	bool active = false;
+
+	rcu_read_lock();
+	list_for_each_entry_rcu(ws, &wakeup_sources, entry) {
+		if (ws->active && len < max) {
+			if (!active)
+				len += scnprintf(pending_wakeup_source, max,
+						"Pending Wakeup Sources: ");
+			len += scnprintf(pending_wakeup_source + len, max - len,
+				"%s ", ws->name);
+			active = true;
+		} else if (!active &&
+			   (!last_active_ws ||
+			    ktime_to_ns(ws->last_time) >
+			    ktime_to_ns(last_active_ws->last_time))) {
+			last_active_ws = ws;
+		}
+	}
+	if (!active && last_active_ws) {
+		scnprintf(pending_wakeup_source, max,
+				"Last active Wakeup Source: %s",
+				last_active_ws->name);
+	}
+	rcu_read_unlock();
+}
+EXPORT_SYMBOL_GPL(pm_get_active_wakeup_sources);
+
 void pm_print_active_wakeup_sources(void)
 {
 	struct wakeup_source *ws;
@@ -878,7 +858,7 @@ void pm_print_active_wakeup_sources(void)
 	srcuidx = srcu_read_lock(&wakeup_srcu);
 	list_for_each_entry_rcu(ws, &wakeup_sources, entry) {
 		if (ws->active) {
-			pm_pr_dbg("active wakeup source: %s\n", ws->name);
+			pr_debug("active wakeup source: %s\n", ws->name);
 			active = 1;
 		} else if (!active &&
 			   (!last_activity_ws ||
@@ -889,7 +869,7 @@ void pm_print_active_wakeup_sources(void)
 	}
 
 	if (!active && last_activity_ws)
-		pm_pr_dbg("last active wakeup source: %s\n",
+		pr_debug("last active wakeup source: %s\n",
 			last_activity_ws->name);
 	srcu_read_unlock(&wakeup_srcu, srcuidx);
 }
@@ -907,6 +887,7 @@ bool pm_wakeup_pending(void)
 {
 	unsigned long flags;
 	bool ret = false;
+	char suspend_abort[MAX_SUSPEND_ABORT_LEN];
 
 	raw_spin_lock_irqsave(&events_lock, flags);
 	if (events_check_enabled) {
@@ -919,8 +900,10 @@ bool pm_wakeup_pending(void)
 	raw_spin_unlock_irqrestore(&events_lock, flags);
 
 	if (ret) {
-		pm_pr_dbg("Wakeup pending, aborting suspend\n");
-		pm_print_active_wakeup_sources();
+		pm_get_active_wakeup_sources(suspend_abort,
+					     MAX_SUSPEND_ABORT_LEN);
+		log_suspend_abort_reason(suspend_abort);
+		pr_info("PM: %s\n", suspend_abort);
 	}
 
 	return ret || atomic_read(&pm_abort_suspend) > 0;
@@ -948,6 +931,18 @@ void pm_wakeup_clear(bool reset)
 void pm_system_irq_wakeup(unsigned int irq_number)
 {
 	if (pm_wakeup_irq == 0) {
+		struct irq_desc *desc;
+		const char *name = "null";
+
+		desc = irq_to_desc(irq_number);
+		if (desc == NULL)
+			name = "stray irq";
+		else if (desc->action && desc->action->name)
+			name = desc->action->name;
+
+		log_irq_wakeup_reason(irq_number);
+		pr_warn("%s: %d triggered %s\n", __func__, irq_number, name);
+
 		pm_wakeup_irq = irq_number;
 		pm_system_wakeup();
 	}
@@ -1044,6 +1039,8 @@ void pm_wakep_autosleep_enabled(bool set)
 }
 #endif /* CONFIG_PM_AUTOSLEEP */
 
+static struct dentry *wakeup_sources_stats_dentry;
+
 /**
  * print_wakeup_source_stats - Print wakeup source statistics information.
  * @m: seq_file to print the statistics into.
@@ -1127,9 +1124,6 @@ static void *wakeup_sources_stats_seq_next(struct seq_file *m,
 		break;
 	}
 
-	if (!next_ws)
-		print_wakeup_source_stats(m, &deleted_ws);
-
 	return next_ws;
 }
 
@@ -1176,8 +1170,8 @@ static const struct file_operations wakeup_sources_stats_fops = {
 
 static int __init wakeup_sources_debugfs_init(void)
 {
-	debugfs_create_file("wakeup_sources", S_IRUGO, NULL, NULL,
-			    &wakeup_sources_stats_fops);
+	wakeup_sources_stats_dentry = debugfs_create_file("wakeup_sources",
+			S_IRUGO, NULL, NULL, &wakeup_sources_stats_fops);
 	return 0;
 }
 

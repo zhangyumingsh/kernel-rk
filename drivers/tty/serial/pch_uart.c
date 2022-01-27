@@ -2,6 +2,9 @@
 /*
  *Copyright (C) 2011 LAPIS Semiconductor Co., Ltd.
  */
+#if defined(CONFIG_SERIAL_PCH_UART_CONSOLE) && defined(CONFIG_MAGIC_SYSRQ)
+#define SUPPORT_SYSRQ
+#endif
 #include <linux/kernel.h>
 #include <linux/serial_reg.h>
 #include <linux/slab.h>
@@ -584,8 +587,12 @@ static int pch_uart_hal_read(struct eg20t_port *priv, unsigned char *buf,
 			if (uart_handle_break(port))
 				continue;
 		}
-		if (uart_handle_sysrq_char(port, rbr))
-			continue;
+#ifdef SUPPORT_SYSRQ
+		if (port->sysrq) {
+			if (uart_handle_sysrq_char(port, rbr))
+				continue;
+		}
+#endif
 
 		buf[i++] = rbr;
 	}
@@ -926,6 +933,7 @@ static unsigned int dma_handle_tx(struct eg20t_port *priv)
 	struct scatterlist *sg;
 	int nent;
 	int fifo_size;
+	int tx_empty;
 	struct dma_async_tx_descriptor *desc;
 	int num;
 	int i;
@@ -950,9 +958,11 @@ static unsigned int dma_handle_tx(struct eg20t_port *priv)
 	}
 
 	fifo_size = max(priv->fifo_size, 1);
+	tx_empty = 1;
 	if (pop_tx_x(priv, xmit->buf)) {
 		pch_uart_hal_write(priv, xmit->buf, 1);
 		port->icount.tx++;
+		tx_empty = 0;
 		fifo_size--;
 	}
 
@@ -1789,7 +1799,6 @@ static struct eg20t_port *pch_uart_init_port(struct pci_dev *pdev,
 	priv->port.flags = UPF_BOOT_AUTOCONF;
 	priv->port.fifosize = fifosize;
 	priv->port.line = board->line_no;
-	priv->port.has_sysrq = IS_ENABLED(CONFIG_SERIAL_PCH_UART_CONSOLE);
 	priv->trigger = PCH_UART_HAL_TRIGGER_M;
 
 	snprintf(priv->irq_name, IRQ_NAME_SIZE,

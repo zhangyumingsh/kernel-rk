@@ -1,10 +1,14 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * Extensible Firmware Interface
  *
  * Based on Extensible Firmware Interface Specification version 2.4
  *
  * Copyright (C) 2013, 2014 Linaro Ltd.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
+ *
  */
 
 #include <linux/dmi.h>
@@ -27,25 +31,24 @@
 
 extern u64 efi_system_table;
 
-#if defined(CONFIG_PTDUMP_DEBUGFS) && defined(CONFIG_ARM64)
+#ifdef CONFIG_ARM64_PTDUMP_DEBUGFS
 #include <asm/ptdump.h>
 
 static struct ptdump_info efi_ptdump_info = {
 	.mm		= &efi_mm,
 	.markers	= (struct addr_marker[]){
-		{ 0,				"UEFI runtime start" },
-		{ DEFAULT_MAP_WINDOW_64,	"UEFI runtime end" },
-		{ -1,				NULL }
+		{ 0,		"UEFI runtime start" },
+		{ TASK_SIZE_64,	"UEFI runtime end" }
 	},
 	.base_addr	= 0,
 };
 
 static int __init ptdump_init(void)
 {
-	if (efi_enabled(EFI_RUNTIME_SERVICES))
-		ptdump_debugfs_register(&efi_ptdump_info, "efi_page_tables");
+	if (!efi_enabled(EFI_RUNTIME_SERVICES))
+		return 0;
 
-	return 0;
+	return ptdump_debugfs_register(&efi_ptdump_info, "efi_page_tables");
 }
 device_initcall(ptdump_init);
 
@@ -121,30 +124,6 @@ static int __init arm_enable_runtime_services(void)
 		return 0;
 	}
 
-	if (efi_soft_reserve_enabled()) {
-		efi_memory_desc_t *md;
-
-		for_each_efi_memory_desc(md) {
-			int md_size = md->num_pages << EFI_PAGE_SHIFT;
-			struct resource *res;
-
-			if (!(md->attribute & EFI_MEMORY_SP))
-				continue;
-
-			res = kzalloc(sizeof(*res), GFP_KERNEL);
-			if (WARN_ON(!res))
-				break;
-
-			res->start	= md->phys_addr;
-			res->end	= md->phys_addr + md_size - 1;
-			res->name	= "Soft Reserved";
-			res->flags	= IORESOURCE_MEM;
-			res->desc	= IORES_DESC_SOFT_RESERVED;
-
-			insert_resource(&iomem_resource, res);
-		}
-	}
-
 	if (efi_runtime_disabled()) {
 		pr_info("EFI runtime services will be disabled.\n");
 		return 0;
@@ -186,11 +165,13 @@ void efi_virtmap_unload(void)
 static int __init arm_dmi_init(void)
 {
 	/*
-	 * On arm64/ARM, DMI depends on UEFI, and dmi_setup() needs to
+	 * On arm64/ARM, DMI depends on UEFI, and dmi_scan_machine() needs to
 	 * be called early because dmi_id_init(), which is an arch_initcall
 	 * itself, depends on dmi_scan_machine() having been called already.
 	 */
-	dmi_setup();
+	dmi_scan_machine();
+	if (dmi_available)
+		dmi_set_dump_stack_arch_desc();
 	return 0;
 }
 core_initcall(arm_dmi_init);

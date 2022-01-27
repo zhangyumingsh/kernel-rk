@@ -427,7 +427,7 @@ static int owl_uart_request_port(struct uart_port *port)
 		return -EBUSY;
 
 	if (port->flags & UPF_IOREMAP) {
-		port->membase = devm_ioremap(port->dev, port->mapbase,
+		port->membase = devm_ioremap_nocache(port->dev, port->mapbase,
 				resource_size(res));
 		if (!port->membase)
 			return -EBUSY;
@@ -662,8 +662,10 @@ static int owl_uart_probe(struct platform_device *pdev)
 	}
 
 	irq = platform_get_irq(pdev, 0);
-	if (irq < 0)
+	if (irq < 0) {
+		dev_err(&pdev->dev, "could not get irq\n");
 		return irq;
+	}
 
 	if (owl_uart_ports[pdev->id]) {
 		dev_err(&pdev->dev, "port %d already allocated\n", pdev->id);
