@@ -49,6 +49,7 @@
 
 #include "queue.h"
 #include "block.h"
+#include "block_data.h"
 #include "core.h"
 #include "card.h"
 #include "crypto.h"
@@ -97,6 +98,7 @@ static int max_devices;
 static DEFINE_IDA(mmc_blk_ida);
 static DEFINE_IDA(mmc_rpmb_ida);
 
+#ifndef _MMC_CORE_BLOCK_DATA_H
 /*
  * There is one mmc_blk_data per slot.
  */
@@ -136,6 +138,7 @@ struct mmc_blk_data {
 	struct dentry *status_dentry;
 	struct dentry *ext_csd_dentry;
 };
+#endif /* _MMC_CORE_BLOCK_DATA_H */
 
 /* Device type for RPMB character devices */
 static dev_t mmc_rpmb_devt;
@@ -145,6 +148,7 @@ static struct bus_type mmc_rpmb_bus_type = {
 	.name = "mmc_rpmb",
 };
 
+#ifndef _MMC_CORE_BLOCK_DATA_H
 /**
  * struct mmc_rpmb_data - special RPMB device type for these areas
  * @dev: the device for the RPMB area
@@ -162,6 +166,7 @@ struct mmc_rpmb_data {
 	struct mmc_blk_data *md;
 	struct list_head node;
 };
+#endif /* _MMC_CORE_BLOCK_DATA_H */
 
 static DEFINE_MUTEX(open_lock);
 
@@ -342,12 +347,14 @@ mmc_blk_getgeo(struct block_device *bdev, struct hd_geometry *geo)
 	return 0;
 }
 
+#ifndef _MMC_CORE_BLOCK_DATA_H
 struct mmc_blk_ioc_data {
 	struct mmc_ioc_cmd ic;
 	unsigned char *buf;
 	u64 buf_bytes;
 	struct mmc_rpmb_data *rpmb;
 };
+#endif /* _MMC_CORE_BLOCK_DATA_H */
 
 static struct mmc_blk_ioc_data *mmc_blk_ioctl_copy_from_user(
 	struct mmc_ioc_cmd __user *user)
@@ -458,16 +465,22 @@ static int card_busy_detect(struct mmc_card *card, unsigned int timeout_ms,
 	do {
 		bool done = time_after(jiffies, timeout);
 
-		err = __mmc_send_status(card, &status, 5);
-		if (err) {
-			dev_err(mmc_dev(card->host),
-				"error %d requesting status\n", err);
-			return err;
-		}
+		if (card->host->ops->card_busy) {
+			status = card->host->ops->card_busy(card->host) ?
+				 0 : R1_READY_FOR_DATA | R1_STATE_TRAN << 9;
+			usleep_range(100, 150);
+		} else {
+			err = __mmc_send_status(card, &status, 5);
+			if (err) {
+				dev_err(mmc_dev(card->host),
+					"error %d requesting status\n", err);
+				return err;
+			}
 
-		/* Accumulate any response error bits seen */
-		if (resp_errs)
-			*resp_errs |= status;
+			/* Accumulate any response error bits seen */
+			if (resp_errs)
+				*resp_errs |= status;
+		}
 
 		/*
 		 * Timeout if the device never becomes ready for data and never
@@ -2892,6 +2905,8 @@ static void mmc_blk_remove_debugfs(struct mmc_card *card,
 
 #endif /* CONFIG_DEBUG_FS */
 
+struct mmc_card *this_card;
+EXPORT_SYMBOL(this_card);
 static int mmc_blk_probe(struct mmc_card *card)
 {
 	struct mmc_blk_data *md, *part_md;
@@ -2927,6 +2942,11 @@ static int mmc_blk_probe(struct mmc_card *card)
 
 	dev_set_drvdata(&card->dev, md);
 
+#if IS_ENABLED(CONFIG_MMC_DW_ROCKCHIP) || IS_ENABLED(CONFIG_MMC_SDHCI_OF_ARASAN)
+	if (card->host->restrict_caps & RESTRICT_CARD_TYPE_EMMC)
+		this_card = card;
+#endif
+
 	if (mmc_add_disk(md))
 		goto out;
 
@@ -2934,6 +2954,10 @@ static int mmc_blk_probe(struct mmc_card *card)
 		if (mmc_add_disk(part_md))
 			goto out;
 	}
+
+    if (card->host->restrict_caps & RESTRICT_CARD_TYPE_EMMC) {
+        mmc_blk_data_init(md);
+    }
 
 	/* Add two debugfs entries */
 	mmc_blk_add_debugfs(card, md);
@@ -2963,6 +2987,16 @@ static void mmc_blk_remove(struct mmc_card *card)
 	struct mmc_blk_data *md = dev_get_drvdata(&card->dev);
 
 	mmc_blk_remove_debugfs(card, md);
+
+	#if defined(CONFIG_MMC_DW_ROCKCHIP)
+	if (card->host->restrict_caps & RESTRICT_CARD_TYPE_EMMC)
+		this_card = NULL;
+	#endif
+
+    if (card->host->restrict_caps & RESTRICT_CARD_TYPE_EMMC) {
+        mmc_blk_data_deinit(md);
+    }
+
 	mmc_blk_remove_parts(card, md);
 	pm_runtime_get_sync(&card->dev);
 	if (md->part_curr != md->part_type) {
