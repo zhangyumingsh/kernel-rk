@@ -94,10 +94,12 @@ else
 	packageversion=$version-$revision
 fi
 sourcename=$KDEB_SOURCENAME
-packagename=linux-image-$version
-kernel_headers_packagename=linux-headers-$version
+packagename=linux-image-"$BRANCH$LOCALVERSION"
+kernel_headers_packagename=linux-headers-"$BRANCH$LOCALVERSION"
+dtb_packagename=linux-dtb-"$BRANCH$LOCALVERSION"
 dbg_packagename=$packagename-dbg
 debarch=
+image_name=
 set_debarch
 
 if [ "$ARCH" = "um" ] ; then
@@ -181,6 +183,7 @@ Description: Linux kernel, version $version
 
 Package: $kernel_headers_packagename
 Architecture: $debarch
+Depends: make, gcc, libc6-dev, flex, bison, libssl-dev
 Description: Linux kernel headers for $version on $debarch
  This package provides kernel header files for $version on $debarch
  .
@@ -200,6 +203,11 @@ Architecture: $debarch
 Description: Linux kernel debugging symbols for $version
  This package will come in handy if you need to debug the kernel. It provides
  all the necessary debug symbols for the kernel and its modules.
+
+Package: $dtb_packagename
+Architecture: $debarch
+Description: Linux DTB, version $version
+ This package contains device blobs from the Linux kernel, version $version
 EOF
 
 cat <<EOF > debian/rules
