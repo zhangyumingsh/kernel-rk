@@ -1,6 +1,6 @@
 /*
  *
- * (C) COPYRIGHT 2014-2015, 2018-2019 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2014-2015 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
@@ -29,7 +29,7 @@
 #ifndef _KBASE_HWACCESS_PM_H_
 #define _KBASE_HWACCESS_PM_H_
 
-#include <gpu/mali_kbase_gpu_regmap.h>
+#include <mali_midg_regmap.h>
 #include <linux/atomic.h>
 
 #include <mali_kbase_pm_defs.h>
@@ -44,18 +44,22 @@ struct kbase_device;
  *
  * Must be called before any other power management function
  *
- * @kbdev: The kbase device structure for the device (must be a valid pointer)
+ * @param kbdev The kbase device structure for the device (must be a valid
+ *              pointer)
  *
- * Return: 0 if the power management framework was successfully initialized.
+ * @return 0 if the power management framework was successfully
+ *         initialized.
  */
 int kbase_hwaccess_pm_init(struct kbase_device *kbdev);
 
 /**
  * Terminate the power management framework.
  *
- * No power management functions may be called after this
+ * No power management functions may be called after this (except
+ * @ref kbase_pm_init)
  *
- * @kbdev: The kbase device structure for the device (must be a valid pointer)
+ * @param kbdev The kbase device structure for the device (must be a valid
+ *              pointer)
  */
 void kbase_hwaccess_pm_term(struct kbase_device *kbdev);
 
@@ -197,33 +201,14 @@ void kbase_pm_set_policy(struct kbase_device *kbdev,
 					const struct kbase_pm_policy *policy);
 
 /**
- * kbase_pm_list_policies - Retrieve a static list of the available policies.
+ * Retrieve a static list of the available policies.
  *
- * @kbdev:   The kbase device structure for the device.
- * @list:    An array pointer to take the list of policies. This may be NULL.
- *           The contents of this array must not be modified.
+ * @param[out] policies An array pointer to take the list of policies. This may
+ *                      be NULL. The contents of this array must not be
+ *                      modified.
  *
- * Return: The number of policies
+ * @return The number of policies
  */
-int kbase_pm_list_policies(struct kbase_device *kbdev,
-	const struct kbase_pm_policy * const **list);
-
-/**
- * kbase_protected_most_enable - Enable protected mode
- *
- * @kbdev: Address of the instance of a GPU platform device.
- *
- * Return: Zero on success or an error code
- */
-int kbase_pm_protected_mode_enable(struct kbase_device *kbdev);
-
-/**
- * kbase_protected_mode_disable - Disable protected mode
- *
- * @kbdev: Address of the instance of a GPU platform device.
- *
- * Return: Zero on success or an error code
- */
-int kbase_pm_protected_mode_disable(struct kbase_device *kbdev);
+int kbase_pm_list_policies(const struct kbase_pm_policy * const **policies);
 
 #endif /* _KBASE_HWACCESS_PM_H_ */

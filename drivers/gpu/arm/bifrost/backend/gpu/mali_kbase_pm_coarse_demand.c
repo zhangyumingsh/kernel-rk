@@ -1,6 +1,6 @@
 /*
  *
- * (C) COPYRIGHT 2012-2016, 2018-2019 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2012-2016 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
@@ -29,14 +29,22 @@
 #include <mali_kbase.h>
 #include <mali_kbase_pm.h>
 
-static bool coarse_demand_shaders_needed(struct kbase_device *kbdev)
+static u64 coarse_demand_get_core_mask(struct kbase_device *kbdev)
 {
-	return kbase_pm_is_active(kbdev);
+	if (kbdev->pm.active_count == 0)
+		return 0;
+
+	return kbdev->gpu_props.props.raw_props.shader_present;
 }
 
 static bool coarse_demand_get_core_active(struct kbase_device *kbdev)
 {
-	return kbase_pm_is_active(kbdev);
+	if (0 == kbdev->pm.active_count && !(kbdev->shader_needed_bitmap |
+			kbdev->shader_inuse_bitmap) && !kbdev->tiler_needed_cnt
+			&& !kbdev->tiler_inuse_cnt)
+		return false;
+
+	return true;
 }
 
 static void coarse_demand_init(struct kbase_device *kbdev)
@@ -58,8 +66,9 @@ const struct kbase_pm_policy kbase_pm_coarse_demand_policy_ops = {
 	"coarse_demand",			/* name */
 	coarse_demand_init,			/* init */
 	coarse_demand_term,			/* term */
-	coarse_demand_shaders_needed,		/* shaders_needed */
+	coarse_demand_get_core_mask,		/* get_core_mask */
 	coarse_demand_get_core_active,		/* get_core_active */
+	0u,					/* flags */
 	KBASE_PM_POLICY_ID_COARSE_DEMAND,	/* id */
 };
 

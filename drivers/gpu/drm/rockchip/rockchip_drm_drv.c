@@ -43,6 +43,7 @@
 #include "rockchip_drm_fb.h"
 #include "rockchip_drm_fbdev.h"
 #include "rockchip_drm_gem.h"
+#include "rockchip_drm_rga.h"
 
 #define DRIVER_NAME	"rockchip"
 #define DRIVER_DESC	"RockChip Soc DRM"
@@ -129,10 +130,10 @@ static
 struct drm_connector *find_connector_by_bridge(struct drm_device *drm_dev,
 					       struct device_node *node)
 {
-	struct device_node *np_encoder;
-	struct drm_bridge *bridge;
+	struct device_node *np_encoder, *np_connector = NULL;
 	struct drm_encoder *encoder;
 	struct drm_connector *connector = NULL;
+	struct device_node *port, *endpoint;
 	bool encoder_bridge = false;
 	bool found_connector = false;
 
@@ -149,17 +150,33 @@ struct drm_connector *find_connector_by_bridge(struct drm_device *drm_dev,
 		dev_err(drm_dev->dev, "can't found encoder bridge!\n");
 		goto err_put_encoder;
 	}
-
-	bridge = encoder->bridge;
-	while (bridge) {
-		if (!bridge->next)
+	port = of_graph_get_port_by_id(np_encoder, 1);
+	if (!port) {
+		dev_err(drm_dev->dev, "can't found port point!\n");
+		goto err_put_encoder;
+	}
+	for_each_child_of_node(port, endpoint) {
+		np_connector = of_graph_get_remote_port_parent(endpoint);
+		if (!np_connector) {
+			dev_err(drm_dev->dev,
+				"can't found connector node, please init!\n");
+			goto err_put_port;
+		}
+		if (!of_device_is_available(np_connector)) {
+			of_node_put(np_connector);
+			np_connector = NULL;
+			continue;
+		} else {
 			break;
-
-		bridge = bridge->next;
+		}
+	}
+	if (!np_connector) {
+		dev_err(drm_dev->dev, "can't found available connector node!\n");
+		goto err_put_port;
 	}
 
 	drm_for_each_connector(connector, drm_dev) {
-		if (connector->port == bridge->of_node) {
+		if (connector->port == np_connector) {
 			found_connector = true;
 			break;
 		}
@@ -168,6 +185,9 @@ struct drm_connector *find_connector_by_bridge(struct drm_device *drm_dev,
 	if (!found_connector)
 		connector = NULL;
 
+	of_node_put(np_connector);
+err_put_port:
+	of_node_put(port);
 err_put_encoder:
 	of_node_put(np_encoder);
 
@@ -190,9 +210,7 @@ void rockchip_free_loader_memory(struct drm_device *drm)
 	if (private->domain) {
 		iommu_unmap(private->domain, logo->dma_addr,
 			    logo->iommu_map_size);
-		mutex_lock(&private->mm_lock);
 		drm_mm_remove_node(&logo->mm);
-		mutex_unlock(&private->mm_lock);
 	} else {
 		dma_unmap_sg(drm->dev, logo->sgt->sgl,
 			     logo->sgt->nents, DMA_TO_DEVICE);
@@ -252,11 +270,9 @@ static int init_loader_memory(struct drm_device *drm_dev)
 
 	if (private->domain) {
 		memset(&logo->mm, 0, sizeof(logo->mm));
-		mutex_lock(&private->mm_lock);
 		ret = drm_mm_insert_node_generic(&private->mm, &logo->mm,
 						 size, PAGE_SIZE,
 						 0, 0, 0);
-		mutex_unlock(&private->mm_lock);
 		if (ret < 0) {
 			DRM_ERROR("out of I/O virtual memory: %d\n", ret);
 			goto err_free_pages;
@@ -334,10 +350,10 @@ get_framebuffer_by_node(struct drm_device *drm_dev, struct device_node *node)
 
 	switch (bpp) {
 	case 16:
-		mode_cmd.pixel_format = DRM_FORMAT_RGB565;
+		mode_cmd.pixel_format = DRM_FORMAT_BGR565;
 		break;
 	case 24:
-		mode_cmd.pixel_format = DRM_FORMAT_RGB888;
+		mode_cmd.pixel_format = DRM_FORMAT_BGR888;
 		break;
 	case 32:
 		mode_cmd.pixel_format = DRM_FORMAT_XRGB8888;
@@ -635,8 +651,6 @@ static int update_state(struct drm_device *drm_dev,
 			return ret;
 		if (encoder_helper_funcs->mode_set)
 			encoder_helper_funcs->mode_set(encoder, mode, mode);
-
-		drm_bridge_mode_set(encoder->bridge, mode, mode);
 	}
 
 	primary_state = drm_atomic_get_plane_state(state, crtc->primary);
@@ -714,7 +728,10 @@ static void show_loader_logo(struct drm_device *drm_dev)
 
 	state->acquire_ctx = mode_config->acquire_ctx;
 
-	for_each_available_child_of_node(root, route) {
+	for_each_child_of_node(root, route) {
+		if (!of_device_is_available(route))
+			continue;
+
 		set = of_parse_display_resource(drm_dev, route);
 		if (!set)
 			continue;
@@ -1684,6 +1701,13 @@ static const struct drm_ioctl_desc rockchip_ioctls[] = {
 			  DRM_UNLOCKED | DRM_AUTH | DRM_RENDER_ALLOW),
 	DRM_IOCTL_DEF_DRV(ROCKCHIP_GEM_GET_PHYS, rockchip_gem_get_phys_ioctl,
 			  DRM_UNLOCKED | DRM_AUTH | DRM_RENDER_ALLOW),
+	DRM_IOCTL_DEF_DRV(ROCKCHIP_RGA_GET_VER, rockchip_rga_get_ver_ioctl,
+			  DRM_AUTH | DRM_RENDER_ALLOW),
+	DRM_IOCTL_DEF_DRV(ROCKCHIP_RGA_SET_CMDLIST,
+			  rockchip_rga_set_cmdlist_ioctl,
+			  DRM_AUTH | DRM_RENDER_ALLOW),
+	DRM_IOCTL_DEF_DRV(ROCKCHIP_RGA_EXEC, rockchip_rga_exec_ioctl,
+			  DRM_AUTH | DRM_RENDER_ALLOW),
 };
 
 static const struct file_operations rockchip_drm_driver_fops = {
@@ -1820,7 +1844,7 @@ static void rockchip_add_endpoints(struct device *dev,
 {
 	struct device_node *ep, *remote;
 
-	for_each_available_child_of_node(port, ep) {
+	for_each_child_of_node(port, ep) {
 		remote = of_graph_get_remote_port_parent(ep);
 		if (!remote || !of_device_is_available(remote)) {
 			of_node_put(remote);

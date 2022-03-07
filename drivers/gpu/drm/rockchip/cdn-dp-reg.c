@@ -82,8 +82,8 @@ void cdn_dp_clock_reset(struct cdn_dp_device *dp)
 	      SOURCE_CRYPTO_SYS_CLK_EN;
 	writel(val, dp->regs + SOURCE_CRYPTO_CAR);
 
-	val = ~(MAILBOX_INT_MASK_BIT | PIF_INT_MASK_BIT) & ALL_INT_MASK;
-	writel(val, dp->regs + APB_INT_MASK);
+	/* enable Mailbox and PIF interrupt */
+	writel(0, dp->regs + APB_INT_MASK);
 }
 
 static int cdn_dp_mailbox_read(struct cdn_dp_device *dp)
@@ -1001,23 +1001,13 @@ static void cdn_dp_audio_config_i2s(struct cdn_dp_device *dp,
 	writel(I2S_DEC_START, dp->regs + AUDIO_SRC_CNTL);
 }
 
-static void cdn_dp_audio_config_spdif(struct cdn_dp_device *dp,
-				      struct audio_info *audio)
+static void cdn_dp_audio_config_spdif(struct cdn_dp_device *dp)
 {
 	u32 val;
-	int sub_pckt_num = 1;
 
-	if (audio->channels == 2) {
-		if (dp->link.num_lanes == 1)
-			sub_pckt_num = 2;
-		else
-			sub_pckt_num = 4;
-	}
 	writel(SYNC_WR_TO_CH_ZERO, dp->regs + FIFO_CNTL);
 
-	val = MAX_NUM_CH(audio->channels);
-	val |= AUDIO_TYPE_LPCM;
-	val |= CFG_SUB_PCKT_NUM(sub_pckt_num);
+	val = MAX_NUM_CH(2) | AUDIO_TYPE_LPCM | CFG_SUB_PCKT_NUM(4);
 	writel(val, dp->regs + SMPL2PKT_CNFG);
 	writel(SMPL2PKT_EN, dp->regs + SMPL2PKT_CNTL);
 
@@ -1067,7 +1057,7 @@ int cdn_dp_audio_config(struct cdn_dp_device *dp, struct audio_info *audio)
 	if (audio->format == AFMT_I2S)
 		cdn_dp_audio_config_i2s(dp, audio);
 	else if (audio->format == AFMT_SPDIF)
-		cdn_dp_audio_config_spdif(dp, audio);
+		cdn_dp_audio_config_spdif(dp);
 
 	ret = cdn_dp_reg_write(dp, AUDIO_PACK_CONTROL, AUDIO_PACK_EN);
 
