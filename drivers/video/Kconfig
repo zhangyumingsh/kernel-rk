@@ -3,10 +3,16 @@
 #
 
 menu "Graphics support"
-
-if HAS_IOMEM
+	depends on HAS_IOMEM
 
 config HAVE_FB_ATMEL
+	bool
+
+config SH_MIPI_DSI
+	tristate
+	depends on (SUPERH || ARCH_SHMOBILE) && HAVE_CLK
+
+config SH_LCD_MIPI_DSI
 	bool
 
 source "drivers/char/agp/Kconfig"
@@ -17,6 +23,9 @@ source "drivers/gpu/host1x/Kconfig"
 source "drivers/gpu/ipu-v3/Kconfig"
 
 source "drivers/gpu/drm/Kconfig"
+
+source "drivers/gpu/rogue_m/Kconfig"
+
 source "drivers/gpu/arm/Kconfig"
 
 menu "Frame buffer Devices"
@@ -29,6 +38,8 @@ menu "Rockchip Misc Video driver"
 source "drivers/video/rockchip/Kconfig"
 endmenu
 
+source "drivers/video/adf/Kconfig"
+
 config VGASTATE
        tristate
        default n
@@ -39,7 +50,8 @@ config VIDEOMODE_HELPERS
 config HDMI
 	bool
 
-endif # HAS_IOMEM
+config HDMI_NOTIFIERS
+	bool
 
 if VT
 	source "drivers/video/console/Kconfig"

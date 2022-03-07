@@ -51,7 +51,6 @@ static int zx_reboot_probe(struct platform_device *pdev)
 
 	np = of_find_compatible_node(NULL, NULL, "zte,zx296702-pcu");
 	pcu_base = of_iomap(np, 0);
-	of_node_put(np);
 	if (!pcu_base) {
 		iounmap(base);
 		WARN(1, "failed to map pcu_base address");
@@ -59,12 +58,9 @@ static int zx_reboot_probe(struct platform_device *pdev)
 	}
 
 	err = register_restart_handler(&zx_restart_nb);
-	if (err) {
-		iounmap(base);
-		iounmap(pcu_base);
+	if (err)
 		dev_err(&pdev->dev, "Register restart handler failed(err=%d)\n",
 			err);
-	}
 
 	return err;
 }
@@ -73,7 +69,6 @@ static const struct of_device_id zx_reboot_of_match[] = {
 	{ .compatible = "zte,sysctrl" },
 	{}
 };
-MODULE_DEVICE_TABLE(of, zx_reboot_of_match);
 
 static struct platform_driver zx_reboot_driver = {
 	.probe = zx_reboot_probe,

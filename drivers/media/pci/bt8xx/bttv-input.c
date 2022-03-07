@@ -12,6 +12,10 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -133,10 +137,10 @@ void bttv_input_irq(struct bttv *btv)
 		ir_handle_key(btv);
 }
 
-static void bttv_input_timer(struct timer_list *t)
+static void bttv_input_timer(unsigned long data)
 {
-	struct bttv_ir *ir = from_timer(ir, t, timer);
-	struct bttv *btv = ir->btv;
+	struct bttv *btv = (struct bttv*)data;
+	struct bttv_ir *ir = btv->remote;
 
 	if (btv->c.type == BTTV_BOARD_ENLTV_FM_2)
 		ir_enltv_handle_key(btv);
@@ -183,15 +187,15 @@ static u32 bttv_rc5_decode(unsigned int code)
 			return 0;
 		}
 	}
-	dprintk("code=%x, rc5=%x, start=%x, toggle=%x, address=%x, instr=%x\n",
-		rc5, org_code, RC5_START(rc5),
+	dprintk("code=%x, rc5=%x, start=%x, toggle=%x, address=%x, "
+		"instr=%x\n", rc5, org_code, RC5_START(rc5),
 		RC5_TOGGLE(rc5), RC5_ADDR(rc5), RC5_INSTR(rc5));
 	return rc5;
 }
 
-static void bttv_rc5_timer_end(struct timer_list *t)
+static void bttv_rc5_timer_end(unsigned long data)
 {
-	struct bttv_ir *ir = from_timer(ir, t, timer);
+	struct bttv_ir *ir = (struct bttv_ir *)data;
 	ktime_t tv;
 	u32 gap, rc5, scancode;
 	u8 toggle, command, system;
@@ -296,15 +300,15 @@ static int bttv_rc5_irq(struct bttv *btv)
 
 /* ---------------------------------------------------------------------- */
 
-static void bttv_ir_start(struct bttv_ir *ir)
+static void bttv_ir_start(struct bttv *btv, struct bttv_ir *ir)
 {
 	if (ir->polling) {
-		timer_setup(&ir->timer, bttv_input_timer, 0);
+		setup_timer(&ir->timer, bttv_input_timer, (unsigned long)btv);
 		ir->timer.expires  = jiffies + msecs_to_jiffies(1000);
 		add_timer(&ir->timer);
 	} else if (ir->rc5_gpio) {
 		/* set timer_end for code completion */
-		timer_setup(&ir->timer, bttv_rc5_timer_end, 0);
+		setup_timer(&ir->timer, bttv_rc5_timer_end, (unsigned long)ir);
 		ir->shift_by = 1;
 		ir->rc5_remote_gap = ir_rc5_remote_gap;
 	}
@@ -332,15 +336,11 @@ static void bttv_ir_stop(struct bttv *btv)
 static int get_key_pv951(struct IR_i2c *ir, enum rc_proto *protocol,
 			 u32 *scancode, u8 *toggle)
 {
-	int rc;
 	unsigned char b;
 
 	/* poll IR chip */
-	rc = i2c_master_recv(ir->c, &b, 1);
-	if (rc != 1) {
+	if (1 != i2c_master_recv(ir->c, &b, 1)) {
 		dprintk("read error\n");
-		if (rc < 0)
-			return rc;
 		return -EIO;
 	}
 
@@ -353,12 +353,12 @@ static int get_key_pv951(struct IR_i2c *ir, enum rc_proto *protocol,
 	 * NOTE:
 	 * lirc_i2c maps the pv951 code as:
 	 *	addr = 0x61D6
-	 *	cmd = bit_reverse (b)
+	 * 	cmd = bit_reverse (b)
 	 * So, it seems that this device uses NEC extended
 	 * I decided to not fix the table, due to two reasons:
-	 *	1) Without the actual device, this is only a guess;
-	 *	2) As the addr is not reported via I2C, nor can be changed,
-	 *	   the device is bound to the vendor-provided RC.
+	 * 	1) Without the actual device, this is only a guess;
+	 * 	2) As the addr is not reported via I2C, nor can be changed,
+	 * 	   the device is bound to the vendor-provided RC.
 	 */
 
 	*protocol = RC_PROTO_UNKNOWN;
@@ -535,7 +535,6 @@ int bttv_input_init(struct bttv *btv)
 
 	/* init input device */
 	ir->dev = rc;
-	ir->btv = btv;
 
 	snprintf(ir->name, sizeof(ir->name), "bttv IR (card=%d)",
 		 btv->c.type);
@@ -558,7 +557,7 @@ int bttv_input_init(struct bttv *btv)
 	rc->driver_name = MODULE_NAME;
 
 	btv->remote = ir;
-	bttv_ir_start(ir);
+	bttv_ir_start(btv, ir);
 
 	/* all done */
 	err = rc_register_device(rc);

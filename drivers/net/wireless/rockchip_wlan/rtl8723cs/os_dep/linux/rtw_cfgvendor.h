@@ -16,7 +16,9 @@
 #ifndef _RTW_CFGVENDOR_H_
 #define _RTW_CFGVENDOR_H_
 
+#define OUI_BRCM    0x001018
 #define OUI_GOOGLE  0x001A11
+#define BRCM_VENDOR_SUBCMD_PRIV_STR	1
 #define ATTRIBUTE_U32_LEN                  (NLA_HDRLEN  + 4)
 #define VENDOR_ID_OVERHEAD                 ATTRIBUTE_U32_LEN
 #define VENDOR_SUBCMD_OVERHEAD             ATTRIBUTE_U32_LEN
@@ -79,7 +81,7 @@ typedef enum {
 
 } ANDROID_VENDOR_SUB_COMMAND;
 
-enum rtw_vendor_subcmd {
+enum wl_vendor_subcmd {
     GSCAN_SUBCMD_GET_CAPABILITIES = ANDROID_NL80211_SUBCMD_GSCAN_RANGE_START,
 
     GSCAN_SUBCMD_SET_CONFIG,                            /* 0x1001 */
@@ -122,25 +124,6 @@ enum rtw_vendor_subcmd {
 
     APF_SUBCMD_GET_CAPABILITIES = ANDROID_NL80211_SUBCMD_PKT_FILTER_RANGE_START,
     APF_SUBCMD_SET_FILTER,
-    
-    LOGGER_START_LOGGING = ANDROID_NL80211_SUBCMD_DEBUG_RANGE_START,
-    LOGGER_TRIGGER_MEM_DUMP,
-    LOGGER_GET_MEM_DUMP,
-    LOGGER_GET_VER,
-    LOGGER_GET_RING_STATUS,
-    LOGGER_GET_RING_DATA,
-    LOGGER_GET_FEATURE,
-    LOGGER_RESET_LOGGING,
-    LOGGER_TRIGGER_DRIVER_MEM_DUMP,
-    LOGGER_GET_DRIVER_MEM_DUMP,
-    LOGGER_START_PKT_FATE_MONITORING,
-    LOGGER_GET_TX_PKT_FATES,
-    LOGGER_GET_RX_PKT_FATES,
-
-	WIFI_OFFLOAD_SUBCMD_START_MKEEP_ALIVE = ANDROID_NL80211_SUBCMD_WIFI_OFFLOAD_RANGE_START,
-	WIFI_OFFLOAD_SUBCMD_STOP_MKEEP_ALIVE,
-
-	VENDOR_SUBCMD_MAX
 };
 
 enum gscan_attributes {
@@ -218,13 +201,6 @@ enum gscan_ch_attributes {
 	GSCAN_ATTRIBUTE_CH_ID_7
 };
 
-enum wifi_rssi_monitor_attr {
-        RSSI_MONITOR_ATTRIBUTE_MAX_RSSI,
-        RSSI_MONITOR_ATTRIBUTE_MIN_RSSI,
-        RSSI_MONITOR_ATTRIBUTE_START,
-};
-
-
 enum rtt_attributes {
 	RTT_ATTRIBUTE_TARGET_CNT,
 	RTT_ATTRIBUTE_TARGET_INFO,
@@ -239,22 +215,7 @@ enum rtt_attributes {
 	RTT_ATTRIBUTE_TARGET_NUM_RETRY
 };
 
-enum logger_attributes {
-	LOGGER_ATTRIBUTE_GET_DRIVER,
-	LOGGER_ATTRIBUTE_GET_FW,
-	LOGGER_ATTRIBUTE_RING_ID,
-	LOGGER_ATTRIBUTE_RING_NAME,
-	LOGGER_ATTRIBUTE_RING_FLAGS,
-	LOGGER_ATTRIBUTE_LOG_LEVEL,
-	LOGGER_ATTRIBUTE_LOG_TIME_INTVAL,
-	LOGGER_ATTRIBUTE_LOG_MIN_DATA_SIZE,
-	LOGGER_ATTRIBUTE_FW_DUMP_LEN,
-	LOGGER_ATTRIBUTE_FW_DUMP_DATA,
-	LOGGERG_ATTRIBUTE_RING_DATA,
-	LOGGER_ATTRIBUTE_RING_STATUS,
-	LOGGER_ATTRIBUTE_RING_NUM
-};
-typedef enum rtw_vendor_event {
+typedef enum wl_vendor_event {
     RTK_RESERVED1,
     RTK_RESERVED2,
     GSCAN_EVENT_SIGNIFICANT_CHANGE_RESULTS ,
@@ -269,19 +230,14 @@ typedef enum rtw_vendor_event {
     GOOGLE_DEBUG_MEM_DUMP_EVENT,
     GSCAN_EVENT_ANQPO_HOTSPOT_MATCH,
     GOOGLE_RSSI_MONITOR_EVENT
-} rtw_vendor_event_t;
+} wl_vendor_event_t;
 
 enum andr_wifi_feature_set_attr {
 	ANDR_WIFI_ATTRIBUTE_NUM_FEATURE_SET,
-	ANDR_WIFI_ATTRIBUTE_FEATURE_SET,
-	ANDR_WIFI_ATTRIBUTE_RANDOM_MAC_OUI,
-	ANDR_WIFI_ATTRIBUTE_NODFS_SET,
-	ANDR_WIFI_ATTRIBUTE_COUNTRY,
-	ANDR_WIFI_ATTRIBUTE_ND_OFFLOAD_VALUE
-	// Add more attribute here
+	ANDR_WIFI_ATTRIBUTE_FEATURE_SET
 };
 
-typedef enum rtw_vendor_gscan_attribute {
+typedef enum wl_vendor_gscan_attribute {
 	ATTR_START_GSCAN,
 	ATTR_STOP_GSCAN,
 	ATTR_SET_SCAN_BATCH_CFG_ID, /* set batch scan params */
@@ -291,7 +247,7 @@ typedef enum rtw_vendor_gscan_attribute {
 	ATTR_GET_GSCAN_CAPABILITIES_ID,
 	/* Add more sub commands here */
 	ATTR_GSCAN_MAX
-} rtw_vendor_gscan_attribute_t;
+} wl_vendor_gscan_attribute_t;
 
 typedef enum gscan_batch_attribute {
 	ATTR_GSCAN_BATCH_BESTN,
@@ -337,6 +293,7 @@ typedef enum {
 } wifi_channel_width;
 
 typedef int wifi_radio;
+typedef int wifi_channel;
 
 typedef struct {
     wifi_channel_width width;
@@ -360,30 +317,7 @@ typedef enum {
     WIFI_ERROR_BUSY = -10,
 } wifi_error;
 
-typedef int wifi_ring_buffer_id;
-/* ring buffer params */
-/**
- * written_bytes and read_bytes implement a producer consumer API
- *     hence written_bytes >= read_bytes
- * a modulo arithmetic of the buffer size has to be applied to those counters:
- * actual offset into ring buffer = written_bytes % ring_buffer_byte_size
- *
- */
-typedef struct {
-    u8 name[32];
-    u32 flags;
-    wifi_ring_buffer_id ring_id; // unique integer representing the ring
-    u32 ring_buffer_byte_size;   // total memory size allocated for the buffer
-    u32 verbose_level;           // verbose level for ring buffer
-    u32 written_bytes;           // number of bytes that was written to the buffer by driver,
-                                 // monotonously increasing integer
-    u32 read_bytes;              // number of bytes that was read from the buffer by user land,
-                                 // monotonously increasing integer
-    u32 written_records;         // number of records that was written to the buffer by driver,
-                                 // monotonously increasing integer
-} wifi_ring_buffer_status;
-
-#ifdef CONFIG_RTW_CFGVENDOR_LLSTATS
+#ifdef LINK_LAYER_STATS_SUPPORT
 #define STATS_MAJOR_VERSION      1
 #define STATS_MINOR_VERSION      0
 #define STATS_MICRO_VERSION      0
@@ -461,11 +395,14 @@ typedef struct {
 // Max number of tx power levels. The actual number vary per device and is specified by |num_tx_levels|
 #define RADIO_STAT_MAX_TX_LEVELS 256
 
-/* Internal radio statistics structure in the driver */
+/* radio statistics */
 typedef struct {
    wifi_radio radio;                      // wifi radio (if multiple radio supported)
    u32 on_time;                           // msecs the radio is awake (32 bits number accruing over time)
    u32 tx_time;                           // msecs the radio is transmitting (32 bits number accruing over time)
+   u32 num_tx_levels;                     // number of radio transmit power levels
+   u32* tx_time_per_levels;               // pointer to an array of radio transmit per power levels in
+                                          // msecs accured over time
    u32 rx_time;                           // msecs the radio is in active receive (32 bits number accruing over time)
    u32 on_time_scan;                      // msecs the radio is awake due to all scan (32 bits number accruing over time)
    u32 on_time_nbd;                       // msecs the radio is awake due to NAN (32 bits number accruing over time)
@@ -475,7 +412,7 @@ typedef struct {
    u32 on_time_hs20;                      // msecs the radio is awake due to HS2.0 scans and GAS exchange (32 bits number accruing over time)
    u32 num_channels;                      // number of channels
    wifi_channel_stat channels[];          // channel statistics
-} wifi_radio_stat_internal;
+} wifi_radio_stat;
 
 /**
  * Packet statistics reporting by firmware is performed on MPDU basi (i.e. counters increase by 1 for each MPDU)
@@ -591,12 +528,11 @@ typedef struct {
    u32 aggressive_statistics_gathering; // set for field debug mode. Driver should collect all statistics regardless of performance impact.
 } wifi_link_layer_params;
 
-#define RSSI_MONITOR_EVT_VERSION   1
+/* callback for reporting link layer stats */
 typedef struct {
-    u8 version;
-    s8 cur_rssi;
-    mac_addr BSSID;
-} rssi_monitor_evt;
+  void (*on_link_stats_results) (wifi_request_id id, wifi_iface_stat *iface_stat,
+         int num_radios, wifi_radio_stat *radio_stat);
+} wifi_stats_result_handler;
 
 
 /* wifi statistics bitmap  */
@@ -609,8 +545,10 @@ typedef struct {
 #define WIFI_STATS_IFACE_AC           0x00000040      // all ac statistics (within interface statistics)
 #define WIFI_STATS_IFACE_CONTENTION   0x00000080      // all contention (min, max, avg) statistics (within ac statisctics)
 
-#endif /* CONFIG_RTW_CFGVENDOR_LLSTATS */
+#endif /* LINK_LAYER_STATS_SUPPORT */
 
+/* Capture the BRCM_VENDOR_SUBCMD_PRIV_STRINGS* here */
+#define BRCM_VENDOR_SCMD_CAPA	"cap"
 
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 14, 0)) || defined(RTW_VENDOR_EXT_SUPPORT)
 extern int rtw_cfgvendor_attach(struct wiphy *wiphy);
@@ -618,19 +556,9 @@ extern int rtw_cfgvendor_detach(struct wiphy *wiphy);
 extern int rtw_cfgvendor_send_async_event(struct wiphy *wiphy,
 	struct net_device *dev, int event_id, const void  *data, int len);
 #if defined(GSCAN_SUPPORT) && 0
-extern int rtw_cfgvendor_send_hotlist_event(struct wiphy *wiphy,
-	struct net_device *dev, void  *data, int len, rtw_vendor_event_t event);
+extern int wl_cfgvendor_send_hotlist_event(struct wiphy *wiphy,
+	struct net_device *dev, void  *data, int len, wl_vendor_event_t event);
 #endif
 #endif /* (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 14, 0)) || defined(RTW_VENDOR_EXT_SUPPORT) */
-
-#ifdef CONFIG_RTW_CFGVENDOR_RSSIMONITOR
-void rtw_cfgvendor_rssi_monitor_evt(_adapter *padapter);
-#endif
-
-#ifdef CONFIG_RTW_CFGVENDOR_RANDOM_MAC_OUI
-void rtw_hal_pno_random_gen_mac_addr(PADAPTER adapter);
-void rtw_hal_set_hw_mac_addr(PADAPTER adapter, u8 *mac_addr);
-#endif
-
 
 #endif /* _RTW_CFGVENDOR_H_ */

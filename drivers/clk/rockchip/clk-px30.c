@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2018 Rockchip Electronics Co. Ltd.
- * Author: Elaine Zhang<zhangqing@rock-chips.com>
+ * Copyright (c) 2016 Rockchip Electronics Co. Ltd.
+ * Author: Elaine <zhangqing@rock-chips.com>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -133,10 +133,9 @@ static struct rockchip_cpuclk_rate_table px30_cpuclk_rates[] __initdata = {
 };
 
 static const struct rockchip_cpuclk_reg_data px30_cpuclk_data = {
-	.core_reg[0] = PX30_CLKSEL_CON(0),
-	.div_core_shift[0] = 0,
-	.div_core_mask[0] = 0xf,
-	.num_cores = 1,
+	.core_reg = PX30_CLKSEL_CON(0),
+	.div_core_shift = 0,
+	.div_core_mask = 0xf,
 	.mux_core_alt = 1,
 	.mux_core_main = 0,
 	.mux_core_shift = 7,
@@ -190,7 +189,6 @@ PNAME(mux_wifi_pmu_p)		= { "xin24m", "clk_wifi_pmu_src" };
 PNAME(mux_uart0_pmu_p)		= { "clk_uart0_pmu_src", "clk_uart0_np5", "clk_uart0_frac" };
 PNAME(mux_usbphy_ref_p)		= { "xin24m", "clk_ref24m_pmu" };
 PNAME(mux_mipidsiphy_ref_p)	= { "xin24m", "clk_ref24m_pmu" };
-PNAME(mux_gpu_p)		= { "clk_gpu_div", "clk_gpu_np5" };
 
 static struct rockchip_pll_clock px30_pll_clks[] __initdata = {
 	[apll] = PLL(pll_rk3328, PLL_APLL, "apll", mux_pll_p,
@@ -208,7 +206,8 @@ static struct rockchip_pll_clock px30_pll_clks[] __initdata = {
 };
 
 static struct rockchip_pll_clock px30_pmu_pll_clks[] __initdata = {
-	[gpll] = PLL(pll_rk3328, PLL_GPLL, "gpll",  mux_pll_p, 0, PX30_PMU_PLL_CON(0),
+	[gpll] = PLL(pll_rk3328, PLL_GPLL, "gpll",  mux_pll_p,
+		     0, PX30_PMU_PLL_CON(0),
 		     PX30_PMU_MODE, 0, 3, 0, px30_pll_rates),
 };
 
@@ -663,7 +662,7 @@ static struct rockchip_clk_branch px30_clk_branches[] __initdata = {
 	COMPOSITE(SCLK_UART1_SRC, "clk_uart1_src", mux_uart_src_p, CLK_SET_RATE_NO_REPARENT,
 			PX30_CLKSEL_CON(34), 14, 2, MFLAGS, 0, 5, DFLAGS,
 			PX30_CLKGATE_CON(10), 12, GFLAGS),
-	COMPOSITE_NOMUX_HALFDIV(0, "clk_uart1_np5", "clk_uart1_src", 0,
+	COMPOSITE_NOMUX_HALFDIV(0, "clk_uart1_np5", "clk_uart1_src", CLK_SET_RATE_PARENT,
 			PX30_CLKSEL_CON(35), 0, 5, DFLAGS,
 			PX30_CLKGATE_CON(10), 13, GFLAGS),
 	COMPOSITE_FRACMUX(0, "clk_uart1_frac", "clk_uart1_src", CLK_SET_RATE_PARENT,
@@ -676,7 +675,7 @@ static struct rockchip_clk_branch px30_clk_branches[] __initdata = {
 	COMPOSITE(SCLK_UART2_SRC, "clk_uart2_src", mux_uart_src_p, 0,
 			PX30_CLKSEL_CON(37), 14, 2, MFLAGS, 0, 5, DFLAGS,
 			PX30_CLKGATE_CON(11), 0, GFLAGS),
-	COMPOSITE_NOMUX_HALFDIV(0, "clk_uart2_np5", "clk_uart2_src", 0,
+	COMPOSITE_NOMUX_HALFDIV(0, "clk_uart2_np5", "clk_uart2_src", CLK_SET_RATE_PARENT,
 			PX30_CLKSEL_CON(38), 0, 5, DFLAGS,
 			PX30_CLKGATE_CON(11), 1, GFLAGS),
 	COMPOSITE_FRACMUX(0, "clk_uart2_frac", "clk_uart2_src", CLK_SET_RATE_PARENT,
@@ -689,7 +688,7 @@ static struct rockchip_clk_branch px30_clk_branches[] __initdata = {
 	COMPOSITE(0, "clk_uart3_src", mux_uart_src_p, 0,
 			PX30_CLKSEL_CON(40), 14, 2, MFLAGS, 0, 5, DFLAGS,
 			PX30_CLKGATE_CON(11), 4, GFLAGS),
-	COMPOSITE_NOMUX_HALFDIV(0, "clk_uart3_np5", "clk_uart3_src", 0,
+	COMPOSITE_NOMUX_HALFDIV(0, "clk_uart3_np5", "clk_uart3_src", CLK_SET_RATE_PARENT,
 			PX30_CLKSEL_CON(41), 0, 5, DFLAGS,
 			PX30_CLKGATE_CON(11), 5, GFLAGS),
 	COMPOSITE_FRACMUX(0, "clk_uart3_frac", "clk_uart3_src", CLK_SET_RATE_PARENT,
@@ -702,7 +701,7 @@ static struct rockchip_clk_branch px30_clk_branches[] __initdata = {
 	COMPOSITE(0, "clk_uart4_src", mux_uart_src_p, 0,
 			PX30_CLKSEL_CON(43), 14, 2, MFLAGS, 0, 5, DFLAGS,
 			PX30_CLKGATE_CON(11), 8, GFLAGS),
-	COMPOSITE_NOMUX_HALFDIV(0, "clk_uart4_np5", "clk_uart4_src", 0,
+	COMPOSITE_NOMUX_HALFDIV(0, "clk_uart4_np5", "clk_uart4_src", CLK_SET_RATE_PARENT,
 			PX30_CLKSEL_CON(44), 0, 5, DFLAGS,
 			PX30_CLKGATE_CON(11), 9, GFLAGS),
 	COMPOSITE_FRACMUX(0, "clk_uart4_frac", "clk_uart4_src", CLK_SET_RATE_PARENT,
@@ -715,7 +714,7 @@ static struct rockchip_clk_branch px30_clk_branches[] __initdata = {
 	COMPOSITE(0, "clk_uart5_src", mux_uart_src_p, 0,
 			PX30_CLKSEL_CON(46), 14, 2, MFLAGS, 0, 5, DFLAGS,
 			PX30_CLKGATE_CON(11), 12, GFLAGS),
-	COMPOSITE_NOMUX_HALFDIV(0, "clk_uart5_np5", "clk_uart5_src", 0,
+	COMPOSITE_NOMUX_HALFDIV(0, "clk_uart5_np5", "clk_uart5_src", CLK_SET_RATE_PARENT,
 			PX30_CLKSEL_CON(47), 0, 5, DFLAGS,
 			PX30_CLKGATE_CON(11), 13, GFLAGS),
 	COMPOSITE_FRACMUX(0, "clk_uart5_frac", "clk_uart5_src", CLK_SET_RATE_PARENT,
@@ -946,7 +945,7 @@ static struct rockchip_clk_branch px30_clk_pmu_branches[] __initdata = {
 	COMPOSITE(0, "clk_uart0_pmu_src", mux_uart_src_p, 0,
 			PX30_PMU_CLKSEL_CON(3), 14, 2, MFLAGS, 0, 5, DFLAGS,
 			PX30_PMU_CLKGATE_CON(1), 0, GFLAGS),
-	COMPOSITE_NOMUX_HALFDIV(0, "clk_uart0_np5", "clk_uart0_pmu_src", 0,
+	COMPOSITE_NOMUX_HALFDIV(0, "clk_uart0_np5", "clk_uart0_pmu_src", CLK_SET_RATE_PARENT,
 			PX30_PMU_CLKSEL_CON(4), 0, 5, DFLAGS,
 			PX30_PMU_CLKGATE_CON(1), 1, GFLAGS),
 	COMPOSITE_FRACMUX(0, "clk_uart0_frac", "clk_uart0_pmu_src", CLK_SET_RATE_PARENT,
@@ -1004,6 +1003,37 @@ static const char *const px30_pmucru_critical_clocks[] __initconst = {
 	"pclk_uart2",
 };
 
+static void __iomem *px30_cru_base;
+static void __iomem *px30_pmucru_base;
+
+void px30_dump_cru(void)
+{
+	if (px30_cru_base) {
+		pr_warn("CRU:\n");
+		print_hex_dump(KERN_WARNING, "", DUMP_PREFIX_OFFSET,
+			       32, 4, px30_cru_base,
+			       0x400, false);
+	}
+	if (px30_pmucru_base) {
+		pr_warn("PMU CRU:\n");
+		print_hex_dump(KERN_WARNING, "", DUMP_PREFIX_OFFSET,
+			       32, 4, px30_pmucru_base,
+			       0x90, false);
+	}
+}
+EXPORT_SYMBOL_GPL(px30_dump_cru);
+
+static int px30_clk_panic(struct notifier_block *this,
+			  unsigned long ev, void *ptr)
+{
+	px30_dump_cru();
+	return NOTIFY_DONE;
+}
+
+static struct notifier_block px30_clk_panic_block = {
+	.notifier_call = px30_clk_panic,
+};
+
 static void __init px30_clk_init(struct device_node *np)
 {
 	struct rockchip_clk_provider *ctx;
@@ -1015,6 +1045,8 @@ static void __init px30_clk_init(struct device_node *np)
 		pr_err("%s: could not map cru region\n", __func__);
 		return;
 	}
+
+	px30_cru_base = reg_base;
 
 	ctx = rockchip_clk_init(np, reg_base, CLK_NR_CLKS);
 	if (IS_ERR(ctx)) {
@@ -1054,7 +1086,11 @@ static void __init px30_clk_init(struct device_node *np)
 	rockchip_register_restart_notifier(ctx, PX30_GLB_SRST_FST, NULL);
 
 	rockchip_clk_of_add_provider(np, ctx);
+
+	atomic_notifier_chain_register(&panic_notifier_list,
+				       &px30_clk_panic_block);
 }
+
 CLK_OF_DECLARE(px30_cru, "rockchip,px30-cru", px30_clk_init);
 
 static void __init px30_pmu_clk_init(struct device_node *np)
@@ -1067,6 +1103,8 @@ static void __init px30_pmu_clk_init(struct device_node *np)
 		pr_err("%s: could not map cru pmu region\n", __func__);
 		return;
 	}
+
+	px30_pmucru_base = reg_base;
 
 	ctx = rockchip_clk_init(np, reg_base, CLKPMU_NR_CLKS);
 	if (IS_ERR(ctx)) {
@@ -1085,4 +1123,6 @@ static void __init px30_pmu_clk_init(struct device_node *np)
 
 	rockchip_clk_of_add_provider(np, ctx);
 }
+
 CLK_OF_DECLARE(px30_cru_pmu, "rockchip,px30-pmucru", px30_pmu_clk_init);
+

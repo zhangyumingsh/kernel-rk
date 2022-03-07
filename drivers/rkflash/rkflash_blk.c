@@ -20,7 +20,6 @@
 #include <linux/proc_fs.h>
 #include <linux/sched.h>
 #include <linux/semaphore.h>
-#include <linux/seq_file.h>
 #include <linux/slab.h>
 #include <linux/spinlock.h>
 #include <linux/timer.h>
@@ -308,8 +307,8 @@ static int rkflash_blktrans_thread(void *arg)
 		rq_len = 0;
 		buf = 0;
 		res = 0;
-		rw_flag = req_op(req);
-		if (rw_flag == REQ_OP_DISCARD) {
+
+		if (req->cmd_flags & REQ_DISCARD) {
 			spin_unlock_irq(rq->queue_lock);
 			if (rkflash_blk_discard(blk_rq_pos(req) +
 						dev->off_size, totle_nsect))
@@ -318,11 +317,14 @@ static int rkflash_blktrans_thread(void *arg)
 			if (!__blk_end_request_cur(req, res))
 				req = NULL;
 			continue;
-		} else if (rw_flag == REQ_OP_FLUSH) {
+		} else if (req->cmd_flags & REQ_FLUSH) {
 			if (!__blk_end_request_cur(req, res))
 				req = NULL;
 			continue;
-		} else if (rw_flag == REQ_OP_READ && mtd_read_temp_buffer) {
+		}
+
+		rw_flag = req->cmd_flags & REQ_WRITE;
+		if (rw_flag == READ && mtd_read_temp_buffer) {
 			buf = mtd_read_temp_buffer;
 			rkflash_blk_check_buffer_align(req, &buf);
 			spin_unlock_irq(rq->queue_lock);
@@ -344,7 +346,7 @@ static int rkflash_blktrans_thread(void *arg)
 					p += bvec.bv_len;
 				}
 			}
-		} else if (rw_flag == REQ_OP_WRITE){
+		} else {
 			rq_for_each_segment(bvec, req, rq_iter) {
 				if ((page_address(bvec.bv_page)
 					+ bvec.bv_offset)
@@ -377,8 +379,6 @@ static int rkflash_blktrans_thread(void *arg)
 						       totle_nsect);
 				spin_lock_irq(rq->queue_lock);
 			}
-		} else {
-			pr_err("%s error req flag\n", __func__);
 		}
 		__blk_end_request_all(req, res);
 		req = NULL;
@@ -573,7 +573,7 @@ static int rkflash_blk_register(struct flash_blk_ops *blk_ops)
 	blk_queue_max_hw_sectors(blk_ops->rq, MTD_RW_SECTORS);
 	blk_queue_max_segments(blk_ops->rq, MTD_RW_SECTORS);
 
-	blk_queue_flag_set(QUEUE_FLAG_DISCARD, blk_ops->rq);
+	queue_flag_set_unlocked(QUEUE_FLAG_DISCARD, blk_ops->rq);
 	blk_queue_max_discard_sectors(blk_ops->rq, UINT_MAX >> 9);
 
 	blk_ops->rq->queuedata = blk_ops;
@@ -624,7 +624,7 @@ static void rkflash_blk_unregister(struct flash_blk_ops *blk_ops)
 	unregister_blkdev(blk_ops->major, blk_ops->name);
 }
 
-static int __maybe_unused rkflash_dev_vendor_read(u32 sec, u32 n_sec, void *p_data)
+static int rkflash_dev_vendor_read(u32 sec, u32 n_sec, void *p_data)
 {
 	int ret;
 
@@ -639,7 +639,7 @@ static int __maybe_unused rkflash_dev_vendor_read(u32 sec, u32 n_sec, void *p_da
 	return ret;
 }
 
-static int __maybe_unused rkflash_dev_vendor_write(u32 sec, u32 n_sec, void *p_data)
+static int rkflash_dev_vendor_write(u32 sec, u32 n_sec, void *p_data)
 {
 	int ret;
 
@@ -682,12 +682,8 @@ int rkflash_dev_init(void __iomem *reg_addr,
 	/* vendor part */
 	switch (type) {
 	case FLASH_TYPE_SFC_NOR:
-#if IS_ENABLED(CONFIG_RK_SFC_NOR_MTD) && IS_ENABLED(CONFIG_ROCKCHIP_MTD_VENDOR_STORAGE)
-		break;
-#else
 		flash_vendor_dev_ops_register(rkflash_dev_vendor_read,
 					      rkflash_dev_vendor_write);
-#endif
 		break;
 	case FLASH_TYPE_SFC_NAND:
 #ifdef CONFIG_RK_SFC_NAND_MTD

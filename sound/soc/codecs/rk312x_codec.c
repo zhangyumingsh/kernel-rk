@@ -39,7 +39,7 @@
 #include <linux/io.h>
 #include <linux/spinlock.h>
 #include <sound/tlv.h>
-#include <linux/extcon-provider.h>
+#include <linux/switch.h>
 #include "rk312x_codec.h"
 
 static int debug = -1;
@@ -57,6 +57,8 @@ module_param(debug, int, S_IRUGO|S_IWUSR);
 #define CODEC_SET_SPK 1
 #define CODEC_SET_HP 2
 #define SWITCH_SPK 1
+#define BIT_HEADSET             (1 << 0)
+#define BIT_HEADSET_NO_MIC      (1 << 1)
 #define GRF_ACODEC_CON  0x013c
 #define GRF_SOC_STATUS0 0x014c
 /* volume setting
@@ -83,7 +85,7 @@ struct rk312x_codec_priv {
 	struct regmap *grf;
 	struct device *dev;
 	unsigned int irq;
-	struct snd_soc_component *component;
+	struct snd_soc_codec *codec;
 
 	unsigned int stereo_sysclk;
 	unsigned int rate;
@@ -116,19 +118,12 @@ struct rk312x_codec_priv {
 	long int voice_call_path;
 	struct clk	*pclk;
 	struct clk	*mclk;
-	struct extcon_dev *edev;
+	struct switch_dev sdev;
 	struct work_struct work;
 	struct delayed_work init_delayed_work;
 	struct delayed_work mute_delayed_work;
 	struct delayed_work hpdet_work;
 };
-
-static const unsigned int headset_extcon_cable[] = {
-	EXTCON_JACK_MICROPHONE,
-	EXTCON_JACK_HEADPHONE,
-	EXTCON_NONE,
-};
-
 static struct rk312x_codec_priv *rk312x_priv;
 
 #define RK312x_CODEC_ALL	0
@@ -299,13 +294,16 @@ static int switch_to_spk(int enable)
 }
 #endif
 
-static int rk312x_reset(struct snd_soc_component *component)
+static int rk312x_reset(struct snd_soc_codec *codec)
 {
 	DBG("%s\n", __func__);
 	regmap_write(rk312x_priv->regmap, RK312x_RESET, 0x00);
 	mdelay(10);
 	regmap_write(rk312x_priv->regmap, RK312x_RESET, 0x43);
 	mdelay(10);
+
+	memcpy(codec->reg_cache, rk312x_reg_defaults,
+	       sizeof(rk312x_reg_defaults));
 
 	return 0;
 }
@@ -636,8 +634,8 @@ int rk312x_codec_mute_dac(int mute)
 		return -EINVAL;
 	}
 	if (mute) {
-		snd_soc_component_write(rk312x_priv->component, 0xb4, 0x40);
-		snd_soc_component_write(rk312x_priv->component, 0xb8, 0x40);
+		snd_soc_write(rk312x_priv->codec, 0xb4, 0x40);
+		snd_soc_write(rk312x_priv->codec, 0xb8, 0x40);
 	}
 	return 0;
 }
@@ -662,6 +660,7 @@ static int rk312x_playback_path_get(struct snd_kcontrol *kcontrol,
 static int rk312x_playback_path_put(struct snd_kcontrol *kcontrol,
 				    struct snd_ctl_elem_value *ucontrol)
 {
+	/* struct snd_soc_codec *codec = snd_kcontrol_chip(kcontrol); */
 	long int pre_path;
 
 	if (!rk312x_priv) {
@@ -692,10 +691,8 @@ static int rk312x_playback_path_put(struct snd_kcontrol *kcontrol,
 	case RING_SPK:
 		if (pre_path == OFF) {
 			rk312x_codec_power_up(RK312x_CODEC_PLAYBACK);
-			snd_soc_component_write(rk312x_priv->component,
-						0xb4, rk312x_priv->spk_volume);
-			snd_soc_component_write(rk312x_priv->component,
-						0xb8, rk312x_priv->spk_volume);
+			snd_soc_write(rk312x_priv->codec, 0xb4, rk312x_priv->spk_volume);
+			snd_soc_write(rk312x_priv->codec, 0xb8, rk312x_priv->spk_volume);
 		}
 		break;
 	case HP_PATH:
@@ -704,10 +701,8 @@ static int rk312x_playback_path_put(struct snd_kcontrol *kcontrol,
 	case RING_HP_NO_MIC:
 		if (pre_path == OFF) {
 			rk312x_codec_power_up(RK312x_CODEC_PLAYBACK);
-			snd_soc_component_write(rk312x_priv->component,
-						0xb4, rk312x_priv->hp_volume);
-			snd_soc_component_write(rk312x_priv->component,
-						0xb8, rk312x_priv->hp_volume);
+			snd_soc_write(rk312x_priv->codec, 0xb4, rk312x_priv->hp_volume);
+			snd_soc_write(rk312x_priv->codec, 0xb8, rk312x_priv->hp_volume);
 		}
 		break;
 	case BT:
@@ -716,10 +711,8 @@ static int rk312x_playback_path_put(struct snd_kcontrol *kcontrol,
 	case RING_SPK_HP:
 		if (pre_path == OFF) {
 			rk312x_codec_power_up(RK312x_CODEC_PLAYBACK);
-			snd_soc_component_write(rk312x_priv->component,
-						0xb4, rk312x_priv->spk_volume);
-			snd_soc_component_write(rk312x_priv->component,
-						0xb8, rk312x_priv->spk_volume);
+			snd_soc_write(rk312x_priv->codec, 0xb4, rk312x_priv->spk_volume);
+			snd_soc_write(rk312x_priv->codec, 0xb8, rk312x_priv->spk_volume);
 		}
 		break;
 	default:
@@ -748,6 +741,7 @@ static int rk312x_capture_path_get(struct snd_kcontrol *kcontrol,
 static int rk312x_capture_path_put(struct snd_kcontrol *kcontrol,
 				   struct snd_ctl_elem_value *ucontrol)
 {
+	/* struct snd_soc_codec *codec = snd_kcontrol_chip(kcontrol); */
 	long int pre_path;
 
 	if (!rk312x_priv) {
@@ -772,19 +766,27 @@ static int rk312x_capture_path_put(struct snd_kcontrol *kcontrol,
 	case Main_Mic:
 		if (pre_path == MIC_OFF) {
 			rk312x_codec_power_up(RK312x_CODEC_CAPTURE);
-			snd_soc_component_write(rk312x_priv->component, 0x10c,
-						0x20 | rk312x_priv->capture_volume);
-			snd_soc_component_write(rk312x_priv->component, 0x14c,
-						0x20 | rk312x_priv->capture_volume);
+			/* snd_soc_write(rk312x_priv->codec, 0x94,
+					 0x20|rk312x_priv->capture_volume); */
+			/* snd_soc_write(rk312x_priv->codec, 0x98,
+					 rk312x_priv->capture_volume); */
+			snd_soc_write(rk312x_priv->codec, 0x10c,
+				      0x20|rk312x_priv->capture_volume);
+			snd_soc_write(rk312x_priv->codec, 0x14c,
+				      0x20|rk312x_priv->capture_volume);
 		}
 		break;
 	case Hands_Free_Mic:
 		if (pre_path == MIC_OFF) {
 			rk312x_codec_power_up(RK312x_CODEC_CAPTURE);
-			snd_soc_component_write(rk312x_priv->component,
-						0x10c, 0x20 | rk312x_priv->capture_volume);
-			snd_soc_component_write(rk312x_priv->component,
-						0x14c, 0x20 | rk312x_priv->capture_volume);
+			/* snd_soc_write(rk312x_priv->codec,0x94,
+					 0x20|rk312x_priv->capture_volume); */
+			/* snd_soc_write(rk312x_priv->codec,
+					 0x98, rk312x_priv->capture_volume); */
+			snd_soc_write(rk312x_priv->codec,
+				      0x10c, 0x20|rk312x_priv->capture_volume);
+			snd_soc_write(rk312x_priv->codec,
+				      0x14c, 0x20|rk312x_priv->capture_volume);
 		}
 		break;
 	case BT_Sco_Mic:
@@ -816,6 +818,7 @@ static int rk312x_voice_call_path_get(struct snd_kcontrol *kcontrol,
 static int rk312x_voice_call_path_put(struct snd_kcontrol *kcontrol,
 				      struct snd_ctl_elem_value *ucontrol)
 {
+	/* struct snd_soc_codec *codec = snd_kcontrol_chip(kcontrol); */
 	long int pre_path;
 
 	if (!rk312x_priv) {
@@ -839,10 +842,8 @@ static int rk312x_voice_call_path_put(struct snd_kcontrol *kcontrol,
 				mdelay(100);
 		} else {
 			rk312x_codec_power_up(RK312x_CODEC_PLAYBACK);
-			snd_soc_component_write(rk312x_priv->component,
-						0xb4, rk312x_priv->spk_volume);
-			snd_soc_component_write(rk312x_priv->component,
-						0xb8, rk312x_priv->spk_volume);
+			snd_soc_write(rk312x_priv->codec, 0xb4, rk312x_priv->spk_volume);
+			snd_soc_write(rk312x_priv->codec, 0xb8, rk312x_priv->spk_volume);
 		}
 	}
 
@@ -887,24 +888,25 @@ static int rk312x_dacl_event(struct snd_soc_dapm_widget *w,
 			     struct snd_kcontrol *kcontrol,
 			     int event)
 {
-	struct snd_soc_component *component = snd_soc_dapm_to_component(w->dapm);
+	struct snd_soc_codec *codec = snd_soc_dapm_to_codec(w->dapm);
 
 	switch (event) {
 	case SND_SOC_DAPM_POST_PMU:
-		snd_soc_component_update_bits(component, RK312x_DAC_ENABLE,
-					      RK312x_DACL_WORK, 0);
-		snd_soc_component_update_bits(component, RK312x_DAC_ENABLE,
-					      RK312x_DACL_EN | RK312x_DACL_CLK_EN,
-					      RK312x_DACL_EN | RK312x_DACL_CLK_EN);
-		snd_soc_component_update_bits(component, RK312x_DAC_ENABLE,
-					      RK312x_DACL_WORK, RK312x_DACL_WORK);
+		snd_soc_update_bits(codec, RK312x_DAC_ENABLE,
+				    RK312x_DACL_WORK, 0);
+		snd_soc_update_bits(codec, RK312x_DAC_ENABLE,
+				    RK312x_DACL_EN | RK312x_DACL_CLK_EN,
+				    RK312x_DACL_EN | RK312x_DACL_CLK_EN);
+		snd_soc_update_bits(codec, RK312x_DAC_ENABLE,
+				    RK312x_DACL_WORK, RK312x_DACL_WORK);
 		break;
 
 	case SND_SOC_DAPM_POST_PMD:
-		snd_soc_component_update_bits(component, RK312x_DAC_ENABLE,
-					      RK312x_DACL_EN | RK312x_DACL_CLK_EN, 0);
-		snd_soc_component_update_bits(component, RK312x_DAC_ENABLE,
-					      RK312x_DACL_WORK, 0);
+		snd_soc_update_bits(codec, RK312x_DAC_ENABLE,
+				    RK312x_DACL_EN
+				    | RK312x_DACL_CLK_EN, 0);
+		snd_soc_update_bits(codec, RK312x_DAC_ENABLE,
+				    RK312x_DACL_WORK, 0);
 		break;
 
 	default:
@@ -918,28 +920,28 @@ static int rk312x_dacr_event(struct snd_soc_dapm_widget *w,
 			     struct snd_kcontrol *kcontrol,
 			     int event)
 {
-	struct snd_soc_component *component = snd_soc_dapm_to_component(w->dapm);
+	struct snd_soc_codec *codec = snd_soc_dapm_to_codec(w->dapm);
 
 	switch (event) {
 	case SND_SOC_DAPM_POST_PMU:
-		snd_soc_component_update_bits(component, RK312x_DAC_ENABLE,
-					      RK312x_DACR_WORK, 0);
-		snd_soc_component_update_bits(component, RK312x_DAC_ENABLE,
-					      RK312x_DACR_EN
-					      | RK312x_DACR_CLK_EN,
-					      RK312x_DACR_EN
-					      | RK312x_DACR_CLK_EN);
-		snd_soc_component_update_bits(component, RK312x_DAC_ENABLE,
-					      RK312x_DACR_WORK,
-					      RK312x_DACR_WORK);
+		snd_soc_update_bits(codec, RK312x_DAC_ENABLE,
+				    RK312x_DACR_WORK, 0);
+		snd_soc_update_bits(codec, RK312x_DAC_ENABLE,
+				    RK312x_DACR_EN
+				    | RK312x_DACR_CLK_EN,
+				    RK312x_DACR_EN
+				    | RK312x_DACR_CLK_EN);
+		snd_soc_update_bits(codec, RK312x_DAC_ENABLE,
+				    RK312x_DACR_WORK,
+				    RK312x_DACR_WORK);
 		break;
 
 	case SND_SOC_DAPM_POST_PMD:
-		snd_soc_component_update_bits(component, RK312x_DAC_ENABLE,
-					      RK312x_DACR_EN
-					      | RK312x_DACR_CLK_EN, 0);
-		snd_soc_component_update_bits(component, RK312x_DAC_ENABLE,
-					      RK312x_DACR_WORK, 0);
+		snd_soc_update_bits(codec, RK312x_DAC_ENABLE,
+				    RK312x_DACR_EN
+				    | RK312x_DACR_CLK_EN, 0);
+		snd_soc_update_bits(codec, RK312x_DAC_ENABLE,
+				    RK312x_DACR_WORK, 0);
 		break;
 
 	default:
@@ -952,21 +954,21 @@ static int rk312x_dacr_event(struct snd_soc_dapm_widget *w,
 static int rk312x_adcl_event(struct snd_soc_dapm_widget *w,
 			     struct snd_kcontrol *kcontrol, int event)
 {
-	struct snd_soc_component *component = snd_soc_dapm_to_component(w->dapm);
+	struct snd_soc_codec *codec = snd_soc_dapm_to_codec(w->dapm);
 
 	switch (event) {
 	case SND_SOC_DAPM_POST_PMU:
-		snd_soc_component_update_bits(component, RK312x_ADC_ENABLE,
-					      RK312x_ADCL_CLK_EN_SFT
-					      | RK312x_ADCL_AMP_EN_SFT,
-					      RK312x_ADCL_CLK_EN
-					      | RK312x_ADCL_AMP_EN);
+		snd_soc_update_bits(codec, RK312x_ADC_ENABLE,
+				    RK312x_ADCL_CLK_EN_SFT
+				    | RK312x_ADCL_AMP_EN_SFT,
+				    RK312x_ADCL_CLK_EN
+				    | RK312x_ADCL_AMP_EN);
 		break;
 
 	case SND_SOC_DAPM_POST_PMD:
-		snd_soc_component_update_bits(component, RK312x_ADC_ENABLE,
-					      RK312x_ADCL_CLK_EN_SFT
-					      | RK312x_ADCL_AMP_EN_SFT, 0);
+		snd_soc_update_bits(codec, RK312x_ADC_ENABLE,
+				    RK312x_ADCL_CLK_EN_SFT
+				    | RK312x_ADCL_AMP_EN_SFT, 0);
 		break;
 
 	default:
@@ -979,21 +981,21 @@ static int rk312x_adcl_event(struct snd_soc_dapm_widget *w,
 static int rk312x_adcr_event(struct snd_soc_dapm_widget *w,
 			     struct snd_kcontrol *kcontrol, int event)
 {
-	struct snd_soc_component *component = snd_soc_dapm_to_component(w->dapm);
+	struct snd_soc_codec *codec = snd_soc_dapm_to_codec(w->dapm);
 
 	switch (event) {
 	case SND_SOC_DAPM_POST_PMU:
-		snd_soc_component_update_bits(component, RK312x_ADC_ENABLE,
-					      RK312x_ADCR_CLK_EN_SFT
-					      | RK312x_ADCR_AMP_EN_SFT,
-					      RK312x_ADCR_CLK_EN
-					      | RK312x_ADCR_AMP_EN);
+		snd_soc_update_bits(codec, RK312x_ADC_ENABLE,
+				    RK312x_ADCR_CLK_EN_SFT
+				    | RK312x_ADCR_AMP_EN_SFT,
+				    RK312x_ADCR_CLK_EN
+				    | RK312x_ADCR_AMP_EN);
 		break;
 
 	case SND_SOC_DAPM_POST_PMD:
-		snd_soc_component_update_bits(component, RK312x_ADC_ENABLE,
-					      RK312x_ADCR_CLK_EN_SFT
-					      | RK312x_ADCR_AMP_EN_SFT, 0);
+		snd_soc_update_bits(codec, RK312x_ADC_ENABLE,
+				    RK312x_ADCR_CLK_EN_SFT
+				    | RK312x_ADCR_AMP_EN_SFT, 0);
 		break;
 
 	default:
@@ -1025,25 +1027,25 @@ static const struct snd_kcontrol_new rk312x_hpmixr[] = {
 static int rk312x_hpmixl_event(struct snd_soc_dapm_widget *w,
 			       struct snd_kcontrol *kcontrol, int event)
 {
-	struct snd_soc_component *component = snd_soc_dapm_to_component(w->dapm);
+	struct snd_soc_codec *codec = snd_soc_dapm_to_codec(w->dapm);
 
 	switch (event) {
 	case SND_SOC_DAPM_POST_PMU:
-		snd_soc_component_update_bits(component, RK312x_DAC_CTL,
-					      RK312x_ZO_DET_VOUTR_SFT,
-					      RK312x_ZO_DET_VOUTR_EN);
-		snd_soc_component_update_bits(component, RK312x_DAC_CTL,
-					      RK312x_ZO_DET_VOUTL_SFT,
-					      RK312x_ZO_DET_VOUTL_EN);
+		snd_soc_update_bits(codec, RK312x_DAC_CTL,
+				    RK312x_ZO_DET_VOUTR_SFT,
+				    RK312x_ZO_DET_VOUTR_EN);
+		snd_soc_update_bits(codec, RK312x_DAC_CTL,
+				    RK312x_ZO_DET_VOUTL_SFT,
+				    RK312x_ZO_DET_VOUTL_EN);
 		break;
 
 	case SND_SOC_DAPM_PRE_PMD:
-		snd_soc_component_update_bits(component, RK312x_DAC_CTL,
-					      RK312x_ZO_DET_VOUTR_SFT,
-					      RK312x_ZO_DET_VOUTR_DIS);
-		snd_soc_component_update_bits(component, RK312x_DAC_CTL,
-					      RK312x_ZO_DET_VOUTL_SFT,
-					      RK312x_ZO_DET_VOUTL_DIS);
+		snd_soc_update_bits(codec, RK312x_DAC_CTL,
+				    RK312x_ZO_DET_VOUTR_SFT,
+				    RK312x_ZO_DET_VOUTR_DIS);
+		snd_soc_update_bits(codec, RK312x_DAC_CTL,
+				    RK312x_ZO_DET_VOUTL_SFT,
+				    RK312x_ZO_DET_VOUTL_DIS);
 		break;
 
 	default:
@@ -1056,16 +1058,17 @@ static int rk312x_hpmixl_event(struct snd_soc_dapm_widget *w,
 static int rk312x_hpmixr_event(struct snd_soc_dapm_widget *w,
 			       struct snd_kcontrol *kcontrol, int event)
 {
+	/* struct snd_soc_codec *codec = snd_soc_dapm_to_codec(w->dapm); */
 #if 0
 	switch (event) {
 	case SND_SOC_DAPM_POST_PMU:
-		snd_soc_component_update_bits(component, RK312x_HPMIX_CTL,
-					      RK312x_HPMIXR_WORK2, RK312x_HPMIXR_WORK2);
+		snd_soc_update_bits(codec, RK312x_HPMIX_CTL,
+				    RK312x_HPMIXR_WORK2, RK312x_HPMIXR_WORK2);
 		break;
 
 	case SND_SOC_DAPM_PRE_PMD:
-		snd_soc_component_update_bits(component, RK312x_HPMIX_CTL,
-					      RK312x_HPMIXR_WORK2, 0);
+		snd_soc_update_bits(codec, RK312x_HPMIX_CTL,
+				    RK312x_HPMIXR_WORK2, 0);
 		break;
 
 	default:
@@ -1246,7 +1249,7 @@ static const struct snd_soc_dapm_route rk312x_dapm_routes[] = {
 	{"HPOUTL", NULL, "HPL"},
 };
 
-static int rk312x_set_bias_level(struct snd_soc_component *component,
+static int rk312x_set_bias_level(struct snd_soc_codec *codec,
 				 enum snd_soc_bias_level level)
 {
 	DBG("%s  level=%d\n", __func__, level);
@@ -1259,58 +1262,58 @@ static int rk312x_set_bias_level(struct snd_soc_component *component,
 		break;
 
 	case SND_SOC_BIAS_STANDBY:
-		if (snd_soc_component_get_bias_level(component) == SND_SOC_BIAS_OFF) {
+		if (snd_soc_codec_get_bias_level(codec) == SND_SOC_BIAS_OFF) {
 			regmap_write(rk312x_priv->regmap, RK312x_DAC_INT_CTL3, 0x32);
-			snd_soc_component_update_bits(component, RK312x_ADC_MIC_CTL,
-						      RK312x_ADC_CURRENT_ENABLE,
-						      RK312x_ADC_CURRENT_ENABLE);
-			snd_soc_component_update_bits(component, RK312x_DAC_CTL,
-						      RK312x_CURRENT_EN,
-						      RK312x_CURRENT_EN);
+			snd_soc_update_bits(codec, RK312x_ADC_MIC_CTL,
+					    RK312x_ADC_CURRENT_ENABLE,
+					    RK312x_ADC_CURRENT_ENABLE);
+			snd_soc_update_bits(codec, RK312x_DAC_CTL,
+					    RK312x_CURRENT_EN,
+					    RK312x_CURRENT_EN);
 			/* set power */
-			snd_soc_component_update_bits(component, RK312x_ADC_ENABLE,
-						      RK312x_ADCL_REF_VOL_EN_SFT
-						      | RK312x_ADCR_REF_VOL_EN_SFT,
-						      RK312x_ADCL_REF_VOL_EN
-						      | RK312x_ADCR_REF_VOL_EN);
+			snd_soc_update_bits(codec, RK312x_ADC_ENABLE,
+					    RK312x_ADCL_REF_VOL_EN_SFT
+					    | RK312x_ADCR_REF_VOL_EN_SFT,
+					    RK312x_ADCL_REF_VOL_EN
+					    | RK312x_ADCR_REF_VOL_EN);
 
-			snd_soc_component_update_bits(component, RK312x_ADC_MIC_CTL,
-						      RK312x_ADCL_ZERO_DET_EN_SFT
-						      | RK312x_ADCR_ZERO_DET_EN_SFT,
-						      RK312x_ADCL_ZERO_DET_EN
-						      | RK312x_ADCR_ZERO_DET_EN);
+			snd_soc_update_bits(codec, RK312x_ADC_MIC_CTL,
+					    RK312x_ADCL_ZERO_DET_EN_SFT
+					    | RK312x_ADCR_ZERO_DET_EN_SFT,
+					    RK312x_ADCL_ZERO_DET_EN
+					    | RK312x_ADCR_ZERO_DET_EN);
 
-			snd_soc_component_update_bits(component, RK312x_DAC_CTL,
-						      RK312x_REF_VOL_DACL_EN_SFT
-						      | RK312x_REF_VOL_DACR_EN_SFT,
-						      RK312x_REF_VOL_DACL_EN
-						      | RK312x_REF_VOL_DACR_EN);
+			snd_soc_update_bits(codec, RK312x_DAC_CTL,
+					    RK312x_REF_VOL_DACL_EN_SFT
+					    | RK312x_REF_VOL_DACR_EN_SFT,
+					    RK312x_REF_VOL_DACL_EN
+					    | RK312x_REF_VOL_DACR_EN);
 
-			snd_soc_component_update_bits(component, RK312x_DAC_ENABLE,
-						      RK312x_DACL_REF_VOL_EN_SFT
-						      | RK312x_DACR_REF_VOL_EN_SFT,
-						      RK312x_DACL_REF_VOL_EN
-						      | RK312x_DACR_REF_VOL_EN);
+			snd_soc_update_bits(codec, RK312x_DAC_ENABLE,
+					    RK312x_DACL_REF_VOL_EN_SFT
+					    | RK312x_DACR_REF_VOL_EN_SFT,
+					    RK312x_DACL_REF_VOL_EN
+					    | RK312x_DACR_REF_VOL_EN);
 		}
 		break;
 
 	case SND_SOC_BIAS_OFF:
-		snd_soc_component_update_bits(component, RK312x_DAC_ENABLE,
-					      RK312x_DACL_REF_VOL_EN_SFT
-					      | RK312x_DACR_REF_VOL_EN_SFT, 0);
-		snd_soc_component_update_bits(component, RK312x_DAC_CTL,
-					      RK312x_REF_VOL_DACL_EN_SFT
-					      | RK312x_REF_VOL_DACR_EN_SFT, 0);
-		snd_soc_component_update_bits(component, RK312x_ADC_MIC_CTL,
-					      RK312x_ADCL_ZERO_DET_EN_SFT
-					      | RK312x_ADCR_ZERO_DET_EN_SFT, 0);
-		snd_soc_component_update_bits(component, RK312x_ADC_ENABLE,
-					      RK312x_ADCL_REF_VOL_EN_SFT
-					      | RK312x_ADCR_REF_VOL_EN_SFT, 0);
-		snd_soc_component_update_bits(component, RK312x_ADC_MIC_CTL,
-					      RK312x_ADC_CURRENT_ENABLE, 0);
-		snd_soc_component_update_bits(component, RK312x_DAC_CTL,
-					      RK312x_CURRENT_EN, 0);
+		snd_soc_update_bits(codec, RK312x_DAC_ENABLE,
+				    RK312x_DACL_REF_VOL_EN_SFT
+				    | RK312x_DACR_REF_VOL_EN_SFT, 0);
+		snd_soc_update_bits(codec, RK312x_DAC_CTL,
+				    RK312x_REF_VOL_DACL_EN_SFT
+				    | RK312x_REF_VOL_DACR_EN_SFT, 0);
+		snd_soc_update_bits(codec, RK312x_ADC_MIC_CTL,
+				    RK312x_ADCL_ZERO_DET_EN_SFT
+				    | RK312x_ADCR_ZERO_DET_EN_SFT, 0);
+		snd_soc_update_bits(codec, RK312x_ADC_ENABLE,
+				    RK312x_ADCL_REF_VOL_EN_SFT
+				    | RK312x_ADCR_REF_VOL_EN_SFT, 0);
+		snd_soc_update_bits(codec, RK312x_ADC_MIC_CTL,
+				    RK312x_ADC_CURRENT_ENABLE, 0);
+		snd_soc_update_bits(codec, RK312x_DAC_CTL,
+				    RK312x_CURRENT_EN, 0);
 		regmap_write(rk312x_priv->regmap, RK312x_DAC_INT_CTL3, 0x22);
 		break;
 	}
@@ -1336,7 +1339,7 @@ static int rk312x_set_dai_sysclk(struct snd_soc_dai *codec_dai,
 static int rk312x_set_dai_fmt(struct snd_soc_dai *codec_dai,
 			      unsigned int fmt)
 {
-	struct snd_soc_component *component = codec_dai->component;
+	struct snd_soc_codec *codec = codec_dai->codec;
 	unsigned int adc_aif1 = 0, adc_aif2 = 0, dac_aif1 = 0, dac_aif2 = 0;
 
 	switch (fmt & SND_SOC_DAIFMT_MASTER_MASK) {
@@ -1405,17 +1408,17 @@ static int rk312x_set_dai_fmt(struct snd_soc_dai *codec_dai,
 		return -EINVAL;
 	}
 
-	snd_soc_component_update_bits(component, RK312x_ADC_INT_CTL1,
-				      RK312x_ALRCK_POL_MASK
-				      | RK312x_ADC_DF_MASK, adc_aif1);
-	snd_soc_component_update_bits(component, RK312x_ADC_INT_CTL2,
-				      RK312x_ABCLK_POL_MASK
-				      | RK312x_I2S_MODE_MASK, adc_aif2);
-	snd_soc_component_update_bits(component, RK312x_DAC_INT_CTL1,
-				      RK312x_DLRCK_POL_MASK
-				      | RK312x_DAC_DF_MASK, dac_aif1);
-	snd_soc_component_update_bits(component, RK312x_DAC_INT_CTL2,
-				      RK312x_DBCLK_POL_MASK, dac_aif2);
+	snd_soc_update_bits(codec, RK312x_ADC_INT_CTL1,
+			    RK312x_ALRCK_POL_MASK
+			    | RK312x_ADC_DF_MASK, adc_aif1);
+	snd_soc_update_bits(codec, RK312x_ADC_INT_CTL2,
+			    RK312x_ABCLK_POL_MASK
+			    | RK312x_I2S_MODE_MASK, adc_aif2);
+	snd_soc_update_bits(codec, RK312x_DAC_INT_CTL1,
+			    RK312x_DLRCK_POL_MASK
+			    | RK312x_DAC_DF_MASK, dac_aif1);
+	snd_soc_update_bits(codec, RK312x_DAC_INT_CTL2,
+			    RK312x_DBCLK_POL_MASK, dac_aif2);
 
 	return 0;
 }
@@ -1425,7 +1428,7 @@ static int rk312x_hw_params(struct snd_pcm_substream *substream,
 			    struct snd_soc_dai *dai)
 {
 	struct snd_soc_pcm_runtime *rtd = substream->private_data;
-	struct snd_soc_component *component = rtd->codec_dai->component;
+	struct snd_soc_codec *codec = rtd->codec;
 	struct rk312x_codec_priv *rk312x = rk312x_priv;
 	unsigned int rate = params_rate(params);
 	unsigned int div;
@@ -1512,19 +1515,19 @@ static int rk312x_hw_params(struct snd_pcm_substream *substream,
 
 	rk312x->rate = rate;
 
-	snd_soc_component_update_bits(component, RK312x_ADC_INT_CTL1,
-				      RK312x_ADC_VWL_MASK
-				      | RK312x_ADC_SWAP_MASK
-				      | RK312x_ADC_TYPE_MASK, adc_aif1);
-	snd_soc_component_update_bits(component, RK312x_ADC_INT_CTL2,
-				      RK312x_ADC_WL_MASK
-				      | RK312x_ADC_RST_MASK, adc_aif2);
-	snd_soc_component_update_bits(component, RK312x_DAC_INT_CTL1,
-				      RK312x_DAC_VWL_MASK
-				      | RK312x_DAC_SWAP_MASK, dac_aif1);
-	snd_soc_component_update_bits(component, RK312x_DAC_INT_CTL2,
-				      RK312x_DAC_WL_MASK
-				      | RK312x_DAC_RST_MASK, dac_aif2);
+	snd_soc_update_bits(codec, RK312x_ADC_INT_CTL1,
+			    RK312x_ADC_VWL_MASK
+			    | RK312x_ADC_SWAP_MASK
+			    | RK312x_ADC_TYPE_MASK, adc_aif1);
+	snd_soc_update_bits(codec, RK312x_ADC_INT_CTL2,
+			    RK312x_ADC_WL_MASK
+			    | RK312x_ADC_RST_MASK, adc_aif2);
+	snd_soc_update_bits(codec, RK312x_DAC_INT_CTL1,
+			    RK312x_DAC_VWL_MASK
+			    | RK312x_DAC_SWAP_MASK, dac_aif1);
+	snd_soc_update_bits(codec, RK312x_DAC_INT_CTL2,
+			    RK312x_DAC_WL_MASK
+			    | RK312x_DAC_RST_MASK, dac_aif2);
 
 	return 0;
 }
@@ -1675,15 +1678,15 @@ static struct rk312x_reg_val_typ capture_power_down_list[] = {
 
 static int rk312x_codec_power_up(int type)
 {
-	struct snd_soc_component *component;
+	struct snd_soc_codec *codec;
 	int i;
 
-	if (!rk312x_priv || !rk312x_priv->component) {
+	if (!rk312x_priv || !rk312x_priv->codec) {
 		DBG("%s : rk312x_priv or rk312x_priv->codec is NULL\n",
 		    __func__);
 		return -EINVAL;
 	}
-	component = rk312x_priv->component;
+	codec = rk312x_priv->codec;
 
 	DBG("%s : power up %s%s\n", __func__,
 	    type == RK312x_CODEC_PLAYBACK ? "playback" : "",
@@ -1691,9 +1694,8 @@ static int rk312x_codec_power_up(int type)
 
 	if (type == RK312x_CODEC_PLAYBACK) {
 		for (i = 0; i < RK312x_CODEC_PLAYBACK_POWER_UP_LIST_LEN; i++) {
-			snd_soc_component_write(component,
-						playback_power_up_list[i].reg,
-						playback_power_up_list[i].value);
+			snd_soc_write(codec, playback_power_up_list[i].reg,
+				      playback_power_up_list[i].value);
 			usleep_range(1000, 1100);
 		}
 	} else if (type == RK312x_CODEC_CAPTURE) {
@@ -1701,23 +1703,23 @@ static int rk312x_codec_power_up(int type)
 			for (i = 0;
 			     i < RK312x_CODEC_CAPTURE_POWER_UP_LIST_LEN;
 			     i++) {
-				snd_soc_component_write(component,
-							capture_power_up_list[i].reg,
-							capture_power_up_list[i].value);
+				snd_soc_write(codec,
+					      capture_power_up_list[i].reg,
+					      capture_power_up_list[i].value);
 			}
 		} else {
 			for (i = 0;
 			     i < RK312x_CODEC_CAPTURE_POWER_UP_LIST_LEN - 4;
 			     i++) {
-				snd_soc_component_write(component,
-							capture_power_up_list[i].reg,
-							capture_power_up_list[i].value);
+				snd_soc_write(codec,
+					      capture_power_up_list[i].reg,
+					      capture_power_up_list[i].value);
 			}
 		}
 	} else if (type == RK312x_CODEC_INCALL) {
-		snd_soc_component_update_bits(component, RK312x_ALC_MUNIN_CTL,
-					      RK312x_MUXINL_F_MSK | RK312x_MUXINR_F_MSK,
-					      RK312x_MUXINR_F_INR | RK312x_MUXINL_F_INL);
+		snd_soc_update_bits(codec, RK312x_ALC_MUNIN_CTL,
+				    RK312x_MUXINL_F_MSK | RK312x_MUXINR_F_MSK,
+				    RK312x_MUXINR_F_INR | RK312x_MUXINL_F_INL);
 	}
 
 	return 0;
@@ -1725,15 +1727,15 @@ static int rk312x_codec_power_up(int type)
 
 static int rk312x_codec_power_down(int type)
 {
-	struct snd_soc_component *component;
+	struct snd_soc_codec *codec;
 	int i;
 
-	if (!rk312x_priv || !rk312x_priv->component) {
-		DBG("%s : rk312x_priv or rk312x_priv->component is NULL\n",
+	if (!rk312x_priv || !rk312x_priv->codec) {
+		DBG("%s : rk312x_priv or rk312x_priv->codec is NULL\n",
 		    __func__);
 		return -EINVAL;
 	}
-	component = rk312x_priv->component;
+	codec = rk312x_priv->codec;
 
 	DBG("%s : power down %s%s%s\n", __func__,
 	    type == RK312x_CODEC_PLAYBACK ? "playback" : "",
@@ -1742,21 +1744,19 @@ static int rk312x_codec_power_down(int type)
 
 	if ((type == RK312x_CODEC_CAPTURE) || (type == RK312x_CODEC_INCALL)) {
 		for (i = 0; i < RK312x_CODEC_CAPTURE_POWER_DOWN_LIST_LEN; i++) {
-			snd_soc_component_write(component,
-						capture_power_down_list[i].reg,
-						capture_power_down_list[i].value);
+			snd_soc_write(codec, capture_power_down_list[i].reg,
+				      capture_power_down_list[i].value);
 		}
 	} else if (type == RK312x_CODEC_PLAYBACK) {
 		for (i = 0;
 		     i < RK312x_CODEC_PLAYBACK_POWER_DOWN_LIST_LEN;
 		     i++) {
-			snd_soc_component_write(component,
-						playback_power_down_list[i].reg,
-						playback_power_down_list[i].value);
+			snd_soc_write(codec, playback_power_down_list[i].reg,
+				      playback_power_down_list[i].value);
 		}
 
 	} else if (type == RK312x_CODEC_ALL) {
-		rk312x_reset(component);
+		rk312x_reset(codec);
 	}
 
 	return 0;
@@ -1773,10 +1773,14 @@ static void  rk312x_codec_capture_work(struct work_struct *work)
 		break;
 	case RK312x_CODEC_WORK_POWER_UP:
 		rk312x_codec_power_up(RK312x_CODEC_CAPTURE);
-		snd_soc_component_write(rk312x_priv->component,
-					0x10c, 0x20 | rk312x_priv->capture_volume);
-		snd_soc_component_write(rk312x_priv->component,
-					0x14c, 0x20 | rk312x_priv->capture_volume);
+		/* snd_soc_write(rk312x_priv->codec,
+				 0x94, 0x20|rk312x_priv->capture_volume); */
+		/* snd_soc_write(rk312x_priv->codec,
+				 0x98, rk312x_priv->capture_volume); */
+		snd_soc_write(rk312x_priv->codec,
+			      0x10c, 0x20|rk312x_priv->capture_volume);
+		snd_soc_write(rk312x_priv->codec,
+			      0x14c, 0x20|rk312x_priv->capture_volume);
 		break;
 	default:
 		break;
@@ -1812,10 +1816,8 @@ static int rk312x_startup(struct snd_pcm_substream *substream,
 		if (rk312x->playback_active > 0)
 			if (!is_codec_playback_running) {
 				rk312x_codec_power_up(RK312x_CODEC_PLAYBACK);
-				snd_soc_component_write(rk312x_priv->component,
-							0xb4, rk312x_priv->spk_volume);
-				snd_soc_component_write(rk312x_priv->component,
-							0xb8, rk312x_priv->spk_volume);
+				snd_soc_write(rk312x_priv->codec, 0xb4, rk312x_priv->spk_volume);
+				snd_soc_write(rk312x_priv->codec, 0xb8, rk312x_priv->spk_volume);
 			}
 	} else {
 		if (rk312x->capture_active > 0 && !is_codec_capture_running) {
@@ -1969,7 +1971,7 @@ static struct snd_soc_dai_driver rk312x_dai[] = {
 
 };
 
-static int rk312x_suspend(struct snd_soc_component *component)
+static int rk312x_suspend(struct snd_soc_codec *codec)
 {
 	unsigned int val=0;
 	DBG("%s\n", __func__);
@@ -1989,10 +1991,10 @@ static int rk312x_suspend(struct snd_soc_component *component)
 
 		rk312x_codec_power_down(RK312x_CODEC_PLAYBACK);
 		rk312x_codec_power_down(RK312x_CODEC_ALL);
-		snd_soc_component_write(component, RK312x_SELECT_CURRENT, 0x1e);
-		snd_soc_component_write(component, RK312x_SELECT_CURRENT, 0x3e);
+		snd_soc_write(codec, RK312x_SELECT_CURRENT, 0x1e);
+		snd_soc_write(codec, RK312x_SELECT_CURRENT, 0x3e);
 	} else {
-		snd_soc_component_force_bias_level(component, SND_SOC_BIAS_OFF);
+		snd_soc_codec_force_bias_level(codec, SND_SOC_BIAS_OFF);
 	}
 	return 0;
 }
@@ -2010,7 +2012,7 @@ static ssize_t gpio_store(struct kobject *kobj, struct kobj_attribute *attr,
 	char cmd;
 	int ret;
 	struct rk312x_codec_priv *rk312x =
-			snd_soc_component_get_drvdata(rk312x_priv->component);
+			snd_soc_codec_get_drvdata(rk312x_priv->codec);
 
 	ret = sscanf(buftmp, "%c ", &cmd);
 	if (ret == 0)
@@ -2060,15 +2062,14 @@ static struct gpio_attribute gpio_attrs[] = {
 	__ATTR(spk-ctl,  S_IRUGO | S_IWUSR,  gpio_show, gpio_store),
 };
 
-static int rk312x_resume(struct snd_soc_component *component)
+static int rk312x_resume(struct snd_soc_codec *codec)
 {
-	unsigned int val = 0;
-
-	if (rk312x_priv->codec_hp_det) {
+	unsigned int val=0;
+	if(rk312x_priv->codec_hp_det)
+	{
 		/* enable hp det interrupt */
-		snd_soc_component_write(component, RK312x_DAC_CTL, 0x08);
-		snd_soc_component_read(component, RK312x_DAC_CTL, &val);
-		printk("0xa0 -- 0x%x\n", val);
+		snd_soc_write(codec, RK312x_DAC_CTL, 0x08);
+		printk("0xa0 -- 0x%x\n",snd_soc_read(codec, RK312x_DAC_CTL));
 		regmap_read(rk312x_priv->grf, GRF_ACODEC_CON, &val);
 		regmap_write(rk312x_priv->grf, GRF_ACODEC_CON, 0x1f001f);
 		regmap_read(rk312x_priv->grf, GRF_ACODEC_CON, &val);
@@ -2076,8 +2077,7 @@ static int rk312x_resume(struct snd_soc_component *component)
 		schedule_delayed_work(&rk312x_priv->hpdet_work, msecs_to_jiffies(20));
 	}
 	if (!rk312x_priv->rk312x_for_mid)
-		snd_soc_component_force_bias_level(component, SND_SOC_BIAS_STANDBY);
-
+		snd_soc_codec_force_bias_level(codec, SND_SOC_BIAS_STANDBY);
 	return 0;
 }
 
@@ -2106,41 +2106,42 @@ static void hpdet_work_func(struct work_struct *work)
 	if (val & 0x80000000) {
 		DBG("%s hp det high\n", __func__);
 		DBG("%s no headset\n", __func__);
-		extcon_set_state_sync(rk312x_priv->edev,
-				      EXTCON_JACK_HEADPHONE, false);
+		switch_set_state(&rk312x_priv->sdev, 0);
 	} else {
 		DBG("%s hp det low\n", __func__);
 		DBG("%s headset inserted\n", __func__);
-		extcon_set_state_sync(rk312x_priv->edev,
-				      EXTCON_JACK_HEADPHONE, true);
+		switch_set_state(&rk312x_priv->sdev, BIT_HEADSET_NO_MIC);
 	}
 	return;
 }
-
+static ssize_t h2w_print_name(struct switch_dev *sdev, char *buf)
+{
+    return sprintf(buf, "Headset\n");
+}
 static void rk312x_delay_workq(struct work_struct *work)
 {
 
 	int ret;
 	unsigned int val;
 	struct rk312x_codec_priv *rk312x_codec;
-	struct snd_soc_component *component;
+	struct snd_soc_codec *codec;
 
 	printk("%s\n", __func__);
-	if (!rk312x_priv || !rk312x_priv->component) {
-		DBG("%s : rk312x_priv or rk312x_priv->component is NULL\n",
+	if (!rk312x_priv || !rk312x_priv->codec) {
+		DBG("%s : rk312x_priv or rk312x_priv->codec is NULL\n",
 		    __func__);
 		return;
 	}
-	rk312x_codec = snd_soc_component_get_drvdata(rk312x_priv->component);
-	component = rk312x_codec->component;
-	rk312x_reset(component);
+	rk312x_codec = snd_soc_codec_get_drvdata(rk312x_priv->codec);
+	codec = rk312x_codec->codec;
+	rk312x_reset(codec);
 	if (!rk312x_priv->rk312x_for_mid) {
-		snd_soc_component_force_bias_level(component, SND_SOC_BIAS_OFF);
-		snd_soc_component_force_bias_level(component, SND_SOC_BIAS_STANDBY);
+		snd_soc_codec_force_bias_level(codec, SND_SOC_BIAS_OFF);
+		snd_soc_codec_force_bias_level(codec, SND_SOC_BIAS_STANDBY);
 	}
 #ifdef WITH_CAP
-	snd_soc_component_write(component, RK312x_SELECT_CURRENT, 0x1e);
-	snd_soc_component_write(component, RK312x_SELECT_CURRENT, 0x3e);
+	snd_soc_write(codec, RK312x_SELECT_CURRENT, 0x1e);
+	snd_soc_write(codec, RK312x_SELECT_CURRENT, 0x3e);
 #endif
 
 	if (rk312x_codec->codec_hp_det) {
@@ -2149,31 +2150,34 @@ static void rk312x_delay_workq(struct work_struct *work)
 				       IRQF_TRIGGER_RISING, "codec_hp_det", NULL);
 		if (ret < 0)
 			DBG(" codec_hp_det request_irq failed %d\n", ret);
-
+		rk312x_codec->sdev.name = "h2w";
+		rk312x_codec->sdev.print_name = h2w_print_name;
+		ret = switch_dev_register(&rk312x_codec->sdev);
+		if (ret)
+			DBG(KERN_ERR"register switch dev failed\n");
 		regmap_read(rk312x_priv->grf, GRF_ACODEC_CON, &val);
 		regmap_write(rk312x_priv->grf, GRF_ACODEC_CON, 0x1f001f);
 		regmap_read(rk312x_priv->grf, GRF_ACODEC_CON, &val);
 		DBG("GRF_ACODEC_CON 3334is 0x%x\n", val);
 		/* enable rk 3128 codec_hp_det */
-		snd_soc_component_write(component, RK312x_DAC_CTL, 0x08);
-		snd_soc_component_read(component, RK312x_DAC_CTL, &val);
-		DBG("0xa0 -- 0x%x\n", val);
+		snd_soc_write(codec, RK312x_DAC_CTL, 0x08);
+		DBG("0xa0 -- 0x%x\n", snd_soc_read(codec, RK312x_DAC_CTL));
 		/* codec hp det once */
 		schedule_delayed_work(&rk312x_priv->hpdet_work, msecs_to_jiffies(100));
 	}
 
 
 }
-static int rk312x_probe(struct snd_soc_component *component)
+static int rk312x_probe(struct snd_soc_codec *codec)
 {
 	struct rk312x_codec_priv *rk312x_codec =
-				snd_soc_component_get_drvdata(component);
+				snd_soc_codec_get_drvdata(codec);
 	unsigned int val;
 	int ret;
 	int i = 0;
 
-	rk312x_codec->component = component;
-	snd_soc_component_force_bias_level(component, SND_SOC_BIAS_OFF);
+	rk312x_codec->codec = codec;
+	snd_soc_codec_force_bias_level(codec, SND_SOC_BIAS_OFF);
 	clk_prepare_enable(rk312x_codec->pclk);
 
 	rk312x_codec->playback_active = 0;
@@ -2187,8 +2191,7 @@ static int rk312x_probe(struct snd_soc_component *component)
 		goto err__;
 	}
 
-	snd_soc_component_read(component, RK312x_RESET, &val);
-
+	val = snd_soc_read(codec, RK312x_RESET);
 	if (val != rk312x_reg_defaults[RK312x_RESET]) {
 		DBG("%s : codec register 0: %x is not a 0x00000003\n",
 		    __func__, val);
@@ -2196,8 +2199,8 @@ static int rk312x_probe(struct snd_soc_component *component)
 		goto err__;
 	}
 
-	snd_soc_add_component_controls(component, rk312x_snd_path_controls,
-				       ARRAY_SIZE(rk312x_snd_path_controls));
+	snd_soc_add_codec_controls(codec, rk312x_snd_path_controls,
+				   ARRAY_SIZE(rk312x_snd_path_controls));
 	INIT_DELAYED_WORK(&rk312x_priv->init_delayed_work, rk312x_delay_workq);
 	INIT_DELAYED_WORK(&rk312x_priv->mute_delayed_work, rk312x_codec_unpop);
 	INIT_DELAYED_WORK(&rk312x_priv->hpdet_work, hpdet_work_func);
@@ -2224,13 +2227,13 @@ err__:
 }
 
 /* power down chip */
-static void rk312x_remove(struct snd_soc_component *component)
+static int rk312x_remove(struct snd_soc_codec *codec)
 {
 
 	DBG("%s\n", __func__);
 	if (!rk312x_priv) {
 		DBG("%s : rk312x_priv is NULL\n", __func__);
-		return;
+		return 0;
 	}
 
 	if (rk312x_priv->spk_ctl_gpio)
@@ -2247,19 +2250,25 @@ static void rk312x_remove(struct snd_soc_component *component)
 		if (rk312x_codec_work_capture_type != RK312x_CODEC_WORK_NULL)
 			rk312x_codec_work_capture_type = RK312x_CODEC_WORK_NULL;
 	}
-	snd_soc_component_write(component, RK312x_RESET, 0xfc);
+	snd_soc_write(codec, RK312x_RESET, 0xfc);
 	mdelay(10);
-	snd_soc_component_write(component, RK312x_RESET, 0x3);
+	snd_soc_write(codec, RK312x_RESET, 0x3);
 	mdelay(10);
+
+	return 0;
 }
 
 
-static struct snd_soc_component_driver soc_codec_dev_rk312x = {
+static struct snd_soc_codec_driver soc_codec_dev_rk312x = {
 	.probe = rk312x_probe,
 	.remove = rk312x_remove,
 	.suspend = rk312x_suspend,
 	.resume = rk312x_resume,
 	.set_bias_level = rk312x_set_bias_level,
+	.reg_cache_size = ARRAY_SIZE(rk312x_reg_defaults),
+	.reg_word_size = sizeof(unsigned int),
+	.reg_cache_default = rk312x_reg_defaults,
+	.reg_cache_step = sizeof(unsigned int),
 };
 
 static const struct regmap_config rk312x_codec_regmap_config = {
@@ -2315,18 +2324,6 @@ static int rk312x_platform_probe(struct platform_device *pdev)
 		}
 	}
 #endif
-	rk312x->edev = devm_extcon_dev_allocate(&pdev->dev, headset_extcon_cable);
-	if (IS_ERR(rk312x->edev)) {
-		dev_err(&pdev->dev, "failed to allocate extcon device\n");
-		return -ENOMEM;
-	}
-
-	ret = devm_extcon_dev_register(&pdev->dev, rk312x->edev);
-	if (ret < 0) {
-		dev_err(&pdev->dev, "failed to register extcon device\n");
-		return ret;
-	}
-
 	rk312x->hp_ctl_gpio = devm_gpiod_get_optional(&pdev->dev, "hp-ctl",
 						  GPIOD_OUT_LOW);
 	if (!IS_ERR_OR_NULL(rk312x->hp_ctl_gpio)) {
@@ -2444,8 +2441,8 @@ static int rk312x_platform_probe(struct platform_device *pdev)
 	clk_prepare_enable(rk312x->mclk);
 	clk_set_rate(rk312x->mclk, 11289600);
 
-	return devm_snd_soc_register_component(&pdev->dev, &soc_codec_dev_rk312x,
-					       rk312x_dai, ARRAY_SIZE(rk312x_dai));
+	return snd_soc_register_codec(&pdev->dev, &soc_codec_dev_rk312x,
+				rk312x_dai, ARRAY_SIZE(rk312x_dai));
 
 err__:
 	platform_set_drvdata(pdev, NULL);
@@ -2457,6 +2454,7 @@ static int rk312x_platform_remove(struct platform_device *pdev)
 {
 	DBG("%s\n", __func__);
 	rk312x_priv = NULL;
+	snd_soc_unregister_codec(&pdev->dev);
 	return 0;
 }
 
@@ -2464,8 +2462,8 @@ void rk312x_platform_shutdown(struct platform_device *pdev)
 {
 	unsigned int val = 0;
 	DBG("%s\n", __func__);
-	if (!rk312x_priv || !rk312x_priv->component) {
-		DBG("%s : rk312x_priv or rk312x_priv->component is NULL\n",
+	if (!rk312x_priv || !rk312x_priv->codec) {
+		DBG("%s : rk312x_priv or rk312x_priv->codec is NULL\n",
 		    __func__);
 		return;
 	}

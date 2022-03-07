@@ -2429,9 +2429,6 @@ PVRSRV_ERROR RGXSetupFirmware(PVRSRV_DEVICE_NODE       *psDeviceNode,
 		goto fail;
 	}
 
-	/* Initialize FW started flag */
-	psRGXFWInit->bFirmwareStarted = IMG_FALSE;
-
 	eError = DevmemAcquireCpuVirtAddr(psDevInfo->psCompletedMemDesc,
 	                                  (void **)& psDevInfo->pui32CompletedById);
 
@@ -2441,6 +2438,8 @@ PVRSRV_ERROR RGXSetupFirmware(PVRSRV_DEVICE_NODE       *psDeviceNode,
 		goto fail;
 	}
 
+		/* Initialize FW started flag */
+	psRGXFWInit->bFirmwareStarted = IMG_FALSE;
 	psRGXFWInit->ui32MarkerVal = 1;
 
 	/* Initialise the compatibility check data */

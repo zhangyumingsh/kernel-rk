@@ -10,7 +10,7 @@
  */
 
 #include <linux/clk.h>
-#include <linux/clk-provider.h>
+#include <linux/delay.h>
 #include <linux/mfd/syscon.h>
 #include <linux/module.h>
 #include <linux/of.h>
@@ -20,53 +20,63 @@
 #include <linux/regmap.h>
 #include <linux/reset.h>
 
-struct rockchip_dp_phy_data {
+struct rockchip_dp_phy_drv_data {
 	u32 grf_reg_offset;
-	u8 ref_clk_sel_shift;
-	u8 iddq_shift;
+	u32 ref_clk_sel_inter;
+	u32 siddq_on;
+	u32 siddq_off;
 };
 
 struct rockchip_dp_phy {
 	struct device  *dev;
 	struct regmap  *grf;
 	struct clk     *phy_24m;
-	struct reset_control *rst;
-	const struct rockchip_dp_phy_data *data;
+	struct reset_control *rst_24m;
+
+	const struct rockchip_dp_phy_drv_data *drv_data;
 };
+
+static int rockchip_set_phy_state(struct phy *phy, bool enable)
+{
+	struct rockchip_dp_phy *dp = phy_get_drvdata(phy);
+	const struct rockchip_dp_phy_drv_data *drv_data = dp->drv_data;
+	int ret;
+
+	if (enable) {
+		if (dp->rst_24m) {
+			/* EDP 24m clock domain software reset request. */
+			reset_control_assert(dp->rst_24m);
+			usleep_range(20, 40);
+			reset_control_deassert(dp->rst_24m);
+			usleep_range(20, 40);
+		}
+
+		ret = regmap_write(dp->grf, drv_data->grf_reg_offset,
+				   drv_data->siddq_on);
+		if (ret < 0) {
+			dev_err(dp->dev, "Can't enable PHY power %d\n", ret);
+			return ret;
+		}
+
+		ret = clk_prepare_enable(dp->phy_24m);
+	} else {
+		clk_disable_unprepare(dp->phy_24m);
+
+		ret = regmap_write(dp->grf, drv_data->grf_reg_offset,
+				   drv_data->siddq_off);
+	}
+
+	return ret;
+}
 
 static int rockchip_dp_phy_power_on(struct phy *phy)
 {
-	struct rockchip_dp_phy *dp = phy_get_drvdata(phy);
-	const struct rockchip_dp_phy_data *data = dp->data;
-
-	if (!__clk_is_enabled(dp->phy_24m))
-		clk_prepare_enable(dp->phy_24m);
-
-	if (dp->rst) {
-		/* EDP 24m clock domain software reset */
-		reset_control_assert(dp->rst);
-		usleep_range(20, 40);
-		reset_control_deassert(dp->rst);
-	}
-
-	regmap_write(dp->grf, data->grf_reg_offset,
-		     0 | BIT(16 + data->iddq_shift));
-
-	return 0;
+	return rockchip_set_phy_state(phy, true);
 }
 
 static int rockchip_dp_phy_power_off(struct phy *phy)
 {
-	struct rockchip_dp_phy *dp = phy_get_drvdata(phy);
-	const struct rockchip_dp_phy_data *data = dp->data;
-
-	regmap_write(dp->grf, data->grf_reg_offset,
-		     BIT(data->iddq_shift) | BIT(16 + data->iddq_shift));
-
-	if (__clk_is_enabled(dp->phy_24m))
-		clk_disable_unprepare(dp->phy_24m);
-
-	return 0;
+	return rockchip_set_phy_state(phy, false);
 }
 
 static const struct phy_ops rockchip_dp_phy_ops = {
@@ -81,7 +91,7 @@ static int rockchip_dp_phy_probe(struct platform_device *pdev)
 	struct device_node *np = dev->of_node;
 	struct phy_provider *phy_provider;
 	struct rockchip_dp_phy *dp;
-	const struct rockchip_dp_phy_data *data = of_device_get_match_data(dev);
+	const struct rockchip_dp_phy_drv_data *drv_data;
 	struct phy *phy;
 	int ret;
 
@@ -91,12 +101,18 @@ static int rockchip_dp_phy_probe(struct platform_device *pdev)
 	if (!dev->parent || !dev->parent->of_node)
 		return -ENODEV;
 
+	drv_data = of_device_get_match_data(dev);
+	if (!drv_data) {
+		dev_err(dev, "No OF match data provided\n");
+		return -EINVAL;
+	}
+
 	dp = devm_kzalloc(dev, sizeof(*dp), GFP_KERNEL);
-	if (!dp)
+	if (IS_ERR(dp))
 		return -ENOMEM;
 
 	dp->dev = dev;
-	dp->data = data;
+	dp->drv_data = drv_data;
 
 	dp->phy_24m = devm_clk_get(dev, "24m");
 	if (IS_ERR(dp->phy_24m)) {
@@ -110,17 +126,11 @@ static int rockchip_dp_phy_probe(struct platform_device *pdev)
 		return ret;
 	}
 
-	ret = clk_prepare_enable(dp->phy_24m);
-	if (ret) {
-		dev_err(dev, "failed to enable phy 24m clock: %d\n", ret);
-		return ret;
-	}
-
-	dp->rst = devm_reset_control_get_optional(dev, "edp_24m");
-	if (IS_ERR(dp->rst)) {
-		ret = PTR_ERR(dp->rst);
-		dev_err(dev, "failed to get reset control: %d\n", ret);
-		return ret;
+	/* optional */
+	dp->rst_24m = devm_reset_control_get_optional(&pdev->dev, "edp_24m");
+	if (IS_ERR(dp->rst_24m)) {
+		dev_info(dev, "No edp_24m reset control specified\n");
+		dp->rst_24m = NULL;
 	}
 
 	dp->grf = syscon_node_to_regmap(dev->parent->of_node);
@@ -129,10 +139,8 @@ static int rockchip_dp_phy_probe(struct platform_device *pdev)
 		return PTR_ERR(dp->grf);
 	}
 
-	/* eDP PHY reference clock source from internal clock */
-	ret = regmap_write(dp->grf, data->grf_reg_offset,
-			   BIT(data->ref_clk_sel_shift) |
-			   BIT(16 + data->ref_clk_sel_shift));
+	ret = regmap_write(dp->grf, drv_data->grf_reg_offset,
+			   drv_data->ref_clk_sel_inter);
 	if (ret) {
 		dev_err(dp->dev, "Could not config GRF edp ref clk: %d\n", ret);
 		return ret;
@@ -150,21 +158,25 @@ static int rockchip_dp_phy_probe(struct platform_device *pdev)
 	return PTR_ERR_OR_ZERO(phy_provider);
 }
 
-static const struct rockchip_dp_phy_data rk3288_dp_phy_data = {
+static const struct rockchip_dp_phy_drv_data rk3288_dp_phy_drv_data = {
 	.grf_reg_offset = 0x274,
-	.ref_clk_sel_shift = 4,
-	.iddq_shift = 5,
+	.ref_clk_sel_inter = BIT(4) | BIT(20),
+	.siddq_on = 0 | BIT(21),
+	.siddq_off = BIT(5) | BIT(21),
 };
 
-static const struct rockchip_dp_phy_data rk3368_dp_phy_data = {
+static const struct rockchip_dp_phy_drv_data rk3368_dp_phy_drv_data = {
 	.grf_reg_offset = 0x410,
-	.ref_clk_sel_shift = 0,
-	.iddq_shift = 1,
+	.ref_clk_sel_inter = BIT(0) | BIT(16),
+	.siddq_on = 0 | BIT(17),
+	.siddq_off = BIT(1) | BIT(17),
 };
 
 static const struct of_device_id rockchip_dp_phy_dt_ids[] = {
-	{ .compatible = "rockchip,rk3288-dp-phy", .data = &rk3288_dp_phy_data },
-	{ .compatible = "rockchip,rk3368-dp-phy", .data = &rk3368_dp_phy_data },
+	{ .compatible = "rockchip,rk3288-dp-phy",
+	  .data = &rk3288_dp_phy_drv_data },
+	{ .compatible = "rockchip,rk3368-dp-phy",
+	  .data = &rk3368_dp_phy_drv_data },
 	{}
 };
 

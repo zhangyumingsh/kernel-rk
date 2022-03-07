@@ -17,12 +17,10 @@
 #ifndef __MALI_OSK_SPECIFIC_H__
 #define __MALI_OSK_SPECIFIC_H__
 
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <linux/platform_device.h>
 #include <linux/gfp.h>
 #include <linux/hardirq.h>
-#include <linux/uaccess.h>
-#include <linux/syscalls.h>
 
 
 #include "mali_osk_types.h"

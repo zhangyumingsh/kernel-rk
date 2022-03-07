@@ -16,6 +16,7 @@
 
 #include <linux/delay.h>
 #include <linux/device.h>
+#include <linux/sched.h>
 #include <linux/slab.h>
 #include <linux/tee_drv.h>
 #include "optee_private.h"
@@ -48,7 +49,7 @@ static void handle_rpc_func_cmd_get_time(struct optee_msg_arg *arg)
 			OPTEE_MSG_ATTR_TYPE_VALUE_OUTPUT)
 		goto bad;
 
-	ktime_get_real_ts64(&ts);
+	getnstimeofday64(&ts);
 	arg->params[0].u.value.a = ts.tv_sec;
 	arg->params[0].u.value.b = ts.tv_nsec;
 

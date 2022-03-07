@@ -3,7 +3,7 @@
  * kernel/drivers/input/sensors/accel/mxc6655xa.c
  *
  * Copyright (C) 2020 Rockchip Co.,Ltd.
- * Author: Wang Jie <dave.wang@rock-chips.com>
+ * Author: Jie Wang <dave.wang@rock-chips.com>
  */
 
 #include <linux/interrupt.h>
@@ -226,37 +226,30 @@ static struct sensor_operate gsensor_mxc6655_ops = {
 	.report		= sensor_report_value,
 };
 
-static int gsensor_mxc6655_probe(struct i2c_client *client,
-				const struct i2c_device_id *devid)
+static struct sensor_operate *gsensor_get_ops(void)
 {
-	return sensor_register_device(client, NULL, devid, &gsensor_mxc6655_ops);
+	return &gsensor_mxc6655_ops;
 }
 
-static int gsensor_mxc6655_remove(struct i2c_client *client)
+static int __init gsensor_mxc6655_init(void)
 {
-	return sensor_unregister_device(client, NULL, &gsensor_mxc6655_ops);
+	struct sensor_operate *ops = gsensor_get_ops();
+	int result = 0;
+	int type = ops->type;
+
+	result = sensor_register_slave(type, NULL, NULL, gsensor_get_ops);
+
+	return result;
 }
 
-static const struct i2c_device_id gsensor_mxc6655_id[] = {
-	{"gs_mxc6655xa", ACCEL_ID_MXC6655XA},
-	{}
-};
+static void __exit gsensor_mxc6655_exit(void)
+{
+	struct sensor_operate *ops = gsensor_get_ops();
+	int type = ops->type;
 
-static struct i2c_driver gsensor_mxc6655_driver = {
-	.probe = gsensor_mxc6655_probe,
-	.remove = gsensor_mxc6655_remove,
-	.shutdown = sensor_shutdown,
-	.id_table = gsensor_mxc6655_id,
-	.driver = {
-		.name = "gsensor_mxc6655",
-	#ifdef CONFIG_PM
-		.pm = &sensor_pm_ops,
-	#endif
-	},
-};
+	sensor_unregister_slave(type, NULL, NULL, gsensor_get_ops);
+}
 
-module_i2c_driver(gsensor_mxc6655_driver);
+module_init(gsensor_mxc6655_init);
+module_exit(gsensor_mxc6655_exit);
 
-MODULE_AUTHOR("Wang Jie <dave.wang@rock-chips.com>");
-MODULE_DESCRIPTION("mxc6655 3-Axis accelerometer driver");
-MODULE_LICENSE("GPL");

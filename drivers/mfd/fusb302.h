@@ -411,7 +411,8 @@ enum role_mode {
 
 #define CAP_POWER_TYPE(PDO)		((PDO >> 30) & 3)
 #define CAP_FPDO_VOLTAGE(PDO)		((PDO >> 10) & 0x3ff)
-#define CAP_VPDO_VOLTAGE(PDO)		((PDO >> 20) & 0x3ff)
+#define CAP_VPDO_MAX_VOLTAGE(PDO)	((PDO >> 20) & 0x3ff)
+#define CAP_VPDO_MIN_VOLTAGE(PDO)	((PDO >> 10) & 0x3ff)
 #define CAP_FPDO_CURRENT(PDO)		((PDO >> 0) & 0x3ff)
 #define CAP_VPDO_CURRENT(PDO)		((PDO >> 0) & 0x3ff)
 
@@ -494,7 +495,7 @@ struct fusb30x_chip {
 	struct gpio_desc *gpio_vbus_other;
 	struct gpio_desc *gpio_int;
 	struct gpio_desc *gpio_discharge;
-	struct gpio_desc *gpio_fswitch;
+	struct gpio_desc *gpio_charge_en;
 	int timer_state;
 	int timer_mux;
 	int port_num;

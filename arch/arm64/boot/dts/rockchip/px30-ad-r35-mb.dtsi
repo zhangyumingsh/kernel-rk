@@ -383,6 +383,32 @@
 	};
 };
 
+&i2c0 {
+	status = "okay";
+
+	rk618: rk618@50 {
+		reg = <0x50>;
+		interrupt-parent = <&gpio2>;
+		interrupts = <12 IRQ_TYPE_LEVEL_HIGH>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&i2s1_2ch_mclk>;
+		assigned-clocks = <&cru SCLK_I2S1_OUT>;
+		assigned-clock-rates = <11289600>;
+		reset-gpios = <&gpio0 RK_PA0 GPIO_ACTIVE_LOW>;
+		status = "okay";
+	};
+};
+
+#include <arm/rk618.dtsi>
+
+&rk618_clkin {
+	clocks = <&cru SCLK_I2S1_OUT>;
+};
+
+&rk618_lcdc0_dclkp {
+	clocks = <&cru DCLK_VOPL>;
+};
+
 &io_domains {
 	vccio1-supply = <&vcc1v8_soc>;
 	vccio2-supply = <&vccio_sd>;
@@ -492,27 +518,7 @@
 	status = "okay";
 };
 
-&mpp_srv {
-	status = "okay";
-};
-
-&vdpu {
-	status = "okay";
-};
-
-&vepu {
-	status = "okay";
-};
-
-&vpu_mmu {
-	status = "okay";
-};
-
-&hevc {
-	status = "okay";
-};
-
-&hevc_mmu {
+&vpu_combo {
 	status = "okay";
 };
 
@@ -740,30 +746,6 @@
 				pixelclk-active = <0>;
 			};
 		};
-
-		ports {
-			#address-cells = <1>;
-			#size-cells = <0>;
-
-			port@0 {
-				reg = <0>;
-				panel_in_dsi: endpoint {
-					remote-endpoint = <&dsi_out_panel>;
-				};
-			};
-		};
-	};
-
-	ports {
-		#address-cells = <1>;
-		#size-cells = <0>;
-
-		port@1 {
-			reg = <1>;
-			dsi_out_panel: endpoint {
-				remote-endpoint = <&panel_in_dsi>;
-			};
-		};
 	};
 };
 
@@ -784,7 +766,7 @@
 	pmic {
 		pmic_int: pmic_int {
 			rockchip,pins =
-				<0 RK_PA7 RK_FUNC_GPIO &pcfg_pull_up>;
+				<0 7 RK_FUNC_GPIO &pcfg_pull_up>;
 		};
 	};
 

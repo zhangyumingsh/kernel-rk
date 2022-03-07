@@ -1,9 +1,19 @@
-// SPDX-License-Identifier: GPL-2.0+
 /*
  * u_audio.h -- interface to USB gadget "ALSA sound card" utilities
  *
  * Copyright (C) 2016
  * Author: Ruslan Bilovol <ruslan.bilovol@gmail.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
  */
 
 #ifndef __U_AUDIO_H
@@ -12,10 +22,9 @@
 #include <linux/usb/composite.h>
 
 #define UAC_VOLUME_CUR			0x0000
-#define UAC_VOLUME_RES			0x0080 /* 0.5 dB */
-#define UAC_VOLUME_MAX			0x1900 /* 25 dB */
-#define UAC_VOLUME_MIN			0xE700 /* -25 dB */
-#define UAC_VOLUME_NEGATIVE_INFINITY	0x8000
+#define UAC_VOLUME_RES			0x0001 /* 1/256 dB */
+#define UAC_VOLUME_MAX			0x7FFF /* +127.9961 dB */
+#define UAC_VOLUME_MIN			0x8001 /* -127.9961 dB */
 #define UAC_MAX_RATES 10
 struct uac_params {
 	/* playback */
@@ -34,8 +43,6 @@ struct uac_params {
 	int c_srate_active;		/* selected rate in Hz */
 	int c_ssize;	/* sample size */
 
-	int ppm;	/* difference between audio clk and usb clk */
-
 	int req_number; /* number of preallocated requests */
 };
 
@@ -48,7 +55,6 @@ enum usb_state_index {
 	SET_VOLUME_IN,
 	SET_MUTE_OUT,
 	SET_MUTE_IN,
-	SET_AUDIO_CLK,
 	SET_USB_STATE_MAX,
 };
 
@@ -57,23 +63,11 @@ enum stream_state_index {
 	STATE_IN,
 };
 
-struct frame_number_data {
-	uint32_t fn_begin;	/* frame number when starting statistics */
-	uint32_t fn_last;	/* frame number in the latest statistics */
-	uint32_t fn_overflow;	/* the time of frame number overflow */
-	uint32_t second;	/* total seconds counted */
-	ktime_t time_begin;	/* system time when starting statistics */
-	ktime_t time_last;	/* system time in the latest statistics */
-};
-
 struct g_audio {
 	struct device *device;
 	bool usb_state[SET_USB_STATE_MAX];
 	bool stream_state[2];
 	struct work_struct work;
-
-	struct frame_number_data *fn;
-	struct delayed_work ppm_work;
 
 	struct usb_function func;
 	struct usb_gadget *gadget;

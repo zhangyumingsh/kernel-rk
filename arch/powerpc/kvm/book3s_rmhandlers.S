@@ -23,7 +23,6 @@
 #include <asm/mmu.h>
 #include <asm/page.h>
 #include <asm/asm-offsets.h>
-#include <asm/asm-compat.h>
 
 #ifdef CONFIG_PPC_BOOK3S_64
 #include <asm/exception-64s.h>
@@ -37,7 +36,7 @@
 
 #if defined(CONFIG_PPC_BOOK3S_64)
 
-#ifdef PPC64_ELF_ABI_v2
+#if defined(_CALL_ELF) && _CALL_ELF == 2
 #define FUNC(name) 		name
 #else
 #define FUNC(name) 		GLUE(.,name)

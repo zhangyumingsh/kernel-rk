@@ -1,7 +1,14 @@
-// SPDX-License-Identifier: GPL-2.0+
-//
-// Driver for the IMX SNVS ON/OFF Power Key
-// Copyright (C) 2015 Freescale Semiconductor, Inc. All Rights Reserved.
+/*
+ * Driver for the IMX SNVS ON/OFF Power Key
+ * Copyright (C) 2015 Freescale Semiconductor, Inc. All Rights Reserved.
+ *
+ * The code contained herein is licensed under the GNU General Public
+ * License. You may obtain a copy of the GNU General Public License
+ * Version 2 or later at the following locations:
+ *
+ * http://www.opensource.org/licenses/gpl-license.html
+ * http://www.gnu.org/copyleft/gpl.html
+ */
 
 #include <linux/device.h>
 #include <linux/err.h>
@@ -38,9 +45,9 @@ struct pwrkey_drv_data {
 	struct input_dev *input;
 };
 
-static void imx_imx_snvs_check_for_events(struct timer_list *t)
+static void imx_imx_snvs_check_for_events(unsigned long data)
 {
-	struct pwrkey_drv_data *pdata = from_timer(pdata, t, check_timer);
+	struct pwrkey_drv_data *pdata = (struct pwrkey_drv_data *) data;
 	struct input_dev *input = pdata->input;
 	u32 state;
 
@@ -104,9 +111,9 @@ static int imx_snvs_pwrkey_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	pdata->snvs = syscon_regmap_lookup_by_phandle(np, "regmap");
-	if (IS_ERR(pdata->snvs)) {
+	if (!pdata->snvs) {
 		dev_err(&pdev->dev, "Can't get snvs syscon\n");
-		return PTR_ERR(pdata->snvs);
+		return -ENODEV;
 	}
 
 	if (of_property_read_u32(np, "linux,keycode", &pdata->keycode)) {
@@ -127,7 +134,8 @@ static int imx_snvs_pwrkey_probe(struct platform_device *pdev)
 	/* clear the unexpected interrupt before driver ready */
 	regmap_write(pdata->snvs, SNVS_LPSR_REG, SNVS_LPSR_SPO);
 
-	timer_setup(&pdata->check_timer, imx_imx_snvs_check_for_events, 0);
+	setup_timer(&pdata->check_timer,
+		    imx_imx_snvs_check_for_events, (unsigned long) pdata);
 
 	input = devm_input_allocate_device(&pdev->dev);
 	if (!input) {
@@ -163,6 +171,7 @@ static int imx_snvs_pwrkey_probe(struct platform_device *pdev)
 	error = input_register_device(input);
 	if (error < 0) {
 		dev_err(&pdev->dev, "failed to register input device\n");
+		input_free_device(input);
 		return error;
 	}
 
@@ -171,7 +180,7 @@ static int imx_snvs_pwrkey_probe(struct platform_device *pdev)
 	return 0;
 }
 
-static int __maybe_unused imx_snvs_pwrkey_suspend(struct device *dev)
+static int imx_snvs_pwrkey_suspend(struct device *dev)
 {
 	struct platform_device *pdev = to_platform_device(dev);
 	struct pwrkey_drv_data *pdata = platform_get_drvdata(pdev);
@@ -182,7 +191,7 @@ static int __maybe_unused imx_snvs_pwrkey_suspend(struct device *dev)
 	return 0;
 }
 
-static int __maybe_unused imx_snvs_pwrkey_resume(struct device *dev)
+static int imx_snvs_pwrkey_resume(struct device *dev)
 {
 	struct platform_device *pdev = to_platform_device(dev);
 	struct pwrkey_drv_data *pdata = platform_get_drvdata(pdev);

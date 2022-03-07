@@ -560,6 +560,13 @@ static int ntfs_read_locked_inode(struct inode *vi)
 	ntfs_debug("Entering for i_ino 0x%lx.", vi->i_ino);
 
 	/* Setup the generic vfs inode parts now. */
+
+	/*
+	 * This is for checking whether an inode has changed w.r.t. a file so
+	 * that the file can be updated if necessary (compare with f_version).
+	 */
+	vi->i_version = 1;
+
 	vi->i_uid = vol->uid;
 	vi->i_gid = vol->gid;
 	vi->i_mode = 0;
@@ -654,12 +661,6 @@ static int ntfs_read_locked_inode(struct inode *vi)
 	}
 	a = ctx->attr;
 	/* Get the standard information attribute value. */
-	if ((u8 *)a + le16_to_cpu(a->data.resident.value_offset)
-			+ le32_to_cpu(a->data.resident.value_length) >
-			(u8 *)ctx->mrec + vol->mft_record_size) {
-		ntfs_error(vi->i_sb, "Corrupt standard information attribute in inode.");
-		goto unm_err_out;
-	}
 	si = (STANDARD_INFORMATION*)((u8*)a +
 			le16_to_cpu(a->data.resident.value_offset));
 
@@ -867,12 +868,12 @@ skip_attr_list_load:
 					ni->itype.index.block_size);
 			goto unm_err_out;
 		}
-		if (ni->itype.index.block_size > PAGE_SIZE) {
+		if (ni->itype.index.block_size > PAGE_CACHE_SIZE) {
 			ntfs_error(vi->i_sb, "Index block size (%u) > "
-					"PAGE_SIZE (%ld) is not "
+					"PAGE_CACHE_SIZE (%ld) is not "
 					"supported.  Sorry.",
 					ni->itype.index.block_size,
-					PAGE_SIZE);
+					PAGE_CACHE_SIZE);
 			err = -EOPNOTSUPP;
 			goto unm_err_out;
 		}
@@ -1239,6 +1240,7 @@ static int ntfs_read_locked_attr_inode(struct inode *base_vi, struct inode *vi)
 	base_ni = NTFS_I(base_vi);
 
 	/* Just mirror the values from the base inode. */
+	vi->i_version	= base_vi->i_version;
 	vi->i_uid	= base_vi->i_uid;
 	vi->i_gid	= base_vi->i_gid;
 	set_nlink(vi, base_vi->i_nlink);
@@ -1505,6 +1507,7 @@ static int ntfs_read_locked_index_inode(struct inode *base_vi, struct inode *vi)
 	ni	= NTFS_I(vi);
 	base_ni = NTFS_I(base_vi);
 	/* Just mirror the values from the base inode. */
+	vi->i_version	= base_vi->i_version;
 	vi->i_uid	= base_vi->i_uid;
 	vi->i_gid	= base_vi->i_gid;
 	set_nlink(vi, base_vi->i_nlink);
@@ -1582,10 +1585,10 @@ static int ntfs_read_locked_index_inode(struct inode *base_vi, struct inode *vi)
 				"two.", ni->itype.index.block_size);
 		goto unm_err_out;
 	}
-	if (ni->itype.index.block_size > PAGE_SIZE) {
-		ntfs_error(vi->i_sb, "Index block size (%u) > PAGE_SIZE "
+	if (ni->itype.index.block_size > PAGE_CACHE_SIZE) {
+		ntfs_error(vi->i_sb, "Index block size (%u) > PAGE_CACHE_SIZE "
 				"(%ld) is not supported.  Sorry.",
-				ni->itype.index.block_size, PAGE_SIZE);
+				ni->itype.index.block_size, PAGE_CACHE_SIZE);
 		err = -EOPNOTSUPP;
 		goto unm_err_out;
 	}
@@ -1841,12 +1844,6 @@ int ntfs_read_inode_mount(struct inode *vi)
 		brelse(bh);
 	}
 
-	if (le32_to_cpu(m->bytes_allocated) != vol->mft_record_size) {
-		ntfs_error(sb, "Incorrect mft record size %u in superblock, should be %u.",
-				le32_to_cpu(m->bytes_allocated), vol->mft_record_size);
-		goto err_out;
-	}
-
 	/* Apply the mst fixups. */
 	if (post_read_mst_fixup((NTFS_RECORD*)m, vol->mft_record_size)) {
 		/* FIXME: Try to use the $MFTMirr now. */
@@ -1857,7 +1854,7 @@ int ntfs_read_inode_mount(struct inode *vi)
 	/* Need this to sanity check attribute list references to $MFT. */
 	vi->i_generation = ni->seq_no = le16_to_cpu(m->sequence_number);
 
-	/* Provides readpage() for map_mft_record(). */
+	/* Provides readpage() and sync_page() for map_mft_record(). */
 	vi->i_mapping->a_ops = &ntfs_mst_aops;
 
 	ctx = ntfs_attr_get_search_ctx(ni, m);
@@ -2816,11 +2813,11 @@ done:
 	 * for real.
 	 */
 	if (!IS_NOCMTIME(VFS_I(base_ni)) && !IS_RDONLY(VFS_I(base_ni))) {
-		struct timespec64 now = current_time(VFS_I(base_ni));
+		struct timespec now = current_fs_time(VFS_I(base_ni)->i_sb);
 		int sync_it = 0;
 
-		if (!timespec64_equal(&VFS_I(base_ni)->i_mtime, &now) ||
-		    !timespec64_equal(&VFS_I(base_ni)->i_ctime, &now))
+		if (!timespec_equal(&VFS_I(base_ni)->i_mtime, &now) ||
+		    !timespec_equal(&VFS_I(base_ni)->i_ctime, &now))
 			sync_it = 1;
 		VFS_I(base_ni)->i_mtime = now;
 		VFS_I(base_ni)->i_ctime = now;
@@ -2896,7 +2893,7 @@ int ntfs_setattr(struct dentry *dentry, struct iattr *attr)
 	int err;
 	unsigned int ia_valid = attr->ia_valid;
 
-	err = setattr_prepare(dentry, attr);
+	err = inode_change_ok(vi, attr);
 	if (err)
 		goto out;
 	/* We do not support NTFS ACLs yet. */
@@ -2935,14 +2932,14 @@ int ntfs_setattr(struct dentry *dentry, struct iattr *attr)
 		}
 	}
 	if (ia_valid & ATTR_ATIME)
-		vi->i_atime = timespec64_trunc(attr->ia_atime,
-					       vi->i_sb->s_time_gran);
+		vi->i_atime = timespec_trunc(attr->ia_atime,
+				vi->i_sb->s_time_gran);
 	if (ia_valid & ATTR_MTIME)
-		vi->i_mtime = timespec64_trunc(attr->ia_mtime,
-					       vi->i_sb->s_time_gran);
+		vi->i_mtime = timespec_trunc(attr->ia_mtime,
+				vi->i_sb->s_time_gran);
 	if (ia_valid & ATTR_CTIME)
-		vi->i_ctime = timespec64_trunc(attr->ia_ctime,
-					       vi->i_sb->s_time_gran);
+		vi->i_ctime = timespec_trunc(attr->ia_ctime,
+				vi->i_sb->s_time_gran);
 	mark_inode_dirty(vi);
 out:
 	return err;

@@ -41,7 +41,6 @@ IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */ /***************************************************************************/
 
-#include "server_sync_primitive.h"
 #include "img_types.h"
 #include "device.h"
 #include "devicemem.h"
@@ -53,6 +52,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #define _SYNC_SERVER_H_
 
 typedef struct _SERVER_OP_COOKIE_ SERVER_OP_COOKIE;
+typedef struct _SERVER_SYNC_PRIMITIVE_ SERVER_SYNC_PRIMITIVE;
 typedef struct _SYNC_PRIMITIVE_BLOCK_ SYNC_PRIMITIVE_BLOCK;
 typedef struct _SERVER_SYNC_EXPORT_ SERVER_SYNC_EXPORT;
 typedef struct _SYNC_CONNECTION_DATA_ SYNC_CONNECTION_DATA;

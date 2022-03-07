@@ -7,7 +7,6 @@
 #include <linux/bug.h>
 #include <linux/delay.h>
 #include <linux/kernel.h>
-#include <asm/string.h>
 
 #include "rkflash_debug.h"
 #include "sfc_nor.h"

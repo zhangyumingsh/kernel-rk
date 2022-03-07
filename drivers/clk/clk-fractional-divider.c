@@ -158,15 +158,14 @@ const struct clk_ops clk_fractional_divider_ops = {
 };
 EXPORT_SYMBOL_GPL(clk_fractional_divider_ops);
 
-struct clk_hw *clk_hw_register_fractional_divider(struct device *dev,
+struct clk *clk_register_fractional_divider(struct device *dev,
 		const char *name, const char *parent_name, unsigned long flags,
 		void __iomem *reg, u8 mshift, u8 mwidth, u8 nshift, u8 nwidth,
 		u8 clk_divider_flags, spinlock_t *lock)
 {
 	struct clk_fractional_divider *fd;
-	struct clk_init_data init = {};
-	struct clk_hw *hw;
-	int ret;
+	struct clk_init_data init;
+	struct clk *clk;
 
 	fd = kzalloc(sizeof(*fd), GFP_KERNEL);
 	if (!fd)
@@ -189,39 +188,10 @@ struct clk_hw *clk_hw_register_fractional_divider(struct device *dev,
 	fd->lock = lock;
 	fd->hw.init = &init;
 
-	hw = &fd->hw;
-	ret = clk_hw_register(dev, hw);
-	if (ret) {
+	clk = clk_register(dev, &fd->hw);
+	if (IS_ERR(clk))
 		kfree(fd);
-		hw = ERR_PTR(ret);
-	}
 
-	return hw;
-}
-EXPORT_SYMBOL_GPL(clk_hw_register_fractional_divider);
-
-struct clk *clk_register_fractional_divider(struct device *dev,
-		const char *name, const char *parent_name, unsigned long flags,
-		void __iomem *reg, u8 mshift, u8 mwidth, u8 nshift, u8 nwidth,
-		u8 clk_divider_flags, spinlock_t *lock)
-{
-	struct clk_hw *hw;
-
-	hw = clk_hw_register_fractional_divider(dev, name, parent_name, flags,
-			reg, mshift, mwidth, nshift, nwidth, clk_divider_flags,
-			lock);
-	if (IS_ERR(hw))
-		return ERR_CAST(hw);
-	return hw->clk;
+	return clk;
 }
 EXPORT_SYMBOL_GPL(clk_register_fractional_divider);
-
-void clk_hw_unregister_fractional_divider(struct clk_hw *hw)
-{
-	struct clk_fractional_divider *fd;
-
-	fd = to_clk_fd(hw);
-
-	clk_hw_unregister(hw);
-	kfree(fd);
-}

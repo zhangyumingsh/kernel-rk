@@ -113,7 +113,7 @@ struct monitor_dev_profile {
 	struct cpumask allowed_cpus;
 };
 
-#if IS_ENABLED(CONFIG_ROCKCHIP_SYSTEM_MONITOR)
+#ifdef CONFIG_ROCKCHIP_SYSTEM_MONITOR
 struct monitor_dev_info *
 rockchip_system_monitor_register(struct device *dev,
 				 struct monitor_dev_profile *devp);
@@ -126,7 +126,7 @@ int rockchip_monitor_dev_low_temp_adjust(struct monitor_dev_info *info,
 					 bool is_low);
 int rockchip_monitor_dev_high_temp_adjust(struct monitor_dev_info *info,
 					  bool is_high);
-int rockchip_monitor_suspend_low_temp_adjust(int cpu);
+int rockchip_monitor_suspend_low_temp_adjust(struct monitor_dev_info *info);
 int
 rockchip_system_monitor_adjust_cdev_state(struct thermal_cooling_device *cdev,
 					  int temp, unsigned long *state);
@@ -171,7 +171,8 @@ rockchip_monitor_dev_high_temp_adjust(struct monitor_dev_info *info,
 	return 0;
 };
 
-static inline int rockchip_monitor_suspend_low_temp_adjust(int cpu)
+static inline int
+rockchip_monitor_suspend_low_temp_adjust(struct monitor_dev_info *info)
 {
 	return 0;
 };

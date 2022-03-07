@@ -17,7 +17,6 @@
 #include <linux/rockchip/rockchip_sip.h>
 #include <linux/slab.h>
 #include <linux/string.h>
-#include <soc/rockchip/rockchip_opp_select.h>
 
 #define CLUSTER0	0
 #define CLUSTER1	1
@@ -28,20 +27,12 @@
 #define to_rockchip_bus_cpufreq_nb(nb) \
 	container_of(nb, struct rockchip_bus, cpufreq_nb)
 
-struct busfreq_table {
-	unsigned long freq;
-	unsigned long volt;
-};
-
 struct rockchip_bus {
 	struct device *dev;
 	struct regulator *regulator;
 	struct clk *clk;
 	struct notifier_block clk_nb;
 	struct notifier_block cpufreq_nb;
-	struct busfreq_table *freq_table;
-
-	unsigned int max_state;
 
 	unsigned long cur_volt;
 	unsigned long cur_rate;
@@ -111,42 +102,6 @@ static int rockchip_bus_smc_config(struct rockchip_bus *bus)
 	return 0;
 }
 
-static int rockchip_bus_set_freq_table(struct rockchip_bus *bus)
-{
-	struct device *dev = bus->dev;
-	struct dev_pm_opp *opp;
-	unsigned long freq;
-	int i, count;
-
-	count = dev_pm_opp_get_opp_count(dev);
-	if (count <= 0)
-		return -EINVAL;
-
-	bus->max_state = count;
-	bus->freq_table = devm_kcalloc(dev,
-				       bus->max_state,
-				       sizeof(*bus->freq_table),
-				       GFP_KERNEL);
-	if (!bus->freq_table) {
-		bus->max_state = 0;
-		return -ENOMEM;
-	}
-
-	for (i = 0, freq = 0; i < bus->max_state; i++, freq++) {
-		opp = dev_pm_opp_find_freq_ceil(dev, &freq);
-		if (IS_ERR(opp)) {
-			devm_kfree(dev, bus->freq_table);
-			bus->max_state = 0;
-			return PTR_ERR(opp);
-		}
-		bus->freq_table[i].volt = dev_pm_opp_get_voltage(opp);
-		bus->freq_table[i].freq = freq;
-		dev_pm_opp_put(opp);
-	}
-
-	return 0;
-}
-
 static int rockchip_bus_power_control_init(struct rockchip_bus *bus)
 {
 	struct device *dev = bus->dev;
@@ -164,33 +119,33 @@ static int rockchip_bus_power_control_init(struct rockchip_bus *bus)
 		return PTR_ERR(bus->regulator);
 	}
 
-	ret = rockchip_init_opp_table(dev, NULL, "leakage", "pvtm");
+	ret = dev_pm_opp_of_add_table(dev);
 	if (ret < 0) {
 		dev_err(dev, "failed to get OPP table\n");
-		return ret;
-	}
-
-	ret = rockchip_bus_set_freq_table(bus);
-	if (ret < 0) {
-		dev_err(dev, "failed to set bus freq table\n");
 		return ret;
 	}
 
 	return 0;
 }
 
-static int rockchip_bus_clkfreq_target(struct device *dev, unsigned long freq)
+static int rockchip_bus_clkfreq_target(struct device *dev, unsigned long freq,
+				       u32 flags)
 {
 	struct rockchip_bus *bus = dev_get_drvdata(dev);
-	unsigned long target_volt = bus->freq_table[bus->max_state - 1].volt;
-	int i;
+	struct dev_pm_opp *opp;
+	unsigned long target_volt, target_rate = freq;
 
-	for (i = 0; i < bus->max_state; i++) {
-		if (freq <= bus->freq_table[i].freq) {
-			target_volt = bus->freq_table[i].volt;
-			break;
-		}
+	rcu_read_lock();
+
+	opp = devfreq_recommended_opp(dev, &target_rate, flags);
+	if (IS_ERR(opp)) {
+		dev_err(dev, "failed to recommended opp %lu\n", target_rate);
+		rcu_read_unlock();
+		return PTR_ERR(opp);
 	}
+	target_volt = dev_pm_opp_get_voltage(opp);
+
+	rcu_read_unlock();
 
 	if (bus->cur_volt != target_volt) {
 		dev_dbg(bus->dev, "target_volt: %lu\n", target_volt);
@@ -220,17 +175,17 @@ static int rockchip_bus_clk_notifier(struct notifier_block *nb,
 	case PRE_RATE_CHANGE:
 		if (ndata->new_rate > ndata->old_rate)
 			ret = rockchip_bus_clkfreq_target(bus->dev,
-							  ndata->new_rate);
+							  ndata->new_rate, 0);
 		break;
 	case POST_RATE_CHANGE:
 		if (ndata->new_rate < ndata->old_rate)
 			ret = rockchip_bus_clkfreq_target(bus->dev,
-							  ndata->new_rate);
+							  ndata->new_rate, 0);
 		break;
 	case ABORT_RATE_CHANGE:
 		if (ndata->new_rate > ndata->old_rate)
 			ret = rockchip_bus_clkfreq_target(bus->dev,
-							  ndata->old_rate);
+							  ndata->old_rate, 0);
 		break;
 	default:
 		break;
@@ -252,7 +207,7 @@ static int rockchip_bus_clkfreq(struct rockchip_bus *bus)
 	}
 
 	init_rate = clk_get_rate(bus->clk);
-	ret = rockchip_bus_clkfreq_target(dev, init_rate);
+	ret = rockchip_bus_clkfreq_target(dev, init_rate, 0);
 	if (ret)
 		return ret;
 
@@ -285,13 +240,17 @@ static int rockchip_bus_cpufreq_target(struct device *dev, unsigned long freq,
 		return ret;
 	}
 
+	rcu_read_lock();
+
 	opp = devfreq_recommended_opp(dev, &target_rate, flags);
 	if (IS_ERR(opp)) {
 		dev_err(dev, "failed to recommended opp %lu\n", target_rate);
+		rcu_read_unlock();
 		return PTR_ERR(opp);
 	}
 	target_volt = dev_pm_opp_get_voltage(opp);
-	dev_pm_opp_put(opp);
+
+	rcu_read_unlock();
 
 	if (bus->cur_rate == target_rate) {
 		if (bus->cur_volt == target_volt)
@@ -447,8 +406,6 @@ static const struct of_device_id rockchip_busfreq_of_match[] = {
 	{ .compatible = "rockchip,rk3288-bus", },
 	{ .compatible = "rockchip,rk3368-bus", },
 	{ .compatible = "rockchip,rk3399-bus", },
-	{ .compatible = "rockchip,rk3568-bus", },
-	{ .compatible = "rockchip,rv1126-bus", },
 	{ },
 };
 

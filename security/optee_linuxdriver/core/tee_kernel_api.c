@@ -81,7 +81,8 @@ void TEEC_FinalizeContext(TEEC_Context *context)
 {
 	if (!context || !context->fd) {
 		pr_err("%s - can't release context %p:[%s]\n", __func__,
-		       context, context ? context->devname : "");
+		       context, (context
+				 && context->devname) ? context->devname : "");
 		return;
 	}
 	/* TODO fixme will not work on 64-bit platform */

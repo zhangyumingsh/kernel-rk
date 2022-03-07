@@ -294,6 +294,10 @@ snd_bebob_maudio_special_discover(struct snd_bebob *bebob, bool is1814)
 		bebob->midi_output_ports = 2;
 	}
 end:
+	if (err < 0) {
+		kfree(params);
+		bebob->maudio_special_quirk = NULL;
+	}
 	mutex_unlock(&bebob->mutex);
 	return err;
 }
@@ -340,7 +344,7 @@ end:
 }
 
 /* Clock source control for special firmware */
-static const enum snd_bebob_clock_type special_clk_types[] = {
+static enum snd_bebob_clock_type special_clk_types[] = {
 	SND_BEBOB_CLOCK_TYPE_INTERNAL,	/* With digital mute */
 	SND_BEBOB_CLOCK_TYPE_EXTERNAL,	/* SPDIF/ADAT */
 	SND_BEBOB_CLOCK_TYPE_EXTERNAL,	/* Word Clock */
@@ -396,7 +400,7 @@ static int special_clk_ctl_put(struct snd_kcontrol *kctl,
 
 	return err;
 }
-static const struct snd_kcontrol_new special_clk_ctl = {
+static struct snd_kcontrol_new special_clk_ctl = {
 	.name	= "Clock Source",
 	.iface	= SNDRV_CTL_ELEM_IFACE_MIXER,
 	.access	= SNDRV_CTL_ELEM_ACCESS_READWRITE,
@@ -429,7 +433,7 @@ static int special_sync_ctl_get(struct snd_kcontrol *kctl,
 
 	return 0;
 }
-static const struct snd_kcontrol_new special_sync_ctl = {
+static struct snd_kcontrol_new special_sync_ctl = {
 	.name	= "Sync Status",
 	.iface	= SNDRV_CTL_ELEM_IFACE_MIXER,
 	.access	= SNDRV_CTL_ELEM_ACCESS_READ,
@@ -521,7 +525,7 @@ end:
 	mutex_unlock(&bebob->mutex);
 	return err;
 }
-static const struct snd_kcontrol_new special_dig_in_iface_ctl = {
+static struct snd_kcontrol_new special_dig_in_iface_ctl = {
 	.name	= "Digital Input Interface",
 	.iface	= SNDRV_CTL_ELEM_IFACE_MIXER,
 	.access	= SNDRV_CTL_ELEM_ACCESS_READWRITE,
@@ -577,7 +581,7 @@ static int special_dig_out_iface_ctl_set(struct snd_kcontrol *kctl,
 	mutex_unlock(&bebob->mutex);
 	return err;
 }
-static const struct snd_kcontrol_new special_dig_out_iface_ctl = {
+static struct snd_kcontrol_new special_dig_out_iface_ctl = {
 	.name	= "Digital Output Interface",
 	.iface	= SNDRV_CTL_ELEM_IFACE_MIXER,
 	.access	= SNDRV_CTL_ELEM_ACCESS_READWRITE,

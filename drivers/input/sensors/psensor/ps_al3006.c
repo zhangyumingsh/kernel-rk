@@ -19,7 +19,7 @@
 #include <linux/irq.h>
 #include <linux/miscdevice.h>
 #include <linux/gpio.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/atomic.h>
 #include <linux/delay.h>
 #include <linux/input.h>
@@ -225,37 +225,32 @@ struct sensor_operate proximity_al3006_ops = {
 };
 
 /****************operate according to sensor chip:end************/
-static int proximity_al3006_probe(struct i2c_client *client,
-				  const struct i2c_device_id *devid)
+
+//function name should not be changed
+static struct sensor_operate *proximity_get_ops(void)
 {
-	return sensor_register_device(client, NULL, devid, &proximity_al3006_ops);
+	return &proximity_al3006_ops;
 }
 
-static int proximity_al3006_remove(struct i2c_client *client)
+
+static int __init proximity_al3006_init(void)
 {
-	return sensor_unregister_device(client, NULL, &proximity_al3006_ops);
+	struct sensor_operate *ops = proximity_get_ops();
+	int result = 0;
+	int type = ops->type;
+	result = sensor_register_slave(type, NULL, NULL, proximity_get_ops);
+	return result;
 }
 
-static const struct i2c_device_id proximity_al3006_id[] = {
-	{"proximity_al3006", PROXIMITY_ID_AL3006},
-	{}
-};
+static void __exit proximity_al3006_exit(void)
+{
+	struct sensor_operate *ops = proximity_get_ops();
+	int type = ops->type;
+	sensor_unregister_slave(type, NULL, NULL, proximity_get_ops);
+}
 
-static struct i2c_driver proximity_al3006_driver = {
-	.probe = proximity_al3006_probe,
-	.remove = proximity_al3006_remove,
-	.shutdown = sensor_shutdown,
-	.id_table = proximity_al3006_id,
-	.driver = {
-		.name = "proximity_al3006",
-	#ifdef CONFIG_PM
-		.pm = &sensor_pm_ops,
-	#endif
-	},
-};
 
-module_i2c_driver(proximity_al3006_driver);
+module_init(proximity_al3006_init);
+module_exit(proximity_al3006_exit);
 
-MODULE_AUTHOR("luowei <lw@rock-chips.com>");
-MODULE_DESCRIPTION("al3006 proximity driver");
-MODULE_LICENSE("GPL");
+

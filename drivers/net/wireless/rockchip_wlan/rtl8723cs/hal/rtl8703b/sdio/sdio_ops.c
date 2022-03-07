@@ -1,6 +1,6 @@
 /******************************************************************************
  *
- * Copyright(c) 2007 - 2017 Realtek Corporation.
+ * Copyright(c) 2007 - 2012 Realtek Corporation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of version 2 of the GNU General Public License as
@@ -11,7 +11,11 @@
  * FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
  * more details.
  *
- *****************************************************************************/
+ * You should have received a copy of the GNU General Public License along with
+ * this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110, USA
+ *
+ *******************************************************************************/
 #define _SDIO_OPS_C_
 
 #include <rtl8703b_hal.h>
@@ -26,10 +30,10 @@
  * Creadted by Roger, 2011.01.31.
  *   */
 static void HalSdioGetCmdAddr8703BSdio(
-		PADAPTER			padapter,
-		u8				DeviceID,
-		u32				Addr,
-		u32				*pCmdAddr
+	IN	PADAPTER			padapter,
+	IN	u8				DeviceID,
+	IN	u32				Addr,
+	OUT	u32				*pCmdAddr
 )
 {
 	switch (DeviceID) {
@@ -489,6 +493,7 @@ static u32 sdio_read_port(
 	u8 *mem)
 {
 	PADAPTER padapter;
+	PSDIO_DATA psdio;
 	PHAL_DATA_TYPE phal;
 	u32 oldcnt;
 #ifdef SDIO_DYNAMIC_ALLOC_MEM
@@ -498,12 +503,15 @@ static u32 sdio_read_port(
 
 
 	padapter = pintfhdl->padapter;
+	psdio = &adapter_to_dvobj(padapter)->intf_data;
 	phal = GET_HAL_DATA(padapter);
 
 	HalSdioGetCmdAddr8703BSdio(padapter, addr, phal->SdioRxFIFOCnt++, &addr);
 
 	oldcnt = cnt;
-	cnt = rtw_sdio_cmd53_align_size(adapter_to_dvobj(padapter), cnt);
+	if (cnt > psdio->block_transfer_len)
+		cnt = _RND(cnt, psdio->block_transfer_len);
+	/*	cnt = sdio_align_size(cnt); */
 
 	if (oldcnt != cnt) {
 #ifdef SDIO_DYNAMIC_ALLOC_MEM
@@ -557,10 +565,12 @@ static u32 sdio_write_port(
 	u8 *mem)
 {
 	PADAPTER padapter;
+	PSDIO_DATA psdio;
 	s32 err;
 	struct xmit_buf *xmitbuf = (struct xmit_buf *)mem;
 
 	padapter = pintfhdl->padapter;
+	psdio = &adapter_to_dvobj(padapter)->intf_data;
 
 	if (!rtw_is_hw_init_completed(padapter)) {
 		RTW_INFO("%s [addr=0x%x cnt=%d] padapter->hw_init_completed == _FALSE\n", __func__, addr, cnt);
@@ -570,7 +580,9 @@ static u32 sdio_write_port(
 	cnt = _RND4(cnt);
 	HalSdioGetCmdAddr8703BSdio(padapter, addr, cnt >> 2, &addr);
 
-	cnt = rtw_sdio_cmd53_align_size(adapter_to_dvobj(padapter), cnt);
+	if (cnt > psdio->block_transfer_len)
+		cnt = _RND(cnt, psdio->block_transfer_len);
+	/*	cnt = sdio_align_size(cnt); */
 
 	err = sd_write(pintfhdl, addr, cnt, xmitbuf->pdata);
 
@@ -879,7 +891,7 @@ DumpLoggedInterruptHistory8703Sdio(
 )
 {
 	HAL_DATA_TYPE	*pHalData = GET_HAL_DATA(padapter);
-	u32				DebugLevel = DBG_LOUD;
+	u4Byte				DebugLevel = DBG_LOUD;
 
 	if (DBG_Var.DbgPrintIsr == 0)
 		return;
@@ -962,7 +974,7 @@ LogInterruptHistory8703Sdio(
 
 void
 DumpHardwareProfile8703Sdio(
-		PADAPTER		padapter
+	IN	PADAPTER		padapter
 )
 {
 	DumpLoggedInterruptHistory8703Sdio(padapter);
@@ -1248,7 +1260,7 @@ static void sd_recv_loopback(PADAPTER padapter, u32 size)
 
 	readsize = size;
 	RTW_INFO("%s: read size=%d\n", __func__, readsize);
-	allocsize = _RND(readsize, rtw_sdio_get_block_size(adapter_to_dvobj(padapter)));
+	allocsize = _RND(readsize, adapter_to_dvobj(padapter)->intf_data.block_transfer_len);
 
 	ploopback = padapter->ploopback;
 	if (ploopback) {
@@ -1285,7 +1297,7 @@ static void sd_recv_loopback(PADAPTER padapter, u32 size)
 #endif /* CONFIG_MAC_LOOPBACK_DRIVER */
 
 #ifdef CONFIG_SDIO_RX_COPY
-static u32 sd_recv_rxfifo(PADAPTER padapter, u32 size, struct recv_buf **recvbuf_ret)
+static struct recv_buf *sd_recv_rxfifo(PADAPTER padapter, u32 size)
 {
 	u32 readsize, ret;
 	u8 *preadbuf;
@@ -1305,9 +1317,8 @@ static u32 sd_recv_rxfifo(PADAPTER padapter, u32 size, struct recv_buf **recvbuf
 	precvpriv = &padapter->recvpriv;
 	precvbuf = rtw_dequeue_recvbuf(&precvpriv->free_recv_buf_queue);
 	if (precvbuf == NULL) {
-		RTW_INFO("%s: recvbuf unavailable\n", __func__); //No free rece_buffer.
-		ret = RTW_RBUF_UNAVAIL;
-		goto exit;
+		RTW_ERR("%s: alloc recvbuf FAIL!\n", __FUNCTION__);
+		return NULL;
 	}
 
 	/* 3 2. alloc skb */
@@ -1319,8 +1330,7 @@ static u32 sd_recv_rxfifo(PADAPTER padapter, u32 size, struct recv_buf **recvbuf
 		if (precvbuf->pskb == NULL) {
 			RTW_INFO("%s: alloc_skb fail! read=%d\n", __FUNCTION__, readsize);
 			rtw_enqueue_recvbuf(precvbuf, &precvpriv->free_recv_buf_queue);
-			ret = RTW_RBUF_PKT_UNAVAIL;
-			goto exit;
+			return NULL;
 		}
 
 		precvbuf->pskb->dev = padapter->pnetdev;
@@ -1336,7 +1346,7 @@ static u32 sd_recv_rxfifo(PADAPTER padapter, u32 size, struct recv_buf **recvbuf
 	ret = sdio_read_port(&padapter->iopriv.intf, WLAN_RX0FF_DEVICE_ID, readsize, preadbuf);
 	if (ret == _FAIL) {
 		rtw_enqueue_recvbuf(precvbuf, &precvpriv->free_recv_buf_queue);
-		goto exit;
+		return NULL;
 	}
 
 	/* 3 4. init recvbuf */
@@ -1347,20 +1357,19 @@ static u32 sd_recv_rxfifo(PADAPTER padapter, u32 size, struct recv_buf **recvbuf
 	precvbuf->ptail = skb_tail_pointer(precvbuf->pskb);
 	precvbuf->pend = skb_end_pointer(precvbuf->pskb);
 
-	*recvbuf_ret = precvbuf;
-	exit:
-		return ret;	
+	return precvbuf;
 }
 #else /* !CONFIG_SDIO_RX_COPY */
 static struct recv_buf *sd_recv_rxfifo(PADAPTER padapter, u32 size)
 {
-	u32 readsize, allocsize, ret;
+	u32 sdioblksize, readsize, allocsize, ret;
 	u8 *preadbuf;
 	_pkt *ppkt;
 	struct recv_priv *precvpriv;
 	struct recv_buf	*precvbuf;
 
 
+	sdioblksize = adapter_to_dvobj(padapter)->intf_data.block_transfer_len;
 #if 0
 	readsize = size;
 #else
@@ -1371,7 +1380,10 @@ static struct recv_buf *sd_recv_rxfifo(PADAPTER padapter, u32 size)
 
 	/* 3 1. alloc skb */
 	/* align to block size */
-	allocsize = rtw_sdio_cmd53_align_size(adapter_to_dvobj(padapter), readsize);
+	if (readsize > sdioblksize)
+		allocsize = _RND(readsize, sdioblksize);
+	else
+		allocsize = readsize;
 
 	ppkt = rtw_skb_alloc(allocsize);
 
@@ -1421,17 +1433,12 @@ static void sd_rxhandler(PADAPTER padapter, struct recv_buf *precvbuf)
 	ppending_queue = &precvpriv->recv_buf_pending_queue;
 
 	/* 3 1. enqueue recvbuf */
-	rtw_enqueue_recvbuf(precvbuf, ppending_queue);//rx thread dequeue pending
+	rtw_enqueue_recvbuf(precvbuf, ppending_queue);
 
-
-	/* 3 2. trigger recv hdl */
-#ifdef CONFIG_RECV_THREAD_MODE
-		_rtw_up_sema(&precvpriv->recv_sema);
-#else
-	#ifdef PLATFORM_LINUX
+	/* 3 2. schedule tasklet */
+#ifdef PLATFORM_LINUX
 	tasklet_schedule(&precvpriv->recv_tasklet);
-	#endif /* PLATFORM_LINUX */
-#endif /* CONFIG_RECV_THREAD_MODE */
+#endif
 }
 
 void sd_int_dpc(PADAPTER padapter)
@@ -1467,7 +1474,8 @@ void sd_int_dpc(PADAPTER padapter)
 		struct reportpwrstate_parm report;
 
 #ifdef CONFIG_LPS_RPWM_TIMER
-		_cancel_timer_ex(&(pwrctl->pwr_rpwm_timer));
+		u8 bcancelled;
+		_cancel_timer(&(pwrctl->pwr_rpwm_timer), &bcancelled);
 #endif /* CONFIG_LPS_RPWM_TIMER */
 
 		report.state = SdioLocalCmd52Read1Byte(padapter, SDIO_REG_HCPWM1_8703B);
@@ -1513,11 +1521,11 @@ void sd_int_dpc(PADAPTER padapter)
 		RTW_INFO("%s: Rx Error\n", __func__);
 
 	if (phal->sdio_hisr & SDIO_HISR_RX_REQUEST) {
-		struct recv_buf *precvbuf = NULL;
+		struct recv_buf *precvbuf;
 		int alloc_fail_time = 0;
-		u32 hisr = 0, rx_cnt = 0, ret = 0;
+		u32 hisr;
 
-	/*		RTW_INFO("%s: RX Request, size=%d\n", __func__, phal->SdioRxFIFOSize); */
+		/*		RTW_INFO("%s: RX Request, size=%d\n", __func__, phal->SdioRxFIFOSize); */
 		phal->sdio_hisr ^= SDIO_HISR_RX_REQUEST;
 		do {
 			phal->SdioRxFIFOSize = SdioLocalCmd52Read2Byte(padapter, SDIO_REG_RX0_REQ_LEN);
@@ -1525,23 +1533,16 @@ void sd_int_dpc(PADAPTER padapter)
 #ifdef CONFIG_MAC_LOOPBACK_DRIVER
 				sd_recv_loopback(padapter, phal->SdioRxFIFOSize);
 #else
-				ret = sd_recv_rxfifo(padapter, phal->SdioRxFIFOSize, &precvbuf);
-				if (precvbuf) {
-					//RTW_INFO("phal->SdioRxFIFOSize:%d\n", phal->SdioRxFIFOSize);
+				precvbuf = sd_recv_rxfifo(padapter, phal->SdioRxFIFOSize);
+				if (precvbuf)
 					sd_rxhandler(padapter, precvbuf);
-					phal->SdioRxFIFOSize = 0;
-					rx_cnt++;
-				} else {
+				else {
 					alloc_fail_time++;
-					if (ret == RTW_RBUF_UNAVAIL || ret == RTW_RBUF_PKT_UNAVAIL)
-						rtw_msleep_os(10);
-					else {
 					RTW_INFO("%s: recv fail!(time=%d)\n", __func__, alloc_fail_time);
-						phal->SdioRxFIFOSize = 0;
-					}
-					if (alloc_fail_time >= 10 && rx_cnt != 0)
+					if (alloc_fail_time >= 10)
 						break;
 				}
+				phal->SdioRxFIFOSize = 0;
 #endif
 			} else
 				break;
@@ -1652,7 +1653,7 @@ u8 RecvOnePkt(PADAPTER padapter)
 
 	if (len) {
 		sdio_claim_host(func);
-		res = sd_recv_rxfifo(padapter, len, &precvbuf);
+		precvbuf = sd_recv_rxfifo(padapter, len);
 
 		if (precvbuf) {
 			/* printk("Completed Recv One Pkt.\n"); */

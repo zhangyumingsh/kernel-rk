@@ -9,8 +9,6 @@
 #include <linux/clk.h>
 #include <linux/delay.h>
 #include <linux/err.h>
-#include <linux/extcon.h>
-#include <linux/extcon-provider.h>
 #include <linux/hdmi.h>
 #include <linux/mfd/rk628.h>
 #include <linux/mfd/syscon.h>
@@ -18,6 +16,9 @@
 #include <linux/mutex.h>
 #include <linux/of_device.h>
 #include <linux/regmap.h>
+#ifdef CONFIG_SWITCH
+#include <linux/switch.h>
+#endif
 
 #include <drm/drm_of.h>
 #include <drm/drmP.h>
@@ -25,8 +26,6 @@
 #include <drm/drm_crtc_helper.h>
 #include <drm/drm_edid.h>
 #include <sound/hdmi-codec.h>
-
-#include "../rockchip_drm_drv.h"
 
 #define HDMI_BASE			0x70000
 #define HDMI_REG_STRIDE			4
@@ -414,14 +413,9 @@ struct rk628_hdmi {
 
 	struct hdmi_data_info	hdmi_data;
 	struct drm_display_mode previous_mode;
-
-	struct rockchip_drm_sub_dev sub_dev;
-	struct extcon_dev *extcon;
-};
-
-static const unsigned int rk628_hdmi_cable[] = {
-	EXTCON_DISP_HDMI,
-	EXTCON_NONE,
+#ifdef CONFIG_SWITCH
+	struct switch_dev switchdev;
+#endif
 };
 
 enum {
@@ -662,7 +656,6 @@ static int rk628_hdmi_config_video_vsi(struct rk628_hdmi *hdmi,
 	int rc;
 
 	rc = drm_hdmi_vendor_infoframe_from_display_mode(&frame.vendor.hdmi,
-							 &hdmi->connector,
 							 mode);
 
 	return rk628_hdmi_upload_frame(hdmi, rc, &frame,
@@ -895,55 +888,25 @@ rk628_hdmi_connector_detect(struct drm_connector *connector, bool force)
 	int status;
 
 	status = hdmi_readb(hdmi, HDMI_STATUS) & HOTPLUG_STATUS;
+#ifdef CONFIG_SWITCH
 	if (status)
-		extcon_set_state_sync(hdmi->extcon, EXTCON_DISP_HDMI, true);
+		switch_set_state(&hdmi->switchdev, 1);
 	else
-		extcon_set_state_sync(hdmi->extcon, EXTCON_DISP_HDMI, false);
-
+		switch_set_state(&hdmi->switchdev, 0);
+#endif
 	return status ? connector_status_connected :
 			connector_status_disconnected;
-}
-
-static bool source_is_bt1120(struct device_node *np)
-{
-	struct device_node *first_remote, *second_remote;
-	bool ret = false;
-
-	first_remote = of_graph_get_remote_node(np, 0, -1);
-	if (!first_remote)
-		return ret;
-
-	if (!of_device_is_available(first_remote)) {
-		of_node_put(first_remote);
-		return ret;
-	}
-
-	second_remote = of_graph_get_remote_node(first_remote, 0, -1);
-	if (!second_remote) {
-		of_node_put(first_remote);
-		return ret;
-	}
-
-	of_node_put(first_remote);
-	if (!of_device_is_available(second_remote)) {
-		of_node_put(second_remote);
-		return ret;
-	}
-
-	if (strstr(of_node_full_name(second_remote), "bt1120-rx"))
-		ret = true;
-
-	of_node_put(second_remote);
-
-	return ret;
 }
 
 static int rk628_hdmi_connector_get_modes(struct drm_connector *connector)
 {
 	struct rk628_hdmi *hdmi = connector_to_hdmi(connector);
+	struct drm_display_mode *mode;
 	struct drm_display_info *info = &connector->display_info;
+	const u8 def_modes[6] = {4, 16, 31, 19, 17, 2};
 	struct edid *edid = NULL;
 	int ret = 0;
+	u8 i;
 
 	if (!hdmi->ddc)
 		return 0;
@@ -956,25 +919,28 @@ static int rk628_hdmi_connector_get_modes(struct drm_connector *connector)
 	if (edid) {
 		hdmi->hdmi_data.sink_is_hdmi = drm_detect_hdmi_monitor(edid);
 		hdmi->hdmi_data.sink_has_audio = drm_detect_monitor_audio(edid);
-		drm_connector_update_edid_property(connector, edid);
+		drm_mode_connector_update_edid_property(connector, edid);
 		ret = drm_add_edid_modes(connector, edid);
 		kfree(edid);
 	} else {
 		hdmi->hdmi_data.sink_is_hdmi = true;
 		hdmi->hdmi_data.sink_has_audio = true;
-		ret = rockchip_drm_add_modes_noedid(connector);
+		for (i = 0; i < sizeof(def_modes); i++) {
+			mode = drm_display_mode_from_vic_index(connector,
+							       def_modes,
+							       31, i);
+			if (mode) {
+				if (!i)
+					mode->type = DRM_MODE_TYPE_PREFERRED;
+				drm_mode_probed_add(connector, mode);
+				ret++;
+			}
+		}
 		info->edid_hdmi_dc_modes = 0;
 		info->hdmi.y420_dc_modes = 0;
 		info->color_formats = 0;
 
 		dev_info(hdmi->dev, "failed to get edid\n");
-	}
-
-	if (source_is_bt1120(hdmi->dev->of_node)) {
-		u32 bus_format = MEDIA_BUS_FMT_VYUY8_1X16;
-
-		drm_display_info_set_bus_formats(&connector->display_info,
-						 &bus_format, 1);
 	}
 
 	return ret;
@@ -1007,6 +973,7 @@ rk628_hdmi_probe_single_connector_modes(struct drm_connector *connector,
 }
 
 static const struct drm_connector_funcs rk628_hdmi_connector_funcs = {
+	.dpms = drm_atomic_helper_connector_dpms,
 	.fill_modes = rk628_hdmi_probe_single_connector_modes,
 	.detect = rk628_hdmi_connector_detect,
 	.destroy = drm_connector_cleanup,
@@ -1050,11 +1017,13 @@ static void rk628_hdmi_bridge_disable(struct drm_bridge *bridge)
 static int rk628_hdmi_bridge_attach(struct drm_bridge *bridge)
 {
 	struct rk628_hdmi *hdmi = bridge_to_hdmi(bridge);
+	struct device *dev = hdmi->dev;
 	struct drm_connector *connector = &hdmi->connector;
 	struct drm_device *drm = bridge->dev;
 	int ret;
 
 	connector->polled = DRM_CONNECTOR_POLL_HPD;
+	connector->port = dev->of_node;
 
 	ret = drm_connector_init(drm, connector, &rk628_hdmi_connector_funcs,
 				 DRM_MODE_CONNECTOR_HDMIA);
@@ -1065,25 +1034,13 @@ static int rk628_hdmi_bridge_attach(struct drm_bridge *bridge)
 
 	drm_connector_helper_add(connector,
 				 &rk628_hdmi_connector_helper_funcs);
-	drm_connector_attach_encoder(connector, bridge->encoder);
-
-	hdmi->sub_dev.connector = &hdmi->connector;
-	hdmi->sub_dev.of_node = hdmi->dev->of_node;
-	rockchip_drm_register_sub_dev(&hdmi->sub_dev);
+	drm_mode_connector_attach_encoder(connector, bridge->encoder);
 
 	return 0;
 }
 
-static void rk628_hdmi_bridge_detach(struct drm_bridge *bridge)
-{
-	struct rk628_hdmi *hdmi = bridge_to_hdmi(bridge);
-
-	rockchip_drm_unregister_sub_dev(&hdmi->sub_dev);
-}
-
 static const struct drm_bridge_funcs rk628_hdmi_bridge_funcs = {
 	.attach = rk628_hdmi_bridge_attach,
-	.detach = rk628_hdmi_bridge_detach,
 	.mode_set = rk628_hdmi_bridge_mode_set,
 	.enable = rk628_hdmi_bridge_enable,
 	.disable = rk628_hdmi_bridge_disable,
@@ -1553,27 +1510,16 @@ static int rk628_hdmi_probe(struct platform_device *pdev)
 		  MASK_INT_HOTPLUG(1));
 	hdmi->bridge.funcs = &rk628_hdmi_bridge_funcs;
 	hdmi->bridge.of_node = dev->of_node;
-	drm_bridge_add(&hdmi->bridge);
-
-	hdmi->extcon = devm_extcon_dev_allocate(hdmi->dev, rk628_hdmi_cable);
-	if (IS_ERR(hdmi->extcon)) {
-		dev_err(hdmi->dev, "allocate extcon failed\n");
-		goto fail;
-	}
-
-	ret = devm_extcon_dev_register(hdmi->dev, hdmi->extcon);
+	ret = drm_bridge_add(&hdmi->bridge);
 	if (ret) {
-		dev_err(dev, "failed to register extcon: %d\n", ret);
+		dev_err(dev, "failed to add drm_bridge: %d\n", ret);
 		goto fail;
 	}
 
-	ret = extcon_set_property_capability(hdmi->extcon, EXTCON_DISP_HDMI,
-					     EXTCON_PROP_DISP_HPD);
-	if (ret) {
-		dev_err(dev, "failed to set USB property capability: %d\n",
-			ret);
-		goto fail;
-	}
+#ifdef CONFIG_SWITCH
+	hdmi->switchdev.name = "hdmi";
+	switch_dev_register(&hdmi->switchdev);
+#endif
 
 	return 0;
 
@@ -1589,6 +1535,9 @@ static int rk628_hdmi_remove(struct platform_device *pdev)
 	drm_bridge_remove(&hdmi->bridge);
 	i2c_put_adapter(hdmi->ddc);
 	clk_disable_unprepare(hdmi->pclk);
+#ifdef CONFIG_SWITCH
+	switch_dev_unregister(&hdmi->switchdev);
+#endif
 
 	return 0;
 }

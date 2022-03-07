@@ -1,7 +1,6 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /******************************************************************************
  *
- * Copyright(c) 2007 - 2017 Realtek Corporation.
+ * Copyright(c) 2007 - 2011 Realtek Corporation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of version 2 of the GNU General Public License as
@@ -12,7 +11,12 @@
  * FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
  * more details.
  *
- *****************************************************************************/
+ * You should have received a copy of the GNU General Public License along with
+ * this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110, USA
+ *
+ *
+ ******************************************************************************/
 #define _RTL8188E_XMIT_C_
 
 #include <drv_types.h>
@@ -120,12 +124,12 @@ struct EMInfo {
 void
 InsertEMContent_8188E(
 	struct EMInfo *pEMInfo,
-	u8 *VirtualAddress)
+	IN pu1Byte	VirtualAddress)
 {
 
 #if RTL8188E_EARLY_MODE_PKT_NUM_10 == 1
-	u8 index = 0;
-	u32	dwtmp = 0;
+	u1Byte index = 0;
+	u4Byte	dwtmp = 0;
 #endif
 
 	_rtw_memset(VirtualAddress, 0, EARLY_MODE_INFO_SIZE);

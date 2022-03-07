@@ -48,7 +48,6 @@
 #include <linux/stat.h>
 #include <linux/module.h>
 #include <linux/uio.h>
-#include <linux/user_namespace.h>
 
 #include "fuse_i.h"
 
@@ -91,7 +90,7 @@ static struct list_head *cuse_conntbl_head(dev_t devt)
 
 static ssize_t cuse_read_iter(struct kiocb *kiocb, struct iov_iter *to)
 {
-	struct fuse_io_priv io = FUSE_IO_PRIV_SYNC(kiocb);
+	struct fuse_io_priv io = FUSE_IO_PRIV_SYNC(kiocb->ki_filp);
 	loff_t pos = 0;
 
 	return fuse_direct_io(&io, to, &pos, FUSE_DIO_CUSE);
@@ -99,7 +98,7 @@ static ssize_t cuse_read_iter(struct kiocb *kiocb, struct iov_iter *to)
 
 static ssize_t cuse_write_iter(struct kiocb *kiocb, struct iov_iter *from)
 {
-	struct fuse_io_priv io = FUSE_IO_PRIV_SYNC(kiocb);
+	struct fuse_io_priv io = FUSE_IO_PRIV_SYNC(kiocb->ki_filp);
 	loff_t pos = 0;
 	/*
 	 * No locking or generic_write_checks(), the server is
@@ -407,7 +406,7 @@ err_unlock:
 err_region:
 	unregister_chrdev_region(devt, 1);
 err:
-	fuse_abort_conn(fc, false);
+	fuse_abort_conn(fc);
 	goto out;
 }
 
@@ -499,11 +498,7 @@ static int cuse_channel_open(struct inode *inode, struct file *file)
 	if (!cc)
 		return -ENOMEM;
 
-	/*
-	 * Limit the cuse channel to requests that can
-	 * be represented in file->f_cred->user_ns.
-	 */
-	fuse_conn_init(&cc->fc, file->f_cred->user_ns);
+	fuse_conn_init(&cc->fc);
 
 	fud = fuse_dev_alloc(&cc->fc);
 	if (!fud) {
@@ -518,7 +513,6 @@ static int cuse_channel_open(struct inode *inode, struct file *file)
 	rc = cuse_send_init(cc);
 	if (rc) {
 		fuse_dev_free(fud);
-		fuse_conn_put(&cc->fc);
 		return rc;
 	}
 	file->private_data = fud;
@@ -587,7 +581,7 @@ static ssize_t cuse_class_abort_store(struct device *dev,
 {
 	struct cuse_conn *cc = dev_get_drvdata(dev);
 
-	fuse_abort_conn(&cc->fc, false);
+	fuse_abort_conn(&cc->fc);
 	return count;
 }
 static DEVICE_ATTR(abort, 0200, NULL, cuse_class_abort_store);
@@ -621,8 +615,6 @@ static int __init cuse_init(void)
 	cuse_channel_fops.owner		= THIS_MODULE;
 	cuse_channel_fops.open		= cuse_channel_open;
 	cuse_channel_fops.release	= cuse_channel_release;
-	/* CUSE is not prepared for FUSE_DEV_IOC_CLONE */
-	cuse_channel_fops.unlocked_ioctl	= NULL;
 
 	cuse_class = class_create(THIS_MODULE, "cuse");
 	if (IS_ERR(cuse_class))

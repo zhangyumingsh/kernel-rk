@@ -329,13 +329,19 @@ static int rga_MapUserMemory(struct page **pages,
 
     do {
         down_read(&current->mm->mmap_sem);
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 6, 0)
-        result = get_user_pages(current, current->mm,
-            Memory << PAGE_SHIFT, pageCount, 1, 0,
-            pages, NULL);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 4, 168) && LINUX_VERSION_CODE < KERNEL_VERSION(4, 5, 0)
+        result = get_user_pages(current, current->mm, Memory << PAGE_SHIFT,
+				pageCount, FOLL_WRITE, pages, NULL);
 #else
-		result = get_user_pages_remote(current, current->mm,
-			Memory << PAGE_SHIFT, pageCount, 1, pages, NULL, NULL);
+        result = get_user_pages(current,
+                current->mm,
+                Memory << PAGE_SHIFT,
+                pageCount,
+                1,
+                0,
+                pages,
+                NULL
+                );
 #endif
         up_read(&current->mm->mmap_sem);
 

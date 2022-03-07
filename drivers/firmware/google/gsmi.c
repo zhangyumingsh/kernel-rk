@@ -480,10 +480,11 @@ static ssize_t eventlog_write(struct file *filp, struct kobject *kobj,
 	if (count < sizeof(u32))
 		return -EINVAL;
 	param.type = *(u32 *)buf;
+	count -= sizeof(u32);
 	buf += sizeof(u32);
 
 	/* The remaining buffer is the data payload */
-	if ((count - sizeof(u32)) > gsmi_dev.data_buf->length)
+	if (count > gsmi_dev.data_buf->length)
 		return -EINVAL;
 	param.data_len = count - sizeof(u32);
 
@@ -503,7 +504,7 @@ static ssize_t eventlog_write(struct file *filp, struct kobject *kobj,
 
 	spin_unlock_irqrestore(&gsmi_dev.lock, flags);
 
-	return (rc == 0) ? count : rc;
+	return rc;
 
 }
 
@@ -708,7 +709,7 @@ static u32 __init hash_oem_table_id(char s[8])
 	return local_hash_64(input, 32);
 }
 
-static const struct dmi_system_id gsmi_dmi_table[] __initconst = {
+static struct dmi_system_id gsmi_dmi_table[] __initdata = {
 	{
 		.ident = "Google Board",
 		.matches = {
@@ -909,7 +910,8 @@ out_err:
 	gsmi_buf_free(gsmi_dev.param_buf);
 	gsmi_buf_free(gsmi_dev.data_buf);
 	gsmi_buf_free(gsmi_dev.name_buf);
-	dma_pool_destroy(gsmi_dev.dma_pool);
+	if (gsmi_dev.dma_pool)
+		dma_pool_destroy(gsmi_dev.dma_pool);
 	platform_device_unregister(gsmi_dev.pdev);
 	pr_info("gsmi: failed to load: %d\n", ret);
 	return ret;

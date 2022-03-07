@@ -19,12 +19,14 @@
 #include <linux/irq.h>
 #include <linux/miscdevice.h>
 #include <linux/gpio.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/atomic.h>
 #include <linux/delay.h>
 #include <linux/input.h>
 #include <linux/workqueue.h>
 #include <linux/freezer.h>
+#include <mach/gpio.h>
+#include <mach/board.h>
 #ifdef CONFIG_HAS_EARLYSUSPEND
 #include <linux/earlysuspend.h>
 #endif
@@ -289,37 +291,32 @@ struct sensor_operate proximity_ap321xx_ops = {
 };
 
 /****************operate according to sensor chip:end************/
-static int proximity_ap321xx_probe(struct i2c_client *client,
-				   const struct i2c_device_id *devid)
+
+//function name should not be changed
+static struct sensor_operate *proximity_get_ops(void)
 {
-	return sensor_register_device(client, NULL, devid, &proximity_ap321xx_ops);
+	return &proximity_ap321xx_ops;
 }
 
-static int proximity_ap321xx_remove(struct i2c_client *client)
+
+static int __init proximity_ap321xx_init(void)
 {
-	return sensor_unregister_device(client, NULL, &proximity_ap321xx_ops);
+	struct sensor_operate *ops = proximity_get_ops();
+	int result = 0;
+	int type = ops->type;
+	result = sensor_register_slave(type, NULL, NULL, proximity_get_ops);
+	return result;
 }
 
-static const struct i2c_device_id proximity_ap321xx_id[] = {
-	{"ps_ap321xx", PROXIMITY_ID_AP321XX},
-	{}
-};
+static void __exit proximity_ap321xx_exit(void)
+{
+	struct sensor_operate *ops = proximity_get_ops();
+	int type = ops->type;
+	sensor_unregister_slave(type, NULL, NULL, proximity_get_ops);
+}
 
-static struct i2c_driver proximity_ap321xx_driver = {
-	.probe = proximity_ap321xx_probe,
-	.remove = proximity_ap321xx_remove,
-	.shutdown = sensor_shutdown,
-	.id_table = proximity_ap321xx_id,
-	.driver = {
-		.name = "proximity_ap321xx",
-	#ifdef CONFIG_PM
-		.pm = &sensor_pm_ops,
-	#endif
-	},
-};
 
-module_i2c_driver(proximity_ap321xx_driver);
+module_init(proximity_ap321xx_init);
+module_exit(proximity_ap321xx_exit);
 
-MODULE_AUTHOR("luowei <lw@rock-chips.com>");
-MODULE_DESCRIPTION("ps_ap321xx proximity driver");
-MODULE_LICENSE("GPL");
+

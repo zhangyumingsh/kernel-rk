@@ -19,7 +19,7 @@
 #include <linux/irq.h>
 #include <linux/miscdevice.h>
 #include <linux/gpio.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/atomic.h>
 #include <linux/delay.h>
 #include <linux/input.h>
@@ -222,37 +222,28 @@ struct sensor_operate gsensor_mma7660_ops = {
 };
 
 /****************operate according to sensor chip:end************/
-static int gsensor_mma7660_probe(struct i2c_client *client,
-				const struct i2c_device_id *devid)
+
+//function name should not be changed
+static struct sensor_operate *gsensor_get_ops(void)
 {
-	return sensor_register_device(client, NULL, devid, &gsensor_mma7660_ops);
+	return &gsensor_mma7660_ops;
 }
 
-static int gsensor_mma7660_remove(struct i2c_client *client)
+static int __init gsensor_mma7660_init(void)
 {
-	return sensor_unregister_device(client, NULL, &gsensor_mma7660_ops);
+	struct sensor_operate *ops = gsensor_get_ops();
+	int type = ops->type;
+
+	return sensor_register_slave(type, NULL, NULL, gsensor_get_ops);
 }
 
-static const struct i2c_device_id gsensor_mma7660_id[] = {
-	{"gs_mma7660", ACCEL_ID_MMA7660},
-	{}
-};
+static void __exit gsensor_mma7660_exit(void)
+{
+	struct sensor_operate *ops = gsensor_get_ops();
+	int type = ops->type;
 
-static struct i2c_driver gsensor_mma7660_driver = {
-	.probe = gsensor_mma7660_probe,
-	.remove = gsensor_mma7660_remove,
-	.shutdown = sensor_shutdown,
-	.id_table = gsensor_mma7660_id,
-	.driver = {
-		.name = "gsensor_mma7660",
-	#ifdef CONFIG_PM
-		.pm = &sensor_pm_ops,
-	#endif
-	},
-};
+	sensor_unregister_slave(type, NULL, NULL, gsensor_get_ops);
+}
 
-module_i2c_driver(gsensor_mma7660_driver);
-
-MODULE_AUTHOR("luowei <lw@rock-chips.com>");
-MODULE_DESCRIPTION("mma7660 3-Axis accelerometer driver");
-MODULE_LICENSE("GPL");
+module_init(gsensor_mma7660_init);
+module_exit(gsensor_mma7660_exit);

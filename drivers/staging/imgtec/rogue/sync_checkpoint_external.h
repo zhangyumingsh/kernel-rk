@@ -45,8 +45,11 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #ifndef _SYNC_CHECKPOINT_EXTERNAL_
 #define _SYNC_CHECKPOINT_EXTERNAL_
 
-#include "psync_checkpoint.h"
-#include "psync_checkpoint_context.h"
+#define SYNC_CHECKPOINT_MAX_CLASS_NAME_LEN 32
+
+typedef struct _SYNC_CHECKPOINT_CONTEXT *PSYNC_CHECKPOINT_CONTEXT;
+
+typedef struct _SYNC_CHECKPOINT *PSYNC_CHECKPOINT;
 
 /* PVRSRV_SYNC_CHECKPOINT states.
  * The OS native sync implementation should call pfnIsSignalled() to determine if a

@@ -92,10 +92,10 @@ static unsigned long rockchip_cpuclk_recalc_rate(struct clk_hw *hw,
 {
 	struct rockchip_cpuclk *cpuclk = to_rockchip_cpuclk_hw(hw);
 	const struct rockchip_cpuclk_reg_data *reg_data = cpuclk->reg_data;
-	u32 clksel0 = readl_relaxed(cpuclk->reg_base + reg_data->core_reg[0]);
+	u32 clksel0 = readl_relaxed(cpuclk->reg_base + reg_data->core_reg);
 
-	clksel0 >>= reg_data->div_core_shift[0];
-	clksel0 &= reg_data->div_core_mask[0];
+	clksel0 >>= reg_data->div_core_shift;
+	clksel0 &= reg_data->div_core_mask;
 	return parent_rate / (clksel0 + 1);
 }
 
@@ -117,43 +117,7 @@ static void rockchip_cpuclk_set_dividers(struct rockchip_cpuclk *cpuclk,
 
 		pr_debug("%s: setting reg 0x%x to 0x%x\n",
 			 __func__, clksel->reg, clksel->val);
-		writel(clksel->val, cpuclk->reg_base + clksel->reg);
-	}
-}
-
-static void rockchip_cpuclk_set_pre_muxs(struct rockchip_cpuclk *cpuclk,
-					 const struct rockchip_cpuclk_rate_table *rate)
-{
-	int i;
-
-	/* alternate parent is active now. set the pre_muxs */
-	for (i = 0; i < ARRAY_SIZE(rate->pre_muxs); i++) {
-		const struct rockchip_cpuclk_clksel *clksel = &rate->pre_muxs[i];
-
-		if (!clksel->reg)
-			break;
-
-		pr_debug("%s: setting reg 0x%x to 0x%x\n",
-			 __func__, clksel->reg, clksel->val);
-		writel(clksel->val, cpuclk->reg_base + clksel->reg);
-	}
-}
-
-static void rockchip_cpuclk_set_post_muxs(struct rockchip_cpuclk *cpuclk,
-					  const struct rockchip_cpuclk_rate_table *rate)
-{
-	int i;
-
-	/* alternate parent is active now. set the muxs */
-	for (i = 0; i < ARRAY_SIZE(rate->post_muxs); i++) {
-		const struct rockchip_cpuclk_clksel *clksel = &rate->post_muxs[i];
-
-		if (!clksel->reg)
-			break;
-
-		pr_debug("%s: setting reg 0x%x to 0x%x\n",
-			 __func__, clksel->reg, clksel->val);
-		writel(clksel->val, cpuclk->reg_base + clksel->reg);
+		writel(clksel->val , cpuclk->reg_base + clksel->reg);
 	}
 }
 
@@ -164,7 +128,6 @@ static int rockchip_cpuclk_pre_rate_change(struct rockchip_cpuclk *cpuclk,
 	const struct rockchip_cpuclk_rate_table *rate;
 	unsigned long alt_prate, alt_div;
 	unsigned long flags;
-	int i = 0;
 
 	/* check validity of the new rate */
 	rate = rockchip_get_cpuclk_settings(cpuclk, ndata->new_rate);
@@ -189,31 +152,27 @@ static int rockchip_cpuclk_pre_rate_change(struct rockchip_cpuclk *cpuclk,
 	if (alt_prate > ndata->old_rate) {
 		/* calculate dividers */
 		alt_div =  DIV_ROUND_UP(alt_prate, ndata->old_rate) - 1;
-		if (alt_div > reg_data->div_core_mask[0]) {
+		if (alt_div > reg_data->div_core_mask) {
 			pr_warn("%s: limiting alt-divider %lu to %d\n",
-				__func__, alt_div, reg_data->div_core_mask[0]);
-			alt_div = reg_data->div_core_mask[0];
+				__func__, alt_div, reg_data->div_core_mask);
+			alt_div = reg_data->div_core_mask;
 		}
 
 		pr_debug("%s: setting div %lu as alt-rate %lu > old-rate %lu\n",
 			 __func__, alt_div, alt_prate, ndata->old_rate);
 
-		for (i = 0; i < reg_data->num_cores; i++) {
-			writel(HIWORD_UPDATE(alt_div, reg_data->div_core_mask[i],
-					     reg_data->div_core_shift[i]),
-			       cpuclk->reg_base + reg_data->core_reg[i]);
-		}
+		/* add dividers */
+		writel(HIWORD_UPDATE(alt_div, reg_data->div_core_mask,
+				     reg_data->div_core_shift),
+		       cpuclk->reg_base + reg_data->core_reg);
 	}
-
 	rockchip_boost_add_core_div(cpuclk->pll_hw, alt_prate);
 
 	/* select alternate parent */
 	writel(HIWORD_UPDATE(reg_data->mux_core_alt,
 			     reg_data->mux_core_mask,
 			     reg_data->mux_core_shift),
-	       cpuclk->reg_base + reg_data->core_reg[0]);
-
-	rockchip_cpuclk_set_pre_muxs(cpuclk, rate);
+	       cpuclk->reg_base + reg_data->core_reg);
 
 	spin_unlock_irqrestore(cpuclk->lock, flags);
 	return 0;
@@ -225,7 +184,6 @@ static int rockchip_cpuclk_post_rate_change(struct rockchip_cpuclk *cpuclk,
 	const struct rockchip_cpuclk_reg_data *reg_data = cpuclk->reg_data;
 	const struct rockchip_cpuclk_rate_table *rate;
 	unsigned long flags;
-	int i = 0;
 
 	rate = rockchip_get_cpuclk_settings(cpuclk, ndata->new_rate);
 	if (!rate) {
@@ -243,16 +201,12 @@ static int rockchip_cpuclk_post_rate_change(struct rockchip_cpuclk *cpuclk,
 	writel(HIWORD_UPDATE(reg_data->mux_core_main,
 			     reg_data->mux_core_mask,
 			     reg_data->mux_core_shift),
-	       cpuclk->reg_base + reg_data->core_reg[0]);
-
-	rockchip_cpuclk_set_post_muxs(cpuclk, rate);
+	       cpuclk->reg_base + reg_data->core_reg);
 
 	/* remove dividers */
-	for (i = 0; i < reg_data->num_cores; i++) {
-		writel(HIWORD_UPDATE(0, reg_data->div_core_mask[i],
-				     reg_data->div_core_shift[i]),
-		       cpuclk->reg_base + reg_data->core_reg[i]);
-	}
+	writel(HIWORD_UPDATE(0, reg_data->div_core_mask,
+			     reg_data->div_core_shift),
+	       cpuclk->reg_base + reg_data->core_reg);
 
 	if (ndata->old_rate > ndata->new_rate)
 		rockchip_cpuclk_set_dividers(cpuclk, rate);
@@ -293,7 +247,7 @@ struct clk *rockchip_clk_register_cpuclk(const char *name,
 			int nrates, void __iomem *reg_base, spinlock_t *lock)
 {
 	struct rockchip_cpuclk *cpuclk;
-	struct clk_init_data init = {};
+	struct clk_init_data init;
 	struct clk *clk, *cclk, *pll_clk;
 	int ret;
 
@@ -357,14 +311,14 @@ struct clk *rockchip_clk_register_cpuclk(const char *name,
 		       __func__, reg_data->mux_core_main,
 		       parent_names[reg_data->mux_core_main]);
 		ret = -EINVAL;
-		goto free_alt_parent;
+		goto free_cpuclk;
 	}
 
 	ret = clk_notifier_register(clk, &cpuclk->clk_nb);
 	if (ret) {
 		pr_err("%s: failed to register clock notifier for %s\n",
 				__func__, name);
-		goto free_alt_parent;
+		goto free_cpuclk;
 	}
 
 	if (nrates > 0) {
@@ -373,6 +327,8 @@ struct clk *rockchip_clk_register_cpuclk(const char *name,
 					     sizeof(*rates) * nrates,
 					     GFP_KERNEL);
 		if (!cpuclk->rate_table) {
+			pr_err("%s: could not allocate memory for cpuclk rates\n",
+			       __func__);
 			ret = -ENOMEM;
 			goto unregister_notifier;
 		}
@@ -391,8 +347,6 @@ free_rate_table:
 	kfree(cpuclk->rate_table);
 unregister_notifier:
 	clk_notifier_unregister(clk, &cpuclk->clk_nb);
-free_alt_parent:
-	clk_disable_unprepare(cpuclk->alt_parent);
 free_cpuclk:
 	kfree(cpuclk);
 	return ERR_PTR(ret);

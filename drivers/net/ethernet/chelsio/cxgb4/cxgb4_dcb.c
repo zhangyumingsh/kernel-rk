@@ -22,7 +22,7 @@
 
 /* DCBx version control
  */
-const char * const dcb_ver_array[] = {
+static const char * const dcb_ver_array[] = {
 	"Unknown",
 	"DCBx-CIN",
 	"DCBx-CEE 1.01",
@@ -40,7 +40,8 @@ static inline bool cxgb4_dcb_state_synced(enum cxgb4_dcb_state state)
 		return false;
 }
 
-/* Initialize a port's Data Center Bridging state.
+/* Initialize a port's Data Center Bridging state.  Typically used after a
+ * Link Down event.
  */
 void cxgb4_dcb_state_init(struct net_device *dev)
 {
@@ -103,15 +104,6 @@ static void cxgb4_dcb_cleanup_apps(struct net_device *dev)
 			break;
 		}
 	}
-}
-
-/* Reset a port's Data Center Bridging state.  Typically used after a
- * Link Down event.
- */
-void cxgb4_dcb_reset(struct net_device *dev)
-{
-	cxgb4_dcb_cleanup_apps(dev);
-	cxgb4_dcb_state_init(dev);
 }
 
 /* Finite State machine for Data Center Bridging.
@@ -202,7 +194,8 @@ void cxgb4_dcb_state_fsm(struct net_device *dev,
 			 * state.  We need to reset back to a ground state
 			 * of incomplete.
 			 */
-			cxgb4_dcb_reset(dev);
+			cxgb4_dcb_cleanup_apps(dev);
+			cxgb4_dcb_state_init(dev);
 			dcb->state = CXGB4_DCB_STATE_FW_INCOMPLETE;
 			dcb->supported = CXGB4_DCBX_FW_SUPPORT;
 			linkwatch_fire_event(dev);
@@ -260,7 +253,7 @@ void cxgb4_dcb_handle_fw_update(struct adapter *adap,
 {
 	const union fw_port_dcb *fwdcb = &pcmd->u.dcb;
 	int port = FW_PORT_CMD_PORTID_G(be32_to_cpu(pcmd->op_to_portid));
-	struct net_device *dev = adap->port[adap->chan_map[port]];
+	struct net_device *dev = adap->port[port];
 	struct port_info *pi = netdev_priv(dev);
 	struct port_dcb_info *dcb = &pi->dcb;
 	int dcb_type = pcmd->u.dcb.pgid.type;
@@ -273,8 +266,8 @@ void cxgb4_dcb_handle_fw_update(struct adapter *adap,
 		enum cxgb4_dcb_state_input input =
 			((pcmd->u.dcb.control.all_syncd_pkd &
 			  FW_PORT_CMD_ALL_SYNCD_F)
-			 ? CXGB4_DCB_INPUT_FW_ALLSYNCED
-			 : CXGB4_DCB_INPUT_FW_INCOMPLETE);
+			 ? CXGB4_DCB_STATE_FW_ALLSYNCED
+			 : CXGB4_DCB_STATE_FW_INCOMPLETE);
 
 		if (dcb->dcb_version != FW_PORT_DCB_VER_UNKNOWN) {
 			dcb_running_version = FW_PORT_CMD_DCB_VERSION_G(

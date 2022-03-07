@@ -19,7 +19,7 @@
 #include <linux/irq.h>
 #include <linux/miscdevice.h>
 #include <linux/gpio.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/atomic.h>
 #include <linux/delay.h>
 #include <linux/input.h>
@@ -383,7 +383,7 @@ static int sensor_report_value(struct i2c_client *client)
 	z = (short) (((buffer[4]) << 8) | buffer[5]);
 
 	//printk("%s: x=%d  y=%d z=%d \n",__func__, x,y,z);
-	if (pdata)
+	if(pdata && pdata->orientation)
 	{
 		axis.x = (pdata->orientation[0])*x + (pdata->orientation[1])*y + (pdata->orientation[2])*z;
 		axis.y = (pdata->orientation[3])*x + (pdata->orientation[4])*y + (pdata->orientation[5])*z;
@@ -425,37 +425,32 @@ struct sensor_operate gyro_ewtsa_ops = {
 };
 
 /****************operate according to sensor chip:end************/
-static int gyro_ewtsa_probe(struct i2c_client *client,
-			    const struct i2c_device_id *devid)
+
+//function name should not be changed
+static struct sensor_operate *gyro_get_ops(void)
 {
-	return sensor_register_device(client, NULL, devid, &gyro_ewtsa_ops);
+	return &gyro_ewtsa_ops;
 }
 
-static int gyro_ewtsa_remove(struct i2c_client *client)
+
+static int __init gyro_ewtsa_init(void)
 {
-	return sensor_unregister_device(client, NULL, &gyro_ewtsa_ops);
+	struct sensor_operate *ops = gyro_get_ops();
+	int result = 0;
+	int type = ops->type;
+	result = sensor_register_slave(type, NULL, NULL, gyro_get_ops);
+	return result;
 }
 
-static const struct i2c_device_id gyro_ewtsa_id[] = {
-	{"ewtsa_gyro", GYRO_ID_EWTSA},
-	{}
-};
+static void __exit gyro_ewtsa_exit(void)
+{
+	struct sensor_operate *ops = gyro_get_ops();
+	int type = ops->type;
+	sensor_unregister_slave(type, NULL, NULL, gyro_get_ops);
+}
 
-static struct i2c_driver gyro_ewtsa_driver = {
-	.probe = gyro_ewtsa_probe,
-	.remove = gyro_ewtsa_remove,
-	.shutdown = sensor_shutdown,
-	.id_table = gyro_ewtsa_id,
-	.driver = {
-		.name = "gyro_ewtsa",
-	#ifdef CONFIG_PM
-		.pm = &sensor_pm_ops,
-	#endif
-	},
-};
 
-module_i2c_driver(gyro_ewtsa_driver);
+module_init(gyro_ewtsa_init);
+module_exit(gyro_ewtsa_exit);
 
-MODULE_AUTHOR("zhangaihui <zah@rock-chips.com>");
-MODULE_DESCRIPTION("ewtsa 3-Axis Gyroscope driver");
-MODULE_LICENSE("GPL");
+

@@ -26,7 +26,7 @@
 #include <linux/slab.h>
 
 #include <asm/memory.h>
-#include <linux/uaccess.h>                      /* to verify pointers from user space */
+#include <asm/uaccess.h>                        /* to verify pointers from user space */
 #include <asm/cacheflush.h>
 #include <linux/dma-mapping.h>
 

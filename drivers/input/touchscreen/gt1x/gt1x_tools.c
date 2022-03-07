@@ -18,7 +18,7 @@
  */
 
 #include <linux/delay.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <linux/proc_fs.h>
 #include <generated/utsrelease.h>
 #include "gt1x_generic.h"

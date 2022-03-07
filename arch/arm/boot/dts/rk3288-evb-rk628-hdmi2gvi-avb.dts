@@ -69,15 +69,26 @@
 	enable-gpios = <&gpio7 2 GPIO_ACTIVE_HIGH>;
 };
 
-&rk628 {
-	pinctrl-names = "default";
-	pinctrl-0 = <&test_clkout>;
-	assigned-clocks = <&cru SCLK_TESTOUT_SRC>;
-	assigned-clock-parents = <&xin24m>;
-};
+&firmware_android {
+	compatible = "android,firmware";
+	boot_devices = "ff0f0000.dwmmc";
 
-&rk628_combtxphy {
-	status = "okay";
+	vbmeta {
+		compatible = "android,vbmeta";
+		parts = "vbmeta,boot,system,vendor,dtbo";
+	};
+
+	fstab {
+		compatible = "android,fstab";
+
+		vendor {
+			compatible = "android,vendor";
+			dev = "/dev/block/by-name/vendor";
+			type = "ext4";
+			mnt_flags = "ro,barrier=1,inode_readahead_blks=8";
+			fsmgr_flags = "wait,avb";
+		};
+	};
 };
 
 &hdmi {
@@ -94,6 +105,13 @@
 			};
 		};
 	};
+};
+
+&rk628 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&test_clkout>;
+	assigned-clocks = <&cru SCLK_TESTOUT_SRC>;
+	assigned-clock-parents = <&xin24m>;
 };
 
 &rk628_gvi {
@@ -183,13 +201,6 @@
 	};
 };
 
-&rk628_xin_osc0_func {
-	compatible = "fixed-factor-clock";
-	clocks = <&cru SCLK_TESTOUT>;
-	clock-mult = <1>;
-	clock-div = <1>;
-};
-
 &hdmi_in_vopl {
 	status = "disabled";
 };
@@ -198,15 +209,22 @@
 	status = "okay";
 };
 
-&route_hdmi {
-	connect = <&vopb_out_rgb>;
-	status = "disabled";
-};
-
 &pinctrl {
 	test {
 		test_clkout: test-clkout {
 			rockchip,pins = <0 17 RK_FUNC_1 &pcfg_pull_none>;
 		};
 	};
+};
+
+&route_hdmi {
+	connect = <&vopb_out_rgb>;
+	status = "disabled";
+};
+
+&rk628_xin_osc0_func {
+	compatible = "fixed-factor-clock";
+	clocks = <&cru SCLK_TESTOUT>;
+	clock-mult = <1>;
+	clock-div = <1>;
 };

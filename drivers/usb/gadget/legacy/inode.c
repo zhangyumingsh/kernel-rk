@@ -1,9 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0+
 /*
  * inode.c -- user mode filesystem api for usb gadget controllers
  *
  * Copyright (C) 2003-2004 David Brownell
  * Copyright (C) 2003 Agilent Technologies
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  */
 
 
@@ -16,14 +20,13 @@
 #include <linux/uts.h>
 #include <linux/wait.h>
 #include <linux/compiler.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <linux/sched.h>
 #include <linux/slab.h>
 #include <linux/poll.h>
 #include <linux/mmu_context.h>
 #include <linux/aio.h>
 #include <linux/uio.h>
-#include <linux/refcount.h>
 #include <linux/delay.h>
 #include <linux/device.h>
 #include <linux/moduleparam.h>
@@ -81,7 +84,8 @@ static int ep_open(struct inode *, struct file *);
 
 /* /dev/gadget/$CHIP represents ep0 and the whole device */
 enum ep0_state {
-	/* DISABLED is the initial state. */
+	/* DISBLED is the initial state.
+	 */
 	STATE_DEV_DISABLED = 0,
 
 	/* Only one open() of /dev/gadget/$CHIP; only one file tracks
@@ -111,7 +115,7 @@ enum ep0_state {
 
 struct dev_data {
 	spinlock_t			lock;
-	refcount_t			count;
+	atomic_t			count;
 	int				udc_usage;
 	enum ep0_state			state;		/* P: lock */
 	struct usb_gadgetfs_event	event [N_EVENT];
@@ -127,8 +131,7 @@ struct dev_data {
 					setup_can_stall : 1,
 					setup_out_ready : 1,
 					setup_out_error : 1,
-					setup_abort : 1,
-					gadget_registered : 1;
+					setup_abort : 1;
 	unsigned			setup_wLength;
 
 	/* the rest is basically write-once */
@@ -148,12 +151,12 @@ struct dev_data {
 
 static inline void get_dev (struct dev_data *data)
 {
-	refcount_inc (&data->count);
+	atomic_inc (&data->count);
 }
 
 static void put_dev (struct dev_data *data)
 {
-	if (likely (!refcount_dec_and_test (&data->count)))
+	if (likely (!atomic_dec_and_test (&data->count)))
 		return;
 	/* needs no more cleanup */
 	BUG_ON (waitqueue_active (&data->wait));
@@ -168,7 +171,7 @@ static struct dev_data *dev_new (void)
 	if (!dev)
 		return NULL;
 	dev->state = STATE_DEV_DISABLED;
-	refcount_set (&dev->count, 1);
+	atomic_set (&dev->count, 1);
 	spin_lock_init (&dev->lock);
 	INIT_LIST_HEAD (&dev->epfiles);
 	init_waitqueue_head (&dev->wait);
@@ -188,7 +191,7 @@ enum ep_state {
 struct ep_data {
 	struct mutex			lock;
 	enum ep_state			state;
-	refcount_t			count;
+	atomic_t			count;
 	struct dev_data			*dev;
 	/* must hold dev->lock before accessing ep or req */
 	struct usb_ep			*ep;
@@ -203,12 +206,12 @@ struct ep_data {
 
 static inline void get_ep (struct ep_data *data)
 {
-	refcount_inc (&data->count);
+	atomic_inc (&data->count);
 }
 
 static void put_ep (struct ep_data *data)
 {
-	if (likely (!refcount_dec_and_test (&data->count)))
+	if (likely (!atomic_dec_and_test (&data->count)))
 		return;
 	put_dev (data->dev);
 	/* needs no more cleanup */
@@ -603,7 +606,7 @@ ep_read_iter(struct kiocb *iocb, struct iov_iter *to)
 	}
 	if (is_sync_kiocb(iocb)) {
 		value = ep_io(epdata, buf, len);
-		if (value >= 0 && (copy_to_iter(buf, value, to) != value))
+		if (value >= 0 && copy_to_iter(buf, value, to))
 			value = -EFAULT;
 	} else {
 		struct kiocb_priv *priv = kzalloc(sizeof *priv, GFP_KERNEL);
@@ -664,7 +667,7 @@ ep_write_iter(struct kiocb *iocb, struct iov_iter *from)
 		return -ENOMEM;
 	}
 
-	if (unlikely(!copy_from_iter_full(buf, len, from))) {
+	if (unlikely(copy_from_iter(buf, len, from) != len)) {
 		value = -EFAULT;
 		goto out;
 	}
@@ -1187,10 +1190,7 @@ dev_release (struct inode *inode, struct file *fd)
 
 	/* closing ep0 === shutdown all */
 
-	if (dev->gadget_registered) {
-		usb_gadget_unregister_driver (&gadgetfs_driver);
-		dev->gadget_registered = false;
-	}
+	usb_gadget_unregister_driver (&gadgetfs_driver);
 
 	/* at this point "good" hardware has disconnected the
 	 * device from USB; the host won't see it any more.
@@ -1209,11 +1209,11 @@ dev_release (struct inode *inode, struct file *fd)
 	return 0;
 }
 
-static __poll_t
+static unsigned int
 ep0_poll (struct file *fd, poll_table *wait)
 {
        struct dev_data         *dev = fd->private_data;
-       __poll_t                mask = 0;
+       int                     mask = 0;
 
 	if (dev->state <= STATE_DEV_OPENED)
 		return DEFAULT_POLLMASK;
@@ -1225,16 +1225,16 @@ ep0_poll (struct file *fd, poll_table *wait)
        /* report fd mode change before acting on it */
        if (dev->setup_abort) {
                dev->setup_abort = 0;
-               mask = EPOLLHUP;
+               mask = POLLHUP;
                goto out;
        }
 
        if (dev->state == STATE_DEV_SETUP) {
                if (dev->setup_in || dev->setup_can_stall)
-                       mask = EPOLLOUT;
+                       mask = POLLOUT;
        } else {
                if (dev->ev_next != 0)
-                       mask = EPOLLIN;
+                       mask = POLLIN;
        }
 out:
        spin_unlock_irq(&dev->lock);
@@ -1360,6 +1360,7 @@ gadgetfs_setup (struct usb_gadget *gadget, const struct usb_ctrlrequest *ctrl)
 
 	req->buf = dev->rbuf;
 	req->context = NULL;
+	value = -EOPNOTSUPP;
 	switch (ctrl->bRequest) {
 
 	case USB_REQ_GET_DESCRIPTOR:
@@ -1469,6 +1470,7 @@ delegate:
 			dev->setup_wLength = w_length;
 			dev->setup_out_ready = 0;
 			dev->setup_out_error = 0;
+			value = 0;
 
 			/* read DATA stage for OUT right away */
 			if (unlikely (!dev->setup_in && w_length)) {
@@ -1557,10 +1559,10 @@ static void destroy_ep_files (struct dev_data *dev)
 		put_ep (ep);
 
 		/* break link to dcache */
-		inode_lock(parent);
+		mutex_lock (&parent->i_mutex);
 		d_delete (dentry);
 		dput (dentry);
-		inode_unlock(parent);
+		mutex_unlock (&parent->i_mutex);
 
 		spin_lock_irq (&dev->lock);
 	}
@@ -1587,7 +1589,7 @@ static int activate_ep_files (struct dev_data *dev)
 		init_waitqueue_head (&data->wait);
 
 		strncpy (data->name, ep->name, sizeof (data->name) - 1);
-		refcount_set (&data->count, 1);
+		atomic_set (&data->count, 1);
 		data->dev = dev;
 		get_dev (dev);
 
@@ -1739,6 +1741,28 @@ static struct usb_gadget_driver gadgetfs_driver = {
 };
 
 /*----------------------------------------------------------------------*/
+
+static void gadgetfs_nop(struct usb_gadget *arg) { }
+
+static int gadgetfs_probe(struct usb_gadget *gadget,
+		struct usb_gadget_driver *driver)
+{
+	CHIP = gadget->name;
+	return -EISNAM;
+}
+
+static struct usb_gadget_driver probe_driver = {
+	.max_speed	= USB_SPEED_HIGH,
+	.bind		= gadgetfs_probe,
+	.unbind		= gadgetfs_nop,
+	.setup		= (void *)gadgetfs_nop,
+	.disconnect	= gadgetfs_nop,
+	.driver	= {
+		.name		= "nop",
+	},
+};
+
+
 /* DEVICE INITIALIZATION
  *
  *     fd = open ("/dev/gadget/$CHIP", O_RDWR)
@@ -1782,7 +1806,7 @@ static ssize_t
 dev_config (struct file *fd, const char __user *buf, size_t len, loff_t *ptr)
 {
 	struct dev_data		*dev = fd->private_data;
-	ssize_t			value, length = len;
+	ssize_t			value = len, length = len;
 	unsigned		total;
 	u32			tag;
 	char			*kbuf;
@@ -1851,6 +1875,7 @@ dev_config (struct file *fd, const char __user *buf, size_t len, loff_t *ptr)
 			|| dev->dev->bDescriptorType != USB_DT_DEVICE
 			|| dev->dev->bNumConfigurations != 1)
 		goto fail;
+	dev->dev->bNumConfigurations = 1;
 	dev->dev->bcdUSB = cpu_to_le16 (0x0200);
 
 	/* triggers gadgetfs_bind(); then we can enumerate. */
@@ -1875,13 +1900,12 @@ dev_config (struct file *fd, const char __user *buf, size_t len, loff_t *ptr)
 		 * kick in after the ep0 descriptor is closed.
 		 */
 		value = len;
-		dev->gadget_registered = true;
 	}
 	return value;
 
 fail:
 	spin_unlock_irq (&dev->lock);
-	pr_debug ("%s: %s fail %zd, %p\n", shortname, __func__, value, dev);
+	pr_debug ("%s: %s fail %Zd, %p\n", shortname, __func__, value, dev);
 	kfree (dev->buf);
 	dev->buf = NULL;
 	return value;
@@ -1952,7 +1976,7 @@ gadgetfs_make_inode (struct super_block *sb,
 		inode->i_uid = make_kuid(&init_user_ns, default_uid);
 		inode->i_gid = make_kgid(&init_user_ns, default_gid);
 		inode->i_atime = inode->i_mtime = inode->i_ctime
-				= current_time(inode);
+				= CURRENT_TIME;
 		inode->i_private = data;
 		inode->i_fop = fops;
 	}
@@ -1997,13 +2021,15 @@ gadgetfs_fill_super (struct super_block *sb, void *opts, int silent)
 	if (the_device)
 		return -ESRCH;
 
-	CHIP = usb_get_gadget_udc_name();
+	/* fake probe to determine $CHIP */
+	CHIP = NULL;
+	usb_gadget_probe_driver(&probe_driver);
 	if (!CHIP)
 		return -ENODEV;
 
 	/* superblock */
-	sb->s_blocksize = PAGE_SIZE;
-	sb->s_blocksize_bits = PAGE_SHIFT;
+	sb->s_blocksize = PAGE_CACHE_SIZE;
+	sb->s_blocksize_bits = PAGE_CACHE_SHIFT;
 	sb->s_magic = GADGETFS_MAGIC;
 	sb->s_op = &gadget_fs_operations;
 	sb->s_time_gran = 1;
@@ -2039,9 +2065,6 @@ gadgetfs_fill_super (struct super_block *sb, void *opts, int silent)
 	return 0;
 
 Enomem:
-	kfree(CHIP);
-	CHIP = NULL;
-
 	return -ENOMEM;
 }
 
@@ -2061,8 +2084,6 @@ gadgetfs_kill_sb (struct super_block *sb)
 		put_dev (the_device);
 		the_device = NULL;
 	}
-	kfree(CHIP);
-	CHIP = NULL;
 }
 
 /*----------------------------------------------------------------------*/

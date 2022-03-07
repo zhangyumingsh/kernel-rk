@@ -165,7 +165,7 @@ static void snd_seq_timer_interrupt(struct snd_timer_instance *timeri,
 	snd_seq_timer_update_tick(&tmr->tick, resolution);
 
 	/* register actual time of this timer update */
-	ktime_get_ts64(&tmr->last_update);
+	do_gettimeofday(&tmr->last_update);
 
 	spin_unlock_irqrestore(&tmr->lock, flags);
 
@@ -191,15 +191,14 @@ int snd_seq_timer_set_tempo(struct snd_seq_timer * tmr, int tempo)
 	return 0;
 }
 
-/* set current tempo and ppq in a shot */
-int snd_seq_timer_set_tempo_ppq(struct snd_seq_timer *tmr, int tempo, int ppq)
+/* set current ppq */
+int snd_seq_timer_set_ppq(struct snd_seq_timer * tmr, int ppq)
 {
-	int changed;
 	unsigned long flags;
 
 	if (snd_BUG_ON(!tmr))
 		return -EINVAL;
-	if (tempo <= 0 || ppq <= 0)
+	if (ppq <= 0)
 		return -EINVAL;
 	spin_lock_irqsave(&tmr->lock, flags);
 	if (tmr->running && (ppq != tmr->ppq)) {
@@ -209,11 +208,9 @@ int snd_seq_timer_set_tempo_ppq(struct snd_seq_timer *tmr, int tempo, int ppq)
 		pr_debug("ALSA: seq: cannot change ppq of a running timer\n");
 		return -EBUSY;
 	}
-	changed = (tempo != tmr->tempo) || (ppq != tmr->ppq);
-	tmr->tempo = tempo;
+
 	tmr->ppq = ppq;
-	if (changed)
-		snd_seq_timer_set_tick_resolution(tmr);
+	snd_seq_timer_set_tick_resolution(tmr);
 	spin_unlock_irqrestore(&tmr->lock, flags);
 	return 0;
 }
@@ -371,7 +368,9 @@ static int initialize_timer(struct snd_seq_timer *tmr)
 
 	tmr->ticks = 1;
 	if (!(t->hw.flags & SNDRV_TIMER_HW_SLAVE)) {
-		unsigned long r = snd_timer_resolution(tmr->timeri);
+		unsigned long r = t->hw.resolution;
+		if (! r && t->hw.c_resolution)
+			r = t->hw.c_resolution(t);
 		if (r) {
 			tmr->ticks = (unsigned int)(1000000000uL / (r * freq));
 			if (! tmr->ticks)
@@ -393,7 +392,7 @@ static int seq_timer_start(struct snd_seq_timer *tmr)
 		return -EINVAL;
 	snd_timer_start(tmr->timeri, tmr->ticks);
 	tmr->running = 1;
-	ktime_get_ts64(&tmr->last_update);
+	do_gettimeofday(&tmr->last_update);
 	return 0;
 }
 
@@ -421,7 +420,7 @@ static int seq_timer_continue(struct snd_seq_timer *tmr)
 	}
 	snd_timer_start(tmr->timeri, tmr->ticks);
 	tmr->running = 1;
-	ktime_get_ts64(&tmr->last_update);
+	do_gettimeofday(&tmr->last_update);
 	return 0;
 }
 
@@ -437,21 +436,25 @@ int snd_seq_timer_continue(struct snd_seq_timer *tmr)
 }
 
 /* return current 'real' time. use timeofday() to get better granularity. */
-snd_seq_real_time_t snd_seq_timer_get_cur_time(struct snd_seq_timer *tmr,
-					       bool adjust_ktime)
+snd_seq_real_time_t snd_seq_timer_get_cur_time(struct snd_seq_timer *tmr)
 {
 	snd_seq_real_time_t cur_time;
 	unsigned long flags;
 
 	spin_lock_irqsave(&tmr->lock, flags);
 	cur_time = tmr->cur_time;
-	if (adjust_ktime && tmr->running) {
-		struct timespec64 tm;
-
-		ktime_get_ts64(&tm);
-		tm = timespec64_sub(tm, tmr->last_update);
-		cur_time.tv_nsec += tm.tv_nsec;
-		cur_time.tv_sec += tm.tv_sec;
+	if (tmr->running) { 
+		struct timeval tm;
+		int usec;
+		do_gettimeofday(&tm);
+		usec = (int)(tm.tv_usec - tmr->last_update.tv_usec);
+		if (usec < 0) {
+			cur_time.tv_nsec += (1000000 + usec) * 1000;
+			cur_time.tv_sec += tm.tv_sec - tmr->last_update.tv_sec - 1;
+		} else {
+			cur_time.tv_nsec += usec * 1000;
+			cur_time.tv_sec += tm.tv_sec - tmr->last_update.tv_sec;
+		}
 		snd_seq_sanity_real_time(&cur_time);
 	}
 	spin_unlock_irqrestore(&tmr->lock, flags);
@@ -462,13 +465,7 @@ snd_seq_real_time_t snd_seq_timer_get_cur_time(struct snd_seq_timer *tmr,
  high PPQ values) */
 snd_seq_tick_time_t snd_seq_timer_get_cur_tick(struct snd_seq_timer *tmr)
 {
-	snd_seq_tick_time_t cur_tick;
-	unsigned long flags;
-
-	spin_lock_irqsave(&tmr->lock, flags);
-	cur_tick = tmr->tick.cur_tick;
-	spin_unlock_irqrestore(&tmr->lock, flags);
-	return cur_tick;
+	return tmr->tick.cur_tick;
 }
 
 
@@ -487,19 +484,15 @@ void snd_seq_info_timer_read(struct snd_info_entry *entry,
 		q = queueptr(idx);
 		if (q == NULL)
 			continue;
-		mutex_lock(&q->timer_mutex);
-		tmr = q->timer;
-		if (!tmr)
-			goto unlock;
-		ti = tmr->timeri;
-		if (!ti)
-			goto unlock;
+		if ((tmr = q->timer) == NULL ||
+		    (ti = tmr->timeri) == NULL) {
+			queuefree(q);
+			continue;
+		}
 		snd_iprintf(buffer, "Timer for queue %i : %s\n", q->queue, ti->timer->name);
 		resolution = snd_timer_resolution(ti) * tmr->ticks;
 		snd_iprintf(buffer, "  Period time : %lu.%09lu\n", resolution / 1000000000, resolution % 1000000000);
 		snd_iprintf(buffer, "  Skew : %u / %u\n", tmr->skew, tmr->skew_base);
-unlock:
-		mutex_unlock(&q->timer_mutex);
 		queuefree(q);
  	}
 }

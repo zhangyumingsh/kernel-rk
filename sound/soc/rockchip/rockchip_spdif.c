@@ -22,7 +22,6 @@
 #include <sound/pcm_params.h>
 #include <sound/dmaengine_pcm.h>
 
-#include "rockchip_pcm.h"
 #include "rockchip_spdif.h"
 
 enum rk_spdif_type {
@@ -61,8 +60,6 @@ static const struct of_device_id rk_spdif_match[] = {
 	{ .compatible = "rockchip,rk3368-spdif",
 	  .data = (void *)RK_SPDIF_RK3366 },
 	{ .compatible = "rockchip,rk3399-spdif",
-	  .data = (void *)RK_SPDIF_RK3366 },
-	{ .compatible = "rockchip,rk3568-spdif",
 	  .data = (void *)RK_SPDIF_RK3366 },
 	{},
 };
@@ -114,11 +111,14 @@ static int rk_spdif_hw_params(struct snd_pcm_substream *substream,
 {
 	struct rk_spdif_dev *spdif = snd_soc_dai_get_drvdata(dai);
 	unsigned int val = SPDIF_CFGR_HALFWORD_ENABLE;
-	int srate, mclk;
+	int mclk;
 	int ret;
 
-	srate = params_rate(params);
-	mclk = srate * 128;
+	/* bmc = 128fs */
+	mclk = 128 * params_rate(params);
+	ret = clk_set_rate(spdif->mclk, mclk);
+	if (ret)
+		return ret;
 
 	switch (params_format(params)) {
 	case SNDRV_PCM_FORMAT_S16_LE:
@@ -134,14 +134,7 @@ static int rk_spdif_hw_params(struct snd_pcm_substream *substream,
 		return -EINVAL;
 	}
 
-	/* Set clock and calculate divider */
-	ret = clk_set_rate(spdif->mclk, mclk);
-	if (ret != 0) {
-		dev_err(spdif->dev, "Failed to set module clock rate: %d\n",
-			ret);
-		return ret;
-	}
-
+	val |= SPDIF_CFGR_CLK_DIV(0);
 	ret = regmap_update_bits(spdif->regmap, SPDIF_CFGR,
 				 SPDIF_CFGR_CLK_DIV_MASK |
 				 SPDIF_CFGR_HALFWORD_ENABLE |
@@ -333,7 +326,7 @@ static int rk_spdif_probe(struct platform_device *pdev)
 
 	spdif->playback_dma_data.addr = res->start + SPDIF_SMPDR;
 	spdif->playback_dma_data.addr_width = DMA_SLAVE_BUSWIDTH_4_BYTES;
-	spdif->playback_dma_data.maxburst = 8;
+	spdif->playback_dma_data.maxburst = 4;
 
 	spdif->dev = &pdev->dev;
 	dev_set_drvdata(&pdev->dev, spdif);
@@ -353,7 +346,7 @@ static int rk_spdif_probe(struct platform_device *pdev)
 		goto err_pm_suspend;
 	}
 
-	ret = rockchip_pcm_platform_register(&pdev->dev);
+	ret = devm_snd_dmaengine_pcm_register(&pdev->dev, NULL, 0);
 	if (ret) {
 		dev_err(&pdev->dev, "Could not register PCM\n");
 		goto err_pm_suspend;
@@ -379,9 +372,35 @@ static int rk_spdif_remove(struct platform_device *pdev)
 	return 0;
 }
 
+#ifdef CONFIG_PM_SLEEP
+static int rockchip_spdif_suspend(struct device *dev)
+{
+	struct rk_spdif_dev *spdif = dev_get_drvdata(dev);
+
+	regcache_mark_dirty(spdif->regmap);
+
+	return 0;
+}
+
+static int rockchip_spdif_resume(struct device *dev)
+{
+	struct rk_spdif_dev *spdif = dev_get_drvdata(dev);
+	int ret;
+
+	ret = pm_runtime_get_sync(dev);
+	if (ret < 0)
+		return ret;
+	ret = regcache_sync(spdif->regmap);
+	pm_runtime_put(dev);
+
+	return ret;
+}
+#endif
+
 static const struct dev_pm_ops rk_spdif_pm_ops = {
 	SET_RUNTIME_PM_OPS(rk_spdif_runtime_suspend, rk_spdif_runtime_resume,
 			   NULL)
+	SET_SYSTEM_SLEEP_PM_OPS(rockchip_spdif_suspend, rockchip_spdif_resume)
 };
 
 static struct platform_driver rk_spdif_driver = {

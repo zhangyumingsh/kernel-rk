@@ -13,7 +13,6 @@
 #include <asm/thread_info.h>
 #include <asm/ppc_asm.h>
 #include <asm/asm-offsets.h>
-#include <asm/feature-fixups.h>
 
 /*
  * Structure for storing CPU registers on the save area.
@@ -180,7 +179,7 @@ nothing_to_copy:
 	sld	r3, r3, r0
 	li	r0, 0
 1:
-	dcbf	0,r3
+	dcbf	r0,r3
 	addi	r3,r3,0x20
 	bdnz	1b
 

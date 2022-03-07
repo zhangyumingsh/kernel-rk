@@ -61,24 +61,26 @@ MODULE_AUTHOR("Mikhail Khelik <mkhelik@cisco.com>");
 MODULE_AUTHOR("Mats Randgaard <matrandg@cisco.com>");
 MODULE_LICENSE("GPL");
 
-#define DRIVER_VERSION			KERNEL_VERSION(0, 0x01, 0x1)
+#define DRIVER_VERSION			KERNEL_VERSION(0, 0x01, 0x0)
 
 #define EDID_NUM_BLOCKS_MAX 8
 #define EDID_BLOCK_SIZE 128
 
 #define I2C_MAX_XFER_SIZE  (EDID_BLOCK_SIZE + 2)
 
-#define POLL_INTERVAL_CEC_MS	10
 #define POLL_INTERVAL_MS	1000
 
 /* PIXEL_RATE = MIPI_FREQ * 2 * lane / 8bit */
 #define TC35874X_LINK_FREQ_310MHZ	310000000
+#define TC35874X_LINK_FREQ_400MHZ	400000000
 #define TC35874X_PIXEL_RATE_310M	TC35874X_LINK_FREQ_310MHZ
+#define TC35874X_PIXEL_RATE_400M	TC35874X_LINK_FREQ_400MHZ
 
 #define TC35874X_NAME			"tc35874x"
 
 static const s64 link_freq_menu_items[] = {
 	TC35874X_LINK_FREQ_310MHZ,
+	TC35874X_LINK_FREQ_400MHZ,
 };
 
 static const struct v4l2_dv_timings_cap tc35874x_timings_cap = {
@@ -86,7 +88,7 @@ static const struct v4l2_dv_timings_cap tc35874x_timings_cap = {
 	/* keep this initialization for compatibility with GCC < 4.4.6 */
 	.reserved = { 0 },
 	/* Pixel clock from REF_01 p. 20. Min/max height/width are unknown */
-	V4L2_INIT_BT_TIMINGS(1, 10000, 1, 10000, 0, 310000000,
+	V4L2_INIT_BT_TIMINGS(1, 10000, 1, 10000, 0, 400000000,
 			V4L2_DV_BT_STD_CEA861 | V4L2_DV_BT_STD_DMT |
 			V4L2_DV_BT_STD_GTF | V4L2_DV_BT_STD_CVT,
 			V4L2_DV_BT_CAP_PROGRESSIVE | V4L2_DV_BT_CAP_INTERLACED |
@@ -213,7 +215,6 @@ struct tc35874x_state {
 	u8 csi_lanes_in_use;
 
 	struct gpio_desc *reset_gpio;
-	struct cec_adapter *cec_adap;
 
 	u32 module_index;
 	const char *module_facing;
@@ -599,7 +600,7 @@ static void print_avi_infoframe(struct v4l2_subdev *sd)
 
 	i2c_rd(sd, PK_AVI_0HEAD, buffer, HDMI_INFOFRAME_SIZE(AVI));
 
-	if (hdmi_infoframe_unpack(&frame, buffer, sizeof(buffer)) < 0) {
+	if (hdmi_infoframe_unpack(&frame, buffer) < 0) {
 		v4l2_err(sd, "%s: unpack of AVI infoframe failed\n", __func__);
 		return;
 	}
@@ -1041,7 +1042,7 @@ static void tc35874x_format_change(struct v4l2_subdev *sd)
 		v4l2_dbg(1, debug, sd, "%s: No signal\n",
 				__func__);
 	} else {
-		if (!v4l2_match_dv_timings(&state->timings, &timings, 0, false)) {
+		if (!v4l2_match_dv_timings(&state->timings, &timings, 0)) {
 			enable_stream(sd, false);
 			/* automaticly set timing rather than set by userspace */
 			tc35874x_s_dv_timings(sd, &timings);
@@ -1524,19 +1525,13 @@ static irqreturn_t tc35874x_irq_handler(int irq, void *dev_id)
 	return handled ? IRQ_HANDLED : IRQ_NONE;
 }
 
-static void tc35874x_irq_poll_timer(struct timer_list *t)
+static void tc35874x_irq_poll_timer(unsigned long arg)
 {
-	struct tc35874x_state *state = from_timer(state, t, timer);
-	unsigned int msecs;
+	struct tc35874x_state *state = (struct tc35874x_state *)arg;
 
 	schedule_work(&state->work_i2c_poll);
 
-	/*
-	 * If CEC is present, then we need to poll more frequently,
-	 * otherwise we will miss CEC messages.
-	 */
-	msecs = state->cec_adap ? POLL_INTERVAL_CEC_MS : POLL_INTERVAL_MS;
-	mod_timer(&state->timer, jiffies + msecs_to_jiffies(msecs));
+	mod_timer(&state->timer, jiffies + msecs_to_jiffies(POLL_INTERVAL_MS));
 }
 
 static void tc35874x_work_i2c_poll(struct work_struct *work)
@@ -1586,7 +1581,7 @@ static int tc35874x_s_dv_timings(struct v4l2_subdev *sd,
 		v4l2_print_dv_timings(sd->name, "tc35874x_s_dv_timings: ",
 				timings, false);
 
-	if (v4l2_match_dv_timings(&state->timings, timings, 0, false)) {
+	if (v4l2_match_dv_timings(&state->timings, timings, 0)) {
 		v4l2_dbg(1, debug, sd, "%s: no change\n", __func__);
 		return 0;
 	}
@@ -1707,13 +1702,11 @@ static int tc35874x_enum_mbus_code(struct v4l2_subdev *sd,
 {
 	switch (code->index) {
 	case 0:
-		code->code = MEDIA_BUS_FMT_UYVY8_2X8;
-		break;
-	/*
-	case 1:
 		code->code = MEDIA_BUS_FMT_RGB888_1X24;
 		break;
-	*/
+	case 1:
+		code->code = MEDIA_BUS_FMT_UYVY8_2X8;
+		break;
 	default:
 		return -EINVAL;
 	}
@@ -1850,10 +1843,17 @@ static int tc35874x_set_fmt(struct v4l2_subdev *sd,
 	mode = tc35874x_find_best_fit(format);
 	state->cur_mode = mode;
 
-	__v4l2_ctrl_s_ctrl(state->link_freq,
-		link_freq_menu_items[0]);
-	__v4l2_ctrl_s_ctrl_int64(state->pixel_rate,
-		TC35874X_PIXEL_RATE_310M);
+	if (state->csi_lanes_in_use == 4) {
+		__v4l2_ctrl_s_ctrl(state->link_freq,
+			link_freq_menu_items[1]);
+		__v4l2_ctrl_s_ctrl_int64(state->pixel_rate,
+			TC35874X_PIXEL_RATE_400M);
+	} else {
+		__v4l2_ctrl_s_ctrl(state->link_freq,
+			link_freq_menu_items[0]);
+		__v4l2_ctrl_s_ctrl_int64(state->pixel_rate,
+			TC35874X_PIXEL_RATE_310M);
+	}
 
 	tc35874x_set_pll(sd);
 	tc35874x_set_csi(sd);
@@ -2072,27 +2072,8 @@ static const struct v4l2_subdev_ops tc35874x_ops = {
 };
 
 /* --------------- CUSTOM CTRLS --------------- */
-static int tc35874x_get_custom_ctrl(struct v4l2_ctrl *ctrl)
-{
-	int ret = -EINVAL;
-	struct tc35874x_state *state = container_of(ctrl->handler,
-			struct tc35874x_state, hdl);
-	struct v4l2_subdev *sd = &state->sd;
-
-	if (ctrl->id == TC35874X_CID_AUDIO_SAMPLING_RATE) {
-		ret = get_audio_sampling_rate(sd);
-		*ctrl->p_new.p_s32 = ret;
-	}
-
-	return ret;
-}
-
-static const struct v4l2_ctrl_ops tc35874x_custom_ctrl_ops = {
-	.g_volatile_ctrl = tc35874x_get_custom_ctrl,
-};
 
 static const struct v4l2_ctrl_config tc35874x_ctrl_audio_sampling_rate = {
-	.ops = &tc35874x_custom_ctrl_ops,
 	.id = TC35874X_CID_AUDIO_SAMPLING_RATE,
 	.name = "Audio sampling rate",
 	.type = V4L2_CTRL_TYPE_INTEGER,
@@ -2332,8 +2313,8 @@ static int tc35874x_probe(struct i2c_client *client,
 		V4L2_CID_LINK_FREQ, 0, 0, link_freq_menu_items);
 
 	state->pixel_rate = v4l2_ctrl_new_std(&state->hdl, NULL,
-		V4L2_CID_PIXEL_RATE, 0, TC35874X_PIXEL_RATE_310M, 1,
-		TC35874X_PIXEL_RATE_310M);
+		V4L2_CID_PIXEL_RATE, 0, TC35874X_PIXEL_RATE_400M, 1,
+		TC35874X_PIXEL_RATE_400M);
 
 	state->detect_tx_5v_ctrl = v4l2_ctrl_new_std(&state->hdl,
 			&tc35874x_ctrl_ops, V4L2_CID_DV_RX_POWER_PRESENT,
@@ -2345,9 +2326,6 @@ static int tc35874x_probe(struct i2c_client *client,
 	/* custom controls */
 	state->audio_sampling_rate_ctrl = v4l2_ctrl_new_custom(&state->hdl,
 			&tc35874x_ctrl_audio_sampling_rate, NULL);
-	if (state->audio_sampling_rate_ctrl)
-		state->audio_sampling_rate_ctrl->flags |=
-			V4L2_CTRL_FLAG_VOLATILE;
 
 	state->audio_present_ctrl = v4l2_ctrl_new_custom(&state->hdl,
 			&tc35874x_ctrl_audio_present, NULL);
@@ -2364,8 +2342,8 @@ static int tc35874x_probe(struct i2c_client *client,
 	}
 
 	state->pad.flags = MEDIA_PAD_FL_SOURCE;
-	sd->entity.function = MEDIA_ENT_F_CAM_SENSOR;
-	err = media_entity_pads_init(&sd->entity, 1, &state->pad);
+	sd->entity.type = MEDIA_ENT_T_V4L2_SUBDEV_SENSOR;
+	err = media_entity_init(&sd->entity, 1, &state->pad, 0);
 	if (err < 0)
 		goto err_hdl;
 
@@ -2416,7 +2394,8 @@ static int tc35874x_probe(struct i2c_client *client,
 	} else {
 		INIT_WORK(&state->work_i2c_poll,
 			  tc35874x_work_i2c_poll);
-		timer_setup(&state->timer, tc35874x_irq_poll_timer, 0);
+		state->timer.data = (unsigned long)state;
+		state->timer.function = tc35874x_irq_poll_timer;
 		state->timer.expires = jiffies +
 				       msecs_to_jiffies(POLL_INTERVAL_MS);
 		add_timer(&state->timer);

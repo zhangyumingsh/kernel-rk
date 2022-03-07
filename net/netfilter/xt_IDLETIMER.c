@@ -51,13 +51,19 @@
 #include <net/sock.h>
 #include <net/inet_sock.h>
 
+struct idletimer_tg_attr {
+	struct attribute attr;
+	ssize_t	(*show)(struct kobject *kobj,
+			struct attribute *attr, char *buf);
+};
+
 struct idletimer_tg {
 	struct list_head entry;
 	struct timer_list timer;
 	struct work_struct work;
 
 	struct kobject *kobj;
-	struct device_attribute attr;
+	struct idletimer_tg_attr attr;
 
 	struct timespec delayed_timer_trigger;
 	struct timespec last_modified_timer;
@@ -70,7 +76,6 @@ struct idletimer_tg {
 	bool send_nl_msg;
 	bool active;
 	uid_t uid;
-	bool suspend_time_valid;
 };
 
 static LIST_HEAD(idletimer_tg_list);
@@ -179,8 +184,8 @@ struct idletimer_tg *__idletimer_tg_find_by_label(const char *label)
 	return NULL;
 }
 
-static ssize_t idletimer_tg_show(struct device *dev,
-				 struct device_attribute *attr, char *buf)
+static ssize_t idletimer_tg_show(struct kobject *kobj, struct attribute *attr,
+				 char *buf)
 {
 	struct idletimer_tg *timer;
 	unsigned long expires = 0;
@@ -188,7 +193,7 @@ static ssize_t idletimer_tg_show(struct device *dev,
 
 	mutex_lock(&list_mutex);
 
-	timer =	__idletimer_tg_find_by_label(attr->attr.name);
+	timer =	__idletimer_tg_find_by_label(attr->name);
 	if (timer)
 		expires = timer->timer.expires;
 
@@ -216,9 +221,9 @@ static void idletimer_tg_work(struct work_struct *work)
 		notify_netlink_uevent(timer->attr.attr.name, timer);
 }
 
-static void idletimer_tg_expired(struct timer_list *t)
+static void idletimer_tg_expired(unsigned long data)
 {
-	struct idletimer_tg *timer = from_timer(timer, t, timer);
+	struct idletimer_tg *timer = (struct idletimer_tg *) data;
 
 	pr_debug("timer %s expired\n", timer->attr.attr.name);
 	spin_lock_bh(&timestamp_lock);
@@ -240,13 +245,8 @@ static int idletimer_resume(struct notifier_block *notifier,
 	switch (pm_event) {
 	case PM_SUSPEND_PREPARE:
 		get_monotonic_boottime(&timer->last_suspend_time);
-		timer->suspend_time_valid = true;
 		break;
 	case PM_POST_SUSPEND:
-		if (!timer->suspend_time_valid)
-			break;
-		timer->suspend_time_valid = false;
-
 		spin_lock_bh(&timestamp_lock);
 		if (!timer->active) {
 			spin_unlock_bh(&timestamp_lock);
@@ -297,7 +297,7 @@ static int idletimer_tg_create(struct idletimer_tg_info *info)
 {
 	int ret;
 
-	info->timer = kzalloc(sizeof(*info->timer), GFP_KERNEL);
+	info->timer = kmalloc(sizeof(*info->timer), GFP_KERNEL);
 	if (!info->timer) {
 		ret = -ENOMEM;
 		goto out;
@@ -313,7 +313,7 @@ static int idletimer_tg_create(struct idletimer_tg_info *info)
 		ret = -ENOMEM;
 		goto out_free_timer;
 	}
-	info->timer->attr.attr.mode = 0444;
+	info->timer->attr.attr.mode = S_IRUGO;
 	info->timer->attr.show = idletimer_tg_show;
 
 	ret = sysfs_create_file(idletimer_tg_kobj, &info->timer->attr.attr);
@@ -324,7 +324,8 @@ static int idletimer_tg_create(struct idletimer_tg_info *info)
 
 	list_add(&info->timer->entry, &idletimer_tg_list);
 
-	timer_setup(&info->timer->timer, idletimer_tg_expired, 0);
+	setup_timer(&info->timer->timer, idletimer_tg_expired,
+		    (unsigned long) info->timer);
 	info->timer->refcnt = 1;
 	info->timer->send_nl_msg = (info->send_nl_msg == 0) ? false : true;
 	info->timer->active = true;
@@ -496,7 +497,6 @@ static struct xt_target idletimer_tg __read_mostly = {
 	.family		= NFPROTO_UNSPEC,
 	.target		= idletimer_tg_target,
 	.targetsize     = sizeof(struct idletimer_tg_info),
-	.usersize	= offsetof(struct idletimer_tg_info, timer),
 	.checkentry	= idletimer_tg_checkentry,
 	.destroy        = idletimer_tg_destroy,
 	.me		= THIS_MODULE,

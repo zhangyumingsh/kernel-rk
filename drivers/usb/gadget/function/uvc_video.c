@@ -1,9 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0+
 /*
  *	uvc_video.c  --  USB Video Class Gadget driver
  *
  *	Copyright (C) 2009-2010
  *	    Laurent Pinchart (laurent.pinchart@ideasonboard.com)
+ *
+ *	This program is free software; you can redistribute it and/or modify
+ *	it under the terms of the GNU General Public License as published by
+ *	the Free Software Foundation; either version 2 of the License, or
+ *	(at your option) any later version.
  */
 
 #include <linux/kernel.h>
@@ -134,7 +138,9 @@ static int uvcg_video_ep_queue(struct uvc_video *video, struct usb_request *req)
 
 	ret = usb_ep_queue(video->ep, req, GFP_ATOMIC);
 	if (ret < 0) {
-		printk(KERN_INFO "Failed to queue request (%d).\n", ret);
+		uvcg_err(&video->uvc->func, "Failed to queue request (%d).\n",
+			 ret);
+
 		/* Isochronous endpoints can't be halted. */
 		if (video->ep->desc && usb_endpoint_xfer_bulk(video->ep->desc))
 			usb_ep_set_halt(video->ep);
@@ -187,13 +193,14 @@ uvc_video_complete(struct usb_ep *ep, struct usb_request *req)
 		break;
 
 	case -ESHUTDOWN:	/* disconnect from host. */
-		printk(KERN_DEBUG "VS request cancelled.\n");
+		uvcg_dbg(&video->uvc->func, "VS request cancelled.\n");
 		uvcg_queue_cancel(queue, 1);
 		goto requeue;
 
 	default:
-		printk(KERN_INFO "VS request completed with status %d.\n",
-			req->status);
+		uvcg_info(&video->uvc->func,
+			  "VS request completed with status %d.\n",
+			  req->status);
 		uvcg_queue_cancel(queue, 0);
 		goto requeue;
 	}
@@ -227,13 +234,8 @@ static int
 uvc_video_free_requests(struct uvc_video *video)
 {
 	unsigned int i;
-	struct uvc_device *uvc;
-	struct f_uvc_opts *opts;
 
-	uvc = container_of(video, struct uvc_device, video);
-	opts = fi_to_f_uvc_opts(uvc->func.fi);
-
-	for (i = 0; i < opts->uvc_num_request; ++i) {
+	for (i = 0; i < UVC_NUM_REQUESTS; ++i) {
 		if (video->req[i]) {
 			usb_ep_free_request(video->ep, video->req[i]);
 			video->req[i] = NULL;
@@ -256,11 +258,6 @@ uvc_video_alloc_requests(struct uvc_video *video)
 	unsigned int req_size;
 	unsigned int i;
 	int ret = -ENOMEM;
-	struct uvc_device *uvc;
-	struct f_uvc_opts *opts;
-
-	uvc = container_of(video, struct uvc_device, video);
-	opts = fi_to_f_uvc_opts(uvc->func.fi);
 
 	BUG_ON(video->req_size);
 
@@ -273,7 +270,7 @@ uvc_video_alloc_requests(struct uvc_video *video)
 			 * max_t(unsigned int, video->ep->maxburst, 1);
 	}
 
-	for (i = 0; i < opts->uvc_num_request; ++i) {
+	for (i = 0; i < UVC_NUM_REQUESTS; ++i) {
 		video->req_buffer[i] = kmalloc(req_size, GFP_KERNEL);
 		if (video->req_buffer[i] == NULL)
 			goto error;
@@ -374,8 +371,8 @@ int uvcg_video_enable(struct uvc_video *video, int enable)
 	struct f_uvc_opts *opts;
 
 	if (video->ep == NULL) {
-		printk(KERN_INFO "Video enable failed, device is "
-			"uninitialized.\n");
+		uvcg_info(&video->uvc->func,
+			  "Video enable failed, device is uninitialized.\n");
 		return -ENODEV;
 	}
 
@@ -383,7 +380,7 @@ int uvcg_video_enable(struct uvc_video *video, int enable)
 	opts = fi_to_f_uvc_opts(uvc->func.fi);
 
 	if (!enable) {
-		for (i = 0; i < opts->uvc_num_request; ++i)
+		for (i = 0; i < UVC_NUM_REQUESTS; ++i)
 			if (video->req[i])
 				usb_ep_dequeue(video->ep, video->req[i]);
 
@@ -414,11 +411,12 @@ int uvcg_video_enable(struct uvc_video *video, int enable)
 /*
  * Initialize the UVC video stream.
  */
-int uvcg_video_init(struct uvc_video *video)
+int uvcg_video_init(struct uvc_video *video, struct uvc_device *uvc)
 {
 	INIT_LIST_HEAD(&video->req_free);
 	spin_lock_init(&video->req_lock);
 
+	video->uvc = uvc;
 	video->fcc = V4L2_PIX_FMT_YUYV;
 	video->bpp = 16;
 	video->width = 320;

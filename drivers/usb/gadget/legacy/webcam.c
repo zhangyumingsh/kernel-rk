@@ -1,9 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0+
 /*
  *	webcam.c -- USB webcam gadget driver
  *
  *	Copyright (C) 2009-2010
  *	    Laurent Pinchart (laurent.pinchart@ideasonboard.com)
+ *
+ *	This program is free software; you can redistribute it and/or modify
+ *	it under the terms of the GNU General Public License as published by
+ *	the Free Software Foundation; either version 2 of the License, or
+ *	(at your option) any later version.
  */
 
 #include <linux/kernel.h>
@@ -70,7 +74,7 @@ static struct usb_function *f_uvc;
 static struct usb_device_descriptor webcam_device_descriptor = {
 	.bLength		= USB_DT_DEVICE_SIZE,
 	.bDescriptorType	= USB_DT_DEVICE,
-	/* .bcdUSB = DYNAMIC */
+	.bcdUSB			= cpu_to_le16(0x0200),
 	.bDeviceClass		= USB_CLASS_MISC,
 	.bDeviceSubClass	= 0x02,
 	.bDeviceProtocol	= 0x01,
@@ -382,7 +386,6 @@ webcam_bind(struct usb_composite_dev *cdev)
 	uvc_opts->fs_streaming = uvc_fs_streaming_cls;
 	uvc_opts->hs_streaming = uvc_hs_streaming_cls;
 	uvc_opts->ss_streaming = uvc_ss_streaming_cls;
-	uvc_opts->uvc_num_request = UVC_NUM_REQUESTS;
 	uvc_opts->pm_qos_latency = 0;
 
 	/* Allocate string descriptor numbers ... note that string contents
@@ -430,4 +433,5 @@ module_usb_composite_driver(webcam_driver);
 MODULE_AUTHOR("Laurent Pinchart");
 MODULE_DESCRIPTION("Webcam Video Gadget");
 MODULE_LICENSE("GPL");
+MODULE_VERSION("0.1.0");
 

@@ -116,14 +116,14 @@ static struct rockchip_cpuclk_rate_table rk1808_cpuclk_rates[] __initdata = {
 };
 
 static const struct rockchip_cpuclk_reg_data rk1808_cpuclk_data = {
-	.core_reg[0] = RK1808_CLKSEL_CON(0),
-	.div_core_shift[0] = 0,
-	.div_core_mask[0] = 0xf,
-	.num_cores = 1,
+	.core_reg = RK1808_CLKSEL_CON(0),
+	.div_core_shift = 0,
+	.div_core_mask = 0xf,
 	.mux_core_alt = 2,
 	.mux_core_main = 0,
 	.mux_core_shift = 6,
 	.mux_core_mask = 0x3,
+	.pll_name = "pll_apll",
 };
 
 PNAME(mux_pll_p)		= { "xin24m", "xin32k"};
@@ -1165,6 +1165,7 @@ static const char *const rk1808_critical_clocks[] __initconst = {
 	"pclk_ddr_grf",
 	"aclk_gic",
 	"hsclk_imem",
+	"cpll",
 };
 
 static void __iomem *rk1808_cru_base;

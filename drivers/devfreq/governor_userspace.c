@@ -1,5 +1,5 @@
 /*
- *  linux/drivers/devfreq/governor_userspace.c
+ *  linux/drivers/devfreq/governor_simpleondemand.c
  *
  *  Copyright (C) 2011 Samsung Electronics
  *	MyungJoo Ham <myungjoo.ham@samsung.com>
@@ -42,6 +42,7 @@ static ssize_t store_freq(struct device *dev, struct device_attribute *attr,
 	unsigned long wanted;
 	int err = 0;
 
+
 	mutex_lock(&devfreq->lock);
 	data = devfreq->data;
 
@@ -78,8 +79,8 @@ static struct attribute *dev_entries[] = {
 	&dev_attr_set_freq.attr,
 	NULL,
 };
-static const struct attribute_group dev_attr_group = {
-	.name	= DEVFREQ_GOV_USERSPACE,
+static struct attribute_group dev_attr_group = {
+	.name	= "userspace",
 	.attrs	= dev_entries,
 };
 

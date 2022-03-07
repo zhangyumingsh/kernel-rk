@@ -23,8 +23,6 @@
 #include <linux/mmc/host.h>
 
 #include "core.h"
-#include "card.h"
-#include "host.h"
 #include "sdio_cis.h"
 #include "bus.h"
 
@@ -351,9 +349,9 @@ int mmc_add_card(struct mmc_card *card)
 #ifdef CONFIG_DEBUG_FS
 	mmc_add_card_debugfs(card);
 #endif
-	card->dev.of_node = mmc_of_find_child_device(card->host, 0);
+	mmc_init_context_info(card->host);
 
-	device_enable_async_suspend(&card->dev);
+	card->dev.of_node = mmc_of_find_child_device(card->host, 0);
 
 	ret = device_add(&card->dev);
 	if (ret)
@@ -370,8 +368,6 @@ int mmc_add_card(struct mmc_card *card)
  */
 void mmc_remove_card(struct mmc_card *card)
 {
-	struct mmc_host *host = card->host;
-
 #ifdef CONFIG_DEBUG_FS
 	mmc_remove_card_debugfs(card);
 #endif
@@ -388,10 +384,6 @@ void mmc_remove_card(struct mmc_card *card)
 		of_node_put(card->dev.of_node);
 	}
 
-	if (host->cqe_enabled) {
-		host->cqe_ops->cqe_disable(host);
-		host->cqe_enabled = false;
-	}
-
 	put_device(&card->dev);
 }
+

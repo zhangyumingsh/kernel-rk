@@ -55,7 +55,6 @@
 #define SCLK_TIMER6		90
 #define SCLK_JTAG		91
 #define SCLK_SMC		92
-#define SCLK_TSADC		93
 
 #define DCLK_LCDC0		190
 #define DCLK_LCDC1		191
@@ -68,14 +67,15 @@
 #define ACLK_LCDC1		196
 #define ACLK_GPU		197
 #define ACLK_SMC		198
-#define ACLK_CIF1		199
+#define ACLK_CIF		199
 #define ACLK_IPP		200
 #define ACLK_RGA		201
 #define ACLK_CIF0		202
-#define ACLK_CPU		203
-#define ACLK_PERI		204
-#define ACLK_VEPU		205
-#define ACLK_VDPU		206
+#define ACLK_VEPU		203
+#define ACLK_VDPU		204
+#define ACLK_CPU		205
+#define ACLK_PERI		206
+#define ACLK_CIF1		207
 
 /* pclk gates */
 #define PCLK_GRF		320
@@ -110,10 +110,8 @@
 #define PCLK_TSADC		349
 #define PCLK_CPU		350
 #define PCLK_PERI		351
-#define PCLK_DDRUPCTL		352
-#define PCLK_PUBL		353
-#define PCLK_CIF0		354
-#define PCLK_CIF1		355
+#define PCLK_CIF0		352
+#define PCLK_CIF1		353
 
 /* hclk gates */
 #define HCLK_SDMMC		448
@@ -136,12 +134,12 @@
 #define HCLK_IPP		465
 #define HCLK_RGA		466
 #define HCLK_NANDC0		467
-#define HCLK_CPU		468
-#define HCLK_PERI		469
-#define HCLK_CIF1		470
-#define HCLK_VEPU		471
-#define HCLK_VDPU		472
-#define HCLK_HDMI               473
+#define HCLK_VEPU		468
+#define HCLK_VDPU		469
+#define HCLK_CPU		470
+#define HCLK_PERI		471
+#define HCLK_CIF1		472
+#define HCLK_HDMI		473
 
 #define CLK_NR_CLKS		(HCLK_HDMI + 1)
 

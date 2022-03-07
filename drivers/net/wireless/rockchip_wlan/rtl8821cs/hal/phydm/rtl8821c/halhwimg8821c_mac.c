@@ -24,7 +24,7 @@
  *
  *****************************************************************************/
 
-/*Image2HeaderVersion: R3 1.5.10.1*/
+/*Image2HeaderVersion: R3 1.5.8*/
 #include "mp_precomp.h"
 #include "../phydm_precomp.h"
 
@@ -315,7 +315,7 @@ odm_read_and_config_mp_8821c_mac_reg(struct dm_struct *dm)
 u32
 odm_get_version_mp_8821c_mac_reg(void)
 {
-		return 62;
+		return 57;
 }
 
 #endif /* end of HWIMG_SUPPORT*/

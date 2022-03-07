@@ -27,7 +27,7 @@
 #include <linux/i2c.h>
 #include <linux/proc_fs.h>
 #include <linux/string.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <linux/vmalloc.h>
 #include <linux/interrupt.h>
 #include <linux/io.h>
@@ -35,6 +35,7 @@
 #include <linux/gpio.h>
 #include <linux/slab.h>
 #include "../tp_suspend.h"
+
 
 //#include <mach/gpio.h>
 //#include <linux/earlysuspend.h>
@@ -94,7 +95,6 @@ typedef enum
 {
     CHIP_TYPE_GT9  = 0,
     CHIP_TYPE_GT9F = 1,
-    CHIP_TYPE_GT9110 = 2,
 } CHIP_TYPE_T;
 #endif
 
@@ -152,6 +152,7 @@ struct goodix_ts_data {
     u8 is_950;
 #endif
     struct regulator *tp_regulator;
+
 };
 
 extern u16 show_len;

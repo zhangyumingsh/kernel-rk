@@ -830,7 +830,9 @@ static int rk628_hdmirx_bridge_attach(struct drm_bridge *bridge)
 		return ret;
 	}
 
-	ret = drm_bridge_attach(bridge->encoder, hdmirx->bridge, bridge);
+	hdmirx->bridge->encoder = bridge->encoder;
+
+	ret = drm_bridge_attach(bridge->dev, hdmirx->bridge);
 	if (ret) {
 		dev_err(dev, "failed to attach bridge\n");
 		return ret;
@@ -943,7 +945,11 @@ static int rk628_hdmirx_probe(struct platform_device *pdev)
 
 	hdmirx->base.funcs = &rk628_hdmirx_bridge_funcs;
 	hdmirx->base.of_node = dev->of_node;
-	drm_bridge_add(&hdmirx->base);
+	ret = drm_bridge_add(&hdmirx->base);
+	if (ret) {
+		dev_err(dev, "failed to add drm_bridge: %d\n", ret);
+		return ret;
+	}
 
 	memset(&pdevinfo, 0, sizeof(pdevinfo));
 	pdevinfo.parent = dev;

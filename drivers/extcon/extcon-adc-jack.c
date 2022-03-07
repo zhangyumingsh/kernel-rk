@@ -26,7 +26,7 @@
 #include <linux/workqueue.h>
 #include <linux/iio/consumer.h>
 #include <linux/extcon/extcon-adc-jack.h>
-#include <linux/extcon-provider.h>
+#include <linux/extcon.h>
 
 /**
  * struct adc_jack_data - internal data for adc_jack device driver
@@ -41,7 +41,6 @@
  * @chan:		iio channel being queried.
  */
 struct adc_jack_data {
-	struct device *dev;
 	struct extcon_dev *edev;
 
 	const unsigned int **cable_names;
@@ -53,7 +52,6 @@ struct adc_jack_data {
 	struct delayed_work handler;
 
 	struct iio_channel *chan;
-	bool wakeup_source;
 };
 
 static void adc_jack_handler(struct work_struct *work)
@@ -67,7 +65,7 @@ static void adc_jack_handler(struct work_struct *work)
 
 	ret = iio_read_channel_raw(data->chan, &adc_val);
 	if (ret < 0) {
-		dev_err(data->dev, "read channel() error: %d\n", ret);
+		dev_err(&data->edev->dev, "read channel() error: %d\n", ret);
 		return;
 	}
 
@@ -75,7 +73,7 @@ static void adc_jack_handler(struct work_struct *work)
 	for (i = 0; i < data->num_conditions; i++) {
 		def = &data->adc_conditions[i];
 		if (def->min_adc <= adc_val && def->max_adc >= adc_val) {
-			extcon_set_state_sync(data->edev, def->id, true);
+			extcon_set_cable_state_(data->edev, def->id, true);
 			return;
 		}
 	}
@@ -83,7 +81,7 @@ static void adc_jack_handler(struct work_struct *work)
 	/* Set the detached state if adc value is not included in the range */
 	for (i = 0; i < data->num_conditions; i++) {
 		def = &data->adc_conditions[i];
-		extcon_set_state_sync(data->edev, def->id, false);
+		extcon_set_cable_state_(data->edev, def->id, false);
 	}
 }
 
@@ -111,7 +109,6 @@ static int adc_jack_probe(struct platform_device *pdev)
 		return -EINVAL;
 	}
 
-	data->dev = &pdev->dev;
 	data->edev = devm_extcon_dev_allocate(&pdev->dev, pdata->cable_names);
 	if (IS_ERR(data->edev)) {
 		dev_err(&pdev->dev, "failed to allocate extcon device\n");
@@ -128,12 +125,11 @@ static int adc_jack_probe(struct platform_device *pdev)
 	for (i = 0; data->adc_conditions[i].id != EXTCON_NONE; i++);
 	data->num_conditions = i;
 
-	data->chan = devm_iio_channel_get(&pdev->dev, pdata->consumer_channel);
+	data->chan = iio_channel_get(&pdev->dev, pdata->consumer_channel);
 	if (IS_ERR(data->chan))
 		return PTR_ERR(data->chan);
 
 	data->handling_delay = msecs_to_jiffies(pdata->handling_delay_ms);
-	data->wakeup_source = pdata->wakeup_source;
 
 	INIT_DEFERRABLE_WORK(&data->handler, adc_jack_handler);
 
@@ -144,7 +140,7 @@ static int adc_jack_probe(struct platform_device *pdev)
 		return err;
 
 	data->irq = platform_get_irq(pdev, 0);
-	if (data->irq < 0) {
+	if (!data->irq) {
 		dev_err(&pdev->dev, "platform_get_irq failed\n");
 		return -ENODEV;
 	}
@@ -157,10 +153,6 @@ static int adc_jack_probe(struct platform_device *pdev)
 		return err;
 	}
 
-	if (data->wakeup_source)
-		device_init_wakeup(&pdev->dev, 1);
-
-	adc_jack_handler(&data->handler.work);
 	return 0;
 }
 
@@ -170,42 +162,16 @@ static int adc_jack_remove(struct platform_device *pdev)
 
 	free_irq(data->irq, data);
 	cancel_work_sync(&data->handler.work);
+	iio_channel_release(data->chan);
 
 	return 0;
 }
-
-#ifdef CONFIG_PM_SLEEP
-static int adc_jack_suspend(struct device *dev)
-{
-	struct adc_jack_data *data = dev_get_drvdata(dev);
-
-	cancel_delayed_work_sync(&data->handler);
-	if (device_may_wakeup(data->dev))
-		enable_irq_wake(data->irq);
-
-	return 0;
-}
-
-static int adc_jack_resume(struct device *dev)
-{
-	struct adc_jack_data *data = dev_get_drvdata(dev);
-
-	if (device_may_wakeup(data->dev))
-		disable_irq_wake(data->irq);
-
-	return 0;
-}
-#endif /* CONFIG_PM_SLEEP */
-
-static SIMPLE_DEV_PM_OPS(adc_jack_pm_ops,
-		adc_jack_suspend, adc_jack_resume);
 
 static struct platform_driver adc_jack_driver = {
 	.probe          = adc_jack_probe,
 	.remove         = adc_jack_remove,
 	.driver         = {
 		.name   = "adc-jack",
-		.pm = &adc_jack_pm_ops,
 	},
 };
 

@@ -72,12 +72,6 @@ extern void set_smp_cross_call(void (*)(const struct cpumask *, unsigned int));
 extern void (*__smp_cross_call)(const struct cpumask *, unsigned int);
 
 /*
- * Provide a function to set a callback function pointer for updating the ipi
- * history.
- */
-extern void set_update_ipi_history_callback(void (*fn)(int));
-
-/*
  * Called from the secondary holding pen, this is the secondary CPU entry point.
  */
 asmlinkage void secondary_start_kernel(void);
@@ -90,7 +84,9 @@ asmlinkage void secondary_start_kernel(void);
  */
 struct secondary_data {
 	void *stack;
+#ifdef CONFIG_THREAD_INFO_IN_TASK
 	struct task_struct *task;
+#endif
 	long status;
 };
 
@@ -132,17 +128,6 @@ static inline void update_cpu_boot_status(int val)
 }
 
 /*
- * The calling secondary CPU has detected serious configuration mismatch,
- * which calls for a kernel panic. Update the boot status and park the calling
- * CPU.
- */
-static inline void cpu_panic_kernel(void)
-{
-	update_cpu_boot_status(CPU_PANIC_KERNEL);
-	cpu_park_loop();
-}
-
-/*
  * If a secondary CPU enters the kernel but fails to come online,
  * (e.g. due to mismatched features), and cannot exit the kernel,
  * we increment cpus_stuck_in_kernel and leave the CPU in a
@@ -154,7 +139,7 @@ static inline void cpu_panic_kernel(void)
  */
 bool cpus_are_stuck_in_kernel(void);
 
-extern void crash_smp_send_stop(void);
+extern void smp_send_crash_stop(void);
 extern bool smp_crash_stop_failed(void);
 
 #endif /* ifndef __ASSEMBLY__ */

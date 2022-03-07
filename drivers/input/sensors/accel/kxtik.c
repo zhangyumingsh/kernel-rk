@@ -19,7 +19,7 @@
 #include <linux/irq.h>
 #include <linux/miscdevice.h>
 #include <linux/gpio.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/atomic.h>
 #include <linux/delay.h>
 #include <linux/input.h>
@@ -323,37 +323,31 @@ struct sensor_operate gsensor_kxtik_ops = {
 };
 
 /****************operate according to sensor chip:end************/
-static int gsensor_kxtik_probe(struct i2c_client *client,
-			       const struct i2c_device_id *devid)
+
+//function name should not be changed
+static struct sensor_operate *gsensor_get_ops(void)
 {
-	return sensor_register_device(client, NULL, devid, &gsensor_kxtik_ops);
+	return &gsensor_kxtik_ops;
 }
 
-static int gsensor_kxtik_remove(struct i2c_client *client)
+
+static int __init gsensor_kxtik_init(void)
 {
-	return sensor_unregister_device(client, NULL, &gsensor_kxtik_ops);
+	struct sensor_operate *ops = gsensor_get_ops();
+	int result = 0;
+	int type = ops->type;
+	result = sensor_register_slave(type, NULL, NULL, gsensor_get_ops);
+	return result;
 }
 
-static const struct i2c_device_id gsensor_kxtik_id[] = {
-	{"gs_kxtik", ACCEL_ID_KXTIK},
-	{}
-};
+static void __exit gsensor_kxtik_exit(void)
+{
+	struct sensor_operate *ops = gsensor_get_ops();
+	int type = ops->type;
+	sensor_unregister_slave(type, NULL, NULL, gsensor_get_ops);
+}
 
-static struct i2c_driver gsensor_kxtik_driver = {
-	.probe = gsensor_kxtik_probe,
-	.remove = gsensor_kxtik_remove,
-	.shutdown = sensor_shutdown,
-	.id_table = gsensor_kxtik_id,
-	.driver = {
-		.name = "gsensor_kxtik",
-	#ifdef CONFIG_PM
-		.pm = &sensor_pm_ops,
-	#endif
-	},
-};
 
-module_i2c_driver(gsensor_kxtik_driver);
+module_init(gsensor_kxtik_init);
+module_exit(gsensor_kxtik_exit);
 
-MODULE_AUTHOR("luowei <lw@rock-chips.com>");
-MODULE_DESCRIPTION("kxtik 3-Axis accelerometer driver");
-MODULE_LICENSE("GPL");

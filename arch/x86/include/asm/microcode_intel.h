@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _ASM_X86_MICROCODE_INTEL_H
 #define _ASM_X86_MICROCODE_INTEL_H
 
@@ -41,6 +40,7 @@ struct extended_sigtable {
 #define DEFAULT_UCODE_TOTALSIZE (DEFAULT_UCODE_DATASIZE + MC_HEADER_SIZE)
 #define EXT_HEADER_SIZE		(sizeof(struct extended_sigtable))
 #define EXT_SIGNATURE_SIZE	(sizeof(struct extended_signature))
+#define DWSIZE			(sizeof(u32))
 
 #define get_totalsize(mc) \
 	(((struct microcode_intel *)mc)->hdr.datasize ? \
@@ -60,13 +60,17 @@ static inline u32 intel_get_microcode_revision(void)
 	native_wrmsrl(MSR_IA32_UCODE_REV, 0);
 
 	/* As documented in the SDM: Do a CPUID 1 here */
-	native_cpuid_eax(1);
+	sync_core();
 
 	/* get the current revision from MSR 0x8B */
 	native_rdmsr(MSR_IA32_UCODE_REV, dummy, rev);
 
 	return rev;
 }
+
+extern int has_newer_microcode(void *mc, unsigned int csig, int cpf, int rev);
+extern int microcode_sanity_check(void *mc, int print_err);
+extern int find_matching_signature(void *mc, unsigned int csig, int cpf);
 
 #ifdef CONFIG_MICROCODE_INTEL
 extern void __init load_ucode_intel_bsp(void);
@@ -82,4 +86,9 @@ static inline int __init save_microcode_in_initrd_intel(void) { return -EINVAL; 
 static inline void reload_ucode_intel(void) {}
 #endif
 
+#ifdef CONFIG_HOTPLUG_CPU
+extern int save_mc_for_early(u8 *mc);
+#else
+static inline int save_mc_for_early(u8 *mc) { return 0; }
+#endif
 #endif /* _ASM_X86_MICROCODE_INTEL_H */

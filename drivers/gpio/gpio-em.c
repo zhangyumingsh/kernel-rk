@@ -27,7 +27,7 @@
 #include <linux/irqdomain.h>
 #include <linux/bitops.h>
 #include <linux/err.h>
-#include <linux/gpio/driver.h>
+#include <linux/gpio.h>
 #include <linux/slab.h>
 #include <linux/module.h>
 #include <linux/pinctrl/consumer.h>
@@ -101,14 +101,12 @@ static void em_gio_irq_enable(struct irq_data *d)
 static int em_gio_irq_reqres(struct irq_data *d)
 {
 	struct em_gio_priv *p = irq_data_get_irq_chip_data(d);
-	int ret;
 
-	ret = gpiochip_lock_as_irq(&p->gpio_chip, irqd_to_hwirq(d));
-	if (ret) {
+	if (gpiochip_lock_as_irq(&p->gpio_chip, irqd_to_hwirq(d))) {
 		dev_err(p->gpio_chip.parent,
 			"unable to lock HW IRQ %lu for IRQ\n",
 			irqd_to_hwirq(d));
-		return ret;
+		return -EINVAL;
 	}
 	return 0;
 }
@@ -194,7 +192,7 @@ static irqreturn_t em_gio_irq_handler(int irq, void *dev_id)
 
 static inline struct em_gio_priv *gpio_to_priv(struct gpio_chip *chip)
 {
-	return gpiochip_get_data(chip);
+	return container_of(chip, struct em_gio_priv, gpio_chip);
 }
 
 static int em_gio_direction_input(struct gpio_chip *chip, unsigned offset)
@@ -205,7 +203,7 @@ static int em_gio_direction_input(struct gpio_chip *chip, unsigned offset)
 
 static int em_gio_get(struct gpio_chip *chip, unsigned offset)
 {
-	return !!(em_gio_read(gpio_to_priv(chip), GIO_I) & BIT(offset));
+	return (int)(em_gio_read(gpio_to_priv(chip), GIO_I) & BIT(offset));
 }
 
 static void __em_gio_set(struct gpio_chip *chip, unsigned int reg,
@@ -241,12 +239,12 @@ static int em_gio_to_irq(struct gpio_chip *chip, unsigned offset)
 
 static int em_gio_request(struct gpio_chip *chip, unsigned offset)
 {
-	return pinctrl_gpio_request(chip->base + offset);
+	return pinctrl_request_gpio(chip->base + offset);
 }
 
 static void em_gio_free(struct gpio_chip *chip, unsigned offset)
 {
-	pinctrl_gpio_free(chip->base + offset);
+	pinctrl_free_gpio(chip->base + offset);
 
 	/* Set the GPIO as an input to ensure that the next GPIO request won't
 	* drive the GPIO pin as an output.
@@ -370,7 +368,7 @@ static int em_gio_probe(struct platform_device *pdev)
 		goto err1;
 	}
 
-	ret = gpiochip_add_data(gpio_chip, p);
+	ret = gpiochip_add(gpio_chip);
 	if (ret) {
 		dev_err(&pdev->dev, "failed to add GPIO controller\n");
 		goto err1;

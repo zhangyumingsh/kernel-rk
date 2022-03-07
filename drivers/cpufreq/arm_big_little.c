@@ -23,8 +23,6 @@
 #include <linux/cpu.h>
 #include <linux/cpufreq.h>
 #include <linux/cpumask.h>
-#include <linux/cpu_cooling.h>
-#include <linux/energy_model.h>
 #include <linux/export.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
@@ -57,8 +55,7 @@ static bool bL_switching_enabled;
 #define ACTUAL_FREQ(cluster, freq)  ((cluster == A7_CLUSTER) ? freq << 1 : freq)
 #define VIRT_FREQ(cluster, freq)    ((cluster == A7_CLUSTER) ? freq >> 1 : freq)
 
-static struct thermal_cooling_device *cdev[MAX_CLUSTERS];
-static const struct cpufreq_arm_bL_ops *arm_bL_ops;
+static struct cpufreq_arm_bL_ops *arm_bL_ops;
 static struct clk *clk[MAX_CLUSTERS];
 static struct cpufreq_frequency_table *freq_table[MAX_CLUSTERS + 1];
 static atomic_t cluster_usage[MAX_CLUSTERS + 1];
@@ -214,7 +211,6 @@ static int bL_cpufreq_set_target(struct cpufreq_policy *policy,
 {
 	u32 cpu = policy->cpu, cur_cluster, new_cluster, actual_cluster;
 	unsigned int freqs_new;
-	int ret;
 
 	cur_cluster = cpu_to_cluster(cpu);
 	new_cluster = actual_cluster = per_cpu(physical_cluster, cpu);
@@ -231,14 +227,7 @@ static int bL_cpufreq_set_target(struct cpufreq_policy *policy,
 		}
 	}
 
-	ret = bL_cpufreq_set_rate(cpu, actual_cluster, new_cluster, freqs_new);
-
-	if (!ret) {
-		arch_set_freq_scale(policy->related_cpus, freqs_new,
-				    policy->cpuinfo.max_freq);
-	}
-
-	return ret;
+	return bL_cpufreq_set_rate(cpu, actual_cluster, new_cluster, freqs_new);
 }
 
 static inline u32 get_table_count(struct cpufreq_frequency_table *table)
@@ -281,7 +270,7 @@ static int merge_cluster_tables(void)
 	for (i = 0; i < MAX_CLUSTERS; i++)
 		count += get_table_count(freq_table[i]);
 
-	table = kcalloc(count, sizeof(*table), GFP_KERNEL);
+	table = kzalloc(sizeof(*table) * count, GFP_KERNEL);
 	if (!table)
 		return -ENOMEM;
 
@@ -307,8 +296,7 @@ static int merge_cluster_tables(void)
 	return 0;
 }
 
-static void _put_cluster_clk_and_freq_table(struct device *cpu_dev,
-					    const struct cpumask *cpumask)
+static void _put_cluster_clk_and_freq_table(struct device *cpu_dev)
 {
 	u32 cluster = raw_cpu_to_cluster(cpu_dev->id);
 
@@ -318,12 +306,11 @@ static void _put_cluster_clk_and_freq_table(struct device *cpu_dev,
 	clk_put(clk[cluster]);
 	dev_pm_opp_free_cpufreq_table(cpu_dev, &freq_table[cluster]);
 	if (arm_bL_ops->free_opp_table)
-		arm_bL_ops->free_opp_table(cpumask);
+		arm_bL_ops->free_opp_table(cpu_dev);
 	dev_dbg(cpu_dev, "%s: cluster: %d\n", __func__, cluster);
 }
 
-static void put_cluster_clk_and_freq_table(struct device *cpu_dev,
-					   const struct cpumask *cpumask)
+static void put_cluster_clk_and_freq_table(struct device *cpu_dev)
 {
 	u32 cluster = cpu_to_cluster(cpu_dev->id);
 	int i;
@@ -332,7 +319,7 @@ static void put_cluster_clk_and_freq_table(struct device *cpu_dev,
 		return;
 
 	if (cluster < MAX_CLUSTERS)
-		return _put_cluster_clk_and_freq_table(cpu_dev, cpumask);
+		return _put_cluster_clk_and_freq_table(cpu_dev);
 
 	for_each_present_cpu(i) {
 		struct device *cdev = get_cpu_device(i);
@@ -341,15 +328,14 @@ static void put_cluster_clk_and_freq_table(struct device *cpu_dev,
 			return;
 		}
 
-		_put_cluster_clk_and_freq_table(cdev, cpumask);
+		_put_cluster_clk_and_freq_table(cdev);
 	}
 
 	/* free virtual table */
 	kfree(freq_table[cluster]);
 }
 
-static int _get_cluster_clk_and_freq_table(struct device *cpu_dev,
-					   const struct cpumask *cpumask)
+static int _get_cluster_clk_and_freq_table(struct device *cpu_dev)
 {
 	u32 cluster = raw_cpu_to_cluster(cpu_dev->id);
 	int ret;
@@ -357,7 +343,7 @@ static int _get_cluster_clk_and_freq_table(struct device *cpu_dev,
 	if (freq_table[cluster])
 		return 0;
 
-	ret = arm_bL_ops->init_opp_table(cpumask);
+	ret = arm_bL_ops->init_opp_table(cpu_dev);
 	if (ret) {
 		dev_err(cpu_dev, "%s: init_opp_table failed, cpu: %d, err: %d\n",
 				__func__, cpu_dev->id, ret);
@@ -386,15 +372,14 @@ static int _get_cluster_clk_and_freq_table(struct device *cpu_dev,
 
 free_opp_table:
 	if (arm_bL_ops->free_opp_table)
-		arm_bL_ops->free_opp_table(cpumask);
+		arm_bL_ops->free_opp_table(cpu_dev);
 out:
 	dev_err(cpu_dev, "%s: Failed to get data for cluster: %d\n", __func__,
 			cluster);
 	return ret;
 }
 
-static int get_cluster_clk_and_freq_table(struct device *cpu_dev,
-					  const struct cpumask *cpumask)
+static int get_cluster_clk_and_freq_table(struct device *cpu_dev)
 {
 	u32 cluster = cpu_to_cluster(cpu_dev->id);
 	int i, ret;
@@ -403,7 +388,7 @@ static int get_cluster_clk_and_freq_table(struct device *cpu_dev,
 		return 0;
 
 	if (cluster < MAX_CLUSTERS) {
-		ret = _get_cluster_clk_and_freq_table(cpu_dev, cpumask);
+		ret = _get_cluster_clk_and_freq_table(cpu_dev);
 		if (ret)
 			atomic_dec(&cluster_usage[cluster]);
 		return ret;
@@ -420,7 +405,7 @@ static int get_cluster_clk_and_freq_table(struct device *cpu_dev,
 			return -ENODEV;
 		}
 
-		ret = _get_cluster_clk_and_freq_table(cdev, cpumask);
+		ret = _get_cluster_clk_and_freq_table(cdev);
 		if (ret)
 			goto put_clusters;
 	}
@@ -446,7 +431,7 @@ put_clusters:
 			return -ENODEV;
 		}
 
-		_put_cluster_clk_and_freq_table(cdev, cpumask);
+		_put_cluster_clk_and_freq_table(cdev);
 	}
 
 	atomic_dec(&cluster_usage[cluster]);
@@ -457,7 +442,6 @@ put_clusters:
 /* Per-CPU initialization */
 static int bL_cpufreq_init(struct cpufreq_policy *policy)
 {
-	struct em_data_callback em_cb = EM_DATA_CB(of_dev_pm_opp_get_cpu_power);
 	u32 cur_cluster = cpu_to_cluster(policy->cpu);
 	struct device *cpu_dev;
 	int ret;
@@ -467,6 +451,18 @@ static int bL_cpufreq_init(struct cpufreq_policy *policy)
 		pr_err("%s: failed to get cpu%d device\n", __func__,
 				policy->cpu);
 		return -ENODEV;
+	}
+
+	ret = get_cluster_clk_and_freq_table(cpu_dev);
+	if (ret)
+		return ret;
+
+	ret = cpufreq_table_validate_and_show(policy, freq_table[cur_cluster]);
+	if (ret) {
+		dev_err(cpu_dev, "CPU %d, cluster: %d invalid freq table\n",
+				policy->cpu, cur_cluster);
+		put_cluster_clk_and_freq_table(cpu_dev);
+		return ret;
 	}
 
 	if (cur_cluster < MAX_CLUSTERS) {
@@ -481,21 +477,11 @@ static int bL_cpufreq_init(struct cpufreq_policy *policy)
 		per_cpu(physical_cluster, policy->cpu) = A15_CLUSTER;
 	}
 
-	ret = get_cluster_clk_and_freq_table(cpu_dev, policy->cpus);
-	if (ret)
-		return ret;
-
-	policy->freq_table = freq_table[cur_cluster];
-	policy->cpuinfo.transition_latency =
-				arm_bL_ops->get_transition_latency(cpu_dev);
-
-	ret = dev_pm_opp_get_opp_count(cpu_dev);
-	if (ret <= 0) {
-		dev_dbg(cpu_dev, "OPP table is not ready, deferring probe\n");
-		return -EPROBE_DEFER;
-	}
-
-	em_register_perf_domain(policy->cpus, ret, &em_cb);
+	if (arm_bL_ops->get_transition_latency)
+		policy->cpuinfo.transition_latency =
+			arm_bL_ops->get_transition_latency(cpu_dev);
+	else
+		policy->cpuinfo.transition_latency = CPUFREQ_ETERNAL;
 
 	if (is_bL_switching_enabled())
 		per_cpu(cpu_last_req_freq, policy->cpu) = clk_get_cpu_rate(policy->cpu);
@@ -507,12 +493,6 @@ static int bL_cpufreq_init(struct cpufreq_policy *policy)
 static int bL_cpufreq_exit(struct cpufreq_policy *policy)
 {
 	struct device *cpu_dev;
-	int cur_cluster = cpu_to_cluster(policy->cpu);
-
-	if (cur_cluster < MAX_CLUSTERS) {
-		cpufreq_cooling_unregister(cdev[cur_cluster]);
-		cdev[cur_cluster] = NULL;
-	}
 
 	cpu_dev = get_cpu_device(policy->cpu);
 	if (!cpu_dev) {
@@ -521,21 +501,10 @@ static int bL_cpufreq_exit(struct cpufreq_policy *policy)
 		return -ENODEV;
 	}
 
-	put_cluster_clk_and_freq_table(cpu_dev, policy->related_cpus);
+	put_cluster_clk_and_freq_table(cpu_dev);
 	dev_dbg(cpu_dev, "%s: Exited, cpu: %d\n", __func__, policy->cpu);
 
 	return 0;
-}
-
-static void bL_cpufreq_ready(struct cpufreq_policy *policy)
-{
-	int cur_cluster = cpu_to_cluster(policy->cpu);
-
-	/* Do not register a cpu_cooling device if we are in IKS mode */
-	if (cur_cluster >= MAX_CLUSTERS)
-		return;
-
-	cdev[cur_cluster] = of_cpufreq_cooling_register(policy);
 }
 
 static struct cpufreq_driver bL_cpufreq_driver = {
@@ -548,7 +517,6 @@ static struct cpufreq_driver bL_cpufreq_driver = {
 	.get			= bL_cpufreq_get_rate,
 	.init			= bL_cpufreq_init,
 	.exit			= bL_cpufreq_exit,
-	.ready			= bL_cpufreq_ready,
 	.attr			= cpufreq_generic_attr,
 };
 
@@ -599,7 +567,7 @@ static int __bLs_register_notifier(void) { return 0; }
 static int __bLs_unregister_notifier(void) { return 0; }
 #endif
 
-int bL_cpufreq_register(const struct cpufreq_arm_bL_ops *ops)
+int bL_cpufreq_register(struct cpufreq_arm_bL_ops *ops)
 {
 	int ret, i;
 
@@ -609,8 +577,7 @@ int bL_cpufreq_register(const struct cpufreq_arm_bL_ops *ops)
 		return -EBUSY;
 	}
 
-	if (!ops || !strlen(ops->name) || !ops->init_opp_table ||
-	    !ops->get_transition_latency) {
+	if (!ops || !strlen(ops->name) || !ops->init_opp_table) {
 		pr_err("%s: Invalid arm_bL_ops, exiting\n", __func__);
 		return -ENODEV;
 	}
@@ -643,7 +610,7 @@ int bL_cpufreq_register(const struct cpufreq_arm_bL_ops *ops)
 }
 EXPORT_SYMBOL_GPL(bL_cpufreq_register);
 
-void bL_cpufreq_unregister(const struct cpufreq_arm_bL_ops *ops)
+void bL_cpufreq_unregister(struct cpufreq_arm_bL_ops *ops)
 {
 	if (arm_bL_ops != ops) {
 		pr_err("%s: Registered with: %s, can't unregister, exiting\n",

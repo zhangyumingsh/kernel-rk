@@ -25,7 +25,6 @@
 #include <linux/spinlock.h>
 #include <linux/sysctl.h>
 #include <linux/wait.h>
-#include <linux/sched/signal.h>
 #include <linux/bcd.h>
 #include <linux/seq_file.h>
 #include <linux/bitops.h>
@@ -43,7 +42,7 @@
 /*
  * The High Precision Event Timer driver.
  * This driver is closely modelled after the rtc.c driver.
- * See HPET spec revision 1.
+ * http://www.intel.com/hardwaredesign/hpetspec_1.pdf
  */
 #define	HPET_USER_FREQ	(64)
 #define	HPET_DRIFT	(500)
@@ -70,9 +69,9 @@ static u32 hpet_nhpet, hpet_max_freq = HPET_USER_FREQ;
 #ifdef CONFIG_IA64
 static void __iomem *hpet_mctr;
 
-static u64 read_hpet(struct clocksource *cs)
+static cycle_t read_hpet(struct clocksource *cs)
 {
-	return (u64)read_counter((void __iomem *)hpet_mctr);
+	return (cycle_t)read_counter((void __iomem *)hpet_mctr);
 }
 
 static struct clocksource clocksource_hpet = {
@@ -342,7 +341,7 @@ out:
 	return retval;
 }
 
-static __poll_t hpet_poll(struct file *file, poll_table * wait)
+static unsigned int hpet_poll(struct file *file, poll_table * wait)
 {
 	unsigned long v;
 	struct hpet_dev *devp;
@@ -359,7 +358,7 @@ static __poll_t hpet_poll(struct file *file, poll_table * wait)
 	spin_unlock_irq(&hpet_lock);
 
 	if (v != 0)
-		return EPOLLIN | EPOLLRDNORM;
+		return POLLIN | POLLRDNORM;
 
 	return 0;
 }
@@ -574,10 +573,11 @@ static inline unsigned long hpet_time_div(struct hpets *hpets,
 }
 
 static int
-hpet_ioctl_common(struct hpet_dev *devp, unsigned int cmd, unsigned long arg,
+hpet_ioctl_common(struct hpet_dev *devp, int cmd, unsigned long arg,
 		  struct hpet_info *info)
 {
 	struct hpet_timer __iomem *timer;
+	struct hpet __iomem *hpet;
 	struct hpets *hpetp;
 	int err;
 	unsigned long v;
@@ -589,6 +589,7 @@ hpet_ioctl_common(struct hpet_dev *devp, unsigned int cmd, unsigned long arg,
 	case HPET_DPI:
 	case HPET_IRQFREQ:
 		timer = devp->hd_timer;
+		hpet = devp->hd_hpet;
 		hpetp = devp->hd_hpets;
 		break;
 	case HPET_IE_ON:
@@ -975,8 +976,6 @@ static acpi_status hpet_resources(struct acpi_resource *res, void *data)
 	if (ACPI_SUCCESS(status)) {
 		hdp->hd_phys_address = addr.address.minimum;
 		hdp->hd_address = ioremap(addr.address.minimum, addr.address.address_length);
-		if (!hdp->hd_address)
-			return AE_ERROR;
 
 		if (hpet_is_known(hdp)) {
 			iounmap(hdp->hd_address);
@@ -990,8 +989,6 @@ static acpi_status hpet_resources(struct acpi_resource *res, void *data)
 		hdp->hd_phys_address = fixmem32->address;
 		hdp->hd_address = ioremap(fixmem32->address,
 						HPET_RANGE_SIZE);
-		if (!hdp->hd_address)
-			return AE_ERROR;
 
 		if (hpet_is_known(hdp)) {
 			iounmap(hdp->hd_address);

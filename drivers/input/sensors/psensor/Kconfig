@@ -4,29 +4,26 @@
 #
 
 menuconfig PROXIMITY_DEVICE
-	tristate "proximity sensor device support"
+	bool "proximity sensor device support"
 	default n	
 
 if PROXIMITY_DEVICE
 
 config PS_AL3006
-	tristate "psensor al3006"
+  bool "psensor al3006"
 	default n
 
 config PS_STK3171
-	tristate "psensor stk3171"
+  bool "psensor stk3171"
 	default n
 
 config PS_AP321XX
-	tristate "psensor ap321xx"
+  bool "psensor ap321xx"
 	default n
 
 config PS_STK3410
-	tristate "proximity sensor stk3410"
+	bool "proximity sensor stk3410"
 	default n
-
-config PS_EM3071X
-	tristate "proximity sensor em3071x"
 
 endif
 

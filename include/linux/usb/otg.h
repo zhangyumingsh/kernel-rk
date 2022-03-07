@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /* USB OTG (On The Go) defines */
 /*
  *
@@ -118,7 +117,6 @@ enum usb_dr_mode {
 	USB_DR_MODE_HOST,
 	USB_DR_MODE_PERIPHERAL,
 	USB_DR_MODE_OTG,
-	USB_DR_MODE_DRD,
 };
 
 /**

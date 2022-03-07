@@ -61,21 +61,6 @@ static inline struct rk628_lvds *connector_to_lvds(struct drm_connector *c)
 	return container_of(c, struct rk628_lvds, connector);
 }
 
-static enum lvds_format rk628_lvds_get_format(u32 bus_format)
-{
-	switch (bus_format) {
-	case MEDIA_BUS_FMT_RGB666_1X7X3_JEIDA:
-		return LVDS_FORMAT_JEIDA_18BIT;
-	case MEDIA_BUS_FMT_RGB888_1X7X4_JEIDA:
-		return LVDS_FORMAT_JEIDA_24BIT;
-	case MEDIA_BUS_FMT_RGB666_1X7X3_SPWG:
-		return LVDS_FORMAT_VESA_18BIT;
-	case MEDIA_BUS_FMT_RGB888_1X7X4_SPWG:
-	default:
-		return LVDS_FORMAT_VESA_24BIT;
-	}
-}
-
 static enum lvds_link_type rk628_lvds_get_link_type(struct rk628_lvds *lvds)
 {
 	struct device *dev = lvds->dev;
@@ -110,14 +95,34 @@ static int rk628_lvds_connector_get_modes(struct drm_connector *connector)
 {
 	struct rk628_lvds *lvds = connector_to_lvds(connector);
 	struct drm_display_info *info = &connector->display_info;
+	u32 bus_format;
 	int num_modes = 0;
 
 	num_modes = drm_panel_get_modes(lvds->panel);
 
 	if (info->num_bus_formats)
-		lvds->format = rk628_lvds_get_format(info->bus_formats[0]);
+		bus_format = info->bus_formats[0];
 	else
-		lvds->format = MEDIA_BUS_FMT_RGB888_1X7X4_SPWG;
+		bus_format = MEDIA_BUS_FMT_RGB888_1X7X4_SPWG;
+
+	switch (bus_format) {
+	case MEDIA_BUS_FMT_RGB888_1X7X4_JEIDA:
+		bus_format = MEDIA_BUS_FMT_RGB888_1X24;
+		lvds->format = LVDS_FORMAT_JEIDA_24BIT;
+		break;
+	case MEDIA_BUS_FMT_RGB666_1X7X3_SPWG:
+		bus_format = MEDIA_BUS_FMT_RGB666_1X18;
+		lvds->format = LVDS_FORMAT_VESA_18BIT;
+		break;
+	case MEDIA_BUS_FMT_RGB888_1X7X4_SPWG:
+	default:
+		bus_format = MEDIA_BUS_FMT_RGB888_1X24;
+		lvds->format = LVDS_FORMAT_VESA_24BIT;
+		break;
+	}
+
+	drm_display_info_set_bus_formats(&connector->display_info,
+					 &bus_format, 1);
 
 	return num_modes;
 }
@@ -128,6 +133,12 @@ rk628_lvds_connector_helper_funcs = {
 	.best_encoder = rk628_lvds_connector_best_encoder,
 };
 
+static enum drm_connector_status
+rk628_lvds_connector_detect(struct drm_connector *connector, bool force)
+{
+	return connector_status_connected;
+}
+
 static void rk628_lvds_connector_destroy(struct drm_connector *connector)
 {
 	struct rk628_lvds *lvds = connector_to_lvds(connector);
@@ -137,6 +148,8 @@ static void rk628_lvds_connector_destroy(struct drm_connector *connector)
 }
 
 static const struct drm_connector_funcs rk628_lvds_connector_funcs = {
+	.dpms = drm_atomic_helper_connector_dpms,
+	.detect = rk628_lvds_connector_detect,
 	.fill_modes = drm_helper_probe_single_connector_modes,
 	.destroy = rk628_lvds_connector_destroy,
 	.reset = drm_atomic_helper_connector_reset,
@@ -223,6 +236,8 @@ static int rk628_lvds_bridge_attach(struct drm_bridge *bridge)
 	struct drm_device *drm = bridge->dev;
 	int ret;
 
+	connector->port = lvds->dev->of_node;
+
 	ret = drm_connector_init(drm, connector, &rk628_lvds_connector_funcs,
 				 DRM_MODE_CONNECTOR_LVDS);
 	if (ret) {
@@ -231,7 +246,7 @@ static int rk628_lvds_bridge_attach(struct drm_bridge *bridge)
 	}
 
 	drm_connector_helper_add(connector, &rk628_lvds_connector_helper_funcs);
-	drm_connector_attach_encoder(connector, bridge->encoder);
+	drm_mode_connector_attach_encoder(connector, bridge->encoder);
 
 	ret = drm_panel_attach(lvds->panel, connector);
 	if (ret) {
@@ -292,7 +307,11 @@ static int rk628_lvds_probe(struct platform_device *pdev)
 
 	lvds->base.funcs = &rk628_lvds_bridge_funcs;
 	lvds->base.of_node = dev->of_node;
-	drm_bridge_add(&lvds->base);
+	ret = drm_bridge_add(&lvds->base);
+	if (ret) {
+		dev_err(dev, "failed to add drm_bridge: %d\n", ret);
+		return ret;
+	}
 
 	return 0;
 }

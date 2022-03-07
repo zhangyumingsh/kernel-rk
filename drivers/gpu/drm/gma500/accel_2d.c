@@ -28,6 +28,7 @@
 #include <linux/tty.h>
 #include <linux/slab.h>
 #include <linux/delay.h>
+#include <linux/fb.h>
 #include <linux/init.h>
 #include <linux/console.h>
 
@@ -251,10 +252,10 @@ static void psbfb_copyarea_accel(struct fb_info *info,
 	if (!fb)
 		return;
 
-	offset = to_gtt_range(fb->obj[0])->offset;
+	offset = psbfb->gtt->offset;
 	stride = fb->pitches[0];
 
-	switch (fb->format->depth) {
+	switch (fb->depth) {
 	case 8:
 		src_format = PSB_2D_SRC_332RGB;
 		dst_format = PSB_2D_DST_332RGB;

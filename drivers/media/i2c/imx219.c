@@ -7,7 +7,6 @@
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
  * V0.0X01.0X01 add enum_frame_interval function.
- * V0.0X01.0X02 add function g_mbus_config.
  */
 #include <linux/clk.h>
 #include <linux/delay.h>
@@ -26,7 +25,7 @@
 #include <media/v4l2-image-sizes.h>
 #include <media/v4l2-mediabus.h>
 
-#define DRIVER_VERSION			KERNEL_VERSION(0, 0x01, 0x2)
+#define DRIVER_VERSION			KERNEL_VERSION(0, 0x01, 0x1)
 
 /* IMX219 supported geometry */
 #define IMX219_TABLE_END		0xffff
@@ -47,8 +46,6 @@
 #define IMX219_EXP_LINES_MARGIN	4
 
 #define IMX219_NAME			"imx219"
-
-#define IMX219_LANES			2
 
 static const s64 link_freq_menu_items[] = {
 	456000000,
@@ -638,7 +635,7 @@ static int imx219_enum_mbus_code(struct v4l2_subdev *sd,
 {
 	if (code->index != 0)
 		return -EINVAL;
-	code->code = MEDIA_BUS_FMT_SRGGB10_1X10;
+	code->code = MEDIA_BUS_FMT_SBGGR10_1X10;
 
 	return 0;
 }
@@ -824,25 +821,10 @@ static int imx219_enum_frame_interval(struct v4l2_subdev *sd,
 	return 0;
 }
 
-static int imx219_g_mbus_config(struct v4l2_subdev *sd,
-				struct v4l2_mbus_config *config)
-{
-	u32 val = 0;
-
-	val = 1 << (IMX219_LANES - 1) |
-	      V4L2_MBUS_CSI2_CHANNEL_0 |
-	      V4L2_MBUS_CSI2_CONTINUOUS_CLOCK;
-	config->type = V4L2_MBUS_CSI2;
-	config->flags = val;
-
-	return 0;
-}
-
 /* Various V4L2 operations tables */
 static struct v4l2_subdev_video_ops imx219_subdev_video_ops = {
 	.s_stream = imx219_s_stream,
 	.g_frame_interval = imx219_g_frame_interval,
-	.g_mbus_config = imx219_g_mbus_config,
 };
 
 static struct v4l2_subdev_core_ops imx219_subdev_core_ops = {
@@ -1082,12 +1064,10 @@ static int imx219_probe(struct i2c_client *client,
 	if (ret < 0)
 		return ret;
 
-	priv->subdev.flags |= V4L2_SUBDEV_FL_HAS_DEVNODE |
-		     V4L2_SUBDEV_FL_HAS_EVENTS;
-
+	priv->subdev.flags |= V4L2_SUBDEV_FL_HAS_DEVNODE;
 	priv->pad.flags = MEDIA_PAD_FL_SOURCE;
-	priv->subdev.entity.function = MEDIA_ENT_F_CAM_SENSOR;
-	ret = media_entity_pads_init(&priv->subdev.entity, 1, &priv->pad);
+	priv->subdev.entity.type = MEDIA_ENT_T_V4L2_SUBDEV_SENSOR;
+	ret = media_entity_init(&priv->subdev.entity, 1, &priv->pad, 0);
 	if (ret < 0)
 		return ret;
 

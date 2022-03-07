@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: (GPL-2.0+ OR MIT)
-// Copyright (c) 2020 Fuzhou Rockchip Electronics Co., Ltd
+// Copyright (c) 2019 Fuzhou Rockchip Electronics Co., Ltd
 
 /dts-v1/;
 #include "rk3288-evb-rk628.dtsi"
@@ -69,15 +69,31 @@
 	enable-gpios = <&gpio7 2 GPIO_ACTIVE_HIGH>;
 };
 
-&rk628 {
-	pinctrl-names = "default";
-	pinctrl-0 = <&test_clkout>;
-	assigned-clocks = <&cru SCLK_TESTOUT_SRC>;
-	assigned-clock-parents = <&xin24m>;
-};
-
 &rk628_combtxphy {
 	status = "okay";
+};
+
+
+&firmware_android {
+	compatible = "android,firmware";
+	boot_devices = "ff0f0000.dwmmc";
+
+	vbmeta {
+		compatible = "android,vbmeta";
+		parts = "vbmeta,boot,system,vendor,dtbo";
+	};
+
+	fstab {
+		compatible = "android,fstab";
+
+		vendor {
+			compatible = "android,vendor";
+			dev = "/dev/block/by-name/vendor";
+			type = "ext4";
+			mnt_flags = "ro,barrier=1,inode_readahead_blks=8";
+			fsmgr_flags = "wait,avb";
+		};
+	};
 };
 
 &rk628_gvi {
@@ -191,13 +207,6 @@
 	};
 };
 
-&rk628_xin_osc0_func {
-	compatible = "fixed-factor-clock";
-	clocks = <&cru SCLK_TESTOUT>;
-	clock-mult = <1>;
-	clock-div = <1>;
-};
-
 &rgb {
 	status = "okay";
 
@@ -227,12 +236,4 @@
 &route_rgb {
 	connect = <&vopl_out_rgb>;
 	status = "disabled";
-};
-
-&pinctrl {
-	test {
-		test_clkout: test-clkout {
-			rockchip,pins = <0 17 RK_FUNC_1 &pcfg_pull_none>;
-		};
-	};
 };

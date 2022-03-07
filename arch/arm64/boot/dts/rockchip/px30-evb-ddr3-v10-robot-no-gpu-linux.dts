@@ -113,6 +113,10 @@
 	cpu-supply = <&vdd_arm>;
 };
 
+&display_subsystem {
+	status = "okay";
+};
+
 &dfi {
 	status = "okay";
 };
@@ -424,6 +428,10 @@
 		pwdn-gpios = <&gpio2 14 GPIO_ACTIVE_HIGH>;
 		pinctrl-names = "default";
 		pinctrl-0 = <&cif_clkout_m0>;
+		rockchip,camera-module-index = <0>;
+		rockchip,camera-module-facing = "back";
+		rockchip,camera-module-name = "TongJu";
+		rockchip,camera-module-lens-name = "CHT842-MD";
 		port {
 			ucam_out: endpoint {
 				remote-endpoint = <&mipi_in_ucam>;
@@ -547,27 +555,23 @@
 	status = "okay";
 };
 
-&mpp_srv {
+&vopb {
 	status = "okay";
 };
 
-&vdpu {
+&vopb_mmu {
 	status = "okay";
 };
 
-&vepu {
+&vopl {
 	status = "okay";
 };
 
-&vpu_mmu {
+&vopl_mmu {
 	status = "okay";
 };
 
-&hevc {
-	status = "okay";
-};
-
-&hevc_mmu {
+&vpu_combo {
 	status = "okay";
 };
 
@@ -603,12 +607,12 @@
 
 		soc_slppin_slp: soc_slppin_slp {
 			rockchip,pins =
-				<0 RK_PA4 1 &pcfg_pull_none>;
+				<0 RK_PA4 RK_FUNC_1 &pcfg_pull_none>;
 		};
 
 		soc_slppin_rst: soc_slppin_rst {
 			rockchip,pins =
-				<0 RK_PA4 2 &pcfg_pull_none>;
+				<0 RK_PA4 RK_FUNC_2 &pcfg_pull_none>;
 		};
 	};
 

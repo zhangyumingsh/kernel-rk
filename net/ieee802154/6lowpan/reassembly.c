@@ -25,7 +25,7 @@
 
 #include <net/ieee802154_netdev.h>
 #include <net/6lowpan.h>
-#include <net/ipv6_frag.h>
+#include <net/ipv6.h>
 #include <net/inet_frag.h>
 
 #include "6lowpan_i.h"
@@ -40,17 +40,21 @@ static int lowpan_frag_reasm(struct lowpan_frag_queue *fq,
 static void lowpan_frag_init(struct inet_frag_queue *q, const void *a)
 {
 	const struct frag_lowpan_compare_key *key = a;
+	struct lowpan_frag_queue *fq;
+
+	fq = container_of(q, struct lowpan_frag_queue, q);
 
 	BUILD_BUG_ON(sizeof(*key) > sizeof(q->key));
 	memcpy(&q->key, key, sizeof(*key));
 }
 
-static void lowpan_frag_expire(struct timer_list *t)
+static void lowpan_frag_expire(unsigned long data)
 {
-	struct inet_frag_queue *frag = from_timer(frag, t, timer);
 	struct frag_queue *fq;
+	struct net *net;
 
-	fq = container_of(frag, struct frag_queue, q);
+	fq = container_of((struct inet_frag_queue *)data, struct frag_queue, q);
+	net = container_of(fq->q.net, struct net, ieee802154_lowpan.frags);
 
 	spin_lock(&fq->q.lock);
 
@@ -603,6 +607,7 @@ int __init lowpan_net_frag_init(void)
 
 	lowpan_frags.constructor = lowpan_frag_init;
 	lowpan_frags.destructor = NULL;
+	lowpan_frags.skb_free = NULL;
 	lowpan_frags.qsize = sizeof(struct frag_queue);
 	lowpan_frags.frag_expire = lowpan_frag_expire;
 	lowpan_frags.frags_cache_name = lowpan_frags_cache_name;
@@ -629,7 +634,7 @@ err_sysctl:
 
 void lowpan_net_frag_exit(void)
 {
+	inet_frags_fini(&lowpan_frags);
 	lowpan_frags_sysctl_unregister();
 	unregister_pernet_subsys(&lowpan_frags_ops);
-	inet_frags_fini(&lowpan_frags);
 }

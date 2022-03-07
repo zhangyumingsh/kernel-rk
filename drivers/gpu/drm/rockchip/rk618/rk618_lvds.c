@@ -22,7 +22,6 @@
 #include <video/of_display_timing.h>
 #include <video/videomode.h>
 
-#include "../rockchip_drm_drv.h"
 #include "rk618_dither.h"
 
 enum {
@@ -42,7 +41,6 @@ struct rk618_lvds {
 	struct rk618 *parent;
 	bool dual_channel;
 	u32 bus_format;
-	struct rockchip_drm_sub_dev sub_dev;
 };
 
 static inline struct rk618_lvds *bridge_to_lvds(struct drm_bridge *b)
@@ -104,6 +102,7 @@ static void rk618_lvds_connector_destroy(struct drm_connector *connector)
 }
 
 static const struct drm_connector_funcs rk618_lvds_connector_funcs = {
+	.dpms = drm_atomic_helper_connector_dpms,
 	.detect = rk618_lvds_connector_detect,
 	.fill_modes = drm_helper_probe_single_connector_modes,
 	.destroy = rk618_lvds_connector_destroy,
@@ -124,9 +123,6 @@ static void rk618_lvds_bridge_enable(struct drm_bridge *bridge)
 	rk618_frc_dither_init(lvds->parent, lvds->bus_format);
 
 	switch (lvds->bus_format) {
-	case MEDIA_BUS_FMT_RGB666_1X7X3_JEIDA:
-		format = LVDS_FORMAT_JEIDA_18BIT;
-		break;
 	case MEDIA_BUS_FMT_RGB888_1X7X4_JEIDA:
 		format = LVDS_FORMAT_JEIDA_24BIT;
 		break;
@@ -173,9 +169,12 @@ static void rk618_lvds_bridge_disable(struct drm_bridge *bridge)
 static int rk618_lvds_bridge_attach(struct drm_bridge *bridge)
 {
 	struct rk618_lvds *lvds = bridge_to_lvds(bridge);
+	struct device *dev = lvds->dev;
 	struct drm_connector *connector = &lvds->connector;
 	struct drm_device *drm = bridge->dev;
 	int ret;
+
+	connector->port = dev->of_node;
 
 	ret = drm_connector_init(drm, connector, &rk618_lvds_connector_funcs,
 				 DRM_MODE_CONNECTOR_LVDS);
@@ -185,7 +184,7 @@ static int rk618_lvds_bridge_attach(struct drm_bridge *bridge)
 	}
 
 	drm_connector_helper_add(connector, &rk618_lvds_connector_helper_funcs);
-	drm_connector_attach_encoder(connector, bridge->encoder);
+	drm_mode_connector_attach_encoder(connector, bridge->encoder);
 
 	ret = drm_panel_attach(lvds->panel, connector);
 	if (ret) {
@@ -193,23 +192,11 @@ static int rk618_lvds_bridge_attach(struct drm_bridge *bridge)
 		return ret;
 	}
 
-	lvds->sub_dev.connector = &lvds->connector;
-	lvds->sub_dev.of_node = lvds->dev->of_node;
-	rockchip_drm_register_sub_dev(&lvds->sub_dev);
-
 	return 0;
-}
-
-static void rk618_lvds_bridge_detach(struct drm_bridge *bridge)
-{
-	struct rk618_lvds *lvds = bridge_to_lvds(bridge);
-
-	rockchip_drm_unregister_sub_dev(&lvds->sub_dev);
 }
 
 static const struct drm_bridge_funcs rk618_lvds_bridge_funcs = {
 	.attach = rk618_lvds_bridge_attach,
-	.detach = rk618_lvds_bridge_detach,
 	.enable = rk618_lvds_bridge_enable,
 	.disable = rk618_lvds_bridge_disable,
 };
@@ -278,7 +265,11 @@ static int rk618_lvds_probe(struct platform_device *pdev)
 
 	lvds->base.funcs = &rk618_lvds_bridge_funcs;
 	lvds->base.of_node = dev->of_node;
-	drm_bridge_add(&lvds->base);
+	ret = drm_bridge_add(&lvds->base);
+	if (ret) {
+		dev_err(dev, "failed to add drm_bridge: %d\n", ret);
+		return ret;
+	}
 
 	return 0;
 }

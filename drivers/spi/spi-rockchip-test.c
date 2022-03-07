@@ -62,10 +62,10 @@
 #include <linux/miscdevice.h>
 #include <linux/hrtimer.h>
 #include <linux/platform_data/spi-rockchip.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <linux/syscalls.h>
 
-#define MAX_SPI_DEV_NUM 8
+#define MAX_SPI_DEV_NUM 6
 #define SPI_MAX_SPEED_HZ	12000000
 
 struct spi_test_data {
@@ -78,43 +78,29 @@ struct spi_test_data {
 };
 
 static struct spi_test_data *g_spi_test_data[MAX_SPI_DEV_NUM];
-static u32 bit_per_word = 8;
 
 int spi_write_slt(int id, const void *txbuf, size_t n)
 {
 	int ret = -1;
 	struct spi_device *spi = NULL;
-	struct spi_transfer     t = {
-			.tx_buf         = txbuf,
-			.len            = n,
-			.bits_per_word = bit_per_word,
-		};
-	struct spi_message      m;
 
 	if (id >= MAX_SPI_DEV_NUM)
-		return ret;
+		return -1;
 	if (!g_spi_test_data[id]) {
 		pr_err("g_spi.%d is NULL\n", id);
-		return ret;
+		return -1;
 	} else {
 		spi = g_spi_test_data[id]->spi;
 	}
 
-	spi_message_init(&m);
-	spi_message_add_tail(&t, &m);
-	return spi_sync(spi, &m);
+	ret = spi_write(spi, txbuf, n);
+	return ret;
 }
 
 int spi_read_slt(int id, void *rxbuf, size_t n)
 {
 	int ret = -1;
 	struct spi_device *spi = NULL;
-	struct spi_transfer     t = {
-			.rx_buf         = rxbuf,
-			.len            = n,
-			.bits_per_word = bit_per_word,
-		};
-	struct spi_message      m;
 
 	if (id >= MAX_SPI_DEV_NUM)
 		return ret;
@@ -125,9 +111,8 @@ int spi_read_slt(int id, void *rxbuf, size_t n)
 		spi = g_spi_test_data[id]->spi;
 	}
 
-	spi_message_init(&m);
-	spi_message_add_tail(&t, &m);
-	return spi_sync(spi, &m);
+	ret = spi_read(spi, rxbuf, n);
+	return ret;
 }
 
 int spi_write_then_read_slt(int id, const void *txbuf, unsigned n_tx,
@@ -244,12 +229,12 @@ static ssize_t spi_test_write(struct file *file,
 		}
 
 		if (argc > 3) {
-			fd = ksys_open(name, O_RDONLY, 0);
+			fd = sys_open(name, O_RDONLY, 0);
 			if (fd < 0) {
 				printk("open %s fail\n", name);
 			} else {
-				ksys_read(fd, (char __user *)txbuf, size);
-				ksys_close(fd);
+				sys_read(fd, (char __user *)txbuf, size);
+				sys_close(fd);
 			}
 			set_fs(old_fs);
 		} else {
@@ -290,13 +275,6 @@ static ssize_t spi_test_write(struct file *file,
 		bytes = size * times * 1;
 		bytes = bytes * 1000 / us;
 		printk("spi read %d*%d cost %ldus speed:%ldKB/S\n", size, times, us, bytes);
-		print_hex_dump(KERN_ERR, "SPI RX: ",
-			       DUMP_PREFIX_OFFSET,
-			       16,
-			       1,
-			       rxbuf,
-			       size,
-			       1);
 
 		kfree(rxbuf);
 	} else if (!strcmp(cmd, "loop")) {
@@ -321,17 +299,15 @@ static ssize_t spi_test_write(struct file *file,
 			txbuf[i] = i % 256;
 
 		start_time = ktime_get();
-		for (i = 0; i < times; i++) {
+		for (i = 0; i < times; i++)
 			spi_write_and_read_slt(id, txbuf, rxbuf, size);
-			if (memcmp(txbuf, rxbuf, size)) {
-				printk("spi loop test fail\n");
-				break;
-			}
-		}
 
 		end_time = ktime_get();
 		cost_time = ktime_sub(end_time, start_time);
 		us = ktime_to_us(cost_time);
+
+		if (memcmp(txbuf, rxbuf, size))
+			printk("spi loop test fail\n");
 
 		bytes = size * times;
 		bytes = bytes * 1000 / us;
@@ -339,15 +315,6 @@ static ssize_t spi_test_write(struct file *file,
 
 		kfree(txbuf);
 		kfree(rxbuf);
-	} else if (!strcmp(cmd, "config")) {
-		int width;
-
-		sscanf(argv[0], "%d", &width);
-
-		if (width == 16)
-			bit_per_word = 16;
-		else
-			bit_per_word = 8;
 	} else {
 		printk("echo id number size > /dev/spi_misc_test\n");
 		printk("echo write 0 10 255 > /dev/spi_misc_test\n");
@@ -355,7 +322,6 @@ static ssize_t spi_test_write(struct file *file,
 		printk("echo read 0 10 255 > /dev/spi_misc_test\n");
 		printk("echo loop 0 10 255 > /dev/spi_misc_test\n");
 		printk("echo setspeed 0 1000000 > /dev/spi_misc_test\n");
-		printk("echo config 8 > /dev/spi_misc_test\n");
 	}
 
 	return n;

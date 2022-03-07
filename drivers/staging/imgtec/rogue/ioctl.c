@@ -51,7 +51,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #endif /* _WIN32 */
 
 #ifdef LINUX
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include "pvr_uaccess.h"
 #endif /* LINUX */
 

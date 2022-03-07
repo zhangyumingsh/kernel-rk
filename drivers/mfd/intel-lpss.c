@@ -24,7 +24,6 @@
 #include <linux/mfd/core.h>
 #include <linux/pm_qos.h>
 #include <linux/pm_runtime.h>
-#include <linux/property.h>
 #include <linux/seq_file.h>
 #include <linux/io-64-nonatomic-lo-hi.h>
 
@@ -40,8 +39,8 @@
 
 /* Offsets from lpss->priv */
 #define LPSS_PRIV_RESETS		0x04
-#define LPSS_PRIV_RESETS_IDMA		BIT(2)
-#define LPSS_PRIV_RESETS_FUNC		0x3
+#define LPSS_PRIV_RESETS_FUNC		BIT(2)
+#define LPSS_PRIV_RESETS_IDMA		0x3
 
 #define LPSS_PRIV_ACTIVELTR		0x10
 #define LPSS_PRIV_IDLELTR		0x14
@@ -74,7 +73,7 @@ struct intel_lpss {
 	enum intel_lpss_dev_type type;
 	struct clk *clk;
 	struct clk_lookup *clock;
-	struct mfd_cell *cell;
+	const struct mfd_cell *cell;
 	struct device *dev;
 	void __iomem *priv;
 	u32 priv_ctx[LPSS_PRIV_REG_COUNT];
@@ -220,7 +219,6 @@ static void intel_lpss_ltr_hide(struct intel_lpss *lpss)
 
 static int intel_lpss_assign_devs(struct intel_lpss *lpss)
 {
-	const struct mfd_cell *cell;
 	unsigned int type;
 
 	type = lpss->caps & LPSS_PRIV_CAPS_TYPE_MASK;
@@ -228,21 +226,17 @@ static int intel_lpss_assign_devs(struct intel_lpss *lpss)
 
 	switch (type) {
 	case LPSS_DEV_I2C:
-		cell = &intel_lpss_i2c_cell;
+		lpss->cell = &intel_lpss_i2c_cell;
 		break;
 	case LPSS_DEV_UART:
-		cell = &intel_lpss_uart_cell;
+		lpss->cell = &intel_lpss_uart_cell;
 		break;
 	case LPSS_DEV_SPI:
-		cell = &intel_lpss_spi_cell;
+		lpss->cell = &intel_lpss_spi_cell;
 		break;
 	default:
 		return -ENODEV;
 	}
-
-	lpss->cell = devm_kmemdup(lpss->dev, cell, sizeof(*cell), GFP_KERNEL);
-	if (!lpss->cell)
-		return -ENOMEM;
 
 	lpss->type = type;
 
@@ -341,8 +335,8 @@ static int intel_lpss_register_clock(struct intel_lpss *lpss)
 		return 0;
 
 	/* Root clock */
-	clk = clk_register_fixed_rate(NULL, dev_name(lpss->dev), NULL, 0,
-				      lpss->info->clk_rate);
+	clk = clk_register_fixed_rate(NULL, dev_name(lpss->dev), NULL,
+				      CLK_IS_ROOT, lpss->info->clk_rate);
 	if (IS_ERR(clk))
 		return PTR_ERR(clk);
 
@@ -397,7 +391,7 @@ int intel_lpss_probe(struct device *dev,
 	if (!lpss)
 		return -ENOMEM;
 
-	lpss->priv = devm_ioremap_uc(dev, info->mem->start + LPSS_PRIV_OFFSET,
+	lpss->priv = devm_ioremap(dev, info->mem->start + LPSS_PRIV_OFFSET,
 				  LPSS_PRIV_SIZE);
 	if (!lpss->priv)
 		return -ENOMEM;
@@ -411,8 +405,6 @@ int intel_lpss_probe(struct device *dev,
 	ret = intel_lpss_assign_devs(lpss);
 	if (ret)
 		return ret;
-
-	lpss->cell->properties = info->properties;
 
 	intel_lpss_init_dev(lpss);
 
@@ -453,8 +445,6 @@ int intel_lpss_probe(struct device *dev,
 	if (ret)
 		goto err_remove_ltr;
 
-	dev_pm_set_driver_flags(dev, DPM_FLAG_SMART_SUSPEND);
-
 	return 0;
 
 err_remove_ltr:
@@ -483,9 +473,7 @@ EXPORT_SYMBOL_GPL(intel_lpss_remove);
 
 static int resume_lpss_device(struct device *dev, void *data)
 {
-	if (!dev_pm_test_driver_flags(dev, DPM_FLAG_SMART_SUSPEND))
-		pm_runtime_resume(dev);
-
+	pm_runtime_resume(dev);
 	return 0;
 }
 
@@ -508,14 +496,6 @@ int intel_lpss_suspend(struct device *dev)
 	/* Save device context */
 	for (i = 0; i < LPSS_PRIV_REG_COUNT; i++)
 		lpss->priv_ctx[i] = readl(lpss->priv + i * 4);
-
-	/*
-	 * If the device type is not UART, then put the controller into
-	 * reset. UART cannot be put into reset since S3/S0ix fail when
-	 * no_console_suspend flag is enabled.
-	 */
-	if (lpss->type != LPSS_DEV_UART)
-		writel(0, lpss->priv + LPSS_PRIV_RESETS);
 
 	return 0;
 }
@@ -545,7 +525,6 @@ module_init(intel_lpss_init);
 
 static void __exit intel_lpss_exit(void)
 {
-	ida_destroy(&intel_lpss_devid_ida);
 	debugfs_remove(intel_lpss_debugfs);
 }
 module_exit(intel_lpss_exit);

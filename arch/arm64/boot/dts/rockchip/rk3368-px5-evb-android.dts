@@ -52,7 +52,7 @@
 	compatible = "rockchip,px5-evb", "rockchip,px5", "rockchip,rk3368";
 
 	chosen: chosen {
-		bootargs = "earlycon=uart8250,mmio32,0xff1c0000 firmware_class.path=/system/vendor/firmware";
+		bootargs = "earlycon=uart8250,mmio32,0xff1c0000 swiotlb=1 firmware_class.path=/system/vendor/firmware";
 	};
 
 	fiq_debugger: fiq-debugger {
@@ -92,12 +92,10 @@
 	};
 
 	xin32k: xin32k {
-		status = "okay";
-		compatible = "pwm-clock";
-		#clock-cells = <0>;
+		compatible = "fixed-clock";
 		clock-frequency = <32768>;
 		clock-output-names = "xin32k";
-		pwms = <&pwm1 0 30518 0>; /* 1 / 30518 ns = 32.7675 KHz */
+		#clock-cells = <0>;
 	};
 
 	sdio_pwrseq: sdio-pwrseq {
@@ -677,6 +675,8 @@
 			vcc33_lcd: SWITCH_REG2 {
 				regulator-boot-on;
 				regulator-name = "vcc33_lcd";
+				regulator-min-microvolt = <3300000>;
+				regulator-max-microvolt = <3300000>;
 				regulator-state-mem {
 					regulator-off-in-suspend;
 				};
@@ -862,6 +862,10 @@
 	status = "okay";
 };
 
+&dwc_control_usb {
+	otg_drv_gpio = <&gpio0 RK_PA4 GPIO_ACTIVE_LOW>;
+};
+
 &lvds {
 	status = "okay";
 
@@ -911,38 +915,34 @@
 	status = "disabled";
 };
 
-&uart4 {
-	status = "okay";
-};
-
 &pinctrl {
 	pmic {
 		pmic_int: pmic-int {
-			rockchip,pins = <0 RK_PA5 RK_FUNC_GPIO &pcfg_pull_up>;
+			rockchip,pins = <RK_GPIO0 RK_PA5 RK_FUNC_GPIO &pcfg_pull_up>;
 		};
 	};
 
 	dc_det {
 		dc_irq_gpio: dc-irq-gpio {
-			rockchip,pins = <0 RK_PC1 RK_FUNC_GPIO &pcfg_pull_up>;
+			rockchip,pins = <RK_GPIO0 RK_PC1 RK_FUNC_GPIO &pcfg_pull_up>;
 		};
 	};
 
 	sdio-pwrseq {
 		wifi_enable_h: wifi-enable-h {
-			rockchip,pins = <3 RK_PA5 RK_FUNC_GPIO &pcfg_pull_none>;
+			rockchip,pins = <RK_GPIO3 RK_PA5 RK_FUNC_GPIO &pcfg_pull_none>;
 		};
 	};
 
 	usb2 {
 		host_vbus_drv: host-vbus-drv {
-			rockchip,pins = <0 RK_PA3 RK_FUNC_GPIO &pcfg_pull_none>;
+			rockchip,pins = <RK_GPIO0 RK_PA3 RK_FUNC_GPIO &pcfg_pull_none>;
 		};
 	};
 
 	wireless-bluetooth {
 		uart0_rts_gpio: uart0-rts-gpio {
-			rockchip,pins = <2 RK_PD3 RK_FUNC_GPIO &pcfg_pull_none>;
+			rockchip,pins = <RK_GPIO2 RK_PD3 RK_FUNC_GPIO &pcfg_pull_none>;
 		};
 	};
 
@@ -951,7 +951,7 @@
 			rockchip,pins = <0 RK_PC7 RK_FUNC_GPIO  &pcfg_pull_down>;
 		};
 		gpio0_a3: gpio0-a3 {
-			rockchip,pins = <0 RK_PA3 3 &pcfg_pull_none>;
+			rockchip,pins = <0 RK_PA3 RK_FUNC_3 &pcfg_pull_none>;
 		};
 		gpio0_c2: gpio0-c2 {
 			rockchip,pins = <0 RK_PC2 RK_FUNC_GPIO &pcfg_pull_down>;
@@ -979,12 +979,12 @@
 	};
 	i2s {
 		i2s_8ch_bus: i2s-8ch-bus {
-			rockchip,pins = <2 RK_PB4 1 &pcfg_pull_none>,
-					<2 RK_PB5 1 &pcfg_pull_none>,
-					<2 RK_PB6 1 &pcfg_pull_none>,
-					<2 RK_PB7 1 &pcfg_pull_none>,
-					<2 RK_PC0 1 &pcfg_pull_none>,
-					<2 RK_PC2 1 &pcfg_pull_none>;
+			rockchip,pins = <2 12 RK_FUNC_1 &pcfg_pull_none>,
+					<2 13 RK_FUNC_1 &pcfg_pull_none>,
+					<2 14 RK_FUNC_1 &pcfg_pull_none>,
+					<2 15 RK_FUNC_1 &pcfg_pull_none>,
+					<2 16 RK_FUNC_1 &pcfg_pull_none>,
+					<2 18 RK_FUNC_1 &pcfg_pull_none>;
 		};
 	};
 };

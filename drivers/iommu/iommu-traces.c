@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * iommu trace points
  *
@@ -26,7 +25,3 @@ EXPORT_TRACEPOINT_SYMBOL_GPL(unmap);
 
 /* iommu_error */
 EXPORT_TRACEPOINT_SYMBOL_GPL(io_page_fault);
-EXPORT_TRACEPOINT_SYMBOL_GPL(smmu_init);
-EXPORT_TRACEPOINT_SYMBOL_GPL(tlbi_end);
-EXPORT_TRACEPOINT_SYMBOL_GPL(tlbi_start);
-EXPORT_TRACEPOINT_SYMBOL_GPL(tlbsync_timeout);

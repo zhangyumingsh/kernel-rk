@@ -21,11 +21,10 @@
 #include <linux/ctype.h>
 #include <linux/export.h>
 #include <linux/inet.h>
-#include <linux/module.h>
-#include <net/ipv6.h>
 #include <target/target_core_base.h>
 #include <target/target_core_fabric.h>
 #include <target/iscsi/iscsi_transport.h>
+
 #include <target/iscsi/iscsi_target_core.h>
 #include "iscsi_target_parameters.h"
 #include "iscsi_target_device.h"
@@ -44,15 +43,14 @@ static inline struct iscsi_tpg_np *to_iscsi_tpg_np(struct config_item *item)
 	return container_of(to_tpg_np(item), struct iscsi_tpg_np, se_tpg_np);
 }
 
-static ssize_t lio_target_np_driver_show(struct config_item *item, char *page,
-					 enum iscsit_transport_type type)
+static ssize_t lio_target_np_sctp_show(struct config_item *item, char *page)
 {
 	struct iscsi_tpg_np *tpg_np = to_iscsi_tpg_np(item);
-	struct iscsi_tpg_np *tpg_np_new;
+	struct iscsi_tpg_np *tpg_np_sctp;
 	ssize_t rb;
 
-	tpg_np_new = iscsit_tpg_locate_child_np(tpg_np, type);
-	if (tpg_np_new)
+	tpg_np_sctp = iscsit_tpg_locate_child_np(tpg_np, ISCSI_SCTP_TCP);
+	if (tpg_np_sctp)
 		rb = sprintf(page, "1\n");
 	else
 		rb = sprintf(page, "0\n");
@@ -60,20 +58,19 @@ static ssize_t lio_target_np_driver_show(struct config_item *item, char *page,
 	return rb;
 }
 
-static ssize_t lio_target_np_driver_store(struct config_item *item,
-		const char *page, size_t count, enum iscsit_transport_type type,
-		const char *mod_name)
+static ssize_t lio_target_np_sctp_store(struct config_item *item,
+		const char *page, size_t count)
 {
 	struct iscsi_tpg_np *tpg_np = to_iscsi_tpg_np(item);
 	struct iscsi_np *np;
 	struct iscsi_portal_group *tpg;
-	struct iscsi_tpg_np *tpg_np_new = NULL;
+	struct iscsi_tpg_np *tpg_np_sctp = NULL;
 	u32 op;
-	int rc;
+	int ret;
 
-	rc = kstrtou32(page, 0, &op);
-	if (rc)
-		return rc;
+	ret = kstrtou32(page, 0, &op);
+	if (ret)
+		return ret;
 	if ((op != 1) && (op != 0)) {
 		pr_err("Illegal value for tpg_enable: %u\n", op);
 		return -EINVAL;
@@ -90,25 +87,89 @@ static ssize_t lio_target_np_driver_store(struct config_item *item,
 		return -EINVAL;
 
 	if (op) {
-		if (strlen(mod_name)) {
-			rc = request_module(mod_name);
-			if (rc != 0) {
-				pr_warn("Unable to request_module for %s\n",
-					mod_name);
-				rc = 0;
-			}
+		/*
+		 * Use existing np->np_sockaddr for SCTP network portal reference
+		 */
+		tpg_np_sctp = iscsit_tpg_add_network_portal(tpg, &np->np_sockaddr,
+					tpg_np, ISCSI_SCTP_TCP);
+		if (!tpg_np_sctp || IS_ERR(tpg_np_sctp))
+			goto out;
+	} else {
+		tpg_np_sctp = iscsit_tpg_locate_child_np(tpg_np, ISCSI_SCTP_TCP);
+		if (!tpg_np_sctp)
+			goto out;
+
+		ret = iscsit_tpg_del_network_portal(tpg, tpg_np_sctp);
+		if (ret < 0)
+			goto out;
+	}
+
+	iscsit_put_tpg(tpg);
+	return count;
+out:
+	iscsit_put_tpg(tpg);
+	return -EINVAL;
+}
+
+static ssize_t lio_target_np_iser_show(struct config_item *item, char *page)
+{
+	struct iscsi_tpg_np *tpg_np = to_iscsi_tpg_np(item);
+	struct iscsi_tpg_np *tpg_np_iser;
+	ssize_t rb;
+
+	tpg_np_iser = iscsit_tpg_locate_child_np(tpg_np, ISCSI_INFINIBAND);
+	if (tpg_np_iser)
+		rb = sprintf(page, "1\n");
+	else
+		rb = sprintf(page, "0\n");
+
+	return rb;
+}
+
+static ssize_t lio_target_np_iser_store(struct config_item *item,
+		const char *page, size_t count)
+{
+	struct iscsi_tpg_np *tpg_np = to_iscsi_tpg_np(item);
+	struct iscsi_np *np;
+	struct iscsi_portal_group *tpg;
+	struct iscsi_tpg_np *tpg_np_iser = NULL;
+	char *endptr;
+	u32 op;
+	int rc = 0;
+
+	op = simple_strtoul(page, &endptr, 0);
+	if ((op != 1) && (op != 0)) {
+		pr_err("Illegal value for tpg_enable: %u\n", op);
+		return -EINVAL;
+	}
+	np = tpg_np->tpg_np;
+	if (!np) {
+		pr_err("Unable to locate struct iscsi_np from"
+				" struct iscsi_tpg_np\n");
+		return -EINVAL;
+	}
+
+	tpg = tpg_np->tpg;
+	if (iscsit_get_tpg(tpg) < 0)
+		return -EINVAL;
+
+	if (op) {
+		rc = request_module("ib_isert");
+		if (rc != 0) {
+			pr_warn("Unable to request_module for ib_isert\n");
+			rc = 0;
 		}
 
-		tpg_np_new = iscsit_tpg_add_network_portal(tpg,
-					&np->np_sockaddr, tpg_np, type);
-		if (IS_ERR(tpg_np_new)) {
-			rc = PTR_ERR(tpg_np_new);
+		tpg_np_iser = iscsit_tpg_add_network_portal(tpg, &np->np_sockaddr,
+				tpg_np, ISCSI_INFINIBAND);
+		if (IS_ERR(tpg_np_iser)) {
+			rc = PTR_ERR(tpg_np_iser);
 			goto out;
 		}
 	} else {
-		tpg_np_new = iscsit_tpg_locate_child_np(tpg_np, type);
-		if (tpg_np_new) {
-			rc = iscsit_tpg_del_network_portal(tpg, tpg_np_new);
+		tpg_np_iser = iscsit_tpg_locate_child_np(tpg_np, ISCSI_INFINIBAND);
+		if (tpg_np_iser) {
+			rc = iscsit_tpg_del_network_portal(tpg, tpg_np_iser);
 			if (rc < 0)
 				goto out;
 		}
@@ -121,35 +182,12 @@ out:
 	return rc;
 }
 
-static ssize_t lio_target_np_iser_show(struct config_item *item, char *page)
-{
-	return lio_target_np_driver_show(item, page, ISCSI_INFINIBAND);
-}
-
-static ssize_t lio_target_np_iser_store(struct config_item *item,
-					const char *page, size_t count)
-{
-	return lio_target_np_driver_store(item, page, count,
-					  ISCSI_INFINIBAND, "ib_isert");
-}
+CONFIGFS_ATTR(lio_target_np_, sctp);
 CONFIGFS_ATTR(lio_target_np_, iser);
 
-static ssize_t lio_target_np_cxgbit_show(struct config_item *item, char *page)
-{
-	return lio_target_np_driver_show(item, page, ISCSI_CXGBIT);
-}
-
-static ssize_t lio_target_np_cxgbit_store(struct config_item *item,
-					  const char *page, size_t count)
-{
-	return lio_target_np_driver_store(item, page, count,
-					  ISCSI_CXGBIT, "cxgbit");
-}
-CONFIGFS_ATTR(lio_target_np_, cxgbit);
-
 static struct configfs_attribute *lio_target_portal_attrs[] = {
+	&lio_target_np_attr_sctp,
 	&lio_target_np_attr_iser,
-	&lio_target_np_attr_cxgbit,
 	NULL,
 };
 
@@ -167,7 +205,10 @@ static struct se_tpg_np *lio_target_call_addnptotpg(
 	struct iscsi_portal_group *tpg;
 	struct iscsi_tpg_np *tpg_np;
 	char *str, *str2, *ip_str, *port_str;
-	struct sockaddr_storage sockaddr = { };
+	struct sockaddr_storage sockaddr;
+	struct sockaddr_in *sock_in;
+	struct sockaddr_in6 *sock_in6;
+	unsigned long port;
 	int ret;
 	char buf[MAX_PORTAL_LEN + 1];
 
@@ -179,19 +220,21 @@ static struct se_tpg_np *lio_target_call_addnptotpg(
 	memset(buf, 0, MAX_PORTAL_LEN + 1);
 	snprintf(buf, MAX_PORTAL_LEN + 1, "%s", name);
 
+	memset(&sockaddr, 0, sizeof(struct sockaddr_storage));
+
 	str = strstr(buf, "[");
 	if (str) {
+		const char *end;
+
 		str2 = strstr(str, "]");
 		if (!str2) {
 			pr_err("Unable to locate trailing \"]\""
 				" in IPv6 iSCSI network portal address\n");
 			return ERR_PTR(-EINVAL);
 		}
-
-		ip_str = str + 1; /* Skip over leading "[" */
+		str++; /* Skip over leading "[" */
 		*str2 = '\0'; /* Terminate the unbracketed IPv6 address */
 		str2++; /* Skip over the \0 */
-
 		port_str = strstr(str2, ":");
 		if (!port_str) {
 			pr_err("Unable to locate \":port\""
@@ -200,8 +243,23 @@ static struct se_tpg_np *lio_target_call_addnptotpg(
 		}
 		*port_str = '\0'; /* Terminate string for IP */
 		port_str++; /* Skip over ":" */
+
+		ret = kstrtoul(port_str, 0, &port);
+		if (ret < 0) {
+			pr_err("kstrtoul() failed for port_str: %d\n", ret);
+			return ERR_PTR(ret);
+		}
+		sock_in6 = (struct sockaddr_in6 *)&sockaddr;
+		sock_in6->sin6_family = AF_INET6;
+		sock_in6->sin6_port = htons((unsigned short)port);
+		ret = in6_pton(str, -1,
+				(void *)&sock_in6->sin6_addr.in6_u, -1, &end);
+		if (ret <= 0) {
+			pr_err("in6_pton returned: %d\n", ret);
+			return ERR_PTR(-EINVAL);
+		}
 	} else {
-		ip_str = &buf[0];
+		str = ip_str = &buf[0];
 		port_str = strstr(ip_str, ":");
 		if (!port_str) {
 			pr_err("Unable to locate \":port\""
@@ -210,15 +268,17 @@ static struct se_tpg_np *lio_target_call_addnptotpg(
 		}
 		*port_str = '\0'; /* Terminate string for IP */
 		port_str++; /* Skip over ":" */
-	}
 
-	ret = inet_pton_with_scope(&init_net, AF_UNSPEC, ip_str,
-			port_str, &sockaddr);
-	if (ret) {
-		pr_err("malformed ip/port passed: %s\n", name);
-		return ERR_PTR(ret);
+		ret = kstrtoul(port_str, 0, &port);
+		if (ret < 0) {
+			pr_err("kstrtoul() failed for port_str: %d\n", ret);
+			return ERR_PTR(ret);
+		}
+		sock_in = (struct sockaddr_in *)&sockaddr;
+		sock_in->sin_family = AF_INET;
+		sock_in->sin_port = htons((unsigned short)port);
+		sock_in->sin_addr.s_addr = in_aton(ip_str);
 	}
-
 	tpg = container_of(se_tpg, struct iscsi_portal_group, tpg_se_tpg);
 	ret = iscsit_get_tpg(tpg);
 	if (ret < 0)
@@ -719,6 +779,14 @@ static int lio_target_init_nodeacl(struct se_node_acl *se_nacl,
 	return 0;
 }
 
+static void lio_target_cleanup_nodeacl( struct se_node_acl *se_nacl)
+{
+	struct iscsi_node_acl *acl = container_of(se_nacl,
+			struct iscsi_node_acl, se_node_acl);
+
+	configfs_remove_default_groups(&acl->se_node_acl.acl_fabric_stat_group);
+}
+
 /* End items for lio_target_acl_cit */
 
 /* Start items for lio_target_tpg_attrib_cit */
@@ -1090,8 +1158,10 @@ static struct configfs_attribute *lio_target_tpg_attrs[] = {
 
 /* Start items for lio_target_tiqn_cit */
 
-static struct se_portal_group *lio_target_tiqn_addtpg(struct se_wwn *wwn,
-						      const char *name)
+static struct se_portal_group *lio_target_tiqn_addtpg(
+	struct se_wwn *wwn,
+	struct config_group *group,
+	const char *name)
 {
 	struct iscsi_portal_group *tpg;
 	struct iscsi_tiqn *tiqn;
@@ -1180,16 +1250,6 @@ static struct se_wwn *lio_target_call_coreaddtiqn(
 	if (IS_ERR(tiqn))
 		return ERR_CAST(tiqn);
 
-	pr_debug("LIO_Target_ConfigFS: REGISTER -> %s\n", tiqn->tiqn);
-	pr_debug("LIO_Target_ConfigFS: REGISTER -> Allocated Node:"
-			" %s\n", name);
-	return &tiqn->tiqn_wwn;
-}
-
-static void lio_target_add_wwn_groups(struct se_wwn *wwn)
-{
-	struct iscsi_tiqn *tiqn = container_of(wwn, struct iscsi_tiqn, tiqn_wwn);
-
 	config_group_init_type_name(&tiqn->tiqn_stat_grps.iscsi_instance_group,
 			"iscsi_instance", &iscsi_stat_instance_cit);
 	configfs_add_default_group(&tiqn->tiqn_stat_grps.iscsi_instance_group,
@@ -1214,12 +1274,20 @@ static void lio_target_add_wwn_groups(struct se_wwn *wwn)
 			"iscsi_logout_stats", &iscsi_stat_logout_cit);
 	configfs_add_default_group(&tiqn->tiqn_stat_grps.iscsi_logout_stats_group,
 			&tiqn->tiqn_wwn.fabric_stat_group);
+
+
+	pr_debug("LIO_Target_ConfigFS: REGISTER -> %s\n", tiqn->tiqn);
+	pr_debug("LIO_Target_ConfigFS: REGISTER -> Allocated Node:"
+			" %s\n", name);
+	return &tiqn->tiqn_wwn;
 }
 
 static void lio_target_call_coredeltiqn(
 	struct se_wwn *wwn)
 {
 	struct iscsi_tiqn *tiqn = container_of(wwn, struct iscsi_tiqn, tiqn_wwn);
+
+	configfs_remove_default_groups(&tiqn->tiqn_wwn.fabric_stat_group);
 
 	pr_debug("LIO_Target_ConfigFS: DEREGISTER -> %s\n",
 			tiqn->tiqn);
@@ -1377,10 +1445,11 @@ static u32 lio_sess_get_initiator_sid(
 static int lio_queue_data_in(struct se_cmd *se_cmd)
 {
 	struct iscsi_cmd *cmd = container_of(se_cmd, struct iscsi_cmd, se_cmd);
-	struct iscsi_conn *conn = cmd->conn;
 
 	cmd->i_state = ISTATE_SEND_DATAIN;
-	return conn->conn_transport->iscsit_queue_data_in(conn, cmd);
+	cmd->conn->conn_transport->iscsit_queue_data_in(cmd->conn, cmd);
+
+	return 0;
 }
 
 static int lio_write_pending(struct se_cmd *se_cmd)
@@ -1409,14 +1478,16 @@ static int lio_write_pending_status(struct se_cmd *se_cmd)
 static int lio_queue_status(struct se_cmd *se_cmd)
 {
 	struct iscsi_cmd *cmd = container_of(se_cmd, struct iscsi_cmd, se_cmd);
-	struct iscsi_conn *conn = cmd->conn;
 
 	cmd->i_state = ISTATE_SEND_STATUS;
 
 	if (cmd->se_cmd.scsi_status || cmd->sense_reason) {
-		return iscsit_add_cmd_to_response_queue(cmd, conn, cmd->i_state);
+		iscsit_add_cmd_to_response_queue(cmd, cmd->conn, cmd->i_state);
+		return 0;
 	}
-	return conn->conn_transport->iscsit_queue_status(conn, cmd);
+	cmd->conn->conn_transport->iscsit_queue_status(cmd->conn, cmd);
+
+	return 0;
 }
 
 static void lio_queue_tm_rsp(struct se_cmd *se_cmd)
@@ -1492,7 +1563,7 @@ static int lio_tpg_check_prot_fabric_only(
  * This function calls iscsit_inc_session_usage_count() on the
  * struct iscsi_session in question.
  */
-static void lio_tpg_close_session(struct se_session *se_sess)
+static int lio_tpg_shutdown_session(struct se_session *se_sess)
 {
 	struct iscsi_session *sess = se_sess->fabric_sess_ptr;
 	struct se_portal_group *se_tpg = &sess->tpg->tpg_se_tpg;
@@ -1501,23 +1572,34 @@ static void lio_tpg_close_session(struct se_session *se_sess)
 	spin_lock(&sess->conn_lock);
 	if (atomic_read(&sess->session_fall_back_to_erl0) ||
 	    atomic_read(&sess->session_logout) ||
-	    atomic_read(&sess->session_close) ||
 	    (sess->time2retain_timer_flags & ISCSI_TF_EXPIRED)) {
 		spin_unlock(&sess->conn_lock);
 		spin_unlock_bh(&se_tpg->session_lock);
-		return;
+		return 0;
 	}
-	iscsit_inc_session_usage_count(sess);
 	atomic_set(&sess->session_reinstatement, 1);
 	atomic_set(&sess->session_fall_back_to_erl0, 1);
-	atomic_set(&sess->session_close, 1);
 	spin_unlock(&sess->conn_lock);
 
 	iscsit_stop_time2retain_timer(sess);
 	spin_unlock_bh(&se_tpg->session_lock);
 
 	iscsit_stop_session(sess, 1, 1);
-	iscsit_dec_session_usage_count(sess);
+	return 1;
+}
+
+/*
+ * Calls iscsit_dec_session_usage_count() as inverse of
+ * lio_tpg_shutdown_session()
+ */
+static void lio_tpg_close_session(struct se_session *se_sess)
+{
+	struct iscsi_session *sess = se_sess->fabric_sess_ptr;
+	/*
+	 * If the iSCSI Session for the iSCSI Initiator Node exists,
+	 * forcefully shutdown the iSCSI NEXUS.
+	 */
+	iscsit_close_session(sess);
 }
 
 static u32 lio_tpg_get_inst_index(struct se_portal_group *se_tpg)
@@ -1568,6 +1650,7 @@ const struct target_core_fabric_ops iscsi_ops = {
 	.tpg_get_inst_index		= lio_tpg_get_inst_index,
 	.check_stop_free		= lio_check_stop_free,
 	.release_cmd			= lio_release_cmd,
+	.shutdown_session		= lio_tpg_shutdown_session,
 	.close_session			= lio_tpg_close_session,
 	.sess_get_index			= lio_sess_get_index,
 	.sess_get_initiator_sid		= lio_sess_get_initiator_sid,
@@ -1581,12 +1664,12 @@ const struct target_core_fabric_ops iscsi_ops = {
 	.aborted_task			= lio_aborted_task,
 	.fabric_make_wwn		= lio_target_call_coreaddtiqn,
 	.fabric_drop_wwn		= lio_target_call_coredeltiqn,
-	.add_wwn_groups			= lio_target_add_wwn_groups,
 	.fabric_make_tpg		= lio_target_tiqn_addtpg,
 	.fabric_drop_tpg		= lio_target_tiqn_deltpg,
 	.fabric_make_np			= lio_target_call_addnptotpg,
 	.fabric_drop_np			= lio_target_call_delnpfromtpg,
 	.fabric_init_nodeacl		= lio_target_init_nodeacl,
+	.fabric_cleanup_nodeacl		= lio_target_cleanup_nodeacl,
 
 	.tfc_discovery_attrs		= lio_target_discovery_auth_attrs,
 	.tfc_wwn_attrs			= lio_target_wwn_attrs,

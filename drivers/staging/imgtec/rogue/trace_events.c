@@ -66,11 +66,9 @@ bool trace_rogue_are_fence_checks_traced(void)
  * simply a no-op, there is no harm in it.
  */
 
-int trace_fence_update_enabled_callback(void)
+void trace_fence_update_enabled_callback(void)
 {
 	fence_update_event_enabled = true;
-	//Warning
-	return 0;
 }
 
 void trace_fence_update_disabled_callback(void)
@@ -78,11 +76,9 @@ void trace_fence_update_disabled_callback(void)
 	fence_update_event_enabled = false;
 }
 
-int trace_fence_check_enabled_callback(void)
+void trace_fence_check_enabled_callback(void)
 {
 	fence_check_event_enabled = true;
-	//Warning
-	return 0;
 }
 
 void trace_fence_check_disabled_callback(void)

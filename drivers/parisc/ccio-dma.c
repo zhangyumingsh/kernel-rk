@@ -48,7 +48,7 @@
 
 #include <asm/byteorder.h>
 #include <asm/cache.h>		/* for L1_CACHE_BYTES */
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/page.h>
 #include <asm/dma.h>
 #include <asm/io.h>
@@ -109,8 +109,6 @@
 #define IOA_NORMAL_MODE      0x00020080 /* IO_CONTROL to turn on CCIO        */
 #define CMD_TLB_DIRECT_WRITE 35         /* IO_COMMAND for I/O TLB Writes     */
 #define CMD_TLB_PURGE        33         /* IO_COMMAND to Purge I/O TLB entry */
-
-#define CCIO_MAPPING_ERROR    (~(dma_addr_t)0)
 
 struct ioa_registers {
         /* Runway Supervisory Set */
@@ -742,7 +740,7 @@ ccio_map_single(struct device *dev, void *addr, size_t size,
 	BUG_ON(!dev);
 	ioc = GET_IOC(dev);
 	if (!ioc)
-		return CCIO_MAPPING_ERROR;
+		return DMA_ERROR_CODE;
 
 	BUG_ON(size <= 0);
 
@@ -788,27 +786,18 @@ ccio_map_single(struct device *dev, void *addr, size_t size,
 	return CCIO_IOVA(iovp, offset);
 }
 
-
-static dma_addr_t
-ccio_map_page(struct device *dev, struct page *page, unsigned long offset,
-		size_t size, enum dma_data_direction direction,
-		unsigned long attrs)
-{
-	return ccio_map_single(dev, page_address(page) + offset, size,
-			direction);
-}
-
-
 /**
- * ccio_unmap_page - Unmap an address range from the IOMMU.
+ * ccio_unmap_single - Unmap an address range from the IOMMU.
  * @dev: The PCI device.
  * @addr: The start address of the DMA region.
  * @size: The length of the DMA region.
  * @direction: The direction of the DMA transaction (to/from device).
+ *
+ * This function implements the pci_unmap_single function.
  */
 static void 
-ccio_unmap_page(struct device *dev, dma_addr_t iova, size_t size,
-		enum dma_data_direction direction, unsigned long attrs)
+ccio_unmap_single(struct device *dev, dma_addr_t iova, size_t size, 
+		  enum dma_data_direction direction)
 {
 	struct ioc *ioc;
 	unsigned long flags; 
@@ -841,7 +830,7 @@ ccio_unmap_page(struct device *dev, dma_addr_t iova, size_t size,
 }
 
 /**
- * ccio_alloc - Allocate a consistent DMA mapping.
+ * ccio_alloc_consistent - Allocate a consistent DMA mapping.
  * @dev: The PCI device.
  * @size: The length of the DMA region.
  * @dma_handle: The DMA address handed back to the device (not the cpu).
@@ -849,8 +838,7 @@ ccio_unmap_page(struct device *dev, dma_addr_t iova, size_t size,
  * This function implements the pci_alloc_consistent function.
  */
 static void * 
-ccio_alloc(struct device *dev, size_t size, dma_addr_t *dma_handle, gfp_t flag,
-		unsigned long attrs)
+ccio_alloc_consistent(struct device *dev, size_t size, dma_addr_t *dma_handle, gfp_t flag)
 {
       void *ret;
 #if 0
@@ -874,7 +862,7 @@ ccio_alloc(struct device *dev, size_t size, dma_addr_t *dma_handle, gfp_t flag,
 }
 
 /**
- * ccio_free - Free a consistent DMA mapping.
+ * ccio_free_consistent - Free a consistent DMA mapping.
  * @dev: The PCI device.
  * @size: The length of the DMA region.
  * @cpu_addr: The cpu address returned from the ccio_alloc_consistent.
@@ -883,10 +871,10 @@ ccio_alloc(struct device *dev, size_t size, dma_addr_t *dma_handle, gfp_t flag,
  * This function implements the pci_free_consistent function.
  */
 static void 
-ccio_free(struct device *dev, size_t size, void *cpu_addr,
-		dma_addr_t dma_handle, unsigned long attrs)
+ccio_free_consistent(struct device *dev, size_t size, void *cpu_addr, 
+		     dma_addr_t dma_handle)
 {
-	ccio_unmap_page(dev, dma_handle, size, 0, 0);
+	ccio_unmap_single(dev, dma_handle, size, 0);
 	free_pages((unsigned long)cpu_addr, get_order(size));
 }
 
@@ -913,7 +901,7 @@ ccio_free(struct device *dev, size_t size, void *cpu_addr,
  */
 static int
 ccio_map_sg(struct device *dev, struct scatterlist *sglist, int nents, 
-	    enum dma_data_direction direction, unsigned long attrs)
+	    enum dma_data_direction direction)
 {
 	struct ioc *ioc;
 	int coalesced, filled = 0;
@@ -992,7 +980,7 @@ ccio_map_sg(struct device *dev, struct scatterlist *sglist, int nents,
  */
 static void 
 ccio_unmap_sg(struct device *dev, struct scatterlist *sglist, int nents, 
-	      enum dma_data_direction direction, unsigned long attrs)
+	      enum dma_data_direction direction)
 {
 	struct ioc *ioc;
 
@@ -1015,28 +1003,27 @@ ccio_unmap_sg(struct device *dev, struct scatterlist *sglist, int nents,
 #ifdef CCIO_COLLECT_STATS
 		ioc->usg_pages += sg_dma_len(sglist) >> PAGE_SHIFT;
 #endif
-		ccio_unmap_page(dev, sg_dma_address(sglist),
-				  sg_dma_len(sglist), direction, 0);
+		ccio_unmap_single(dev, sg_dma_address(sglist),
+				  sg_dma_len(sglist), direction);
 		++sglist;
 	}
 
 	DBG_RUN_SG("%s() DONE (nents %d)\n", __func__, nents);
 }
 
-static int ccio_mapping_error(struct device *dev, dma_addr_t dma_addr)
-{
-	return dma_addr == CCIO_MAPPING_ERROR;
-}
-
-static const struct dma_map_ops ccio_ops = {
+static struct hppa_dma_ops ccio_ops = {
 	.dma_supported =	ccio_dma_supported,
-	.alloc =		ccio_alloc,
-	.free =			ccio_free,
-	.map_page =		ccio_map_page,
-	.unmap_page =		ccio_unmap_page,
+	.alloc_consistent =	ccio_alloc_consistent,
+	.alloc_noncoherent =	ccio_alloc_consistent,
+	.free_consistent =	ccio_free_consistent,
+	.map_single =		ccio_map_single,
+	.unmap_single =		ccio_unmap_single,
 	.map_sg = 		ccio_map_sg,
 	.unmap_sg = 		ccio_unmap_sg,
-	.mapping_error =	ccio_mapping_error,
+	.dma_sync_single_for_cpu =	NULL,	/* NOP for U2/Uturn */
+	.dma_sync_single_for_device =	NULL,	/* NOP for U2/Uturn */
+	.dma_sync_sg_for_cpu =		NULL,	/* ditto */
+	.dma_sync_sg_for_device =		NULL,	/* ditto */
 };
 
 #ifdef CONFIG_PROC_FS
@@ -1085,7 +1072,7 @@ static int ccio_proc_info(struct seq_file *m, void *p)
 			   ioc->msingle_calls, ioc->msingle_pages,
 			   (int)((ioc->msingle_pages * 1000)/ioc->msingle_calls));
 
-		/* KLUGE - unmap_sg calls unmap_page for each mapped page */
+		/* KLUGE - unmap_sg calls unmap_single for each mapped page */
 		min = ioc->usingle_calls - ioc->usg_calls;
 		max = ioc->usingle_pages - ioc->usg_pages;
 		seq_printf(m, "pci_unmap_single: %8ld calls  %8ld pages (avg %d/1000)\n",
@@ -1106,6 +1093,19 @@ static int ccio_proc_info(struct seq_file *m, void *p)
 	return 0;
 }
 
+static int ccio_proc_info_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, &ccio_proc_info, NULL);
+}
+
+static const struct file_operations ccio_proc_info_fops = {
+	.owner = THIS_MODULE,
+	.open = ccio_proc_info_open,
+	.read = seq_read,
+	.llseek = seq_lseek,
+	.release = single_release,
+};
+
 static int ccio_proc_bitmap_info(struct seq_file *m, void *p)
 {
 	struct ioc *ioc = ioc_list;
@@ -1120,6 +1120,19 @@ static int ccio_proc_bitmap_info(struct seq_file *m, void *p)
 
 	return 0;
 }
+
+static int ccio_proc_bitmap_open(struct inode *inode, struct file *file)
+{
+	return single_open(file, &ccio_proc_bitmap_info, NULL);
+}
+
+static const struct file_operations ccio_proc_bitmap_fops = {
+	.owner = THIS_MODULE,
+	.open = ccio_proc_bitmap_open,
+	.read = seq_read,
+	.llseek = seq_lseek,
+	.release = single_release,
+};
 #endif /* CONFIG_PROC_FS */
 
 /**
@@ -1167,7 +1180,7 @@ void * ccio_get_iommu(const struct parisc_device *dev)
  * to/from certain pages.  To avoid this happening, we mark these pages
  * as `used', and ensure that nothing will try to allocate from them.
  */
-void __init ccio_cujo20_fixup(struct parisc_device *cujo, u32 iovp)
+void ccio_cujo20_fixup(struct parisc_device *cujo, u32 iovp)
 {
 	unsigned int idx;
 	struct parisc_device *dev = parisc_parent(cujo);
@@ -1213,7 +1226,7 @@ ccio_get_iotlb_size(struct parisc_device *dev)
 #endif /* 0 */
 
 /* We *can't* support JAVA (T600). Venture there at your own risk. */
-static const struct parisc_device_id ccio_tbl[] __initconst = {
+static const struct parisc_device_id ccio_tbl[] = {
 	{ HPHW_IOA, HVERSION_REV_ANY_ID, U2_IOA_RUNWAY, 0xb }, /* U2 */
 	{ HPHW_IOA, HVERSION_REV_ANY_ID, UTURN_IOA_RUNWAY, 0xb }, /* UTurn */
 	{ 0, }
@@ -1221,7 +1234,7 @@ static const struct parisc_device_id ccio_tbl[] __initconst = {
 
 static int ccio_probe(struct parisc_device *dev);
 
-static struct parisc_driver ccio_driver __refdata = {
+static struct parisc_driver ccio_driver = {
 	.name =		"ccio",
 	.id_table =	ccio_tbl,
 	.probe =	ccio_probe,
@@ -1235,7 +1248,7 @@ static struct parisc_driver ccio_driver __refdata = {
  * I/O Page Directory, the resource map, and initalizing the
  * U2/Uturn chip into virtual mode.
  */
-static void __init
+static void
 ccio_ioc_init(struct ioc *ioc)
 {
 	int i;
@@ -1531,7 +1544,7 @@ static int __init ccio_probe(struct parisc_device *dev)
 	ioc = kzalloc(sizeof(struct ioc), GFP_KERNEL);
 	if (ioc == NULL) {
 		printk(KERN_ERR MODULE_NAME ": memory allocation failure\n");
-		return -ENOMEM;
+		return 1;
 	}
 
 	ioc->name = dev->id.hversion == U2_IOA_RUNWAY ? "U2" : "UTurn";
@@ -1546,10 +1559,6 @@ static int __init ccio_probe(struct parisc_device *dev)
 
 	ioc->hw_path = dev->hw_path;
 	ioc->ioc_regs = ioremap_nocache(dev->hpa.start, 4096);
-	if (!ioc->ioc_regs) {
-		kfree(ioc);
-		return -ENOMEM;
-	}
 	ccio_ioc_init(ioc);
 	ccio_init_resources(ioc);
 	hppa_dma_ops = &ccio_ops;
@@ -1561,13 +1570,15 @@ static int __init ccio_probe(struct parisc_device *dev)
 
 #ifdef CONFIG_PROC_FS
 	if (ioc_count == 0) {
-		proc_create_single(MODULE_NAME, 0, proc_runway_root,
-				ccio_proc_info);
-		proc_create_single(MODULE_NAME"-bitmap", 0, proc_runway_root,
-				ccio_proc_bitmap_info);
+		proc_create(MODULE_NAME, 0, proc_runway_root,
+			    &ccio_proc_info_fops);
+		proc_create(MODULE_NAME"-bitmap", 0, proc_runway_root,
+			    &ccio_proc_bitmap_fops);
 	}
 #endif
 	ioc_count++;
+
+	parisc_has_iommu();
 	return 0;
 }
 

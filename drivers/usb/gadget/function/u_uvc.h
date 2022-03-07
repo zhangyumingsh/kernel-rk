@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * u_uvc.h
  *
@@ -8,6 +7,10 @@
  *		http://www.samsung.com
  *
  * Author: Andrzej Pietrasiewicz <andrzej.p@samsung.com>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License version 2 as
+ * published by the Free Software Foundation.
  */
 
 #ifndef U_UVC_H
@@ -26,12 +29,9 @@ struct f_uvc_opts {
 	unsigned int					streaming_interval;
 	unsigned int					streaming_maxpacket;
 	unsigned int					streaming_maxburst;
-	bool						device_name_allocated;
-	const char					*device_name;
 
 	unsigned int					control_interface;
 	unsigned int					streaming_interface;
-	unsigned int					uvc_num_request;
 
 	/*
 	 * Control descriptors array pointers for full-/high-speed and

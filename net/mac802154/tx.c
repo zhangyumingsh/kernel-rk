@@ -38,20 +38,29 @@ void ieee802154_xmit_worker(struct work_struct *work)
 	struct net_device *dev = skb->dev;
 	int res;
 
+	rtnl_lock();
+
+	/* check if ifdown occurred while schedule */
+	if (!netif_running(dev))
+		goto err_tx;
+
 	res = drv_xmit_sync(local, skb);
 	if (res)
 		goto err_tx;
 
+	ieee802154_xmit_complete(&local->hw, skb, false);
+
 	dev->stats.tx_packets++;
 	dev->stats.tx_bytes += skb->len;
 
-	ieee802154_xmit_complete(&local->hw, skb, false);
+	rtnl_unlock();
 
 	return;
 
 err_tx:
 	/* Restart the netif queue on each sub_if_data object. */
 	ieee802154_wake_queue(&local->hw);
+	rtnl_unlock();
 	kfree_skb(skb);
 	netdev_dbg(dev, "transmission failed\n");
 }
@@ -86,8 +95,6 @@ ieee802154_tx(struct ieee802154_local *local, struct sk_buff *skb)
 
 	/* async is priority, otherwise sync is fallback */
 	if (local->ops->xmit_async) {
-		unsigned int len = skb->len;
-
 		ret = drv_xmit_async(local, skb);
 		if (ret) {
 			ieee802154_wake_queue(&local->hw);
@@ -95,7 +102,7 @@ ieee802154_tx(struct ieee802154_local *local, struct sk_buff *skb)
 		}
 
 		dev->stats.tx_packets++;
-		dev->stats.tx_bytes += len;
+		dev->stats.tx_bytes += skb->len;
 	} else {
 		local->tx_skb = skb;
 		queue_work(local->workqueue, &local->tx_work);

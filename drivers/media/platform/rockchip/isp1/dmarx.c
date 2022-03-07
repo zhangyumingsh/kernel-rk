@@ -247,19 +247,26 @@ static int dmarx_start(struct rkisp1_stream *stream)
 }
 
 static int rkisp1_queue_setup(struct vb2_queue *queue,
+			      const void *parg,
 			      unsigned int *num_buffers,
 			      unsigned int *num_planes,
 			      unsigned int sizes[],
-			      struct device *alloc_ctxs[])
+			      void *alloc_ctxs[])
 {
 	struct rkisp1_stream *stream = queue->drv_priv;
 	struct rkisp1_device *dev = stream->ispdev;
+	const struct v4l2_format *pfmt = parg;
 	const struct v4l2_pix_format_mplane *pixm = NULL;
 	const struct capture_fmt *isp_fmt = NULL;
 	u32 i;
 
-	pixm = &stream->out_fmt;
-	isp_fmt = &stream->out_isp_fmt;
+	if (pfmt) {
+		pixm = &pfmt->fmt.pix_mp;
+		isp_fmt = find_fmt(stream, pixm->pixelformat);
+	} else {
+		pixm = &stream->out_fmt;
+		isp_fmt = &stream->out_isp_fmt;
+	}
 
 	*num_planes = isp_fmt->mplanes;
 
@@ -268,6 +275,7 @@ static int rkisp1_queue_setup(struct vb2_queue *queue,
 
 		plane_fmt = &pixm->plane_fmt[i];
 		sizes[i] = plane_fmt->sizeimage;
+		alloc_ctxs[i] = dev->alloc_ctx;
 	}
 
 	v4l2_dbg(1, rkisp1_debug, &dev->v4l2_dev, "%s count %d, size %d\n",
@@ -383,6 +391,10 @@ static int rkisp_init_vb2_queue(struct vb2_queue *q,
 				struct rkisp1_stream *stream,
 				enum v4l2_buf_type buf_type)
 {
+	struct rkisp1_vdev_node *node;
+
+	node = queue_to_node(q);
+
 	q->type = buf_type;
 	q->io_modes = VB2_MMAP | VB2_DMABUF | VB2_USERPTR;
 	q->drv_priv = stream;
@@ -607,7 +619,7 @@ static int rkisp1_register_dmarx_video(struct rkisp1_stream *stream)
 		return ret;
 	}
 
-	ret = media_entity_pads_init(&vdev->entity, 1, &node->pad);
+	ret = media_entity_init(&vdev->entity, 1, &node->pad, 0);
 	if (ret < 0)
 		goto unreg;
 
@@ -668,7 +680,7 @@ int rkisp1_register_dmarx_vdev(struct rkisp1_device *dev)
 		/* dmarx links -> isp subdev */
 		source = &vdev->entity;
 		sink = &dev->isp_sdev.sd.entity;
-		ret = media_create_pad_link(source, 0,
+		media_entity_create_link(source, 0,
 			sink, RKISP1_ISP_PAD_SINK, 0);
 	}
 

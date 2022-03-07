@@ -19,20 +19,17 @@
 #include <linux/kasan.h>
 #include <linux/kernel.h>
 #include <linux/kprobes.h>
-#include <linux/extable.h>
+#include <linux/module.h>
 #include <linux/slab.h>
 #include <linux/stop_machine.h>
-#include <linux/sched/debug.h>
-#include <linux/set_memory.h>
 #include <linux/stringify.h>
-#include <linux/vmalloc.h>
 #include <asm/traps.h>
 #include <asm/ptrace.h>
 #include <asm/cacheflush.h>
 #include <asm/debug-monitors.h>
 #include <asm/system_misc.h>
 #include <asm/insn.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/irq.h>
 #include <asm/sections.h>
 
@@ -44,45 +41,34 @@ DEFINE_PER_CPU(struct kprobe_ctlblk, kprobe_ctlblk);
 static void __kprobes
 post_kprobe_handler(struct kprobe_ctlblk *, struct pt_regs *);
 
-static int __kprobes patch_text(kprobe_opcode_t *addr, u32 opcode)
-{
-	void *addrs[1];
-	u32 insns[1];
-
-	addrs[0] = addr;
-	insns[0] = opcode;
-
-	return aarch64_insn_patch_text(addrs, insns, 1);
-}
-
 static void __kprobes arch_prepare_ss_slot(struct kprobe *p)
 {
 	/* prepare insn slot */
-	patch_text(p->ainsn.api.insn, p->opcode);
+	p->ainsn.insn[0] = cpu_to_le32(p->opcode);
 
-	flush_icache_range((uintptr_t) (p->ainsn.api.insn),
-			   (uintptr_t) (p->ainsn.api.insn) +
+	flush_icache_range((uintptr_t) (p->ainsn.insn),
+			   (uintptr_t) (p->ainsn.insn) +
 			   MAX_INSN_SIZE * sizeof(kprobe_opcode_t));
 
 	/*
 	 * Needs restoring of return address after stepping xol.
 	 */
-	p->ainsn.api.restore = (unsigned long) p->addr +
+	p->ainsn.restore = (unsigned long) p->addr +
 	  sizeof(kprobe_opcode_t);
 }
 
 static void __kprobes arch_prepare_simulate(struct kprobe *p)
 {
 	/* This instructions is not executed xol. No need to adjust the PC */
-	p->ainsn.api.restore = 0;
+	p->ainsn.restore = 0;
 }
 
 static void __kprobes arch_simulate_insn(struct kprobe *p, struct pt_regs *regs)
 {
 	struct kprobe_ctlblk *kcb = get_kprobe_ctlblk();
 
-	if (p->ainsn.api.handler)
-		p->ainsn.api.handler((u32)p->opcode, (long)p->addr, regs);
+	if (p->ainsn.handler)
+		p->ainsn.handler((u32)p->opcode, (long)p->addr, regs);
 
 	/* single step simulated, now go for post processing */
 	post_kprobe_handler(kcb, regs);
@@ -112,18 +98,18 @@ int __kprobes arch_prepare_kprobe(struct kprobe *p)
 		return -EINVAL;
 
 	case INSN_GOOD_NO_SLOT:	/* insn need simulation */
-		p->ainsn.api.insn = NULL;
+		p->ainsn.insn = NULL;
 		break;
 
 	case INSN_GOOD:	/* instruction uses slot */
-		p->ainsn.api.insn = get_insn_slot();
-		if (!p->ainsn.api.insn)
+		p->ainsn.insn = get_insn_slot();
+		if (!p->ainsn.insn)
 			return -ENOMEM;
 		break;
 	};
 
 	/* prepare the instruction */
-	if (p->ainsn.api.insn)
+	if (p->ainsn.insn)
 		arch_prepare_ss_slot(p);
 	else
 		arch_prepare_simulate(p);
@@ -131,15 +117,15 @@ int __kprobes arch_prepare_kprobe(struct kprobe *p)
 	return 0;
 }
 
-void *alloc_insn_page(void)
+static int __kprobes patch_text(kprobe_opcode_t *addr, u32 opcode)
 {
-	void *page;
+	void *addrs[1];
+	u32 insns[1];
 
-	page = vmalloc_exec(PAGE_SIZE);
-	if (page)
-		set_memory_ro((unsigned long)page, 1);
+	addrs[0] = (void *)addr;
+	insns[0] = (u32)opcode;
 
-	return page;
+	return aarch64_insn_patch_text(addrs, insns, 1);
 }
 
 /* arm kprobe: install breakpoint in text */
@@ -156,9 +142,9 @@ void __kprobes arch_disarm_kprobe(struct kprobe *p)
 
 void __kprobes arch_remove_kprobe(struct kprobe *p)
 {
-	if (p->ainsn.api.insn) {
-		free_insn_slot(p->ainsn.api.insn, 0);
-		p->ainsn.api.insn = NULL;
+	if (p->ainsn.insn) {
+		free_insn_slot(p->ainsn.insn, 0);
+		p->ainsn.insn = NULL;
 	}
 }
 
@@ -180,18 +166,13 @@ static void __kprobes set_current_kprobe(struct kprobe *p)
 }
 
 /*
- * When PSTATE.D is set (masked), then software step exceptions can not be
- * generated.
- * SPSR's D bit shows the value of PSTATE.D immediately before the
- * exception was taken. PSTATE.D is set while entering into any exception
- * mode, however software clears it for any normal (none-debug-exception)
- * mode in the exception entry. Therefore, when we are entering into kprobe
- * breakpoint handler from any normal mode then SPSR.D bit is already
- * cleared, however it is set when we are entering from any debug exception
- * mode.
- * Since we always need to generate single step exception after a kprobe
- * breakpoint exception therefore we need to clear it unconditionally, when
- * we become sure that the current breakpoint exception is for kprobe.
+ * The D-flag (Debug mask) is set (masked) upon debug exception entry.
+ * Kprobes needs to clear (unmask) D-flag -ONLY- in case of recursive
+ * probe i.e. when probe hit from kprobe handler context upon
+ * executing the pre/post handlers. In this case we return with
+ * D-flag clear so that single-stepping can be carried-out.
+ *
+ * Leave D-flag set in all other cases.
  */
 static void __kprobes
 spsr_set_debug_flag(struct pt_regs *regs, int mask)
@@ -258,13 +239,16 @@ static void __kprobes setup_singlestep(struct kprobe *p,
 	}
 
 
-	if (p->ainsn.api.insn) {
+	if (p->ainsn.insn) {
 		/* prepare for single stepping */
-		slot = (unsigned long)p->ainsn.api.insn;
+		slot = (unsigned long)p->ainsn.insn;
 
 		set_ss_context(kcb, slot);	/* mark pending ss */
 
-		spsr_set_debug_flag(regs, 0);
+		if (kcb->kprobe_status == KPROBE_REENTER)
+			spsr_set_debug_flag(regs, 0);
+		else
+			WARN_ON(regs->pstate & PSR_D_BIT);
 
 		/* IRQs and single stepping do not mix well. */
 		kprobes_save_local_irqflag(kcb, regs);
@@ -288,7 +272,7 @@ static int __kprobes reenter_kprobe(struct kprobe *p,
 		break;
 	case KPROBE_HIT_SS:
 	case KPROBE_REENTER:
-		pr_warn("Unrecoverable kprobe detected.\n");
+		pr_warn("Unrecoverable kprobe detected at %p.\n", p->addr);
 		dump_kprobe(p);
 		BUG();
 		break;
@@ -309,8 +293,8 @@ post_kprobe_handler(struct kprobe_ctlblk *kcb, struct pt_regs *regs)
 		return;
 
 	/* return addr restore if non-branching insn */
-	if (cur->ainsn.api.restore != 0)
-		instruction_pointer_set(regs, cur->ainsn.api.restore);
+	if (cur->ainsn.restore != 0)
+		instruction_pointer_set(regs, cur->ainsn.restore);
 
 	/* restore back original saved kprobe variables and continue */
 	if (kcb->kprobe_status == KPROBE_REENTER) {
@@ -349,6 +333,8 @@ int __kprobes kprobe_fault_handler(struct pt_regs *regs, unsigned int fsr)
 			BUG();
 
 		kernel_disable_single_step();
+		if (kcb->kprobe_status == KPROBE_REENTER)
+			spsr_set_debug_flag(regs, 1);
 
 		if (kcb->kprobe_status == KPROBE_REENTER)
 			restore_previous_kprobe(kcb);
@@ -385,6 +371,12 @@ int __kprobes kprobe_fault_handler(struct pt_regs *regs, unsigned int fsr)
 	return 0;
 }
 
+int __kprobes kprobe_exceptions_notify(struct notifier_block *self,
+				       unsigned long val, void *data)
+{
+	return NOTIFY_DONE;
+}
+
 static void __kprobes kprobe_handler(struct pt_regs *regs)
 {
 	struct kprobe *p, *cur_kprobe;
@@ -408,9 +400,9 @@ static void __kprobes kprobe_handler(struct pt_regs *regs)
 			/*
 			 * If we have no pre-handler or it returned 0, we
 			 * continue with normal processing.  If we have a
-			 * pre-handler and it returned non-zero, it will
-			 * modify the execution path and no need to single
-			 * stepping. Let's just reset current kprobe and exit.
+			 * pre-handler and it returned non-zero, it prepped
+			 * for calling the break_handler below on re-entry,
+			 * so get out doing nothing more here.
 			 *
 			 * pre_handler can hit a breakpoint and can step thru
 			 * before return, keep PSTATE D-flag enabled until
@@ -418,8 +410,16 @@ static void __kprobes kprobe_handler(struct pt_regs *regs)
 			 */
 			if (!p->pre_handler || !p->pre_handler(p, regs)) {
 				setup_singlestep(p, regs, kcb, 0);
-			} else
-				reset_current_kprobe();
+				return;
+			}
+		}
+	} else if ((le32_to_cpu(*(kprobe_opcode_t *) addr) ==
+	    BRK64_OPCODE_KPROBES) && cur_kprobe) {
+		/* We probably hit a jprobe.  Call its break handler. */
+		if (cur_kprobe->break_handler  &&
+		     cur_kprobe->break_handler(cur_kprobe, regs)) {
+			setup_singlestep(cur_kprobe, regs, kcb, 0);
+			return;
 		}
 	}
 	/*
@@ -450,15 +450,15 @@ kprobe_single_step_handler(struct pt_regs *regs, unsigned int esr)
 	struct kprobe_ctlblk *kcb = get_kprobe_ctlblk();
 	int retval;
 
-	if (user_mode(regs))
-		return DBG_HOOK_ERROR;
-
 	/* return error if this is not our step */
 	retval = kprobe_ss_hit(kcb, instruction_pointer(regs));
 
 	if (retval == DBG_HOOK_HANDLED) {
 		kprobes_restore_local_irqflag(kcb, regs);
 		kernel_disable_single_step();
+
+		if (kcb->kprobe_status == KPROBE_REENTER)
+			spsr_set_debug_flag(regs, 1);
 
 		post_kprobe_handler(kcb, regs);
 	}
@@ -469,11 +469,76 @@ kprobe_single_step_handler(struct pt_regs *regs, unsigned int esr)
 int __kprobes
 kprobe_breakpoint_handler(struct pt_regs *regs, unsigned int esr)
 {
-	if (user_mode(regs))
-		return DBG_HOOK_ERROR;
-
 	kprobe_handler(regs);
 	return DBG_HOOK_HANDLED;
+}
+
+int __kprobes setjmp_pre_handler(struct kprobe *p, struct pt_regs *regs)
+{
+	struct jprobe *jp = container_of(p, struct jprobe, kp);
+	struct kprobe_ctlblk *kcb = get_kprobe_ctlblk();
+
+	kcb->jprobe_saved_regs = *regs;
+	/*
+	 * Since we can't be sure where in the stack frame "stacked"
+	 * pass-by-value arguments are stored we just don't try to
+	 * duplicate any of the stack. Do not use jprobes on functions that
+	 * use more than 64 bytes (after padding each to an 8 byte boundary)
+	 * of arguments, or pass individual arguments larger than 16 bytes.
+	 */
+
+	instruction_pointer_set(regs, (unsigned long) jp->entry);
+	preempt_disable();
+	pause_graph_tracing();
+	return 1;
+}
+
+void __kprobes jprobe_return(void)
+{
+	struct kprobe_ctlblk *kcb = get_kprobe_ctlblk();
+
+	/*
+	 * Jprobe handler return by entering break exception,
+	 * encoded same as kprobe, but with following conditions
+	 * -a special PC to identify it from the other kprobes.
+	 * -restore stack addr to original saved pt_regs
+	 */
+	asm volatile("				mov sp, %0	\n"
+		     "jprobe_return_break:	brk %1		\n"
+		     :
+		     : "r" (kcb->jprobe_saved_regs.sp),
+		       "I" (BRK64_ESR_KPROBES)
+		     : "memory");
+
+	unreachable();
+}
+
+int __kprobes longjmp_break_handler(struct kprobe *p, struct pt_regs *regs)
+{
+	struct kprobe_ctlblk *kcb = get_kprobe_ctlblk();
+	long stack_addr = kcb->jprobe_saved_regs.sp;
+	long orig_sp = kernel_stack_pointer(regs);
+	struct jprobe *jp = container_of(p, struct jprobe, kp);
+	extern const char jprobe_return_break[];
+
+	if (instruction_pointer(regs) != (u64) jprobe_return_break)
+		return 0;
+
+	if (orig_sp != stack_addr) {
+		struct pt_regs *saved_regs =
+		    (struct pt_regs *)kcb->jprobe_saved_regs.sp;
+		pr_err("current sp %lx does not match saved sp %lx\n",
+		       orig_sp, stack_addr);
+		pr_err("Saved registers for jprobe %p\n", jp);
+		show_regs(saved_regs);
+		pr_err("Current registers\n");
+		show_regs(regs);
+		BUG();
+	}
+	unpause_graph_tracing();
+	*regs = kcb->jprobe_saved_regs;
+	preempt_enable_no_resched();
+	return 1;
 }
 
 bool arch_within_kprobe_blacklist(unsigned long addr)
@@ -484,16 +549,9 @@ bool arch_within_kprobe_blacklist(unsigned long addr)
 	    addr < (unsigned long)__entry_text_end) ||
 	    (addr >= (unsigned long)__idmap_text_start &&
 	    addr < (unsigned long)__idmap_text_end) ||
-	    (addr >= (unsigned long)__hyp_text_start &&
-	    addr < (unsigned long)__hyp_text_end) ||
 	    !!search_exception_tables(addr))
 		return true;
 
-	if (!is_kernel_in_hyp_mode()) {
-		if ((addr >= (unsigned long)__hyp_idmap_text_start &&
-		    addr < (unsigned long)__hyp_idmap_text_end))
-			return true;
-	}
 
 	return false;
 }

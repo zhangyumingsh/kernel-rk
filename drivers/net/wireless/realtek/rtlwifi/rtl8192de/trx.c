@@ -11,6 +11,10 @@
  * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
  * more details.
  *
+ * You should have received a copy of the GNU General Public License along with
+ * this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110, USA
+ *
  * The full GNU General Public License is included in this distribution in the
  * file called LICENSE.
  *
@@ -44,7 +48,7 @@ static u8 _rtl92de_map_hwqueue_to_fwqueue(struct sk_buff *skb, u8 hw_queue)
 	return skb->priority;
 }
 
-static u8 _rtl92d_query_rxpwrpercentage(s8 antpower)
+static u8 _rtl92d_query_rxpwrpercentage(char antpower)
 {
 	if ((antpower <= -100) || (antpower >= 20))
 		return 0;
@@ -54,9 +58,9 @@ static u8 _rtl92d_query_rxpwrpercentage(s8 antpower)
 		return 100 + antpower;
 }
 
-static u8 _rtl92d_evm_db_to_percentage(s8 value)
+static u8 _rtl92d_evm_db_to_percentage(char value)
 {
-	s8 ret_val = value;
+	char ret_val = value;
 
 	if (ret_val >= 0)
 		ret_val = 0;
@@ -503,9 +507,9 @@ bool rtl92de_rx_query_desc(struct ieee80211_hw *hw,	struct rtl_stats *stats,
 	if (!GET_RX_DESC_SWDEC(pdesc))
 		rx_status->flag |= RX_FLAG_DECRYPTED;
 	if (GET_RX_DESC_BW(pdesc))
-		rx_status->bw = RATE_INFO_BW_40;
+		rx_status->flag |= RX_FLAG_40MHZ;
 	if (GET_RX_DESC_RXHT(pdesc))
-		rx_status->encoding = RX_ENC_HT;
+		rx_status->flag |= RX_FLAG_HT;
 	rx_status->flag |= RX_FLAG_MACTIME_START;
 	if (stats->decrypted)
 		rx_status->flag |= RX_FLAG_DECRYPTED;
@@ -582,7 +586,7 @@ void rtl92de_tx_fill_desc(struct ieee80211_hw *hw,
 				 PCI_DMA_TODEVICE);
 	if (pci_dma_mapping_error(rtlpci->pdev, mapping)) {
 		RT_TRACE(rtlpriv, COMP_SEND, DBG_TRACE,
-			 "DMA mapping error\n");
+			 "DMA mapping error");
 		return;
 	}
 	CLEAR_PCI_TX_DESC_CONTENT(pdesc, sizeof(struct tx_desc_92d));
@@ -740,7 +744,7 @@ void rtl92de_tx_fill_cmddesc(struct ieee80211_hw *hw,
 
 	if (pci_dma_mapping_error(rtlpci->pdev, mapping)) {
 		RT_TRACE(rtlpriv, COMP_SEND, DBG_TRACE,
-			 "DMA mapping error\n");
+			 "DMA mapping error");
 		return;
 	}
 	CLEAR_PCI_TX_DESC_CONTENT(pdesc, TX_DESC_SIZE);
@@ -794,7 +798,7 @@ void rtl92de_set_desc(struct ieee80211_hw *hw, u8 *pdesc, bool istx,
 			SET_TX_DESC_NEXT_DESC_ADDRESS(pdesc, *(u32 *) val);
 			break;
 		default:
-			WARN_ONCE(true, "rtl8192de: ERR txdesc :%d not processed\n",
+			RT_ASSERT(false, "ERR txdesc :%d not process\n",
 				  desc_name);
 			break;
 		}
@@ -814,15 +818,14 @@ void rtl92de_set_desc(struct ieee80211_hw *hw, u8 *pdesc, bool istx,
 			SET_RX_DESC_EOR(pdesc, 1);
 			break;
 		default:
-			WARN_ONCE(true, "rtl8192de: ERR rxdesc :%d not processed\n",
+			RT_ASSERT(false, "ERR rxdesc :%d not process\n",
 				  desc_name);
 			break;
 		}
 	}
 }
 
-u64 rtl92de_get_desc(struct ieee80211_hw *hw,
-		     u8 *p_desc, bool istx, u8 desc_name)
+u32 rtl92de_get_desc(u8 *p_desc, bool istx, u8 desc_name)
 {
 	u32 ret = 0;
 
@@ -835,45 +838,26 @@ u64 rtl92de_get_desc(struct ieee80211_hw *hw,
 			ret = GET_TX_DESC_TX_BUFFER_ADDRESS(p_desc);
 			break;
 		default:
-			WARN_ONCE(true, "rtl8192de: ERR txdesc :%d not processed\n",
+			RT_ASSERT(false, "ERR txdesc :%d not process\n",
 				  desc_name);
 			break;
 		}
 	} else {
+		struct rx_desc_92c *pdesc = (struct rx_desc_92c *)p_desc;
 		switch (desc_name) {
 		case HW_DESC_OWN:
-			ret = GET_RX_DESC_OWN(p_desc);
+			ret = GET_RX_DESC_OWN(pdesc);
 			break;
 		case HW_DESC_RXPKT_LEN:
-			ret = GET_RX_DESC_PKT_LEN(p_desc);
-			break;
-		case HW_DESC_RXBUFF_ADDR:
-			ret = GET_RX_DESC_BUFF_ADDR(p_desc);
+			ret = GET_RX_DESC_PKT_LEN(pdesc);
 			break;
 		default:
-			WARN_ONCE(true, "rtl8192de: ERR rxdesc :%d not processed\n",
+			RT_ASSERT(false, "ERR rxdesc :%d not process\n",
 				  desc_name);
 			break;
 		}
 	}
 	return ret;
-}
-
-bool rtl92de_is_tx_desc_closed(struct ieee80211_hw *hw,
-			       u8 hw_queue, u16 index)
-{
-	struct rtl_pci *rtlpci = rtl_pcidev(rtl_pcipriv(hw));
-	struct rtl8192_tx_ring *ring = &rtlpci->tx_ring[hw_queue];
-	u8 *entry = (u8 *)(&ring->desc[ring->idx]);
-	u8 own = (u8)rtl92de_get_desc(hw, entry, true, HW_DESC_OWN);
-
-	/* a beacon packet will only use the first
-	 * descriptor by defaut, and the own bit may not
-	 * be cleared by the hardware
-	 */
-	if (own)
-		return false;
-	return true;
 }
 
 void rtl92de_tx_polling(struct ieee80211_hw *hw, u8 hw_queue)

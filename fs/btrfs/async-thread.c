@@ -1,7 +1,20 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  * Copyright (C) 2007 Oracle.  All rights reserved.
  * Copyright (C) 2014 Fujitsu.  All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public
+ * License v2 as published by the Free Software Foundation.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ * General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public
+ * License along with this program; if not, write to the
+ * Free Software Foundation, Inc., 59 Temple Place - Suite 330,
+ * Boston, MA 021110-1307, USA.
  */
 
 #include <linux/kthread.h>
@@ -21,10 +34,6 @@
 
 struct __btrfs_workqueue {
 	struct workqueue_struct *normal_wq;
-
-	/* File system this workqueue services */
-	struct btrfs_fs_info *fs_info;
-
 	/* List head pointing to ordered work list */
 	struct list_head ordered_list;
 
@@ -54,26 +63,14 @@ struct btrfs_workqueue {
 static void normal_work_helper(struct btrfs_work *work);
 
 #define BTRFS_WORK_HELPER(name)					\
-noinline_for_stack void btrfs_##name(struct work_struct *arg)		\
+void btrfs_##name(struct work_struct *arg)				\
 {									\
 	struct btrfs_work *work = container_of(arg, struct btrfs_work,	\
 					       normal_work);		\
 	normal_work_helper(work);					\
 }
 
-struct btrfs_fs_info *
-btrfs_workqueue_owner(const struct __btrfs_workqueue *wq)
-{
-	return wq->fs_info;
-}
-
-struct btrfs_fs_info *
-btrfs_work_owner(const struct btrfs_work *work)
-{
-	return work->wq->fs_info;
-}
-
-bool btrfs_workqueue_normal_congested(const struct btrfs_workqueue *wq)
+bool btrfs_workqueue_normal_congested(struct btrfs_workqueue *wq)
 {
 	/*
 	 * We could compare wq->normal->pending with num_online_cpus()
@@ -111,15 +108,14 @@ BTRFS_WORK_HELPER(scrubnc_helper);
 BTRFS_WORK_HELPER(scrubparity_helper);
 
 static struct __btrfs_workqueue *
-__btrfs_alloc_workqueue(struct btrfs_fs_info *fs_info, const char *name,
-			unsigned int flags, int limit_active, int thresh)
+__btrfs_alloc_workqueue(const char *name, unsigned int flags, int limit_active,
+			 int thresh)
 {
-	struct __btrfs_workqueue *ret = kzalloc(sizeof(*ret), GFP_KERNEL);
+	struct __btrfs_workqueue *ret = kzalloc(sizeof(*ret), GFP_NOFS);
 
 	if (!ret)
 		return NULL;
 
-	ret->fs_info = fs_info;
 	ret->limit_active = limit_active;
 	atomic_set(&ret->pending, 0);
 	if (thresh == 0)
@@ -161,19 +157,17 @@ __btrfs_alloc_workqueue(struct btrfs_fs_info *fs_info, const char *name,
 static inline void
 __btrfs_destroy_workqueue(struct __btrfs_workqueue *wq);
 
-struct btrfs_workqueue *btrfs_alloc_workqueue(struct btrfs_fs_info *fs_info,
-					      const char *name,
+struct btrfs_workqueue *btrfs_alloc_workqueue(const char *name,
 					      unsigned int flags,
 					      int limit_active,
 					      int thresh)
 {
-	struct btrfs_workqueue *ret = kzalloc(sizeof(*ret), GFP_KERNEL);
+	struct btrfs_workqueue *ret = kzalloc(sizeof(*ret), GFP_NOFS);
 
 	if (!ret)
 		return NULL;
 
-	ret->normal = __btrfs_alloc_workqueue(fs_info, name,
-					      flags & ~WQ_HIGHPRI,
+	ret->normal = __btrfs_alloc_workqueue(name, flags & ~WQ_HIGHPRI,
 					      limit_active, thresh);
 	if (!ret->normal) {
 		kfree(ret);
@@ -181,8 +175,8 @@ struct btrfs_workqueue *btrfs_alloc_workqueue(struct btrfs_fs_info *fs_info,
 	}
 
 	if (flags & WQ_HIGHPRI) {
-		ret->high = __btrfs_alloc_workqueue(fs_info, name, flags,
-						    limit_active, thresh);
+		ret->high = __btrfs_alloc_workqueue(name, flags, limit_active,
+						    thresh);
 		if (!ret->high) {
 			__btrfs_destroy_workqueue(ret->normal);
 			kfree(ret);
@@ -252,15 +246,12 @@ out:
 	}
 }
 
-static void run_ordered_work(struct __btrfs_workqueue *wq,
-			     struct btrfs_work *self)
+static void run_ordered_work(struct __btrfs_workqueue *wq)
 {
 	struct list_head *list = &wq->ordered_list;
 	struct btrfs_work *work;
 	spinlock_t *lock = &wq->list_lock;
 	unsigned long flags;
-	void *wtag;
-	bool free_self = false;
 
 	while (1) {
 		spin_lock_irqsave(lock, flags);
@@ -288,53 +279,19 @@ static void run_ordered_work(struct __btrfs_workqueue *wq,
 		list_del(&work->ordered_list);
 		spin_unlock_irqrestore(lock, flags);
 
-		if (work == self) {
-			/*
-			 * This is the work item that the worker is currently
-			 * executing.
-			 *
-			 * The kernel workqueue code guarantees non-reentrancy
-			 * of work items. I.e., if a work item with the same
-			 * address and work function is queued twice, the second
-			 * execution is blocked until the first one finishes. A
-			 * work item may be freed and recycled with the same
-			 * work function; the workqueue code assumes that the
-			 * original work item cannot depend on the recycled work
-			 * item in that case (see find_worker_executing_work()).
-			 *
-			 * Note that the work of one Btrfs filesystem may depend
-			 * on the work of another Btrfs filesystem via, e.g., a
-			 * loop device. Therefore, we must not allow the current
-			 * work item to be recycled until we are really done,
-			 * otherwise we break the above assumption and can
-			 * deadlock.
-			 */
-			free_self = true;
-		} else {
-			/*
-			 * We don't want to call the ordered free functions with
-			 * the lock held though. Save the work as tag for the
-			 * trace event, because the callback could free the
-			 * structure.
-			 */
-			wtag = work;
-			work->ordered_free(work);
-			trace_btrfs_all_work_done(wq->fs_info, wtag);
-		}
+		/*
+		 * we don't want to call the ordered free functions
+		 * with the lock held though
+		 */
+		work->ordered_free(work);
+		trace_btrfs_all_work_done(work);
 	}
 	spin_unlock_irqrestore(lock, flags);
-
-	if (free_self) {
-		wtag = self;
-		self->ordered_free(self);
-		trace_btrfs_all_work_done(wq->fs_info, wtag);
-	}
 }
 
 static void normal_work_helper(struct btrfs_work *work)
 {
 	struct __btrfs_workqueue *wq;
-	void *wtag;
 	int need_order = 0;
 
 	/*
@@ -348,18 +305,16 @@ static void normal_work_helper(struct btrfs_work *work)
 	if (work->ordered_func)
 		need_order = 1;
 	wq = work->wq;
-	/* Safe for tracepoints in case work gets freed by the callback */
-	wtag = work;
 
 	trace_btrfs_work_sched(work);
 	thresh_exec_hook(wq);
 	work->func(work);
 	if (need_order) {
 		set_bit(WORK_DONE_BIT, &work->flags);
-		run_ordered_work(wq, work);
+		run_ordered_work(wq);
 	}
 	if (!need_order)
-		trace_btrfs_all_work_done(wq->fs_info, wtag);
+		trace_btrfs_all_work_done(work);
 }
 
 void btrfs_init_work(struct btrfs_work *work, btrfs_work_func_t uniq_func,
@@ -433,12 +388,4 @@ void btrfs_workqueue_set_max(struct btrfs_workqueue *wq, int limit_active)
 void btrfs_set_work_high_priority(struct btrfs_work *work)
 {
 	set_bit(WORK_HIGH_PRIO_BIT, &work->flags);
-}
-
-void btrfs_flush_workqueue(struct btrfs_workqueue *wq)
-{
-	if (wq->high)
-		flush_workqueue(wq->high->normal_wq);
-
-	flush_workqueue(wq->normal->normal_wq);
 }

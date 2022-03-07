@@ -89,8 +89,6 @@ enum wiimote_exttype {
 	WIIMOTE_EXT_CLASSIC_CONTROLLER,
 	WIIMOTE_EXT_BALANCE_BOARD,
 	WIIMOTE_EXT_PRO_CONTROLLER,
-	WIIMOTE_EXT_DRUMS,
-	WIIMOTE_EXT_GUITAR,
 	WIIMOTE_EXT_NUM,
 };
 
@@ -139,7 +137,6 @@ struct wiimote_state {
 	/* calibration/cache data */
 	__u16 calib_bboard[4][3];
 	__s16 calib_pro_sticks[4];
-	__u8 pressure_drums[7];
 	__u8 cache_rumble;
 };
 
@@ -259,7 +256,8 @@ enum wiiproto_reqs {
 	WIIPROTO_REQ_MAX
 };
 
-#define dev_to_wii(pdev) hid_get_drvdata(to_hid_device(pdev))
+#define dev_to_wii(pdev) hid_get_drvdata(container_of(pdev, struct hid_device, \
+									dev))
 
 void __wiimote_schedule(struct wiimote_data *wdata);
 

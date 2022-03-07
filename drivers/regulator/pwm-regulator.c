@@ -122,7 +122,8 @@ static int pwm_regulator_enable(struct regulator_dev *dev)
 {
 	struct pwm_regulator_data *drvdata = rdev_get_drvdata(dev);
 
-	gpiod_set_value_cansleep(drvdata->enb_gpio, 1);
+	if (drvdata->enb_gpio)
+		gpiod_set_value_cansleep(drvdata->enb_gpio, 1);
 
 	return pwm_enable(drvdata->pwm);
 }
@@ -133,7 +134,8 @@ static int pwm_regulator_disable(struct regulator_dev *dev)
 
 	pwm_disable(drvdata->pwm);
 
-	gpiod_set_value_cansleep(drvdata->enb_gpio, 0);
+	if (drvdata->enb_gpio)
+		gpiod_set_value_cansleep(drvdata->enb_gpio, 0);
 
 	return 0;
 }
@@ -285,7 +287,7 @@ static int pwm_regulator_init_table(struct platform_device *pdev,
 		return ret;
 	}
 
-	drvdata->state			= -ENOTRECOVERABLE;
+	drvdata->state			= -EINVAL;
 	drvdata->duty_cycle_table	= duty_cycle_table;
 	memcpy(&drvdata->ops, &pwm_regulator_voltage_table_ops,
 	       sizeof(drvdata->ops));
@@ -376,7 +378,7 @@ static int pwm_regulator_probe(struct platform_device *pdev)
 						    gpio_flags);
 	if (IS_ERR(drvdata->enb_gpio)) {
 		ret = PTR_ERR(drvdata->enb_gpio);
-		dev_err(&pdev->dev, "Failed to get enable GPIO: %d\n", ret);
+		dev_warn(&pdev->dev, "enable GPIO was not set: %d\n", ret);
 		return ret;
 	}
 
@@ -410,21 +412,7 @@ static struct platform_driver pwm_regulator_driver = {
 	.probe = pwm_regulator_probe,
 };
 
-#ifdef CONFIG_ROCKCHIP_THUNDER_BOOT
-static int __init pwm_regulator_driver_init(void)
-{
-	return platform_driver_register(&pwm_regulator_driver);
-}
-subsys_initcall_sync(pwm_regulator_driver_init);
-
-static void __exit pwm_regulator_driver_exit(void)
-{
-	platform_driver_unregister(&pwm_regulator_driver);
-}
-module_exit(pwm_regulator_driver_exit);
-#else
 module_platform_driver(pwm_regulator_driver);
-#endif
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Lee Jones <lee.jones@linaro.org>");

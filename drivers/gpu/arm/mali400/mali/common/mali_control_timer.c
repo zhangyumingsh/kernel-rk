@@ -76,7 +76,7 @@ _mali_osk_errcode_t mali_control_timer_init(void)
 		}
 	}
 
-	mali_control_timer = _mali_osk_timer_init(mali_control_timer_callback);
+	mali_control_timer = _mali_osk_timer_init();
 	if (NULL == mali_control_timer) {
 		return _MALI_OSK_ERR_FAULT;
 	}

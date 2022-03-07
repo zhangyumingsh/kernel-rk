@@ -1,4 +1,3 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef __ASM_ARM_CP15_H
 #define __ASM_ARM_CP15_H
 
@@ -49,8 +48,6 @@
 #endif
 
 #ifdef CONFIG_CPU_CP15
-
-#include <asm/vdso/cp15.h>
 
 extern unsigned long cr_alignment;	/* defined in entry-armv.S */
 

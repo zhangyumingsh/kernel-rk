@@ -11,16 +11,9 @@
 
 #include <linux/kernel.h>
 #include <linux/errno.h>
-#include <linux/string.h>
-#include <linux/verification.h>
+#include <keys/system_keyring.h>
 #include <crypto/public_key.h>
 #include "module-internal.h"
-
-enum pkey_id_type {
-	PKEY_ID_PGP,		/* OpenPGP generated key ID */
-	PKEY_ID_X509,		/* X.509 arbitrary subjectKeyIdentifier */
-	PKEY_ID_PKCS7,		/* Signature in PKCS#7 message */
-};
 
 /*
  * Module signature information block.
@@ -45,10 +38,10 @@ struct module_signature {
 /*
  * Verify the signature on a module.
  */
-int mod_verify_sig(const void *mod, struct load_info *info)
+int mod_verify_sig(const void *mod, unsigned long *_modlen)
 {
 	struct module_signature ms;
-	size_t sig_len, modlen = info->len;
+	size_t modlen = *_modlen, sig_len;
 
 	pr_devel("==>%s(,%zu)\n", __func__, modlen);
 
@@ -62,11 +55,10 @@ int mod_verify_sig(const void *mod, struct load_info *info)
 	if (sig_len >= modlen)
 		return -EBADMSG;
 	modlen -= sig_len;
-	info->len = modlen;
+	*_modlen = modlen;
 
 	if (ms.id_type != PKEY_ID_PKCS7) {
-		pr_err("%s: Module is not signed with expected PKCS#7 message\n",
-		       info->name);
+		pr_err("Module is not signed with expected PKCS#7 message\n");
 		return -ENOPKG;
 	}
 
@@ -77,12 +69,10 @@ int mod_verify_sig(const void *mod, struct load_info *info)
 	    ms.__pad[0] != 0 ||
 	    ms.__pad[1] != 0 ||
 	    ms.__pad[2] != 0) {
-		pr_err("%s: PKCS#7 signature info has unexpected non-zero params\n",
-		       info->name);
+		pr_err("PKCS#7 signature info has unexpected non-zero params\n");
 		return -EBADMSG;
 	}
 
-	return verify_pkcs7_signature(mod, modlen, mod + modlen, sig_len,
-				      NULL, VERIFYING_MODULE_SIGNATURE,
-				      NULL, NULL);
+	return system_verify_data(mod, modlen, mod + modlen, sig_len,
+				  VERIFYING_MODULE_SIGNATURE);
 }

@@ -22,7 +22,7 @@
 #include <asm/glue-df.h>
 #include <asm/glue-pf.h>
 #include <asm/vfpmacros.h>
-#ifndef CONFIG_GENERIC_IRQ_MULTI_HANDLER
+#ifndef CONFIG_MULTI_IRQ_HANDLER
 #include <mach/entry-macro.S>
 #endif
 #include <asm/thread_notify.h>
@@ -30,7 +30,6 @@
 #include <asm/unistd.h>
 #include <asm/tls.h>
 #include <asm/system_info.h>
-#include <asm/uaccess-asm.h>
 
 #include "entry-header.S"
 #include <asm/entry-macro-multi.S>
@@ -40,7 +39,7 @@
  * Interrupt handling.
  */
 	.macro	irq_handler
-#ifdef CONFIG_GENERIC_IRQ_MULTI_HANDLER
+#ifdef CONFIG_MULTI_IRQ_HANDLER
 	ldr	r1, =handle_arch_irq
 	mov	r0, sp
 	badr	lr, 9997f
@@ -83,13 +82,17 @@
 #endif
 	.endm
 
-	.section	.entry.text,"ax",%progbits
+#ifdef CONFIG_KPROBES
+	.section	.kprobes.text,"ax",%progbits
+#else
+	.text
+#endif
 
 /*
  * Invalid mode handlers
  */
 	.macro	inv_entry, reason
-	sub	sp, sp, #PT_REGS_SIZE
+	sub	sp, sp, #S_FRAME_SIZE
  ARM(	stmib	sp, {r1 - lr}		)
  THUMB(	stmia	sp, {r0 - r12}		)
  THUMB(	str	sp, [sp, #S_SP]		)
@@ -149,7 +152,7 @@ ENDPROC(__und_invalid)
 	.macro	svc_entry, stack_hole=0, trace=1, uaccess=1
  UNWIND(.fnstart		)
  UNWIND(.save {r0 - pc}		)
-	sub	sp, sp, #(SVC_REGS_SIZE + \stack_hole - 4)
+	sub	sp, sp, #(S_FRAME_SIZE + 8 + \stack_hole - 4)
 #ifdef CONFIG_THUMB2_KERNEL
  SPFIX(	str	r0, [sp]	)	@ temporarily saved
  SPFIX(	mov	r0, sp		)
@@ -164,7 +167,7 @@ ENDPROC(__und_invalid)
 	ldmia	r0, {r3 - r5}
 	add	r7, sp, #S_SP - 4	@ here for interlock avoidance
 	mov	r6, #-1			@  ""  ""      ""       ""
-	add	r2, sp, #(SVC_REGS_SIZE + \stack_hole - 4)
+	add	r2, sp, #(S_FRAME_SIZE + 8 + \stack_hole - 4)
  SPFIX(	addeq	r2, r2, #4	)
 	str	r3, [sp, #-4]!		@ save the "real" r0 copied
 					@ from the exception stack
@@ -182,8 +185,10 @@ ENDPROC(__und_invalid)
 	@
 	stmia	r7, {r2 - r6}
 
-	get_thread_info tsk
-	uaccess_entry tsk, r0, r1, r2, \uaccess
+	uaccess_save r0
+	.if \uaccess
+	uaccess_disable r0
+	.endif
 
 	.if \trace
 #ifdef CONFIG_TRACE_IRQFLAGS
@@ -208,6 +213,7 @@ __irq_svc:
 	irq_handler
 
 #ifdef CONFIG_PREEMPT
+	get_thread_info tsk
 	ldr	r8, [tsk, #TI_PREEMPT]		@ get preempt count
 	ldr	r0, [tsk, #TI_FLAGS]		@ get flags
 	teq	r8, #0				@ if preempt count != 0
@@ -284,7 +290,6 @@ __und_svc_fault:
 	bl	__und_fault
 
 __und_svc_finish:
-	get_thread_info tsk
 	ldr	r5, [sp, #S_PSR]		@ Get SVC cpsr
 	svc_exit r5				@ return from exception
  UNWIND(.fnend		)
@@ -361,17 +366,17 @@ ENDPROC(__fiq_abt)
 /*
  * User mode handlers
  *
- * EABI note: sp_svc is always 64-bit aligned here, so should PT_REGS_SIZE
+ * EABI note: sp_svc is always 64-bit aligned here, so should S_FRAME_SIZE
  */
 
-#if defined(CONFIG_AEABI) && (__LINUX_ARM_ARCH__ >= 5) && (PT_REGS_SIZE & 7)
+#if defined(CONFIG_AEABI) && (__LINUX_ARM_ARCH__ >= 5) && (S_FRAME_SIZE & 7)
 #error "sizeof(struct pt_regs) must be a multiple of 8"
 #endif
 
 	.macro	usr_entry, trace=1, uaccess=1
  UNWIND(.fnstart	)
  UNWIND(.cantunwind	)	@ don't unwind the user space
-	sub	sp, sp, #PT_REGS_SIZE
+	sub	sp, sp, #S_FRAME_SIZE
  ARM(	stmib	sp, {r1 - r12}	)
  THUMB(	stmia	sp, {r0 - r12}	)
 
@@ -710,7 +715,6 @@ do_fpe:
  */
 
 	.pushsection .data
-	.align	2
 ENTRY(fp_enter)
 	.word	no_fp
 	.popsection
@@ -784,13 +788,10 @@ ENTRY(__switch_to)
 	ldr	r6, [r2, #TI_CPU_DOMAIN]
 #endif
 	switch_tls r1, r4, r5, r3, r7
-#if defined(CONFIG_STACKPROTECTOR) && !defined(CONFIG_SMP)
+#if defined(CONFIG_CC_STACKPROTECTOR) && !defined(CONFIG_SMP)
 	ldr	r7, [r2, #TI_TASK]
 	ldr	r8, =__stack_chk_guard
-	.if (TSK_STACK_CANARY > IMM12_MASK)
-	add	r7, r7, #TSK_STACK_CANARY & ~IMM12_MASK
-	.endif
-	ldr	r7, [r7, #TSK_STACK_CANARY & IMM12_MASK]
+	ldr	r7, [r7, #TSK_STACK_CANARY]
 #endif
 #ifdef CONFIG_CPU_USE_DOMAINS
 	mcr	p15, 0, r6, c3, c0, 0		@ Set domain register
@@ -800,7 +801,7 @@ ENTRY(__switch_to)
 	ldr	r0, =thread_notify_head
 	mov	r1, #THREAD_NOTIFY_SWITCH
 	bl	atomic_notifier_call_chain
-#if defined(CONFIG_STACKPROTECTOR) && !defined(CONFIG_SMP)
+#if defined(CONFIG_CC_STACKPROTECTOR) && !defined(CONFIG_SMP)
 	str	r7, [r8]
 #endif
  THUMB(	mov	ip, r4			   )
@@ -1063,6 +1064,7 @@ ENDPROC(vector_\name)
 	.endm
 
 	.section .stubs, "ax", %progbits
+__stubs_start:
 	@ This must be the first word
 	.word	vector_swi
 
@@ -1200,13 +1202,14 @@ vector_addrexcptn:
 	.long	__fiq_svc			@  e
 	.long	__fiq_svc			@  f
 
-	.globl	vector_fiq
+	.globl	vector_fiq_offset
+	.equ	vector_fiq_offset, vector_fiq
 
 	.section .vectors, "ax", %progbits
-.L__vectors_start:
+__vectors_start:
 	W(b)	vector_rst
 	W(b)	vector_und
-	W(ldr)	pc, .L__vectors_start + 0x1000
+	W(ldr)	pc, __vectors_start + 0x1000
 	W(b)	vector_pabt
 	W(b)	vector_dabt
 	W(b)	vector_addrexcptn
@@ -1214,8 +1217,13 @@ vector_addrexcptn:
 	W(b)	vector_fiq
 
 	.data
-	.align	2
 
 	.globl	cr_alignment
 cr_alignment:
 	.space	4
+
+#ifdef CONFIG_MULTI_IRQ_HANDLER
+	.globl	handle_arch_irq
+handle_arch_irq:
+	.space	4
+#endif

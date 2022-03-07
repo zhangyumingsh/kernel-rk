@@ -34,6 +34,9 @@
 #include <linux/slab.h>
 #include <linux/of.h>
 #include <linux/of_gpio.h>
+#include <linux/mfd/syscon.h>
+#include <linux/regmap.h>
+
 
 struct gpio_regulator_data {
 	struct regulator_desc desc;
@@ -47,6 +50,24 @@ struct gpio_regulator_data {
 
 	int state;
 };
+
+#define GPIOMUTE 25
+#define RK3328_GRF_SOC_CON10   (0x0428)
+static void rk3328_gpioMute_set(int value)
+{
+  struct regmap *regmap;
+       regmap = syscon_regmap_lookup_by_compatible("rockchip,rk3328-grf");                                                                  
+       if (IS_ERR(regmap)) {
+               printk("gpio-regulator: Unable to get rockchip,grf\n");                                                                      
+    return;
+       }
+  printk("gpio-regulator: set GRF_SOC_CON10 bit 1 to %d\n", value);
+  regmap_write(regmap,
+               RK3328_GRF_SOC_CON10,
+               (BIT(1) << 16) | (value << 1));
+}
+
+
 
 static int gpio_regulator_get_value(struct regulator_dev *dev)
 {
@@ -82,7 +103,12 @@ static int gpio_regulator_set_voltage(struct regulator_dev *dev,
 
 	for (ptr = 0; ptr < data->nr_gpios; ptr++) {
 		state = (target & (1 << ptr)) >> ptr;
-		gpio_set_value_cansleep(data->gpios[ptr].gpio, state);
+		//gpio_set_value_cansleep(data->gpios[ptr].gpio, state);
+               if(data->gpios[ptr].gpio == GPIOMUTE)
+		rk3328_gpioMute_set(state);
+               else
+		gpio_set_value_cansleep(data->gpios[ptr].gpio, state);                                                               
+               printk("enter %s line %d ,gpio=%d state=%d\n",__FUNCTION__,__LINE__,data->gpios[ptr].gpio, state);
 	}
 	data->state = target;
 
@@ -119,7 +145,12 @@ static int gpio_regulator_set_current_limit(struct regulator_dev *dev,
 
 	for (ptr = 0; ptr < data->nr_gpios; ptr++) {
 		state = (target & (1 << ptr)) >> ptr;
-		gpio_set_value_cansleep(data->gpios[ptr].gpio, state);
+		//gpio_set_value_cansleep(data->gpios[ptr].gpio, state);
+               if(data->gpios[ptr].gpio == GPIOMUTE)
+                       rk3328_gpioMute_set(state);
+               else
+                       gpio_set_value_cansleep(data->gpios[ptr].gpio, state);                                                               
+               printk("enter %s line %d ,gpio=%d state=%d\n",__FUNCTION__,__LINE__,data->gpios[ptr].gpio, state); 
 	}
 	data->state = target;
 
@@ -162,8 +193,6 @@ of_get_gpio_regulator_config(struct device *dev, struct device_node *np,
 	of_property_read_u32(np, "startup-delay-us", &config->startup_delay);
 
 	config->enable_gpio = of_get_named_gpio(np, "enable-gpio", 0);
-	if (config->enable_gpio < 0 && config->enable_gpio != -ENOENT)
-		return ERR_PTR(config->enable_gpio);
 
 	/* Fetch GPIOs. - optional property*/
 	ret = of_gpio_count(np);
@@ -172,8 +201,8 @@ of_get_gpio_regulator_config(struct device *dev, struct device_node *np,
 
 	if (ret > 0) {
 		config->nr_gpios = ret;
-		config->gpios = devm_kcalloc(dev,
-					config->nr_gpios, sizeof(struct gpio),
+		config->gpios = devm_kzalloc(dev,
+					sizeof(struct gpio) * config->nr_gpios,
 					GFP_KERNEL);
 		if (!config->gpios)
 			return ERR_PTR(-ENOMEM);
@@ -190,13 +219,9 @@ of_get_gpio_regulator_config(struct device *dev, struct device_node *np,
 
 		for (i = 0; i < config->nr_gpios; i++) {
 			gpio = of_get_named_gpio(np, "gpios", i);
-			if (gpio < 0) {
-				if (gpio != -ENOENT)
-					return ERR_PTR(gpio);
+			if (gpio < 0)
 				break;
-			}
 			config->gpios[i].gpio = gpio;
-			config->gpios[i].label = config->supply_name;
 			if (proplen > 0) {
 				of_property_read_u32_index(np, "gpios-states",
 							   i, &ret);
@@ -214,9 +239,9 @@ of_get_gpio_regulator_config(struct device *dev, struct device_node *np,
 		return ERR_PTR(-EINVAL);
 	}
 
-	config->states = devm_kcalloc(dev,
-				proplen / 2,
-				sizeof(struct gpio_regulator_state),
+	config->states = devm_kzalloc(dev,
+				sizeof(struct gpio_regulator_state)
+				* (proplen / 2),
 				GFP_KERNEL);
 	if (!config->states)
 		return ERR_PTR(-ENOMEM);
@@ -240,9 +265,6 @@ of_get_gpio_regulator_config(struct device *dev, struct device_node *np,
 			dev_warn(dev, "Unknown regulator-type '%s'\n",
 				 regtype);
 	}
-
-	if (of_find_property(np, "vin-supply", NULL))
-		config->input_supply = "vin";
 
 	return config;
 }
@@ -275,19 +297,8 @@ static int gpio_regulator_probe(struct platform_device *pdev)
 	drvdata->desc.name = kstrdup(config->supply_name, GFP_KERNEL);
 	if (drvdata->desc.name == NULL) {
 		dev_err(&pdev->dev, "Failed to allocate supply name\n");
-		return -ENOMEM;
-	}
-
-	if (config->input_supply) {
-		drvdata->desc.supply_name = devm_kstrdup(&pdev->dev,
-							 config->input_supply,
-							 GFP_KERNEL);
-		if (!drvdata->desc.supply_name) {
-			dev_err(&pdev->dev,
-				"Failed to allocate input supply\n");
-			ret = -ENOMEM;
-			goto err_name;
-		}
+		ret = -ENOMEM;
+		goto err;
 	}
 
 	if (config->nr_gpios != 0) {
@@ -303,11 +314,9 @@ static int gpio_regulator_probe(struct platform_device *pdev)
 		drvdata->nr_gpios = config->nr_gpios;
 		ret = gpio_request_array(drvdata->gpios, drvdata->nr_gpios);
 		if (ret) {
-			if (ret != -EPROBE_DEFER)
-				dev_err(&pdev->dev,
-					"Could not obtain regulator setting GPIOs: %d\n",
-					ret);
-			goto err_memgpio;
+			dev_err(&pdev->dev,
+			"Could not obtain regulator setting GPIOs: %d\n", ret);
+			goto err_memstate;
 		}
 	}
 
@@ -318,7 +327,7 @@ static int gpio_regulator_probe(struct platform_device *pdev)
 	if (drvdata->states == NULL) {
 		dev_err(&pdev->dev, "Failed to allocate state data\n");
 		ret = -ENOMEM;
-		goto err_stategpio;
+		goto err_memgpio;
 	}
 	drvdata->nr_states = config->nr_states;
 
@@ -339,7 +348,7 @@ static int gpio_regulator_probe(struct platform_device *pdev)
 	default:
 		dev_err(&pdev->dev, "No regulator type set\n");
 		ret = -EINVAL;
-		goto err_memstate;
+		goto err_memgpio;
 	}
 
 	/* build initial state from gpio init data. */
@@ -376,21 +385,22 @@ static int gpio_regulator_probe(struct platform_device *pdev)
 	if (IS_ERR(drvdata->dev)) {
 		ret = PTR_ERR(drvdata->dev);
 		dev_err(&pdev->dev, "Failed to register regulator: %d\n", ret);
-		goto err_memstate;
+		goto err_stategpio;
 	}
 
 	platform_set_drvdata(pdev, drvdata);
 
 	return 0;
 
-err_memstate:
-	kfree(drvdata->states);
 err_stategpio:
 	gpio_free_array(drvdata->gpios, drvdata->nr_gpios);
+err_memstate:
+	kfree(drvdata->states);
 err_memgpio:
 	kfree(drvdata->gpios);
 err_name:
 	kfree(drvdata->desc.name);
+err:
 	return ret;
 }
 

@@ -110,8 +110,6 @@ static int sensor_active(struct i2c_client *client, int enable, int rate);
 #define IS_MC3210		2
 #define IS_MC2234		3
 #define IS_MC3236		4
-#define IS_MC3413		5
-#define IS_MC3416		6
 
 static const char backup_calib_path[] = "/data/misc/mcube-calib.txt";
 static const char calib_path[] =
@@ -378,16 +376,13 @@ static int mc3230_reg_init(struct i2c_client *client)
 	} else if (pcode == 0x59) {
 		mc32x0_type = IS_MC2234;
 	}
-
 	if ((pcode & 0xF1) == 0x60) {
 		mc32x0_type = IS_MC3236;
-	} else if ((pcode & 0xF1) == 0x10) {
-		mc32x0_type = IS_MC3413;
-	} else if ((pcode & 0xF1) == 0x20) {
-		mc32x0_type = IS_MC3416;
 	}
 
-	GSE_LOG("MC3230 1, MC3210 2, MC2234 3, MC3236 4, MC3416 5, MC3416 6:mc32x0_type=%d\n", mc32x0_type);
+	GSE_LOG
+	    ("MC3230 1, MC3210 2, MC2234 3, MC3236 4 : mc32x0_type=%d\n",
+	     mc32x0_type);
 
 	if ((mc32x0_type == IS_MC3230) || (mc32x0_type == IS_MC2234)) {
 		ret = sensor_write_reg(client, 0x20, 0x32);
@@ -395,21 +390,14 @@ static int mc3230_reg_init(struct i2c_client *client)
 		ret = sensor_write_reg(client, 0x20, 0x02);
 	} else if (mc32x0_type == IS_MC3210) {
 		ret = sensor_write_reg(client, 0x20, 0x3F);
-	} else if (mc32x0_type == IS_MC3413) {
-		ret = sensor_write_reg(client, 0x20, 0x25);
-	} else if (mc32x0_type == IS_MC3416) {
-		ret = sensor_write_reg(client, 0x08, 0x05);
-		ret = sensor_write_reg(client, 0x20, 0x29);
 	}
 
 	if ((mc32x0_type == IS_MC3230) || (mc32x0_type == IS_MC2234)) {
 		gsensor_gain.x = gsensor_gain.y = gsensor_gain.z = 86;
 	} else if (mc32x0_type == IS_MC3236) {
 		gsensor_gain.x = gsensor_gain.y = gsensor_gain.z = 64;
-	} else if ((mc32x0_type == IS_MC3210) || (mc32x0_type == IS_MC3413)) {
+	} else if (mc32x0_type == IS_MC3210) {
 		gsensor_gain.x = gsensor_gain.y = gsensor_gain.z = 1024;
-	} else if (mc32x0_type == IS_MC3416) {
-		gsensor_gain.x = gsensor_gain.y = gsensor_gain.z = 4096;
 	}
 
 	return ret;
@@ -530,16 +518,14 @@ static int mc3230_start(struct i2c_client *client, char rate)
 
 static inline int mc3230_convert_to_int(s16 value)
 {
-	int result = 0;
+	int result;
 
 	if ((mc32x0_type == IS_MC3230) || (mc32x0_type == IS_MC2234)) {
 		result = value * 192;
 	} else if (mc32x0_type == IS_MC3236) {
 		result = value * 256;
-	} else if ((mc32x0_type == IS_MC3210) || (mc32x0_type == IS_MC3413)) {
+	} else if (mc32x0_type == IS_MC3210) {
 		result = value * 16;
-	} else if (mc32x0_type == IS_MC3416) {
-		result = value * 4;
 	}
 
 	return result;
@@ -560,10 +546,6 @@ static void mc3230_report_value(struct i2c_client *client,
 	} else if (mc32x0_type == IS_MC3236) {
 		input_report_abs(mc3230->input_dev, ABS_X, -(axis->x));
 		input_report_abs(mc3230->input_dev, ABS_Y, (axis->y));
-		input_report_abs(mc3230->input_dev, ABS_Z, -(axis->z));
-	} else if (mc32x0_type == IS_MC3416) {
-		input_report_abs(mc3230->input_dev, ABS_X, (axis->x));
-		input_report_abs(mc3230->input_dev, ABS_Y, -(axis->y));
 		input_report_abs(mc3230->input_dev, ABS_Z, -(axis->z));
 	} else {
 		input_report_abs(mc3230->input_dev, ABS_X, (axis->y));
@@ -690,8 +672,7 @@ static int MC32X0_ReadOffset(struct i2c_client *client,
 	u8 off_data[6];
 
 	off_data[0] = MC32X0_XOUT_EX_L_REG;
-	if ((mc32x0_type == IS_MC3210) || (mc32x0_type == IS_MC3413)
-				|| (mc32x0_type == IS_MC3416)) {
+	if (mc32x0_type == IS_MC3210) {
 		err = sensor_rx_data(client, off_data, MC32X0_DATA_LEN);
 		if (err) {
 			GSE_ERR("error: %d\n", err);
@@ -914,9 +895,7 @@ static int MC32X0_ReadData(struct i2c_client *client,
 				(s8)(gsensor_gain.z - (abs(tempX) + abs(tempY)));
 		}
 
-		else if ((mc32x0_type == IS_MC3210)
-					|| (mc32x0_type == IS_MC3413)
-					|| (mc32x0_type == IS_MC3416)) {
+		else if (mc32x0_type == IS_MC3210) {
 			do {
 				memset(buf1, 0, 6);
 				buf[0] = MC32X0_XOUT_EX_L_REG;
@@ -1318,36 +1297,31 @@ static struct sensor_operate gsensor_ops = {
 };
 
 /****************operate according to sensor chip:end************/
-static int gsensor_mc3230_probe(struct i2c_client *client,
-				const struct i2c_device_id *devid)
+
+/* function name should not be changed */
+static struct sensor_operate *gsensor_get_ops(void)
 {
-	return sensor_register_device(client, NULL, devid, &gsensor_ops);
+	return &gsensor_ops;
 }
 
-static int gsensor_mc3230_remove(struct i2c_client *client)
+static int __init gsensor_init(void)
 {
-	return sensor_unregister_device(client, NULL, &gsensor_ops);
+	struct sensor_operate *ops = gsensor_get_ops();
+	int result = 0;
+	int type = ops->type;
+
+	result = sensor_register_slave(type, NULL, NULL, gsensor_get_ops);
+	GSE_LOG("  %s\n", __func__);
+	return result;
 }
 
-static const struct i2c_device_id gsensor_mc3230_id[] = {
-	{"gs_mc3230", ACCEL_ID_MC3230},
-	{}
-};
+static void __exit gsensor_exit(void)
+{
+	struct sensor_operate *ops = gsensor_get_ops();
+	int type = ops->type;
 
-static struct i2c_driver gsensor_mc3230_driver = {
-	.probe = gsensor_mc3230_probe,
-	.remove = gsensor_mc3230_remove,
-	.shutdown = sensor_shutdown,
-	.id_table = gsensor_mc3230_id,
-	.driver = {
-		.name = "gsensor_mc3230",
-	#ifdef CONFIG_PM
-		.pm = &sensor_pm_ops,
-	#endif
-	},
-};
+	sensor_unregister_slave(type, NULL, NULL, gsensor_get_ops);
+}
 
-module_i2c_driver(gsensor_mc3230_driver);
-
-MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("mc3230 3-Axis accelerometer driver");
+module_init(gsensor_init);
+module_exit(gsensor_exit);

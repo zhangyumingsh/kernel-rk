@@ -22,7 +22,6 @@
 
 #include <video/videomode.h>
 
-#include "../rockchip_drm_drv.h"
 #include "rk618_dither.h"
 
 struct rk618_rgb {
@@ -36,7 +35,6 @@ struct rk618_rgb {
 	struct rk618 *parent;
 	u32 bus_format;
 	u32 id;
-	struct rockchip_drm_sub_dev sub_dev;
 };
 
 static inline struct rk618_rgb *bridge_to_rgb(struct drm_bridge *b)
@@ -98,6 +96,7 @@ static void rk618_rgb_connector_destroy(struct drm_connector *connector)
 }
 
 static const struct drm_connector_funcs rk618_rgb_connector_funcs = {
+	.dpms = drm_atomic_helper_connector_dpms,
 	.detect = rk618_rgb_connector_detect,
 	.fill_modes = drm_helper_probe_single_connector_modes,
 	.destroy = rk618_rgb_connector_destroy,
@@ -170,6 +169,8 @@ static int rk618_rgb_bridge_attach(struct drm_bridge *bridge)
 	int ret;
 
 	if (rgb->panel) {
+		connector->port = dev->of_node;
+
 		ret = drm_connector_init(drm, connector,
 					 &rk618_rgb_connector_funcs,
 					 DRM_MODE_CONNECTOR_DPI);
@@ -180,33 +181,25 @@ static int rk618_rgb_bridge_attach(struct drm_bridge *bridge)
 
 		drm_connector_helper_add(connector,
 					 &rk618_rgb_connector_helper_funcs);
-		drm_connector_attach_encoder(connector, bridge->encoder);
+		drm_mode_connector_attach_encoder(connector, bridge->encoder);
 		drm_panel_attach(rgb->panel, connector);
-
-		rgb->sub_dev.connector = &rgb->connector;
-		rgb->sub_dev.of_node = rgb->dev->of_node;
-		rockchip_drm_register_sub_dev(&rgb->sub_dev);
 	} else {
-		ret = drm_bridge_attach(bridge->encoder, rgb->bridge, bridge);
+		rgb->bridge->encoder = bridge->encoder;
+
+		ret = drm_bridge_attach(bridge->dev, rgb->bridge);
 		if (ret) {
 			dev_err(dev, "failed to attach bridge\n");
 			return ret;
 		}
+
+		bridge->next = rgb->bridge;
 	}
 
 	return 0;
 }
 
-static void rk618_rgb_bridge_detach(struct drm_bridge *bridge)
-{
-	struct rk618_rgb *rgb = bridge_to_rgb(bridge);
-
-	rockchip_drm_unregister_sub_dev(&rgb->sub_dev);
-}
-
 static const struct drm_bridge_funcs rk618_rgb_bridge_funcs = {
 	.attach = rk618_rgb_bridge_attach,
-	.detach = rk618_rgb_bridge_detach,
 	.enable = rk618_rgb_bridge_enable,
 	.disable = rk618_rgb_bridge_disable,
 };
@@ -252,10 +245,8 @@ static int rk618_rgb_probe(struct platform_device *pdev)
 		}
 
 		rgb->panel = of_drm_find_panel(remote);
-		if (IS_ERR(rgb->panel)) {
-			rgb->panel = NULL;
+		if (!rgb->panel)
 			rgb->bridge = of_drm_find_bridge(remote);
-		}
 		of_node_put(remote);
 		if (!rgb->panel && !rgb->bridge) {
 			dev_err(dev, "Waiting for panel/bridge driver\n");
@@ -267,7 +258,11 @@ static int rk618_rgb_probe(struct platform_device *pdev)
 
 	rgb->base.funcs = &rk618_rgb_bridge_funcs;
 	rgb->base.of_node = dev->of_node;
-	drm_bridge_add(&rgb->base);
+	ret = drm_bridge_add(&rgb->base);
+	if (ret) {
+		dev_err(dev, "failed to add drm_bridge: %d\n", ret);
+		return ret;
+	}
 
 	return 0;
 }

@@ -214,6 +214,8 @@ static int rockchip_sound_probe(struct platform_device *pdev)
 	if (ret)
 		dev_err(&pdev->dev, "%s register card failed %d\n",
 			__func__, ret);
+
+	dev_info(&pdev->dev, "snd_soc_register_card successful\n");
 	return ret;
 }
 

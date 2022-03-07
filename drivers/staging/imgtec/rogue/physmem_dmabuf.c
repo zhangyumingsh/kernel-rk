@@ -81,7 +81,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
  * and using our dmabuf.
  */
 
-static int PVRDmaBufOpsAttach(struct dma_buf *psDmaBuf,
+static int PVRDmaBufOpsAttach(struct dma_buf *psDmaBuf, struct device *psDev,
                            struct dma_buf_attachment *psAttachment)
 {
 	return -ENOSYS;
@@ -123,13 +123,8 @@ static const struct dma_buf_ops sPVRDmaBufOps =
 	.map_dma_buf   = PVRDmaBufOpsMap,
 	.unmap_dma_buf = PVRDmaBufOpsUnmap,
 	.release       = PVRDmaBufOpsRelease,
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 12, 0))
-    //.map_atomic    = PVRDmaBufOpsKMap,
-    .map           = PVRDmaBufOpsKMap,
-#else
-    .kmap_atomic   = PVRDmaBufOpsKMap,
-    .kmap          = PVRDmaBufOpsKMap,
-#endif
+	.kmap_atomic   = PVRDmaBufOpsKMap,
+	.kmap          = PVRDmaBufOpsKMap,
 	.mmap          = PVRDmaBufOpsMMap,
 };
 
@@ -558,6 +553,7 @@ PhysmemCreateNewDmaBufBackedPMR(PVRSRV_DEVICE_NODE *psDevNode,
 
 	psPrivData->ui32PhysPageCount = ui32PageCount;
 	psPrivData->psSgTable = table;
+	ui32PageCount = 0;
 	sg = table->sgl;
 	uiSglOffset = 0;
 

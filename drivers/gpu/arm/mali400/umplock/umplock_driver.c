@@ -14,7 +14,7 @@
 #include <linux/slab.h>
 #include <linux/cdev.h>
 #include <linux/device.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include "umplock_ioctl.h"
 #include <linux/sched.h>
 

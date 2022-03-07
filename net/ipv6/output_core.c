@@ -49,7 +49,7 @@ static u32 __ipv6_select_ident(struct net *net,
  *
  * The network header must be set before calling this.
  */
-__be32 ipv6_proxy_select_ident(struct net *net, struct sk_buff *skb)
+void ipv6_proxy_select_ident(struct net *net, struct sk_buff *skb)
 {
 	struct in6_addr buf[2];
 	struct in6_addr *addrs;
@@ -60,10 +60,10 @@ __be32 ipv6_proxy_select_ident(struct net *net, struct sk_buff *skb)
 				   offsetof(struct ipv6hdr, saddr),
 				   sizeof(buf), buf);
 	if (!addrs)
-		return 0;
+		return;
 
 	id = __ipv6_select_ident(net, &addrs[1], &addrs[0]);
-	return htonl(id);
+	skb_shinfo(skb)->ip6_frag_id = htonl(id);
 }
 EXPORT_SYMBOL_GPL(ipv6_proxy_select_ident);
 
@@ -153,13 +153,6 @@ int __ip6_local_out(struct net *net, struct sock *sk, struct sk_buff *skb)
 		len = 0;
 	ipv6_hdr(skb)->payload_len = htons(len);
 	IP6CB(skb)->nhoff = offsetof(struct ipv6hdr, nexthdr);
-
-	/* if egress device is enslaved to an L3 master device pass the
-	 * skb to its handler for processing
-	 */
-	skb = l3mdev_ip6_out(sk, skb);
-	if (unlikely(!skb))
-		return 0;
 
 	skb->protocol = htons(ETH_P_IPV6);
 

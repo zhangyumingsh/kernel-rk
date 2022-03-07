@@ -56,7 +56,7 @@
 /*===========Himax Option function=============*/
 #define HX_RST_PIN_FUNC
 #define HX_ESD_RECOVERY
-/*#define HX_FIX_TOUCH_INFO*/ //0305
+#define HX_FIX_TOUCH_INFO //0305
 /*#define HX_NEW_EVENT_STACK_FORMAT*/
 /*#define HX_AUTO_UPDATE_FW*/
 /*#define HX_SMART_WAKEUP*/
@@ -249,18 +249,18 @@ enum cell_type {
 };
 #if defined(HX_FIX_TOUCH_INFO)
 enum fix_touch_info {
-	FIX_HX_RX_NUM = 48,
-	FIX_HX_TX_NUM = 32,
+	FIX_HX_RX_NUM = 36,
+	FIX_HX_TX_NUM = 22,
 	FIX_HX_BT_NUM = 0,
-	FIX_HX_X_RES = 1200,
-	FIX_HX_Y_RES = 1920,
+	FIX_HX_X_RES = 1280,
+	FIX_HX_Y_RES = 800,
 	FIX_HX_MAX_PT = 10,
 	FIX_HX_XY_REVERSE = false,
 	FIX_HX_INT_IS_EDGE = true,
 	FIX_HX_PEN_FUNC = false,
 #if defined(HX_TP_PROC_2T2R)
-	FIX_HX_RX_NUM_2 = 48,
-	FIX_HX_TX_NUM_2 = 32,
+	FIX_HX_RX_NUM_2 = 0,
+	FIX_HX_TX_NUM_2 = 0,
 #endif
 };
 #endif

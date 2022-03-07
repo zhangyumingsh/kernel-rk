@@ -4143,6 +4143,10 @@ int power_control_init(struct kbase_device *kbdev)
 	kbdev->nr_clocks = i;
 	dev_dbg(&pdev->dev, "Clocks probed: %u\n", kbdev->nr_clocks);
 
+	err = kbase_platform_rk_init_opp_table(kbdev);
+	if (err)
+		dev_err(kbdev->dev, "Failed to init_opp_table (%d)\n", err);
+
 #if defined(CONFIG_PM_OPP)
 #if ((KERNEL_VERSION(4, 10, 0) <= LINUX_VERSION_CODE) && \
 	defined(CONFIG_REGULATOR))
@@ -4151,14 +4155,8 @@ int power_control_init(struct kbase_device *kbdev)
 			regulator_names, BASE_MAX_NR_CLOCKS_REGULATORS);
 	}
 #endif /* (KERNEL_VERSION(4, 10, 0) <= LINUX_VERSION_CODE */
-#ifdef CONFIG_ARCH_ROCKCHIP
-	err = kbase_platform_rk_init_opp_table(kbdev);
-	if (err)
-		dev_err(kbdev->dev, "Failed to init_opp_table (%d)\n", err);
-#else
 	err = dev_pm_opp_of_add_table(kbdev->dev);
 	CSTD_UNUSED(err);
-#endif
 #endif /* CONFIG_PM_OPP */
 
 #endif /* KERNEL_VERSION(4, 4, 0) > LINUX_VERSION_CODE */
@@ -4455,7 +4453,7 @@ int kbase_device_debugfs_init(struct kbase_device *kbdev)
 
 #ifdef CONFIG_MALI_BIFROST_DEVFREQ
 #ifdef CONFIG_DEVFREQ_THERMAL
-	if (kbdev->devfreq && !kbdev->model_data)
+	if (kbdev->devfreq)
 		kbase_ipa_debugfs_init(kbdev);
 #endif /* CONFIG_DEVFREQ_THERMAL */
 #endif /* CONFIG_MALI_BIFROST_DEVFREQ */
@@ -4909,6 +4907,8 @@ static const struct dev_pm_ops kbase_pm_ops = {
 
 #ifdef CONFIG_OF
 static const struct of_device_id kbase_dt_ids[] = {
+	{ .compatible = "arm,malit6xx" },
+	{ .compatible = "arm,mali-midgard" },
 	{ .compatible = "arm,mali-bifrost" },
 	{ /* sentinel */ }
 };

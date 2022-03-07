@@ -28,7 +28,6 @@
 #include <linux/slab.h>
 #include <linux/syscalls.h>
 #include <linux/uaccess.h>
-#include <uapi/linux/sched/types.h>
 
 #include "ptp_private.h"
 
@@ -150,10 +149,7 @@ static int ptp_clock_adjtime(struct posix_clock *pc, struct timex *tx)
 		s32 ppb = scaled_ppm_to_ppb(tx->freq);
 		if (ppb > ops->max_adj || ppb < -ops->max_adj)
 			return -ERANGE;
-		if (ops->adjfine)
-			err = ops->adjfine(ops, tx->freq);
-		else
-			err = ops->adjfreq(ops, ppb);
+		err = ops->adjfreq(ops, ppb);
 		ptp->dialed_frequency = tx->freq;
 	} else if (tx->modes == 0) {
 		tx->freq = ptp->dialed_frequency;
@@ -175,28 +171,14 @@ static struct posix_clock_operations ptp_clock_ops = {
 	.read		= ptp_read,
 };
 
-static void ptp_clock_release(struct device *dev)
+static void delete_ptp_clock(struct posix_clock *pc)
 {
-	struct ptp_clock *ptp = container_of(dev, struct ptp_clock, dev);
+	struct ptp_clock *ptp = container_of(pc, struct ptp_clock, clock);
 
-	ptp_cleanup_pin_groups(ptp);
 	mutex_destroy(&ptp->tsevq_mux);
 	mutex_destroy(&ptp->pincfg_mux);
 	ida_simple_remove(&ptp_clocks_map, ptp->index);
 	kfree(ptp);
-}
-
-static void ptp_aux_kworker(struct kthread_work *work)
-{
-	struct ptp_clock *ptp = container_of(work, struct ptp_clock,
-					     aux_work.work);
-	struct ptp_clock_info *info = ptp->info;
-	long delay;
-
-	delay = info->do_aux_work(info);
-
-	if (delay >= 0)
-		kthread_queue_delayed_work(ptp->kworker, &ptp->aux_work, delay);
 }
 
 /* public interface */
@@ -223,6 +205,7 @@ struct ptp_clock *ptp_clock_register(struct ptp_clock_info *info,
 	}
 
 	ptp->clock.ops = ptp_clock_ops;
+	ptp->clock.release = delete_ptp_clock;
 	ptp->info = info;
 	ptp->devid = MKDEV(major, index);
 	ptp->index = index;
@@ -231,23 +214,17 @@ struct ptp_clock *ptp_clock_register(struct ptp_clock_info *info,
 	mutex_init(&ptp->pincfg_mux);
 	init_waitqueue_head(&ptp->tsev_wq);
 
-	if (ptp->info->do_aux_work) {
-		char *worker_name = kasprintf(GFP_KERNEL, "ptp%d", ptp->index);
+	/* Create a new device in our class. */
+	ptp->dev = device_create(ptp_class, parent, ptp->devid, ptp,
+				 "ptp%d", ptp->index);
+	if (IS_ERR(ptp->dev))
+		goto no_device;
 
-		kthread_init_delayed_work(&ptp->aux_work, ptp_aux_kworker);
-		ptp->kworker = kthread_create_worker(0, worker_name ?
-						     worker_name : info->name);
-		kfree(worker_name);
-		if (IS_ERR(ptp->kworker)) {
-			err = PTR_ERR(ptp->kworker);
-			pr_err("failed to create ptp aux_worker %d\n", err);
-			goto kworker_err;
-		}
-	}
+	dev_set_drvdata(ptp->dev, ptp);
 
-	err = ptp_populate_pin_groups(ptp);
+	err = ptp_populate_sysfs(ptp);
 	if (err)
-		goto no_pin_groups;
+		goto no_sysfs;
 
 	/* Register a new PPS source. */
 	if (info->pps) {
@@ -258,24 +235,13 @@ struct ptp_clock *ptp_clock_register(struct ptp_clock_info *info,
 		pps.owner = info->owner;
 		ptp->pps_source = pps_register_source(&pps, PTP_PPS_DEFAULTS);
 		if (!ptp->pps_source) {
-			err = -EINVAL;
 			pr_err("failed to register pps source\n");
 			goto no_pps;
 		}
 	}
 
-	/* Initialize a new device of our class in our clock structure. */
-	device_initialize(&ptp->dev);
-	ptp->dev.devt = ptp->devid;
-	ptp->dev.class = ptp_class;
-	ptp->dev.parent = parent;
-	ptp->dev.groups = ptp->pin_attr_groups;
-	ptp->dev.release = ptp_clock_release;
-	dev_set_drvdata(&ptp->dev, ptp);
-	dev_set_name(&ptp->dev, "ptp%d", ptp->index);
-
-	/* Create a posix clock and link it to the device. */
-	err = posix_clock_register(&ptp->clock, &ptp->dev);
+	/* Create a posix clock. */
+	err = posix_clock_register(&ptp->clock, ptp->devid);
 	if (err) {
 		pr_err("failed to create posix clock\n");
 		goto no_clock;
@@ -287,14 +253,12 @@ no_clock:
 	if (ptp->pps_source)
 		pps_unregister_source(ptp->pps_source);
 no_pps:
-	ptp_cleanup_pin_groups(ptp);
-no_pin_groups:
-	if (ptp->kworker)
-		kthread_destroy_worker(ptp->kworker);
-kworker_err:
+	ptp_cleanup_sysfs(ptp);
+no_sysfs:
+	device_destroy(ptp_class, ptp->devid);
+no_device:
 	mutex_destroy(&ptp->tsevq_mux);
 	mutex_destroy(&ptp->pincfg_mux);
-	ida_simple_remove(&ptp_clocks_map, index);
 no_slot:
 	kfree(ptp);
 no_memory:
@@ -307,17 +271,13 @@ int ptp_clock_unregister(struct ptp_clock *ptp)
 	ptp->defunct = 1;
 	wake_up_interruptible(&ptp->tsev_wq);
 
-	if (ptp->kworker) {
-		kthread_cancel_delayed_work_sync(&ptp->aux_work);
-		kthread_destroy_worker(ptp->kworker);
-	}
-
 	/* Release the clock's resources. */
 	if (ptp->pps_source)
 		pps_unregister_source(ptp->pps_source);
+	ptp_cleanup_sysfs(ptp);
+	device_destroy(ptp_class, ptp->devid);
 
 	posix_clock_unregister(&ptp->clock);
-
 	return 0;
 }
 EXPORT_SYMBOL(ptp_clock_unregister);
@@ -374,12 +334,6 @@ int ptp_find_pin(struct ptp_clock *ptp,
 	return pin ? i : -1;
 }
 EXPORT_SYMBOL(ptp_find_pin);
-
-int ptp_schedule_worker(struct ptp_clock *ptp, unsigned long delay)
-{
-	return kthread_mod_delayed_work(ptp->kworker, &ptp->aux_work, delay);
-}
-EXPORT_SYMBOL(ptp_schedule_worker);
 
 /* module operations */
 

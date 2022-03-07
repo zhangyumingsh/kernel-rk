@@ -48,7 +48,7 @@ CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include <linux/list.h>
 #include <linux/init.h>
 #include <linux/vmalloc.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <drm/drmP.h>
 
 #include "img_types.h"

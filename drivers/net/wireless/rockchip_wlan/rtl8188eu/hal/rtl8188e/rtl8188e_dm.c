@@ -1,7 +1,6 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /******************************************************************************
  *
- * Copyright(c) 2007 - 2017 Realtek Corporation.
+ * Copyright(c) 2007 - 2011 Realtek Corporation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of version 2 of the GNU General Public License as
@@ -12,7 +11,12 @@
  * FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
  * more details.
  *
- *****************************************************************************/
+ * You should have received a copy of the GNU General Public License along with
+ * this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110, USA
+ *
+ *
+ ******************************************************************************/
 /* ************************************************************
  * Description:
  *
@@ -31,6 +35,53 @@
 /* ************************************************************
  * Global var
  * ************************************************************ */
+
+
+static VOID
+dm_CheckProtection(
+	IN	PADAPTER	Adapter
+)
+{
+#if 0
+	PMGNT_INFO		pMgntInfo = &(Adapter->MgntInfo);
+	u1Byte			CurRate, RateThreshold;
+
+	if (pMgntInfo->pHTInfo->bCurBW40MHz)
+		RateThreshold = MGN_MCS1;
+	else
+		RateThreshold = MGN_MCS3;
+
+	if (Adapter->TxStats.CurrentInitTxRate <= RateThreshold) {
+		pMgntInfo->bDmDisableProtect = TRUE;
+		dbg_print("Forced disable protect: %x\n", Adapter->TxStats.CurrentInitTxRate);
+	} else {
+		pMgntInfo->bDmDisableProtect = FALSE;
+		dbg_print("Enable protect: %x\n", Adapter->TxStats.CurrentInitTxRate);
+	}
+#endif
+}
+
+static VOID
+dm_CheckStatistics(
+	IN	PADAPTER	Adapter
+)
+{
+#if 0
+	if (!Adapter->MgntInfo.bMediaConnect)
+		return;
+
+	/* 2008.12.10 tynli Add for getting Current_Tx_Rate_Reg flexibly. */
+	rtw_hal_get_hwreg(Adapter, HW_VAR_INIT_TX_RATE, (pu1Byte)(&Adapter->TxStats.CurrentInitTxRate));
+
+	/* Calculate current Tx Rate(Successful transmited!!) */
+
+	/* Calculate current Rx Rate(Successful received!!) */
+
+	/* for tx tx retry count */
+	rtw_hal_get_hwreg(Adapter, HW_VAR_RETRY_COUNT, (pu1Byte)(&Adapter->TxStats.NumTxRetryCount));
+#endif
+}
+
 #ifdef CONFIG_SUPPORT_HW_WPS_PBC
 static void dm_CheckPbcGPIO(_adapter *padapter)
 {
@@ -88,9 +139,9 @@ static void dm_CheckPbcGPIO(_adapter *padapter)
  *
  *	Created by Roger, 2010.03.05.
  *   */
-void
+VOID
 dm_InterruptMigration(
-		PADAPTER	Adapter
+	IN	PADAPTER	Adapter
 )
 {
 	HAL_DATA_TYPE	*pHalData = GET_HAL_DATA(Adapter);
@@ -161,10 +212,9 @@ dm_InterruptMigration(
 /*
  * Initialize GPIO setting registers
  *   */
-#ifdef CONFIG_USB_HCI
 static void
 dm_InitGPIOSetting(
-		PADAPTER	Adapter
+	IN	PADAPTER	Adapter
 )
 {
 	PHAL_DATA_TYPE		pHalData = GET_HAL_DATA(Adapter);
@@ -177,14 +227,15 @@ dm_InitGPIOSetting(
 	rtw_write8(Adapter, REG_GPIO_MUXCFG, tmp1byte);
 
 }
-#endif
+
 /* ************************************************************
  * functions
  * ************************************************************ */
 static void Init_ODM_ComInfo_88E(PADAPTER	Adapter)
 {
 	PHAL_DATA_TYPE	pHalData = GET_HAL_DATA(Adapter);
-	struct dm_struct		*pDM_Odm = &(pHalData->odmpriv);
+	struct PHY_DM_STRUCT		*pDM_Odm = &(pHalData->odmpriv);
+	u32  SupportAbility = 0;
 	u8	cut_ver, fab_ver;
 
 	Init_ODM_ComInfo(Adapter);
@@ -197,41 +248,107 @@ static void Init_ODM_ComInfo_88E(PADAPTER	Adapter)
 
 	odm_cmn_info_init(pDM_Odm, ODM_CMNINFO_FAB_VER, fab_ver);
 	odm_cmn_info_init(pDM_Odm, ODM_CMNINFO_CUT_VER, cut_ver);
+
+#ifdef CONFIG_DISABLE_ODM
+	SupportAbility = 0;
+#else
+	SupportAbility =	ODM_RF_CALIBRATION |
+				ODM_RF_TX_PWR_TRACK
+				;
+#endif
+
+	odm_cmn_info_update(pDM_Odm, ODM_CMNINFO_ABILITY, SupportAbility);
+
+}
+static void Update_ODM_ComInfo_88E(PADAPTER	Adapter)
+{
+	PHAL_DATA_TYPE	pHalData = GET_HAL_DATA(Adapter);
+	struct PHY_DM_STRUCT		*pDM_Odm = &(pHalData->odmpriv);
+	u32  SupportAbility = 0;
+	int i;
+
+	SupportAbility = 0
+			 | ODM_BB_DIG
+			 | ODM_BB_RA_MASK
+			 | ODM_BB_DYNAMIC_TXPWR
+			 | ODM_BB_FA_CNT
+			 | ODM_BB_RSSI_MONITOR
+			 | ODM_BB_CCK_PD
+			 /* | ODM_BB_PWR_SAVE	 */
+			 | ODM_BB_CFO_TRACKING
+			 | ODM_RF_CALIBRATION
+			 | ODM_RF_TX_PWR_TRACK
+			 | ODM_BB_NHM_CNT
+			 | ODM_BB_PRIMARY_CCA
+			 /*		| ODM_BB_PWR_TRAIN */
+			 ;
+
+	if (rtw_odm_adaptivity_needed(Adapter) == _TRUE) {
+		rtw_odm_adaptivity_config_msg(RTW_DBGDUMP, Adapter);
+		SupportAbility |= ODM_BB_ADAPTIVITY;
+	}
+
+	if (!Adapter->registrypriv.qos_opt_enable)
+		SupportAbility |= ODM_MAC_EDCA_TURBO;
+
+#ifdef CONFIG_ANTENNA_DIVERSITY
+	if (pHalData->AntDivCfg)
+		SupportAbility |= ODM_BB_ANT_DIV;
+#endif
+
+#if (MP_DRIVER == 1)
+	if (Adapter->registrypriv.mp_mode == 1) {
+		SupportAbility = 0
+				 | ODM_RF_CALIBRATION
+				 | ODM_RF_TX_PWR_TRACK
+				 ;
+	}
+#endif/* (MP_DRIVER==1) */
+
+#ifdef CONFIG_DISABLE_ODM
+	SupportAbility = 0;
+#endif/* CONFIG_DISABLE_ODM */
+
+	odm_cmn_info_update(pDM_Odm, ODM_CMNINFO_ABILITY, SupportAbility);
 }
 
 void
 rtl8188e_InitHalDm(
-		PADAPTER	Adapter
+	IN	PADAPTER	Adapter
 )
 {
 	PHAL_DATA_TYPE	pHalData = GET_HAL_DATA(Adapter);
-	struct dm_struct		*pDM_Odm = &(pHalData->odmpriv);
+	struct PHY_DM_STRUCT		*pDM_Odm = &(pHalData->odmpriv);
+	u8	i;
 
 #ifdef CONFIG_USB_HCI
 	dm_InitGPIOSetting(Adapter);
 #endif
-	rtw_phydm_init(Adapter);
+
+	pHalData->DM_Type = dm_type_by_driver;
+
+	Update_ODM_ComInfo_88E(Adapter);
+	odm_dm_init(pDM_Odm);
 }
 
 
-void
+VOID
 rtl8188e_HalDmWatchDog(
-		PADAPTER	Adapter
+	IN	PADAPTER	Adapter
 )
 {
 	BOOLEAN		bFwCurrentInPSMode = _FALSE;
-	u8 bFwPSAwake = _TRUE;
+	BOOLEAN		bFwPSAwake = _TRUE;
 	PHAL_DATA_TYPE	pHalData = GET_HAL_DATA(Adapter);
-	struct dm_struct		*pDM_Odm = &(pHalData->odmpriv);
-	struct pwrctrl_priv *pwrpriv = adapter_to_pwrctl(Adapter);
-	u8 in_lps = _FALSE;
+	struct PHY_DM_STRUCT		*pDM_Odm = &(pHalData->odmpriv);
+
 
 	if (!rtw_is_hw_init_completed(Adapter))
 		goto skip_dm;
 
 #ifdef CONFIG_LPS
 	bFwCurrentInPSMode = adapter_to_pwrctl(Adapter)->bFwCurrentInPSMode;
-	rtw_hal_get_hwreg(Adapter, HW_VAR_FWLPS_RF_ON, &bFwPSAwake);
+	rtw_hal_get_hwreg(Adapter, HW_VAR_FWLPS_RF_ON, (u8 *)(&bFwPSAwake));
 #endif
 
 #ifdef CONFIG_P2P_PS
@@ -243,10 +360,16 @@ rtl8188e_HalDmWatchDog(
 
 	if ((rtw_is_hw_init_completed(Adapter))
 	    && ((!bFwCurrentInPSMode) && bFwPSAwake)) {
+		/*  */
+		/* Calculate Tx/Rx statistics. */
+		/*  */
+		dm_CheckStatistics(Adapter);
+
 		rtw_hal_check_rxfifo_full(Adapter);
 		/*  */
 		/* Dynamically switch RTS/CTS protection. */
 		/*  */
+		/* dm_CheckProtection(Adapter); */
 
 #ifdef CONFIG_PCI_HCI
 		/* 20100630 Joseph: Disable Interrupt Migration mechanism temporarily because it degrades Rx throughput. */
@@ -259,15 +382,28 @@ rtl8188e_HalDmWatchDog(
 
 	}
 
+
+	/* ODM */
+	if (rtw_is_hw_init_completed(Adapter)) {
+		u8	bLinked = _FALSE;
+		u8	bsta_state = _FALSE;
 #ifdef CONFIG_DISABLE_ODM
-	goto skip_dm;
-#endif
-#ifdef CONFIG_LPS
-	if (pwrpriv->bLeisurePs && bFwCurrentInPSMode && pwrpriv->pwr_mode != PS_MODE_ACTIVE)
-		in_lps = _TRUE;
+		pHalData->odmpriv.support_ability = 0;
 #endif
 
-	rtw_phydm_watchdog(Adapter, in_lps);
+		if (rtw_mi_check_status(Adapter, MI_ASSOC)) {
+			bLinked = _TRUE;
+			if (rtw_mi_check_status(Adapter, MI_STA_LINKED))
+				bsta_state = _TRUE;
+		}
+
+		odm_cmn_info_update(&pHalData->odmpriv , ODM_CMNINFO_LINK, bLinked);
+		odm_cmn_info_update(&pHalData->odmpriv , ODM_CMNINFO_STATION_STATE, bsta_state);
+
+
+		odm_dm_watchdog(&pHalData->odmpriv);
+
+	}
 
 skip_dm:
 
@@ -278,10 +414,10 @@ skip_dm:
 	return;
 }
 
-void rtl8188e_init_dm_priv(PADAPTER Adapter)
+void rtl8188e_init_dm_priv(IN PADAPTER Adapter)
 {
 	PHAL_DATA_TYPE	pHalData = GET_HAL_DATA(Adapter);
-	struct dm_struct		*podmpriv = &pHalData->odmpriv;
+	struct PHY_DM_STRUCT		*podmpriv = &pHalData->odmpriv;
 
 	/* _rtw_spinlock_init(&(pHalData->odm_stainfo_lock)); */
 	Init_ODM_ComInfo_88E(Adapter);
@@ -289,10 +425,10 @@ void rtl8188e_init_dm_priv(PADAPTER Adapter)
 	
 }
 
-void rtl8188e_deinit_dm_priv(PADAPTER Adapter)
+void rtl8188e_deinit_dm_priv(IN PADAPTER Adapter)
 {
 	PHAL_DATA_TYPE	pHalData = GET_HAL_DATA(Adapter);
-	struct dm_struct		*podmpriv = &pHalData->odmpriv;
+	struct PHY_DM_STRUCT		*podmpriv = &pHalData->odmpriv;
 	/* _rtw_spinlock_free(&pHalData->odm_stainfo_lock); */
 	odm_cancel_all_timers(podmpriv);
 }

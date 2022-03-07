@@ -345,7 +345,6 @@ phy_RFSerialWrite_8723B(
 	BB_REGISTER_DEFINITION_T	*pPhyReg = &pHalData->PHYRegDef[eRFPath];
 	u32						NewOffset;
 
-
 	Offset &= 0xff;
 
 	//
@@ -443,7 +442,6 @@ PHY_SetRFReg_8723B(
 	)
 {
 	u32		Original_Value, BitShift;
-
 
 	if (eRFPath >= MAX_RF_PATH)
 		return;

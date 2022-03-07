@@ -331,6 +331,13 @@ static struct ubi_wl_entry *find_wl_entry(struct ubi_device *ubi,
 		}
 	}
 
+	/* If no fastmap has been written and this WL entry can be used
+	 * as anchor PEB, hold it back and return the second best WL entry
+	 * such that fastmap can use the anchor PEB later. */
+	if (prev_e && !ubi->fm_disabled &&
+	    !ubi->fm && e->pnum < UBI_FM_MAX_START)
+		return prev_e;
+
 	return e;
 }
 
@@ -624,7 +631,6 @@ static int do_sync_erase(struct ubi_device *ubi, struct ubi_wl_entry *e,
 	return __erase_worker(ubi, &wl_wrk);
 }
 
-static int ensure_wear_leveling(struct ubi_device *ubi, int nested);
 /**
  * wear_leveling_worker - wear-leveling worker function.
  * @ubi: UBI device description object
@@ -641,20 +647,19 @@ static int wear_leveling_worker(struct ubi_device *ubi, struct ubi_work *wrk,
 {
 	int err, scrubbing = 0, torture = 0, protect = 0, erroneous = 0;
 	int erase = 0, keep = 0, vol_id = -1, lnum = -1;
+#ifdef CONFIG_MTD_UBI_FASTMAP
+	int anchor = wrk->anchor;
+#endif
 	struct ubi_wl_entry *e1, *e2;
-	struct ubi_vid_io_buf *vidb;
 	struct ubi_vid_hdr *vid_hdr;
-	int dst_leb_clean = 0;
 
 	kfree(wrk);
 	if (shutdown)
 		return 0;
 
-	vidb = ubi_alloc_vid_buf(ubi, GFP_NOFS);
-	if (!vidb)
+	vid_hdr = ubi_zalloc_vid_hdr(ubi, GFP_NOFS);
+	if (!vid_hdr)
 		return -ENOMEM;
-
-	vid_hdr = ubi_get_vid_hdr(vidb);
 
 	down_read(&ubi->fm_eba_sem);
 	mutex_lock(&ubi->move_mutex);
@@ -680,7 +685,11 @@ static int wear_leveling_worker(struct ubi_device *ubi, struct ubi_work *wrk,
 	}
 
 #ifdef CONFIG_MTD_UBI_FASTMAP
-	if (ubi->fm_do_produce_anchor) {
+	/* Check whether we need to produce an anchor PEB */
+	if (!anchor)
+		anchor = !anchor_pebs_avalible(&ubi->free);
+
+	if (anchor) {
 		e1 = find_anchor_wl_entry(&ubi->used);
 		if (!e1)
 			goto out_cancel;
@@ -691,7 +700,6 @@ static int wear_leveling_worker(struct ubi_device *ubi, struct ubi_work *wrk,
 		self_check_in_wl_tree(ubi, e1, &ubi->used);
 		rb_erase(&e1->u.rb, &ubi->used);
 		dbg_wl("anchor-move PEB %d to PEB %d", e1->pnum, e2->pnum);
-		ubi->fm_do_produce_anchor = 0;
 	} else if (!ubi->scrub.rb_node) {
 #else
 	if (!ubi->scrub.rb_node) {
@@ -747,9 +755,8 @@ static int wear_leveling_worker(struct ubi_device *ubi, struct ubi_work *wrk,
 	 * which is being moved was unmapped.
 	 */
 
-	err = ubi_io_read_vid_hdr(ubi, e1->pnum, vidb, 0);
+	err = ubi_io_read_vid_hdr(ubi, e1->pnum, vid_hdr, 0);
 	if (err && err != UBI_IO_BITFLIPS) {
-		dst_leb_clean = 1;
 		if (err == UBI_IO_FF) {
 			/*
 			 * We are trying to move PEB without a VID header. UBI
@@ -794,7 +801,7 @@ static int wear_leveling_worker(struct ubi_device *ubi, struct ubi_work *wrk,
 	vol_id = be32_to_cpu(vid_hdr->vol_id);
 	lnum = be32_to_cpu(vid_hdr->lnum);
 
-	err = ubi_eba_copy_leb(ubi, e1->pnum, e2->pnum, vidb);
+	err = ubi_eba_copy_leb(ubi, e1->pnum, e2->pnum, vid_hdr);
 	if (err) {
 		if (err == MOVE_CANCEL_RACE) {
 			/*
@@ -805,12 +812,10 @@ static int wear_leveling_worker(struct ubi_device *ubi, struct ubi_work *wrk,
 			 * protection queue.
 			 */
 			protect = 1;
-			dst_leb_clean = 1;
 			goto out_not_moved;
 		}
 		if (err == MOVE_RETRY) {
 			scrubbing = 1;
-			dst_leb_clean = 1;
 			goto out_not_moved;
 		}
 		if (err == MOVE_TARGET_BITFLIPS || err == MOVE_TARGET_WR_ERR ||
@@ -837,7 +842,6 @@ static int wear_leveling_worker(struct ubi_device *ubi, struct ubi_work *wrk,
 					ubi->erroneous_peb_count);
 				goto out_error;
 			}
-			dst_leb_clean = 1;
 			erroneous = 1;
 			goto out_not_moved;
 		}
@@ -852,7 +856,7 @@ static int wear_leveling_worker(struct ubi_device *ubi, struct ubi_work *wrk,
 	if (scrubbing)
 		ubi_msg(ubi, "scrubbed PEB %d (LEB %d:%d), data moved to PEB %d",
 			e1->pnum, vol_id, lnum, e2->pnum);
-	ubi_free_vid_buf(vidb);
+	ubi_free_vid_hdr(ubi, vid_hdr);
 
 	spin_lock(&ubi->wl_lock);
 	if (!ubi->move_to_put) {
@@ -909,24 +913,15 @@ out_not_moved:
 		wl_tree_add(e1, &ubi->scrub);
 	else if (keep)
 		wl_tree_add(e1, &ubi->used);
-	if (dst_leb_clean) {
-		wl_tree_add(e2, &ubi->free);
-		ubi->free_count++;
-	}
-
 	ubi_assert(!ubi->move_to_put);
 	ubi->move_from = ubi->move_to = NULL;
 	ubi->wl_scheduled = 0;
 	spin_unlock(&ubi->wl_lock);
 
-	ubi_free_vid_buf(vidb);
-	if (dst_leb_clean) {
-		ensure_wear_leveling(ubi, 1);
-	} else {
-		err = do_sync_erase(ubi, e2, vol_id, lnum, torture);
-		if (err)
-			goto out_ro;
-	}
+	ubi_free_vid_hdr(ubi, vid_hdr);
+	err = do_sync_erase(ubi, e2, vol_id, lnum, torture);
+	if (err)
+		goto out_ro;
 
 	if (erase) {
 		err = do_sync_erase(ubi, e1, vol_id, lnum, 1);
@@ -950,7 +945,7 @@ out_error:
 	ubi->move_to_put = ubi->wl_scheduled = 0;
 	spin_unlock(&ubi->wl_lock);
 
-	ubi_free_vid_buf(vidb);
+	ubi_free_vid_hdr(ubi, vid_hdr);
 	wl_entry_destroy(ubi, e1);
 	wl_entry_destroy(ubi, e2);
 
@@ -966,7 +961,7 @@ out_cancel:
 	spin_unlock(&ubi->wl_lock);
 	mutex_unlock(&ubi->move_mutex);
 	up_read(&ubi->fm_eba_sem);
-	ubi_free_vid_buf(vidb);
+	ubi_free_vid_hdr(ubi, vid_hdr);
 	return 0;
 }
 
@@ -1024,6 +1019,7 @@ static int ensure_wear_leveling(struct ubi_device *ubi, int nested)
 		goto out_cancel;
 	}
 
+	wrk->anchor = 0;
 	wrk->func = &wear_leveling_worker;
 	if (nested)
 		__schedule_ubi_work(ubi, wrk);
@@ -1065,15 +1061,8 @@ static int __erase_worker(struct ubi_device *ubi, struct ubi_work *wl_wrk)
 	err = sync_erase(ubi, e, wl_wrk->torture);
 	if (!err) {
 		spin_lock(&ubi->wl_lock);
-
-		if (!ubi->fm_anchor && e->pnum < UBI_FM_MAX_START) {
-			ubi->fm_anchor = e;
-			ubi->fm_do_produce_anchor = 0;
-		} else {
-			wl_tree_add(e, &ubi->free);
-			ubi->free_count++;
-		}
-
+		wl_tree_add(e, &ubi->free);
+		ubi->free_count++;
 		spin_unlock(&ubi->wl_lock);
 
 		/*
@@ -1471,19 +1460,6 @@ int ubi_thread(void *u)
 		    !ubi->thread_enabled || ubi_dbg_is_bgt_disabled(ubi)) {
 			set_current_state(TASK_INTERRUPTIBLE);
 			spin_unlock(&ubi->wl_lock);
-
-			/*
-			 * Check kthread_should_stop() after we set the task
-			 * state to guarantee that we either see the stop bit
-			 * and exit or the task state is reset to runnable such
-			 * that it's not scheduled out indefinitely and detects
-			 * the stop bit at kthread_should_stop().
-			 */
-			if (kthread_should_stop()) {
-				set_current_state(TASK_RUNNING);
-				break;
-			}
-
 			schedule();
 			continue;
 		}
@@ -1598,7 +1574,7 @@ int ubi_wl_init(struct ubi_device *ubi, struct ubi_attach_info *ai)
 	sprintf(ubi->bgt_name, UBI_BGT_NAME_PATTERN, ubi->ubi_num);
 
 	err = -ENOMEM;
-	ubi->lookuptbl = kcalloc(ubi->peb_count, sizeof(void *), GFP_KERNEL);
+	ubi->lookuptbl = kzalloc(ubi->peb_count * sizeof(void *), GFP_KERNEL);
 	if (!ubi->lookuptbl)
 		return err;
 
@@ -1606,7 +1582,6 @@ int ubi_wl_init(struct ubi_device *ubi, struct ubi_attach_info *ai)
 		INIT_LIST_HEAD(&ubi->pq[i]);
 	ubi->pq_head = 0;
 
-	ubi->free_count = 0;
 	list_for_each_entry_safe(aeb, tmp, &ai->erase, u.list) {
 		cond_resched();
 
@@ -1617,6 +1592,7 @@ int ubi_wl_init(struct ubi_device *ubi, struct ubi_attach_info *ai)
 		found_pebs++;
 	}
 
+	ubi->free_count = 0;
 	list_for_each_entry(aeb, &ai->free, u.list) {
 		cond_resched();
 
@@ -1730,9 +1706,6 @@ int ubi_wl_init(struct ubi_device *ubi, struct ubi_attach_info *ai)
 	if (err)
 		goto out_free;
 
-#ifdef CONFIG_MTD_UBI_FASTMAP
-	ubi_ensure_anchor_pebs(ubi);
-#endif
 	return 0;
 
 out_free:

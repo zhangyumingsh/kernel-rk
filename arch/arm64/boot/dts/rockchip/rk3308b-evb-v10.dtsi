@@ -11,7 +11,7 @@
 	compatible = "rockchip,rk3308b-evb-v10", "rockchip,rk3308";
 
 	chosen {
-		bootargs = "earlycon=uart8250,mmio32,0xff0e0000 console=ttyFIQ0 root=PARTUUID=614e0000-0000 rootfstype=squashfs rootwait snd_aloop.index=7 snd_aloop.use_raw_jiffies=1";
+		bootargs = "earlycon=uart8250,mmio32,0xff0e0000 swiotlb=1 console=ttyFIQ0 root=PARTUUID=614e0000-0000 rootfstype=squashfs rootwait snd_aloop.index=7 snd_aloop.use_raw_jiffies=1";
 	};
 
 	acodec_sound: acodec-sound {
@@ -68,7 +68,7 @@
 		rockchip,mclk-fs = <128>;
 		rockchip,cpu = <&i2s_8ch_0>;
 		rockchip,codec = <&dummy_codec>;
-		rockchip,format = "dsp_b";
+		rockchip,format = "dsp_a";
 		rockchip,bitclock-inversion = <0>;
 		rockchip,wait-card-locked = <0>;
 	};
@@ -206,8 +206,9 @@
 		regulator-name = "vccio_flash";
 		regulator-always-on;
 		regulator-boot-on;
-		regulator-min-microvolt = <1800000>;
-		regulator-max-microvolt = <1800000>;
+		regulator-min-microvolt = <3300000>;
+		regulator-max-microvolt = <3300000>;
+		vin-supply = <&vcc_io>;
 	};
 
 	vcc_phy: vcc-phy-regulator {
@@ -743,10 +744,6 @@
 &tsadc {
 	rockchip,hw-tshut-mode = <0>; /* tshut mode 0:CRU 1:GPIO */
 	rockchip,hw-tshut-polarity = <1>; /* tshut polarity 0:LOW 1:HIGH */
-	pinctrl-names = "init", "default", "sleep";
-	pinctrl-0 = <&tsadc_otp_gpio>;
-	pinctrl-1 = <&tsadc_otp_gpio>;
-	pinctrl-2 = <&tsadc_otp_gpio>;
 	status = "okay";
 };
 

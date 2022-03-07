@@ -25,7 +25,6 @@
 #include "ocfs2_ioctl.h"
 
 #include "alloc.h"
-#include "localalloc.h"
 #include "aops.h"
 #include "dlmglue.h"
 #include "extent_map.h"
@@ -172,7 +171,7 @@ static int ocfs2_lock_meta_allocator_move_extents(struct inode *inode,
 	unsigned int max_recs_needed = 2 * extents_to_split + clusters_to_move;
 	struct ocfs2_super *osb = OCFS2_SB(inode->i_sb);
 
-	num_free_extents = ocfs2_num_free_extents(et);
+	num_free_extents = ocfs2_num_free_extents(osb, et);
 	if (num_free_extents < 0) {
 		ret = num_free_extents;
 		mlog_errno(ret);
@@ -223,10 +222,12 @@ static int ocfs2_defrag_extent(struct ocfs2_move_extents_context *context,
 	struct ocfs2_refcount_tree *ref_tree = NULL;
 	u32 new_phys_cpos, new_len;
 	u64 phys_blkno = ocfs2_clusters_to_blocks(inode->i_sb, phys_cpos);
-	int need_free = 0;
 
 	if ((ext_flags & OCFS2_EXT_REFCOUNTED) && *len) {
-		BUG_ON(!ocfs2_is_refcount_inode(inode));
+
+		BUG_ON(!(OCFS2_I(inode)->ip_dyn_features &
+			 OCFS2_HAS_REFCOUNT_FL));
+
 		BUG_ON(!context->refcount_loc);
 
 		ret = ocfs2_lock_refcount_tree(osb, context->refcount_loc, 1,
@@ -264,7 +265,7 @@ static int ocfs2_defrag_extent(struct ocfs2_move_extents_context *context,
 	 *	context->data_ac->ac_resv = &OCFS2_I(inode)->ip_la_data_resv;
 	 */
 
-	inode_lock(tl_inode);
+	mutex_lock(&tl_inode->i_mutex);
 
 	if (ocfs2_truncate_log_needs_flush(osb)) {
 		ret = __ocfs2_flush_truncate_log(osb);
@@ -314,7 +315,6 @@ static int ocfs2_defrag_extent(struct ocfs2_move_extents_context *context,
 		if (!partial) {
 			context->range->me_flags &= ~OCFS2_MOVE_EXT_FL_COMPLETE;
 			ret = -ENOSPC;
-			need_free = 1;
 			goto out_commit;
 		}
 	}
@@ -339,24 +339,10 @@ static int ocfs2_defrag_extent(struct ocfs2_move_extents_context *context,
 		mlog_errno(ret);
 
 out_commit:
-	if (need_free && context->data_ac) {
-		struct ocfs2_alloc_context *data_ac = context->data_ac;
-
-		if (context->data_ac->ac_which == OCFS2_AC_USE_LOCAL)
-			ocfs2_free_local_alloc_bits(osb, handle, data_ac,
-					new_phys_cpos, new_len);
-		else
-			ocfs2_free_clusters(handle,
-					data_ac->ac_inode,
-					data_ac->ac_bh,
-					ocfs2_clusters_to_blocks(osb->sb, new_phys_cpos),
-					new_len);
-	}
-
 	ocfs2_commit_trans(osb, handle);
 
 out_unlock_mutex:
-	inode_unlock(tl_inode);
+	mutex_unlock(&tl_inode->i_mutex);
 
 	if (context->data_ac) {
 		ocfs2_free_alloc_context(context->data_ac);
@@ -599,7 +585,10 @@ static int ocfs2_move_extent(struct ocfs2_move_extents_context *context,
 	phys_blkno = ocfs2_clusters_to_blocks(inode->i_sb, phys_cpos);
 
 	if ((ext_flags & OCFS2_EXT_REFCOUNTED) && len) {
-		BUG_ON(!ocfs2_is_refcount_inode(inode));
+
+		BUG_ON(!(OCFS2_I(inode)->ip_dyn_features &
+			 OCFS2_HAS_REFCOUNT_FL));
+
 		BUG_ON(!context->refcount_loc);
 
 		ret = ocfs2_lock_refcount_tree(osb, context->refcount_loc, 1,
@@ -648,7 +637,7 @@ static int ocfs2_move_extent(struct ocfs2_move_extents_context *context,
 		goto out;
 	}
 
-	inode_lock(gb_inode);
+	mutex_lock(&gb_inode->i_mutex);
 
 	ret = ocfs2_inode_lock(gb_inode, &gb_bh, 1);
 	if (ret) {
@@ -656,7 +645,7 @@ static int ocfs2_move_extent(struct ocfs2_move_extents_context *context,
 		goto out_unlock_gb_mutex;
 	}
 
-	inode_lock(tl_inode);
+	mutex_lock(&tl_inode->i_mutex);
 
 	handle = ocfs2_start_trans(osb, credits);
 	if (IS_ERR(handle)) {
@@ -724,11 +713,11 @@ out_commit:
 	brelse(gd_bh);
 
 out_unlock_tl_inode:
-	inode_unlock(tl_inode);
+	mutex_unlock(&tl_inode->i_mutex);
 
 	ocfs2_inode_unlock(gb_inode, 1);
 out_unlock_gb_mutex:
-	inode_unlock(gb_inode);
+	mutex_unlock(&gb_inode->i_mutex);
 	brelse(gb_bh);
 	iput(gb_inode);
 
@@ -921,7 +910,7 @@ static int ocfs2_move_extents(struct ocfs2_move_extents_context *context)
 	if (ocfs2_is_hard_readonly(osb) || ocfs2_is_soft_readonly(osb))
 		return -EROFS;
 
-	inode_lock(inode);
+	mutex_lock(&inode->i_mutex);
 
 	/*
 	 * This prevents concurrent writes from other nodes
@@ -969,7 +958,7 @@ static int ocfs2_move_extents(struct ocfs2_move_extents_context *context)
 	}
 
 	di = (struct ocfs2_dinode *)di_bh->b_data;
-	inode->i_ctime = current_time(inode);
+	inode->i_ctime = CURRENT_TIME;
 	di->i_ctime = cpu_to_le64(inode->i_ctime.tv_sec);
 	di->i_ctime_nsec = cpu_to_le32(inode->i_ctime.tv_nsec);
 	ocfs2_update_inode_fsync_trans(handle, inode, 0);
@@ -985,7 +974,7 @@ out_inode_unlock:
 out_rw_unlock:
 	ocfs2_rw_unlock(inode, 1);
 out:
-	inode_unlock(inode);
+	mutex_unlock(&inode->i_mutex);
 
 	return status;
 }

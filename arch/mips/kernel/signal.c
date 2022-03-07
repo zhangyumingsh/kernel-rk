@@ -165,7 +165,7 @@ static int save_msa_extcontext(void __user *buf)
 		 * should already have been done when handling scalar FP
 		 * context.
 		 */
-		BUG_ON(IS_ENABLED(CONFIG_EVA));
+		BUG_ON(config_enabled(CONFIG_EVA));
 
 		err = __put_user(read_msa_csr(), &msa->csr);
 		err |= _save_msa_all_upper(&msa->wr);
@@ -195,7 +195,7 @@ static int restore_msa_extcontext(void __user *buf, unsigned int size)
 	unsigned int csr;
 	int i, err;
 
-	if (!IS_ENABLED(CONFIG_CPU_HAS_MSA))
+	if (!config_enabled(CONFIG_CPU_HAS_MSA))
 		return SIGSYS;
 
 	if (size != sizeof(*msa))
@@ -215,7 +215,7 @@ static int restore_msa_extcontext(void __user *buf, unsigned int size)
 		 * scalar FP context, so FPU & MSA should have already been
 		 * disabled whilst handling scalar FP context.
 		 */
-		BUG_ON(IS_ENABLED(CONFIG_EVA));
+		BUG_ON(config_enabled(CONFIG_EVA));
 
 		write_msa_csr(csr);
 		err |= _restore_msa_all_upper(&msa->wr);
@@ -315,7 +315,7 @@ int protected_save_fp_context(void __user *sc)
 	 * EVA does not have userland equivalents of ldc1 or sdc1, so
 	 * save to the kernel FP context & copy that to userland below.
 	 */
-	if (IS_ENABLED(CONFIG_EVA))
+	if (config_enabled(CONFIG_EVA))
 		lose_fpu(1);
 
 	while (1) {
@@ -378,7 +378,7 @@ int protected_restore_fp_context(void __user *sc)
 	 * disable the FPU here such that the code below simply copies to
 	 * the kernel FP context.
 	 */
-	if (IS_ENABLED(CONFIG_EVA))
+	if (config_enabled(CONFIG_EVA))
 		lose_fpu(0);
 
 	while (1) {
@@ -592,15 +592,13 @@ SYSCALL_DEFINE3(sigaction, int, sig, const struct sigaction __user *, act,
 #endif
 
 #ifdef CONFIG_TRAD_SIGNALS
-asmlinkage void sys_sigreturn(void)
+asmlinkage void sys_sigreturn(nabi_no_regargs struct pt_regs regs)
 {
 	struct sigframe __user *frame;
-	struct pt_regs *regs;
 	sigset_t blocked;
 	int sig;
 
-	regs = current_pt_regs();
-	frame = (struct sigframe __user *)regs->regs[29];
+	frame = (struct sigframe __user *) regs.regs[29];
 	if (!access_ok(VERIFY_READ, frame, sizeof(*frame)))
 		goto badframe;
 	if (__copy_from_user(&blocked, &frame->sf_mask, sizeof(blocked)))
@@ -608,7 +606,7 @@ asmlinkage void sys_sigreturn(void)
 
 	set_current_blocked(&blocked);
 
-	sig = restore_sigcontext(regs, &frame->sf_sc);
+	sig = restore_sigcontext(&regs, &frame->sf_sc);
 	if (sig < 0)
 		goto badframe;
 	else if (sig)
@@ -620,8 +618,8 @@ asmlinkage void sys_sigreturn(void)
 	__asm__ __volatile__(
 		"move\t$29, %0\n\t"
 		"j\tsyscall_exit"
-		: /* no outputs */
-		: "r" (regs));
+		:/* no outputs */
+		:"r" (&regs));
 	/* Unreached */
 
 badframe:
@@ -629,15 +627,13 @@ badframe:
 }
 #endif /* CONFIG_TRAD_SIGNALS */
 
-asmlinkage void sys_rt_sigreturn(void)
+asmlinkage void sys_rt_sigreturn(nabi_no_regargs struct pt_regs regs)
 {
 	struct rt_sigframe __user *frame;
-	struct pt_regs *regs;
 	sigset_t set;
 	int sig;
 
-	regs = current_pt_regs();
-	frame = (struct rt_sigframe __user *)regs->regs[29];
+	frame = (struct rt_sigframe __user *) regs.regs[29];
 	if (!access_ok(VERIFY_READ, frame, sizeof(*frame)))
 		goto badframe;
 	if (__copy_from_user(&set, &frame->rs_uc.uc_sigmask, sizeof(set)))
@@ -645,7 +641,7 @@ asmlinkage void sys_rt_sigreturn(void)
 
 	set_current_blocked(&set);
 
-	sig = restore_sigcontext(regs, &frame->rs_uc.uc_mcontext);
+	sig = restore_sigcontext(&regs, &frame->rs_uc.uc_mcontext);
 	if (sig < 0)
 		goto badframe;
 	else if (sig)
@@ -660,8 +656,8 @@ asmlinkage void sys_rt_sigreturn(void)
 	__asm__ __volatile__(
 		"move\t$29, %0\n\t"
 		"j\tsyscall_exit"
-		: /* no outputs */
-		: "r" (regs));
+		:/* no outputs */
+		:"r" (&regs));
 	/* Unreached */
 
 badframe:
@@ -805,9 +801,7 @@ static void handle_signal(struct ksignal *ksig, struct pt_regs *regs)
 		regs->regs[0] = 0;		/* Don't deal with this again.	*/
 	}
 
-	rseq_signal_deliver(ksig, regs);
-
-	if (sig_uses_siginfo(&ksig->ka, abi))
+	if (sig_uses_siginfo(&ksig->ka))
 		ret = abi->setup_rt_frame(vdso + abi->vdso->off_rt_sigreturn,
 					  ksig, regs, oldset);
 	else
@@ -874,7 +868,6 @@ asmlinkage void do_notify_resume(struct pt_regs *regs, void *unused,
 	if (thread_info_flags & _TIF_NOTIFY_RESUME) {
 		clear_thread_flag(TIF_NOTIFY_RESUME);
 		tracehook_notify_resume(regs);
-		rseq_handle_notify_resume(NULL, regs);
 	}
 
 	user_enter();

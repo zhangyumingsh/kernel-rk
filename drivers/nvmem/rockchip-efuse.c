@@ -79,13 +79,17 @@
 #define RK3288_STROBE		BIT(1)
 #define RK3288_CSB		BIT(0)
 
-#define RK3328_SECURE_SIZES	96
 #define RK3328_INT_STATUS	0x0018
 #define RK3328_DOUT		0x0020
 #define RK3328_AUTO_CTRL	0x0024
 #define RK3328_INT_FINISH	BIT(0)
 #define RK3328_AUTO_ENB		BIT(0)
 #define RK3328_AUTO_RD		BIT(1)
+
+#define RK3366_A_SHIFT		6
+#define RK3366_A_MASK		0x3ff
+#define RK3366_RDEN		BIT(2)
+#define RK3366_AEN		BIT(1)
 
 #define RK3399_A_SHIFT		16
 #define RK3399_A_MASK		0x3ff
@@ -104,8 +108,8 @@
 struct rockchip_efuse_chip {
 	struct device *dev;
 	void __iomem *base;
-	struct clk_bulk_data *clks;
-	int num_clks;
+	struct clk *clk;
+	struct clk *sclk;
 	phys_addr_t phys;
 	struct mutex mutex;
 };
@@ -159,10 +163,16 @@ static int rockchip_rk1808_efuse_read(void *context, unsigned int offset,
 
 	mutex_lock(&efuse->mutex);
 
-	ret = clk_bulk_prepare_enable(efuse->num_clks, efuse->clks);
+	ret = clk_prepare_enable(efuse->clk);
 	if (ret < 0) {
-		dev_err(efuse->dev, "failed to prepare/enable efuse clk\n");
+		dev_err(efuse->dev, "failed to prepare/enable efuse pclk\n");
 		goto out;
+	}
+
+	ret = clk_prepare_enable(efuse->sclk);
+	if (ret < 0) {
+		dev_err(efuse->dev, "failed to prepare/enable efuse sclk\n");
+		goto err_sclk;
 	}
 
 	addr_start = rounddown(offset, RK1808_NBYTES) / RK1808_NBYTES;
@@ -199,8 +209,9 @@ err:
 	rk1808_efuse_timing_deinit(efuse->base);
 	kfree(buf);
 nomem:
-	rk1808_efuse_timing_deinit(efuse->base);
-	clk_bulk_disable_unprepare(efuse->num_clks, efuse->clks);
+	clk_disable_unprepare(efuse->sclk);
+err_sclk:
+	clk_disable_unprepare(efuse->clk);
 out:
 	mutex_unlock(&efuse->mutex);
 
@@ -214,7 +225,7 @@ static int rockchip_rk3128_efuse_read(void *context, unsigned int offset,
 	u8 *buf = val;
 	int ret;
 
-	ret = clk_bulk_prepare_enable(efuse->num_clks, efuse->clks);
+	ret = clk_prepare_enable(efuse->clk);
 	if (ret < 0) {
 		dev_err(efuse->dev, "failed to prepare/enable efuse clk\n");
 		return ret;
@@ -242,7 +253,7 @@ static int rockchip_rk3128_efuse_read(void *context, unsigned int offset,
 	/* Switch to standby mode */
 	writel(RK3288_PGENB | RK3288_CSB, efuse->base + REG_EFUSE_CTRL);
 
-	clk_bulk_disable_unprepare(efuse->num_clks, efuse->clks);
+	clk_disable_unprepare(efuse->clk);
 
 	return 0;
 }
@@ -254,7 +265,7 @@ static int rockchip_rk3288_efuse_read(void *context, unsigned int offset,
 	u8 *buf = val;
 	int ret;
 
-	ret = clk_bulk_prepare_enable(efuse->num_clks, efuse->clks);
+	ret = clk_prepare_enable(efuse->clk);
 	if (ret < 0) {
 		dev_err(efuse->dev, "failed to prepare/enable efuse clk\n");
 		return ret;
@@ -282,7 +293,7 @@ static int rockchip_rk3288_efuse_read(void *context, unsigned int offset,
 	/* Switch to standby mode */
 	writel(RK3288_PGENB | RK3288_CSB, efuse->base + REG_EFUSE_CTRL);
 
-	clk_bulk_disable_unprepare(efuse->num_clks, efuse->clks);
+	clk_disable_unprepare(efuse->clk);
 
 	return 0;
 }
@@ -296,7 +307,7 @@ static int rockchip_rk3288_efuse_secure_read(void *context,
 	u32 wr_val;
 	int ret;
 
-	ret = clk_bulk_prepare_enable(efuse->num_clks, efuse->clks);
+	ret = clk_prepare_enable(efuse->clk);
 	if (ret < 0) {
 		dev_err(efuse->dev, "failed to prepare/enable efuse clk\n");
 		return ret;
@@ -328,7 +339,7 @@ static int rockchip_rk3288_efuse_secure_read(void *context,
 	sip_smc_secure_reg_write(efuse->phys + REG_EFUSE_CTRL,
 				 RK3288_PGENB | RK3288_CSB);
 
-	clk_bulk_disable_unprepare(efuse->num_clks, efuse->clks);
+	clk_disable_unprepare(efuse->clk);
 
 	return 0;
 }
@@ -342,21 +353,20 @@ static int rockchip_rk3328_efuse_read(void *context, unsigned int offset,
 	u8 *buf;
 	int ret, i = 0;
 
-	ret = clk_bulk_prepare_enable(efuse->num_clks, efuse->clks);
+	/* 128 Byte efuse, 96 Byte for secure, 32 Byte for non-secure */
+	offset += 96;
+	ret = clk_prepare_enable(efuse->clk);
 	if (ret < 0) {
 		dev_err(efuse->dev, "failed to prepare/enable efuse clk\n");
 		return ret;
 	}
 
-	/* 128 Byte efuse, 96 Byte for secure, 32 Byte for non-secure */
-	offset += RK3328_SECURE_SIZES;
 	addr_start = rounddown(offset, RK3399_NBYTES) / RK3399_NBYTES;
 	addr_end = roundup(offset + bytes, RK3399_NBYTES) / RK3399_NBYTES;
 	addr_offset = offset % RK3399_NBYTES;
 	addr_len = addr_end - addr_start;
 
-	buf = kzalloc(array3_size(addr_len, RK3399_NBYTES, sizeof(*buf)),
-		      GFP_KERNEL);
+	buf = kzalloc(sizeof(*buf) * addr_len * RK3399_NBYTES, GFP_KERNEL);
 	if (!buf) {
 		ret = -ENOMEM;
 		goto nomem;
@@ -366,7 +376,7 @@ static int rockchip_rk3328_efuse_read(void *context, unsigned int offset,
 		writel(RK3328_AUTO_RD | RK3328_AUTO_ENB |
 		       ((addr_start++ & RK3399_A_MASK) << RK3399_A_SHIFT),
 		       efuse->base + RK3328_AUTO_CTRL);
-		udelay(4);
+		udelay(2);
 		status = readl(efuse->base + RK3328_INT_STATUS);
 		if (!(status & RK3328_INT_FINISH)) {
 			ret = -EIO;
@@ -378,14 +388,53 @@ static int rockchip_rk3328_efuse_read(void *context, unsigned int offset,
 		memcpy(&buf[i], &out_value, RK3399_NBYTES);
 		i += RK3399_NBYTES;
 	}
-
 	memcpy(val, buf + addr_offset, bytes);
 err:
 	kfree(buf);
 nomem:
-	clk_bulk_disable_unprepare(efuse->num_clks, efuse->clks);
+	clk_disable_unprepare(efuse->clk);
 
 	return ret;
+}
+
+static int rockchip_rk3366_efuse_read(void *context, unsigned int offset,
+				      void *val, size_t bytes)
+{
+	struct rockchip_efuse_chip *efuse = context;
+	u8 *buf = val;
+	int ret;
+
+	ret = clk_prepare_enable(efuse->clk);
+	if (ret < 0) {
+		dev_err(efuse->dev, "failed to prepare/enable efuse clk\n");
+		return ret;
+	}
+
+	writel(RK3366_RDEN, efuse->base + REG_EFUSE_CTRL);
+	udelay(1);
+	while (bytes--) {
+		writel(readl(efuse->base + REG_EFUSE_CTRL) &
+		       (~(RK3366_A_MASK << RK3366_A_SHIFT)),
+		       efuse->base + REG_EFUSE_CTRL);
+		writel(readl(efuse->base + REG_EFUSE_CTRL) |
+		       ((offset++ & RK3366_A_MASK) << RK3366_A_SHIFT),
+		       efuse->base + REG_EFUSE_CTRL);
+		udelay(1);
+		writel(readl(efuse->base + REG_EFUSE_CTRL) |
+		       RK3366_AEN, efuse->base + REG_EFUSE_CTRL);
+		udelay(1);
+		*buf++ = readb(efuse->base + REG_EFUSE_DOUT);
+		writel(readl(efuse->base + REG_EFUSE_CTRL) &
+		       (~RK3366_AEN), efuse->base + REG_EFUSE_CTRL);
+		udelay(1);
+	}
+
+	writel(readl(efuse->base + REG_EFUSE_CTRL) &
+	       (~RK3366_RDEN), efuse->base + REG_EFUSE_CTRL);
+
+	clk_disable_unprepare(efuse->clk);
+
+	return 0;
 }
 
 static int rockchip_rk3368_efuse_read(void *context, unsigned int offset,
@@ -396,7 +445,7 @@ static int rockchip_rk3368_efuse_read(void *context, unsigned int offset,
 	u32 wr_val;
 	int ret;
 
-	ret = clk_bulk_prepare_enable(efuse->num_clks, efuse->clks);
+	ret = clk_prepare_enable(efuse->clk);
 	if (ret < 0) {
 		dev_err(efuse->dev, "failed to prepare/enable efuse clk\n");
 		return ret;
@@ -428,7 +477,7 @@ static int rockchip_rk3368_efuse_read(void *context, unsigned int offset,
 	sip_smc_secure_reg_write(efuse->phys + REG_EFUSE_CTRL,
 				 RK3288_PGENB | RK3288_CSB);
 
-	clk_bulk_disable_unprepare(efuse->num_clks, efuse->clks);
+	clk_disable_unprepare(efuse->clk);
 
 	return 0;
 }
@@ -442,7 +491,7 @@ static int rockchip_rk3399_efuse_read(void *context, unsigned int offset,
 	u8 *buf;
 	int ret, i = 0;
 
-	ret = clk_bulk_prepare_enable(efuse->num_clks, efuse->clks);
+	ret = clk_prepare_enable(efuse->clk);
 	if (ret < 0) {
 		dev_err(efuse->dev, "failed to prepare/enable efuse clk\n");
 		return ret;
@@ -453,11 +502,10 @@ static int rockchip_rk3399_efuse_read(void *context, unsigned int offset,
 	addr_offset = offset % RK3399_NBYTES;
 	addr_len = addr_end - addr_start;
 
-	buf = kzalloc(array3_size(addr_len, RK3399_NBYTES, sizeof(*buf)),
-		      GFP_KERNEL);
+	buf = kzalloc(sizeof(*buf) * addr_len * RK3399_NBYTES, GFP_KERNEL);
 	if (!buf) {
-		ret = -ENOMEM;
-		goto disable_clks;
+		clk_disable_unprepare(efuse->clk);
+		return -ENOMEM;
 	}
 
 	writel(RK3399_LOAD | RK3399_PGENB | RK3399_STROBSFTSEL | RK3399_RSB,
@@ -484,14 +532,14 @@ static int rockchip_rk3399_efuse_read(void *context, unsigned int offset,
 
 	kfree(buf);
 
-disable_clks:
-	clk_bulk_disable_unprepare(efuse->num_clks, efuse->clks);
+	clk_disable_unprepare(efuse->clk);
 
-	return ret;
+	return 0;
 }
 
 static struct nvmem_config econfig = {
 	.name = "rockchip-efuse",
+	.owner = THIS_MODULE,
 	.stride = 1,
 	.word_size = 1,
 	.read_only = true,
@@ -520,7 +568,7 @@ static const struct of_device_id rockchip_efuse_match[] = {
 		.data = (void *)&rockchip_rk3288_efuse_read,
 	},
 	{
-		.compatible = "rockchip,rk3228-efuse",
+		.compatible = "rockchip,rk322x-efuse",
 		.data = (void *)&rockchip_rk3288_efuse_read,
 	},
 	{
@@ -534,6 +582,10 @@ static const struct of_device_id rockchip_efuse_match[] = {
 	{
 		.compatible = "rockchip,rk3328-efuse",
 		.data = (void *)&rockchip_rk3328_efuse_read,
+	},
+	{
+		.compatible = "rockchip,rk3366-efuse",
+		.data = (void *)&rockchip_rk3366_efuse_read,
 	},
 	{
 		.compatible = "rockchip,rk3368-efuse",
@@ -552,45 +604,69 @@ static int __init rockchip_efuse_probe(struct platform_device *pdev)
 	struct resource *res;
 	struct nvmem_device *nvmem;
 	struct rockchip_efuse_chip *efuse;
-	const void *data;
+	const struct of_device_id *match;
 	struct device *dev = &pdev->dev;
+	int count;
 
-	data = of_device_get_match_data(dev);
-	if (!data) {
+	match = of_match_device(dev->driver->of_match_table, dev);
+	if (!match || !match->data) {
 		dev_err(dev, "failed to get match data\n");
 		return -EINVAL;
 	}
 
-	efuse = devm_kzalloc(dev, sizeof(struct rockchip_efuse_chip),
+	efuse = devm_kzalloc(&pdev->dev, sizeof(struct rockchip_efuse_chip),
 			     GFP_KERNEL);
 	if (!efuse)
 		return -ENOMEM;
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	efuse->phys = res->start;
-	efuse->base = devm_ioremap_resource(dev, res);
+	efuse->base = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(efuse->base))
 		return PTR_ERR(efuse->base);
 
-	efuse->num_clks = devm_clk_bulk_get_all(dev, &efuse->clks);
-	if (efuse->num_clks < 1)
-		return -ENODEV;
+	efuse->clk = devm_clk_get(&pdev->dev, "pclk_efuse");
+	if (IS_ERR(efuse->clk))
+		return PTR_ERR(efuse->clk);
+
+	count = of_clk_get_parent_count(pdev->dev.of_node);
+	if (count == 2)
+		efuse->sclk = devm_clk_get(&pdev->dev, "sclk_efuse");
+	else
+		efuse->sclk = efuse->clk;
+	if (IS_ERR(efuse->sclk))
+		return PTR_ERR(efuse->sclk);
 
 	mutex_init(&efuse->mutex);
 
-	efuse->dev = dev;
-	if (of_property_read_u32(dev->of_node, "rockchip,efuse-size",
-				 &econfig.size))
+	efuse->dev = &pdev->dev;
+	if (of_property_read_u32_index(dev->of_node,
+				       "rockchip,efuse-size",
+				       0,
+				       &econfig.size))
 		econfig.size = resource_size(res);
-	econfig.reg_read = data;
+
+	econfig.reg_read = match->data;
 	econfig.priv = efuse;
 	econfig.dev = efuse->dev;
-	nvmem = devm_nvmem_register(dev, &econfig);
+	nvmem = nvmem_register(&econfig);
+	if (IS_ERR(nvmem))
+		return PTR_ERR(nvmem);
 
-	return PTR_ERR_OR_ZERO(nvmem);
+	platform_set_drvdata(pdev, nvmem);
+
+	return 0;
+}
+
+static int rockchip_efuse_remove(struct platform_device *pdev)
+{
+	struct nvmem_device *nvmem = platform_get_drvdata(pdev);
+
+	return nvmem_unregister(nvmem);
 }
 
 static struct platform_driver rockchip_efuse_driver = {
+	.remove = rockchip_efuse_remove,
 	.driver = {
 		.name = "rockchip-efuse",
 		.of_match_table = rockchip_efuse_match,

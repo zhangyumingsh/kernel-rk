@@ -1,7 +1,6 @@
-/* SPDX-License-Identifier: GPL-2.0 */
 /******************************************************************************
  *
- * Copyright(c) 2007 - 2017 Realtek Corporation.
+ * Copyright(c) 2007 - 2011 Realtek Corporation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of version 2 of the GNU General Public License as
@@ -12,7 +11,12 @@
  * FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
  * more details.
  *
- *****************************************************************************/
+ * You should have received a copy of the GNU General Public License along with
+ * this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110, USA
+ *
+ *
+ ******************************************************************************/
 #define _HCI_OPS_OS_C_
 
 #include <drv_types.h>
@@ -113,6 +117,7 @@ int recvbuf2recvframe(PADAPTER padapter, void *ptr)
 	u32	pkt_offset;
 	s32	transfer_len;
 	struct recv_stat	*prxstat;
+	u8 *pphy_status = NULL;
 	union recv_frame	*precvframe = NULL;
 	struct rx_pkt_attrib	*pattrib = NULL;
 	HAL_DATA_TYPE	*pHalData = GET_HAL_DATA(padapter);
@@ -172,7 +177,7 @@ int recvbuf2recvframe(PADAPTER padapter, void *ptr)
 
 #ifdef CONFIG_RX_PACKET_APPEND_FCS
 		if (check_fwstate(&padapter->mlmepriv, WIFI_MONITOR_STATE) == _FALSE)
-			if ((pattrib->pkt_rpt_type == NORMAL_RX) && rtw_hal_rcr_check(padapter, RCR_APPFCS))
+			if ((pattrib->pkt_rpt_type == NORMAL_RX) && (pHalData->ReceiveConfig & RCR_APPFCS))
 				pattrib->pkt_len -= IEEE80211_FCS_LEN;
 #endif
 
@@ -186,9 +191,21 @@ int recvbuf2recvframe(PADAPTER padapter, void *ptr)
 		recvframe_put(precvframe, pattrib->pkt_len);
 		/* recvframe_pull(precvframe, drvinfo_sz + RXDESC_SIZE);	 */
 
-		if (pattrib->pkt_rpt_type == NORMAL_RX) /* Normal rx packet */
-			pre_recv_entry(precvframe, pattrib->physt ? (pbuf + RXDESC_OFFSET) : NULL);
-		else { /* pkt_rpt_type == TX_REPORT1-CCX, TX_REPORT2-TX RTP,HIS_REPORT-USB HISR RTP */
+		if (pattrib->pkt_rpt_type == NORMAL_RX) { /* Normal rx packet */
+			if (pattrib->physt)
+				pphy_status = pbuf + RXDESC_OFFSET;
+
+#ifdef CONFIG_CONCURRENT_MODE
+			pre_recv_entry(precvframe, pphy_status);
+#endif /*CONFIG_CONCURRENT_MODE*/
+
+
+			if (pattrib->physt && pphy_status)
+				rx_query_phy_status(precvframe, pphy_status);
+
+			rtw_recv_entry(precvframe);
+
+		} else { /* pkt_rpt_type == TX_REPORT1-CCX, TX_REPORT2-TX RTP,HIS_REPORT-USB HISR RTP */
 
 			/* enqueue recvframe to txrtp queue */
 			if (pattrib->pkt_rpt_type == TX_REPORT1) {

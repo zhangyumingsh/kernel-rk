@@ -29,7 +29,7 @@
 #include <asm/local.h>
 #include <asm/mipsregs.h>
 #include <asm/ptrace.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 
 #ifdef CONFIG_64BIT
 #define ADDIU	"daddiu "
@@ -46,11 +46,9 @@
 #define LL	"ll "
 #define SC	"sc "
 
-#ifdef CONFIG_DEBUG_FS
-static DEFINE_PER_CPU(struct mips_r2_emulator_stats, mipsr2emustats);
-static DEFINE_PER_CPU(struct mips_r2_emulator_stats, mipsr2bdemustats);
-static DEFINE_PER_CPU(struct mips_r2br_emulator_stats, mipsr2bremustats);
-#endif
+DEFINE_PER_CPU(struct mips_r2_emulator_stats, mipsr2emustats);
+DEFINE_PER_CPU(struct mips_r2_emulator_stats, mipsr2bdemustats);
+DEFINE_PER_CPU(struct mips_r2br_emulator_stats, mipsr2bremustats);
 
 extern const unsigned int fpucondbit[8];
 
@@ -85,7 +83,7 @@ static inline int mipsr6_emul(struct pt_regs *regs, u32 ir)
 				(s32)MIPSInst_SIMM(ir);
 		return 0;
 	case daddiu_op:
-		if (IS_ENABLED(CONFIG_32BIT))
+		if (config_enabled(CONFIG_32BIT))
 			break;
 
 		if (MIPSInst_RT(ir))
@@ -144,7 +142,7 @@ static inline int mipsr6_emul(struct pt_regs *regs, u32 ir)
 					      (u32)regs->regs[MIPSInst_RT(ir)]);
 			return 0;
 		case dsll_op:
-			if (IS_ENABLED(CONFIG_32BIT) || MIPSInst_RS(ir))
+			if (config_enabled(CONFIG_32BIT) || MIPSInst_RS(ir))
 				break;
 
 			if (MIPSInst_RD(ir))
@@ -153,7 +151,7 @@ static inline int mipsr6_emul(struct pt_regs *regs, u32 ir)
 						MIPSInst_FD(ir));
 			return 0;
 		case dsrl_op:
-			if (IS_ENABLED(CONFIG_32BIT) || MIPSInst_RS(ir))
+			if (config_enabled(CONFIG_32BIT) || MIPSInst_RS(ir))
 				break;
 
 			if (MIPSInst_RD(ir))
@@ -162,7 +160,7 @@ static inline int mipsr6_emul(struct pt_regs *regs, u32 ir)
 						MIPSInst_FD(ir));
 			return 0;
 		case daddu_op:
-			if (IS_ENABLED(CONFIG_32BIT) || MIPSInst_FD(ir))
+			if (config_enabled(CONFIG_32BIT) || MIPSInst_FD(ir))
 				break;
 
 			if (MIPSInst_RD(ir))
@@ -171,7 +169,7 @@ static inline int mipsr6_emul(struct pt_regs *regs, u32 ir)
 					(u64)regs->regs[MIPSInst_RT(ir)];
 			return 0;
 		case dsubu_op:
-			if (IS_ENABLED(CONFIG_32BIT) || MIPSInst_FD(ir))
+			if (config_enabled(CONFIG_32BIT) || MIPSInst_FD(ir))
 				break;
 
 			if (MIPSInst_RD(ir))
@@ -499,7 +497,7 @@ static int dmult_func(struct pt_regs *regs, u32 ir)
 	s64 res;
 	s64 rt, rs;
 
-	if (IS_ENABLED(CONFIG_32BIT))
+	if (config_enabled(CONFIG_32BIT))
 		return SIGILL;
 
 	rt = regs->regs[MIPSInst_RT(ir)];
@@ -531,7 +529,7 @@ static int dmultu_func(struct pt_regs *regs, u32 ir)
 	u64 res;
 	u64 rt, rs;
 
-	if (IS_ENABLED(CONFIG_32BIT))
+	if (config_enabled(CONFIG_32BIT))
 		return SIGILL;
 
 	rt = regs->regs[MIPSInst_RT(ir)];
@@ -562,7 +560,7 @@ static int ddiv_func(struct pt_regs *regs, u32 ir)
 {
 	s64 rt, rs;
 
-	if (IS_ENABLED(CONFIG_32BIT))
+	if (config_enabled(CONFIG_32BIT))
 		return SIGILL;
 
 	rt = regs->regs[MIPSInst_RT(ir)];
@@ -587,7 +585,7 @@ static int ddivu_func(struct pt_regs *regs, u32 ir)
 {
 	u64 rt, rs;
 
-	if (IS_ENABLED(CONFIG_32BIT))
+	if (config_enabled(CONFIG_32BIT))
 		return SIGILL;
 
 	rt = regs->regs[MIPSInst_RT(ir)];
@@ -602,7 +600,7 @@ static int ddivu_func(struct pt_regs *regs, u32 ir)
 }
 
 /* R6 removed instructions for the SPECIAL opcode */
-static const struct r2_decoder_table spec_op_table[] = {
+static struct r2_decoder_table spec_op_table[] = {
 	{ 0xfc1ff83f, 0x00000008, jr_func },
 	{ 0xfc00ffff, 0x00000018, mult_func },
 	{ 0xfc00ffff, 0x00000019, multu_func },
@@ -826,7 +824,7 @@ static int dclz_func(struct pt_regs *regs, u32 ir)
 	u64 res;
 	u64 rs;
 
-	if (IS_ENABLED(CONFIG_32BIT))
+	if (config_enabled(CONFIG_32BIT))
 		return SIGILL;
 
 	if (!MIPSInst_RD(ir))
@@ -853,7 +851,7 @@ static int dclo_func(struct pt_regs *regs, u32 ir)
 	u64 res;
 	u64 rs;
 
-	if (IS_ENABLED(CONFIG_32BIT))
+	if (config_enabled(CONFIG_32BIT))
 		return SIGILL;
 
 	if (!MIPSInst_RD(ir))
@@ -869,7 +867,7 @@ static int dclo_func(struct pt_regs *regs, u32 ir)
 }
 
 /* R6 removed instructions for the SPECIAL2 opcode */
-static const struct r2_decoder_table spec2_op_table[] = {
+static struct r2_decoder_table spec2_op_table[] = {
 	{ 0xfc00ffff, 0x70000000, madd_func },
 	{ 0xfc00ffff, 0x70000001, maddu_func },
 	{ 0xfc0007ff, 0x70000002, mul_func },
@@ -883,9 +881,9 @@ static const struct r2_decoder_table spec2_op_table[] = {
 };
 
 static inline int mipsr2_find_op_func(struct pt_regs *regs, u32 inst,
-				      const struct r2_decoder_table *table)
+				      struct r2_decoder_table *table)
 {
-	const struct r2_decoder_table *p;
+	struct r2_decoder_table *p;
 	int err;
 
 	for (p = table; p->func; p++) {
@@ -1212,7 +1210,7 @@ fpu_emul:
 	case lwl_op:
 		rt = regs->regs[MIPSInst_RT(inst)];
 		vaddr = regs->regs[MIPSInst_RS(inst)] + MIPSInst_SIMM(inst);
-		if (!access_ok(VERIFY_READ, (void __user *)vaddr, 4)) {
+		if (!access_ok(VERIFY_READ, vaddr, 4)) {
 			current->thread.cp0_baduaddr = vaddr;
 			err = SIGSEGV;
 			break;
@@ -1285,7 +1283,7 @@ fpu_emul:
 	case lwr_op:
 		rt = regs->regs[MIPSInst_RT(inst)];
 		vaddr = regs->regs[MIPSInst_RS(inst)] + MIPSInst_SIMM(inst);
-		if (!access_ok(VERIFY_READ, (void __user *)vaddr, 4)) {
+		if (!access_ok(VERIFY_READ, vaddr, 4)) {
 			current->thread.cp0_baduaddr = vaddr;
 			err = SIGSEGV;
 			break;
@@ -1359,7 +1357,7 @@ fpu_emul:
 	case swl_op:
 		rt = regs->regs[MIPSInst_RT(inst)];
 		vaddr = regs->regs[MIPSInst_RS(inst)] + MIPSInst_SIMM(inst);
-		if (!access_ok(VERIFY_WRITE, (void __user *)vaddr, 4)) {
+		if (!access_ok(VERIFY_WRITE, vaddr, 4)) {
 			current->thread.cp0_baduaddr = vaddr;
 			err = SIGSEGV;
 			break;
@@ -1429,7 +1427,7 @@ fpu_emul:
 	case swr_op:
 		rt = regs->regs[MIPSInst_RT(inst)];
 		vaddr = regs->regs[MIPSInst_RS(inst)] + MIPSInst_SIMM(inst);
-		if (!access_ok(VERIFY_WRITE, (void __user *)vaddr, 4)) {
+		if (!access_ok(VERIFY_WRITE, vaddr, 4)) {
 			current->thread.cp0_baduaddr = vaddr;
 			err = SIGSEGV;
 			break;
@@ -1497,14 +1495,14 @@ fpu_emul:
 		break;
 
 	case ldl_op:
-		if (IS_ENABLED(CONFIG_32BIT)) {
+		if (config_enabled(CONFIG_32BIT)) {
 		    err = SIGILL;
 		    break;
 		}
 
 		rt = regs->regs[MIPSInst_RT(inst)];
 		vaddr = regs->regs[MIPSInst_RS(inst)] + MIPSInst_SIMM(inst);
-		if (!access_ok(VERIFY_READ, (void __user *)vaddr, 8)) {
+		if (!access_ok(VERIFY_READ, vaddr, 8)) {
 			current->thread.cp0_baduaddr = vaddr;
 			err = SIGSEGV;
 			break;
@@ -1616,14 +1614,14 @@ fpu_emul:
 		break;
 
 	case ldr_op:
-		if (IS_ENABLED(CONFIG_32BIT)) {
+		if (config_enabled(CONFIG_32BIT)) {
 		    err = SIGILL;
 		    break;
 		}
 
 		rt = regs->regs[MIPSInst_RT(inst)];
 		vaddr = regs->regs[MIPSInst_RS(inst)] + MIPSInst_SIMM(inst);
-		if (!access_ok(VERIFY_READ, (void __user *)vaddr, 8)) {
+		if (!access_ok(VERIFY_READ, vaddr, 8)) {
 			current->thread.cp0_baduaddr = vaddr;
 			err = SIGSEGV;
 			break;
@@ -1735,14 +1733,14 @@ fpu_emul:
 		break;
 
 	case sdl_op:
-		if (IS_ENABLED(CONFIG_32BIT)) {
+		if (config_enabled(CONFIG_32BIT)) {
 		    err = SIGILL;
 		    break;
 		}
 
 		rt = regs->regs[MIPSInst_RT(inst)];
 		vaddr = regs->regs[MIPSInst_RS(inst)] + MIPSInst_SIMM(inst);
-		if (!access_ok(VERIFY_WRITE, (void __user *)vaddr, 8)) {
+		if (!access_ok(VERIFY_WRITE, vaddr, 8)) {
 			current->thread.cp0_baduaddr = vaddr;
 			err = SIGSEGV;
 			break;
@@ -1853,14 +1851,14 @@ fpu_emul:
 		break;
 
 	case sdr_op:
-		if (IS_ENABLED(CONFIG_32BIT)) {
+		if (config_enabled(CONFIG_32BIT)) {
 		    err = SIGILL;
 		    break;
 		}
 
 		rt = regs->regs[MIPSInst_RT(inst)];
 		vaddr = regs->regs[MIPSInst_RS(inst)] + MIPSInst_SIMM(inst);
-		if (!access_ok(VERIFY_WRITE, (void __user *)vaddr, 8)) {
+		if (!access_ok(VERIFY_WRITE, vaddr, 8)) {
 			current->thread.cp0_baduaddr = vaddr;
 			err = SIGSEGV;
 			break;
@@ -1977,7 +1975,7 @@ fpu_emul:
 			err = SIGBUS;
 			break;
 		}
-		if (!access_ok(VERIFY_READ, (void __user *)vaddr, 4)) {
+		if (!access_ok(VERIFY_READ, vaddr, 4)) {
 			current->thread.cp0_baduaddr = vaddr;
 			err = SIGBUS;
 			break;
@@ -2033,7 +2031,7 @@ fpu_emul:
 			err = SIGBUS;
 			break;
 		}
-		if (!access_ok(VERIFY_WRITE, (void __user *)vaddr, 4)) {
+		if (!access_ok(VERIFY_WRITE, vaddr, 4)) {
 			current->thread.cp0_baduaddr = vaddr;
 			err = SIGBUS;
 			break;
@@ -2085,7 +2083,7 @@ fpu_emul:
 		break;
 
 	case lld_op:
-		if (IS_ENABLED(CONFIG_32BIT)) {
+		if (config_enabled(CONFIG_32BIT)) {
 		    err = SIGILL;
 		    break;
 		}
@@ -2096,7 +2094,7 @@ fpu_emul:
 			err = SIGBUS;
 			break;
 		}
-		if (!access_ok(VERIFY_READ, (void __user *)vaddr, 8)) {
+		if (!access_ok(VERIFY_READ, vaddr, 8)) {
 			current->thread.cp0_baduaddr = vaddr;
 			err = SIGBUS;
 			break;
@@ -2146,7 +2144,7 @@ fpu_emul:
 		break;
 
 	case scd_op:
-		if (IS_ENABLED(CONFIG_32BIT)) {
+		if (config_enabled(CONFIG_32BIT)) {
 		    err = SIGILL;
 		    break;
 		}
@@ -2157,7 +2155,7 @@ fpu_emul:
 			err = SIGBUS;
 			break;
 		}
-		if (!access_ok(VERIFY_WRITE, (void __user *)vaddr, 8)) {
+		if (!access_ok(VERIFY_WRITE, vaddr, 8)) {
 			current->thread.cp0_baduaddr = vaddr;
 			err = SIGBUS;
 			break;

@@ -27,7 +27,7 @@
 /*
 #include <linux/kernel.h>
 #include <linux/if_arp.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 
 #include <linux/kernel.h>
 #include <linux/kthread.h>

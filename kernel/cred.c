@@ -1,4 +1,4 @@
-/* Task credentials management - see Documentation/security/credentials.rst
+/* Task credentials management - see Documentation/security/credentials.txt
  *
  * Copyright (C) 2008 Red Hat, Inc. All Rights Reserved.
  * Written by David Howells (dhowells@redhat.com)
@@ -12,7 +12,6 @@
 #include <linux/cred.h>
 #include <linux/slab.h>
 #include <linux/sched.h>
-#include <linux/sched/coredump.h>
 #include <linux/key.h>
 #include <linux/keyctl.h>
 #include <linux/init_task.h>
@@ -220,7 +219,7 @@ struct cred *cred_alloc_blank(void)
 	new->magic = CRED_MAGIC;
 #endif
 
-	if (security_cred_alloc_blank(new, GFP_KERNEL_ACCOUNT) < 0)
+	if (security_cred_alloc_blank(new, GFP_KERNEL) < 0)
 		goto error;
 
 	return new;
@@ -279,7 +278,7 @@ struct cred *prepare_creds(void)
 	new->security = NULL;
 #endif
 
-	if (security_prepare_creds(new, old, GFP_KERNEL_ACCOUNT) < 0)
+	if (security_prepare_creds(new, old, GFP_KERNEL) < 0)
 		goto error;
 	validate_creds(new);
 	return new;
@@ -595,8 +594,8 @@ EXPORT_SYMBOL(revert_creds);
 void __init cred_init(void)
 {
 	/* allocate a slab in which we can store credentials */
-	cred_jar = kmem_cache_create("cred_jar", sizeof(struct cred), 0,
-			SLAB_HWCACHE_ALIGN|SLAB_PANIC|SLAB_ACCOUNT, NULL);
+	cred_jar = kmem_cache_create("cred_jar", sizeof(struct cred),
+				     0, SLAB_HWCACHE_ALIGN|SLAB_PANIC, NULL);
 }
 
 /**
@@ -654,7 +653,7 @@ struct cred *prepare_kernel_cred(struct task_struct *daemon)
 #ifdef CONFIG_SECURITY
 	new->security = NULL;
 #endif
-	if (security_prepare_creds(new, old, GFP_KERNEL_ACCOUNT) < 0)
+	if (security_prepare_creds(new, old, GFP_KERNEL) < 0)
 		goto error;
 
 	put_cred(old);

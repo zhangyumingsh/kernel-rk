@@ -137,12 +137,7 @@ of_pwm_xlate_with_flags(struct pwm_chip *pc, const struct of_phandle_args *args)
 {
 	struct pwm_device *pwm;
 
-	/* check, whether the driver supports a third cell for flags */
 	if (pc->of_pwm_n_cells < 3)
-		return ERR_PTR(-EINVAL);
-
-	/* flags in the third cell are optional */
-	if (args->args_count < 2)
 		return ERR_PTR(-EINVAL);
 
 	if (args->args[0] >= pc->npwm)
@@ -153,10 +148,11 @@ of_pwm_xlate_with_flags(struct pwm_chip *pc, const struct of_phandle_args *args)
 		return pwm;
 
 	pwm->args.period = args->args[1];
-	pwm->args.polarity = PWM_POLARITY_NORMAL;
 
-	if (args->args_count > 2 && args->args[2] & PWM_POLARITY_INVERTED)
+	if (args->args[2] & PWM_POLARITY_INVERTED)
 		pwm->args.polarity = PWM_POLARITY_INVERSED;
+	else
+		pwm->args.polarity = PWM_POLARITY_NORMAL;
 
 	return pwm;
 }
@@ -167,12 +163,7 @@ of_pwm_simple_xlate(struct pwm_chip *pc, const struct of_phandle_args *args)
 {
 	struct pwm_device *pwm;
 
-	/* sanity check driver support */
 	if (pc->of_pwm_n_cells < 2)
-		return ERR_PTR(-EINVAL);
-
-	/* all cells are required */
-	if (args->args_count != pc->of_pwm_n_cells)
 		return ERR_PTR(-EINVAL);
 
 	if (args->args[0] >= pc->npwm)
@@ -294,7 +285,6 @@ int pwmchip_add_with_polarity(struct pwm_chip *chip,
 		pwm->pwm = chip->base + i;
 		pwm->hwpwm = i;
 		pwm->state.polarity = polarity;
-		pwm->state.output_type = PWM_OUTPUT_FIXED;
 
 		if (chip->ops->get_state)
 			chip->ops->get_state(chip, pwm, &pwm->state);
@@ -508,46 +498,11 @@ int pwm_apply_state(struct pwm_device *pwm, struct pwm_state *state)
 			pwm->state.polarity = state->polarity;
 		}
 
-		if (state->output_type != pwm->state.output_type) {
-			if (!pwm->chip->ops->set_output_type)
-				return -ENOTSUPP;
-
-			err = pwm->chip->ops->set_output_type(pwm->chip, pwm,
-						state->output_type);
-			if (err)
-				return err;
-
-			pwm->state.output_type = state->output_type;
-		}
-
-		if (state->output_pattern != pwm->state.output_pattern &&
-				state->output_pattern != NULL) {
-			if (!pwm->chip->ops->set_output_pattern)
-				return -ENOTSUPP;
-
-			err = pwm->chip->ops->set_output_pattern(pwm->chip,
-					pwm, state->output_pattern);
-			if (err)
-				return err;
-
-			pwm->state.output_pattern = state->output_pattern;
-		}
-
 		if (state->period != pwm->state.period ||
 		    state->duty_cycle != pwm->state.duty_cycle) {
-			if (pwm->chip->ops->config_extend) {
-				err = pwm->chip->ops->config_extend(pwm->chip,
-						pwm, state->duty_cycle,
-						state->period);
-			} else {
-				if (state->period > UINT_MAX)
-					pr_warn("period %llu duty_cycle %llu will be truncated\n",
-							state->period,
-							state->duty_cycle);
-				err = pwm->chip->ops->config(pwm->chip, pwm,
-						state->duty_cycle,
-						state->period);
-			}
+			err = pwm->chip->ops->config(pwm->chip, pwm,
+						     state->duty_cycle,
+						     state->period);
 			if (err)
 				return err;
 
@@ -708,16 +663,21 @@ struct pwm_device *of_pwm_get(struct device_node *np, const char *con_id)
 	err = of_parse_phandle_with_args(np, "pwms", "#pwm-cells", index,
 					 &args);
 	if (err) {
-		pr_err("%s(): can't parse \"pwms\" property\n", __func__);
+		pr_debug("%s(): can't parse \"pwms\" property\n", __func__);
 		return ERR_PTR(err);
 	}
 
 	pc = of_node_to_pwmchip(args.np);
 	if (IS_ERR(pc)) {
-		if (PTR_ERR(pc) != -EPROBE_DEFER)
-			pr_err("%s(): PWM chip not found\n", __func__);
-
+		pr_debug("%s(): PWM chip not found\n", __func__);
 		pwm = ERR_CAST(pc);
+		goto put;
+	}
+
+	if (args.args_count != pc->of_pwm_n_cells) {
+		pr_debug("%s: wrong #pwm-cells for %s\n", np->full_name,
+			 args.np->full_name);
+		pwm = ERR_PTR(-EINVAL);
 		goto put;
 	}
 
@@ -797,13 +757,12 @@ void pwm_remove_table(struct pwm_lookup *table, size_t num)
  */
 struct pwm_device *pwm_get(struct device *dev, const char *con_id)
 {
+	struct pwm_device *pwm = ERR_PTR(-EPROBE_DEFER);
 	const char *dev_id = dev ? dev_name(dev) : NULL;
-	struct pwm_device *pwm;
-	struct pwm_chip *chip;
+	struct pwm_chip *chip = NULL;
 	unsigned int best = 0;
 	struct pwm_lookup *p, *chosen = NULL;
 	unsigned int match;
-	int err;
 
 	/* look up via DT first */
 	if (IS_ENABLED(CONFIG_OF) && dev && dev->of_node)
@@ -858,35 +817,24 @@ struct pwm_device *pwm_get(struct device *dev, const char *con_id)
 		}
 	}
 
-	mutex_unlock(&pwm_lookup_lock);
-
-	if (!chosen)
-		return ERR_PTR(-ENODEV);
-
-	chip = pwmchip_find_by_name(chosen->provider);
-
-	/*
-	 * If the lookup entry specifies a module, load the module and retry
-	 * the PWM chip lookup. This can be used to work around driver load
-	 * ordering issues if driver's can't be made to properly support the
-	 * deferred probe mechanism.
-	 */
-	if (!chip && chosen->module) {
-		err = request_module(chosen->module);
-		if (err == 0)
-			chip = pwmchip_find_by_name(chosen->provider);
+	if (!chosen) {
+		pwm = ERR_PTR(-ENODEV);
+		goto out;
 	}
 
+	chip = pwmchip_find_by_name(chosen->provider);
 	if (!chip)
-		return ERR_PTR(-EPROBE_DEFER);
+		goto out;
 
 	pwm = pwm_request_from_chip(chip, chosen->index, con_id ?: dev_id);
 	if (IS_ERR(pwm))
-		return pwm;
+		goto out;
 
 	pwm->args.period = chosen->period;
 	pwm->args.polarity = chosen->polarity;
 
+out:
+	mutex_unlock(&pwm_lookup_lock);
 	return pwm;
 }
 EXPORT_SYMBOL_GPL(pwm_get);
@@ -910,7 +858,6 @@ void pwm_put(struct pwm_device *pwm)
 	if (pwm->chip->ops->free)
 		pwm->chip->ops->free(pwm->chip, pwm);
 
-	pwm_set_chip_data(pwm, NULL);
 	pwm->label = NULL;
 
 	module_put(pwm->chip->ops->owner);
@@ -1013,6 +960,18 @@ void devm_pwm_put(struct device *dev, struct pwm_device *pwm)
 }
 EXPORT_SYMBOL_GPL(devm_pwm_put);
 
+/**
+  * pwm_can_sleep() - report whether PWM access will sleep
+  * @pwm: PWM device
+  *
+  * Returns: True if accessing the PWM can sleep, false otherwise.
+  */
+bool pwm_can_sleep(struct pwm_device *pwm)
+{
+	return true;
+}
+EXPORT_SYMBOL_GPL(pwm_can_sleep);
+
 #ifdef CONFIG_DEBUG_FS
 static void pwm_dbg_show(struct pwm_chip *chip, struct seq_file *s)
 {
@@ -1032,8 +991,8 @@ static void pwm_dbg_show(struct pwm_chip *chip, struct seq_file *s)
 		if (state.enabled)
 			seq_puts(s, " enabled");
 
-		seq_printf(s, " period: %llu ns", state.period);
-		seq_printf(s, " duty: %llu ns", state.duty_cycle);
+		seq_printf(s, " period: %u ns", state.period);
+		seq_printf(s, " duty: %u ns", state.duty_cycle);
 		seq_printf(s, " polarity: %s",
 			   state.polarity ? "inverse" : "normal");
 
@@ -1105,9 +1064,5 @@ static int __init pwm_debugfs_init(void)
 
 	return 0;
 }
-#ifdef CONFIG_ROCKCHIP_THUNDER_BOOT
-postcore_initcall(pwm_debugfs_init);
-#else
 subsys_initcall(pwm_debugfs_init);
-#endif
 #endif /* CONFIG_DEBUG_FS */

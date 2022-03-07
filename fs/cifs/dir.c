@@ -40,14 +40,14 @@ renew_parental_timestamps(struct dentry *direntry)
 	/* BB check if there is a way to get the kernel to do this or if we
 	   really need this */
 	do {
-		cifs_set_time(direntry, jiffies);
+		direntry->d_time = jiffies;
 		direntry = direntry->d_parent;
 	} while (!IS_ROOT(direntry));
 }
 
 char *
 cifs_build_path_to_root(struct smb_vol *vol, struct cifs_sb_info *cifs_sb,
-			struct cifs_tcon *tcon, int add_treename)
+			struct cifs_tcon *tcon)
 {
 	int pplen = vol->prepath ? strlen(vol->prepath) + 1 : 0;
 	int dfsplen;
@@ -59,7 +59,7 @@ cifs_build_path_to_root(struct smb_vol *vol, struct cifs_sb_info *cifs_sb,
 		return full_path;
 	}
 
-	if (add_treename)
+	if (tcon->Flags & SMB_SHARE_IS_IN_DFS)
 		dfsplen = strnlen(tcon->treeName, MAX_TREE_SIZE + 1);
 	else
 		dfsplen = 0;
@@ -81,17 +81,6 @@ cifs_build_path_to_root(struct smb_vol *vol, struct cifs_sb_info *cifs_sb,
 char *
 build_path_from_dentry(struct dentry *direntry)
 {
-	struct cifs_sb_info *cifs_sb = CIFS_SB(direntry->d_sb);
-	struct cifs_tcon *tcon = cifs_sb_master_tcon(cifs_sb);
-	bool prefix = tcon->Flags & SMB_SHARE_IS_IN_DFS;
-
-	return build_path_from_dentry_optional_prefix(direntry,
-						      prefix);
-}
-
-char *
-build_path_from_dentry_optional_prefix(struct dentry *direntry, bool prefix)
-{
 	struct dentry *temp;
 	int namelen;
 	int dfsplen;
@@ -103,7 +92,7 @@ build_path_from_dentry_optional_prefix(struct dentry *direntry, bool prefix)
 	unsigned seq;
 
 	dirsep = CIFS_DIR_SEP(cifs_sb);
-	if (prefix)
+	if (tcon->Flags & SMB_SHARE_IS_IN_DFS)
 		dfsplen = strnlen(tcon->treeName, MAX_TREE_SIZE + 1);
 	else
 		dfsplen = 0;
@@ -369,7 +358,7 @@ cifs_do_create(struct inode *inode, struct dentry *direntry, unsigned int xid,
 	oparms.path = full_path;
 	oparms.fid = fid;
 	oparms.reconnect = false;
-	oparms.mode = mode;
+
 	rc = server->ops->open(xid, &oparms, oplock, buf);
 	if (rc) {
 		cifs_dbg(FYI, "cifs_create returned 0x%x\n", rc);
@@ -465,7 +454,8 @@ out_err:
 
 int
 cifs_atomic_open(struct inode *inode, struct dentry *direntry,
-		 struct file *file, unsigned oflags, umode_t mode)
+		 struct file *file, unsigned oflags, umode_t mode,
+		 int *opened)
 {
 	int rc;
 	unsigned int xid;
@@ -495,7 +485,7 @@ cifs_atomic_open(struct inode *inode, struct dentry *direntry,
 		 * Check for hashed negative dentry. We have already revalidated
 		 * the dentry and it is fine. No need to perform another lookup.
 		 */
-		if (!d_in_lookup(direntry))
+		if (!d_unhashed(direntry))
 			return -ENOENT;
 
 		res = cifs_lookup(inode, direntry, 0);
@@ -538,9 +528,9 @@ cifs_atomic_open(struct inode *inode, struct dentry *direntry,
 	}
 
 	if ((oflags & (O_CREAT | O_EXCL)) == (O_CREAT | O_EXCL))
-		file->f_mode |= FMODE_CREATED;
+		*opened |= FILE_CREATED;
 
-	rc = finish_open(file, direntry, generic_file_open);
+	rc = finish_open(file, direntry, generic_file_open, opened);
 	if (rc) {
 		if (server->ops->close)
 			server->ops->close(xid, tcon, &fid);
@@ -561,6 +551,7 @@ cifs_atomic_open(struct inode *inode, struct dentry *direntry,
 		if (server->ops->close)
 			server->ops->close(xid, tcon, &fid);
 		cifs_del_pending_open(&open);
+		fput(file);
 		rc = -ENOMEM;
 	}
 
@@ -778,25 +769,21 @@ cifs_lookup(struct inode *parent_dir_inode, struct dentry *direntry,
 	tlink = cifs_sb_tlink(cifs_sb);
 	if (IS_ERR(tlink)) {
 		free_xid(xid);
-		return ERR_CAST(tlink);
+		return (struct dentry *)tlink;
 	}
 	pTcon = tlink_tcon(tlink);
 
 	rc = check_name(direntry, pTcon);
-	if (unlikely(rc)) {
-		cifs_put_tlink(tlink);
-		free_xid(xid);
-		return ERR_PTR(rc);
-	}
+	if (rc)
+		goto lookup_out;
 
 	/* can not grab the rename sem here since it would
 	deadlock in the cases (beginning of sys_rename itself)
 	in which we already have the sb rename sem */
 	full_path = build_path_from_dentry(direntry);
 	if (full_path == NULL) {
-		cifs_put_tlink(tlink);
-		free_xid(xid);
-		return ERR_PTR(-ENOMEM);
+		rc = -ENOMEM;
+		goto lookup_out;
 	}
 
 	if (d_really_is_positive(direntry)) {
@@ -815,60 +802,40 @@ cifs_lookup(struct inode *parent_dir_inode, struct dentry *direntry,
 				parent_dir_inode->i_sb, xid, NULL);
 	}
 
-	if (rc == 0) {
+	if ((rc == 0) && (newInode != NULL)) {
+		d_add(direntry, newInode);
 		/* since paths are not looked up by component - the parent
 		   directories are presumed to be good here */
 		renew_parental_timestamps(direntry);
+
 	} else if (rc == -ENOENT) {
-		cifs_set_time(direntry, jiffies);
-		newInode = NULL;
-	} else {
-		if (rc != -EACCES) {
-			cifs_dbg(FYI, "Unexpected lookup error %d\n", rc);
-			/* We special case check for Access Denied - since that
-			is a common return code */
-		}
-		newInode = ERR_PTR(rc);
+		rc = 0;
+		direntry->d_time = jiffies;
+		d_add(direntry, NULL);
+	/*	if it was once a directory (but how can we tell?) we could do
+		shrink_dcache_parent(direntry); */
+	} else if (rc != -EACCES) {
+		cifs_dbg(FYI, "Unexpected lookup error %d\n", rc);
+		/* We special case check for Access Denied - since that
+		is a common return code */
 	}
+
+lookup_out:
 	kfree(full_path);
 	cifs_put_tlink(tlink);
 	free_xid(xid);
-	return d_splice_alias(newInode, direntry);
+	return ERR_PTR(rc);
 }
 
 static int
 cifs_d_revalidate(struct dentry *direntry, unsigned int flags)
 {
-	struct inode *inode;
-	int rc;
-
 	if (flags & LOOKUP_RCU)
 		return -ECHILD;
 
 	if (d_really_is_positive(direntry)) {
-		inode = d_inode(direntry);
-		if ((flags & LOOKUP_REVAL) && !CIFS_CACHE_READ(CIFS_I(inode)))
-			CIFS_I(inode)->time = 0; /* force reval */
-
-		rc = cifs_revalidate_dentry(direntry);
-		if (rc) {
-			cifs_dbg(FYI, "cifs_revalidate_dentry failed with rc=%d", rc);
-			switch (rc) {
-			case -ENOENT:
-			case -ESTALE:
-				/*
-				 * Those errors mean the dentry is invalid
-				 * (file was deleted or recreated)
-				 */
-				return 0;
-			default:
-				/*
-				 * Otherwise some unexpected error happened
-				 * report it as-is to VFS layer
-				 */
-				return rc;
-			}
-		}
+		if (cifs_revalidate_dentry(direntry))
+			return 0;
 		else {
 			/*
 			 * If the inode wasn't known to be a dfs entry when
@@ -877,7 +844,7 @@ cifs_d_revalidate(struct dentry *direntry, unsigned int flags)
 			 * attributes will have been updated by
 			 * cifs_revalidate_dentry().
 			 */
-			if (IS_AUTOMOUNT(inode) &&
+			if (IS_AUTOMOUNT(d_inode(direntry)) &&
 			   !(direntry->d_flags & DCACHE_NEED_AUTOMOUNT)) {
 				spin_lock(&direntry->d_lock);
 				direntry->d_flags |= DCACHE_NEED_AUTOMOUNT;
@@ -903,7 +870,7 @@ cifs_d_revalidate(struct dentry *direntry, unsigned int flags)
 	if (flags & (LOOKUP_CREATE | LOOKUP_RENAME_TARGET))
 		return 0;
 
-	if (time_after(jiffies, cifs_get_time(direntry) + HZ) || !lookupCacheEnabled)
+	if (time_after(jiffies, direntry->d_time + HZ) || !lookupCacheEnabled)
 		return 0;
 
 	return 1;
@@ -931,7 +898,7 @@ static int cifs_ci_hash(const struct dentry *dentry, struct qstr *q)
 	wchar_t c;
 	int i, charlen;
 
-	hash = init_name_hash(dentry);
+	hash = init_name_hash();
 	for (i = 0; i < q->len; i += charlen) {
 		charlen = codepage->char2uni(&q->name[i], q->len - i, &c);
 		/* error out if we can't convert the character */
@@ -944,10 +911,10 @@ static int cifs_ci_hash(const struct dentry *dentry, struct qstr *q)
 	return 0;
 }
 
-static int cifs_ci_compare(const struct dentry *dentry,
+static int cifs_ci_compare(const struct dentry *parent, const struct dentry *dentry,
 		unsigned int len, const char *str, const struct qstr *name)
 {
-	struct nls_table *codepage = CIFS_SB(dentry->d_sb)->local_nls;
+	struct nls_table *codepage = CIFS_SB(parent->d_sb)->local_nls;
 	wchar_t c1, c2;
 	int i, l1, l2;
 

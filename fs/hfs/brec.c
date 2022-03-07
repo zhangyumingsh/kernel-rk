@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-2.0
 /*
  *  linux/fs/hfs/brec.c
  *
@@ -445,7 +444,6 @@ skip:
 			/* restore search_key */
 			hfs_bnode_read_key(node, fd->search_key, 14);
 		}
-		new_node = NULL;
 	}
 
 	if (!rec && node->parent)

@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: GPL-1.0+
 /*
  * Open Host Controller Interface (OHCI) driver for USB.
  *
@@ -81,7 +80,7 @@ static const char	hcd_name [] = "ohci_hcd";
 
 static void ohci_dump(struct ohci_hcd *ohci);
 static void ohci_stop(struct usb_hcd *hcd);
-static void io_watchdog_func(struct timer_list *t);
+static void io_watchdog_func(unsigned long _ohci);
 
 #include "ohci-hub.c"
 #include "ohci-dbg.c"
@@ -101,13 +100,13 @@ static void io_watchdog_func(struct timer_list *t);
 
 
 /* Some boards misreport power switching/overcurrent */
-static bool distrust_firmware;
+static bool distrust_firmware = 1;
 module_param (distrust_firmware, bool, 0);
 MODULE_PARM_DESC (distrust_firmware,
 	"true to distrust firmware power/overcurrent setup");
 
 /* Some boards leave IR set wrongly, since they fail BIOS/SMM handshakes */
-static bool no_handshake;
+static bool no_handshake = 0;
 module_param (no_handshake, bool, 0);
 MODULE_PARM_DESC (no_handshake, "true (not default) disables BIOS handshake");
 
@@ -233,8 +232,7 @@ static int ohci_urb_enqueue (
 
 		/* Start up the I/O watchdog timer, if it's not running */
 		if (ohci->prev_frame_no == IO_WATCHDOG_OFF &&
-				list_empty(&ohci->eds_in_use) &&
-				!(ohci->flags & OHCI_QUIRK_QEMU)) {
+				list_empty(&ohci->eds_in_use)) {
 			ohci->prev_frame_no = ohci_frame_no(ohci);
 			mod_timer(&ohci->io_watchdog,
 					jiffies + IO_WATCHDOG_DELAY);
@@ -384,7 +382,7 @@ sanitize:
 			ed_free (ohci, ed);
 			break;
 		}
-		/* fall through */
+		/* else FALL THROUGH */
 	default:
 		/* caller was supposed to have unlinked any requests;
 		 * that's not our job.  can't recover; must leak ed.
@@ -511,7 +509,9 @@ static int ohci_init (struct ohci_hcd *ohci)
 	if (ohci->hcca)
 		return 0;
 
-	timer_setup(&ohci->io_watchdog, io_watchdog_func, 0);
+	setup_timer(&ohci->io_watchdog, io_watchdog_func,
+			(unsigned long) ohci);
+	set_timer_slack(&ohci->io_watchdog, msecs_to_jiffies(20));
 	ohci->prev_frame_no = IO_WATCHDOG_OFF;
 
 	ohci->hcca = dma_alloc_coherent (hcd->self.controller,
@@ -665,24 +665,20 @@ retry:
 
 	/* handle root hub init quirks ... */
 	val = roothub_a (ohci);
-	/* Configure for per-port over-current protection by default */
-	val &= ~RH_A_NOCP;
-	val |= RH_A_OCPM;
+	val &= ~(RH_A_PSM | RH_A_OCPM);
 	if (ohci->flags & OHCI_QUIRK_SUPERIO) {
-		/* NSC 87560 and maybe others.
-		 * Ganged power switching, no over-current protection.
-		 */
+		/* NSC 87560 and maybe others */
 		val |= RH_A_NOCP;
-		val &= ~(RH_A_POTPGT | RH_A_NPS | RH_A_PSM | RH_A_OCPM);
+		val &= ~(RH_A_POTPGT | RH_A_NPS);
+		ohci_writel (ohci, val, &ohci->regs->roothub.a);
 	} else if ((ohci->flags & OHCI_QUIRK_AMD756) ||
 			(ohci->flags & OHCI_QUIRK_HUB_POWER)) {
 		/* hub power always on; required for AMD-756 and some
-		 * Mac platforms.
+		 * Mac platforms.  ganged overcurrent reporting, if any.
 		 */
 		val |= RH_A_NPS;
+		ohci_writel (ohci, val, &ohci->regs->roothub.a);
 	}
-	ohci_writel(ohci, val, &ohci->regs->roothub.a);
-
 	ohci_writel (ohci, RH_HS_LPSC, &ohci->regs->roothub.status);
 	ohci_writel (ohci, (val & RH_A_NPS) ? 0 : RH_B_PPCM,
 						&ohci->regs->roothub.b);
@@ -707,7 +703,7 @@ int ohci_setup(struct usb_hcd *hcd)
 	struct ohci_hcd		*ohci = hcd_to_ohci(hcd);
 
 	ohci_hcd_init(ohci);
-	
+
 	return ohci_init(ohci);
 }
 EXPORT_SYMBOL_GPL(ohci_setup);
@@ -738,9 +734,9 @@ static int ohci_start(struct usb_hcd *hcd)
  * the unlink list.  As a result, URBs could never be dequeued and
  * endpoints could never be released.
  */
-static void io_watchdog_func(struct timer_list *t)
+static void io_watchdog_func(unsigned long _ohci)
 {
-	struct ohci_hcd	*ohci = from_timer(ohci, t, io_watchdog);
+	struct ohci_hcd	*ohci = (struct ohci_hcd *) _ohci;
 	bool		takeback_all_pending = false;
 	u32		status;
 	u32		head;
@@ -766,6 +762,10 @@ static void io_watchdog_func(struct timer_list *t)
 			usb_hc_died(ohci_to_hcd(ohci));
 			ohci_dump(ohci);
 			_ohci_shutdown(ohci_to_hcd(ohci));
+
+			schedule_delayed_work(&ohci->died_delay_work,
+						msecs_to_jiffies(10));
+
 			goto done;
 		} else {
 			/* No write back because the done queue was empty */
@@ -801,7 +801,7 @@ static void io_watchdog_func(struct timer_list *t)
 		}
 
 		/* find the last TD processed by the controller. */
-		head = hc32_to_cpu(ohci, READ_ONCE(ed->hwHeadP)) & TD_MASK;
+		head = hc32_to_cpu(ohci, ACCESS_ONCE(ed->hwHeadP)) & TD_MASK;
 		td_start = td;
 		td_next = list_prepare_entry(td, &ed->td_list, td_list);
 		list_for_each_entry_continue(td_next, &ed->td_list, td_list) {
@@ -1013,7 +1013,7 @@ static void ohci_stop (struct usb_hcd *hcd)
 
 /*-------------------------------------------------------------------------*/
 
-#if defined(CONFIG_PM) || defined(CONFIG_USB_PCI)
+#if defined(CONFIG_PM) || defined(CONFIG_PCI)
 
 /* must not be called from interrupt context */
 int ohci_restart(struct ohci_hcd *ohci)
@@ -1238,6 +1238,11 @@ MODULE_LICENSE ("GPL");
 #define SA1111_DRIVER		ohci_hcd_sa1111_driver
 #endif
 
+#ifdef CONFIG_USB_OHCI_HCD_DAVINCI
+#include "ohci-da8xx.c"
+#define DAVINCI_PLATFORM_DRIVER	ohci_hcd_da8xx_driver
+#endif
+
 #ifdef CONFIG_USB_OHCI_HCD_PPC_OF
 #include "ohci-ppc-of.c"
 #define OF_PLATFORM_DRIVER	ohci_hcd_ppc_of_driver
@@ -1258,6 +1263,16 @@ MODULE_LICENSE ("GPL");
 #define TMIO_OHCI_DRIVER	ohci_hcd_tmio_driver
 #endif
 
+#ifdef CONFIG_MACH_JZ4740
+#include "ohci-jz4740.c"
+#define PLATFORM_DRIVER	ohci_hcd_jz4740_driver
+#endif
+
+#ifdef CONFIG_TILE_USB
+#include "ohci-tilegx.c"
+#define PLATFORM_DRIVER		ohci_hcd_tilegx_driver
+#endif
+
 static int __init ohci_hcd_mod_init(void)
 {
 	int retval = 0;
@@ -1266,16 +1281,26 @@ static int __init ohci_hcd_mod_init(void)
 		return -ENODEV;
 
 	printk(KERN_INFO "%s: " DRIVER_DESC "\n", hcd_name);
-	pr_debug ("%s: block sizes: ed %zd td %zd\n", hcd_name,
+	pr_debug ("%s: block sizes: ed %Zd td %Zd\n", hcd_name,
 		sizeof (struct ed), sizeof (struct td));
 	set_bit(USB_OHCI_LOADED, &usb_hcds_loaded);
 
 	ohci_debug_root = debugfs_create_dir("ohci", usb_debug_root);
+	if (!ohci_debug_root) {
+		retval = -ENOENT;
+		goto error_debug;
+	}
 
 #ifdef PS3_SYSTEM_BUS_DRIVER
 	retval = ps3_ohci_driver_register(&PS3_SYSTEM_BUS_DRIVER);
 	if (retval < 0)
 		goto error_ps3;
+#endif
+
+#ifdef PLATFORM_DRIVER
+	retval = platform_driver_register(&PLATFORM_DRIVER);
+	if (retval < 0)
+		goto error_platform;
 #endif
 
 #ifdef OF_PLATFORM_DRIVER
@@ -1302,9 +1327,19 @@ static int __init ohci_hcd_mod_init(void)
 		goto error_tmio;
 #endif
 
+#ifdef DAVINCI_PLATFORM_DRIVER
+	retval = platform_driver_register(&DAVINCI_PLATFORM_DRIVER);
+	if (retval < 0)
+		goto error_davinci;
+#endif
+
 	return retval;
 
 	/* Error path */
+#ifdef DAVINCI_PLATFORM_DRIVER
+	platform_driver_unregister(&DAVINCI_PLATFORM_DRIVER);
+ error_davinci:
+#endif
 #ifdef TMIO_OHCI_DRIVER
 	platform_driver_unregister(&TMIO_OHCI_DRIVER);
  error_tmio:
@@ -1321,12 +1356,17 @@ static int __init ohci_hcd_mod_init(void)
 	platform_driver_unregister(&OF_PLATFORM_DRIVER);
  error_of_platform:
 #endif
+#ifdef PLATFORM_DRIVER
+	platform_driver_unregister(&PLATFORM_DRIVER);
+ error_platform:
+#endif
 #ifdef PS3_SYSTEM_BUS_DRIVER
 	ps3_ohci_driver_unregister(&PS3_SYSTEM_BUS_DRIVER);
  error_ps3:
 #endif
 	debugfs_remove(ohci_debug_root);
 	ohci_debug_root = NULL;
+ error_debug:
 
 	clear_bit(USB_OHCI_LOADED, &usb_hcds_loaded);
 	return retval;
@@ -1335,6 +1375,9 @@ module_init(ohci_hcd_mod_init);
 
 static void __exit ohci_hcd_mod_exit(void)
 {
+#ifdef DAVINCI_PLATFORM_DRIVER
+	platform_driver_unregister(&DAVINCI_PLATFORM_DRIVER);
+#endif
 #ifdef TMIO_OHCI_DRIVER
 	platform_driver_unregister(&TMIO_OHCI_DRIVER);
 #endif
@@ -1346,6 +1389,9 @@ static void __exit ohci_hcd_mod_exit(void)
 #endif
 #ifdef OF_PLATFORM_DRIVER
 	platform_driver_unregister(&OF_PLATFORM_DRIVER);
+#endif
+#ifdef PLATFORM_DRIVER
+	platform_driver_unregister(&PLATFORM_DRIVER);
 #endif
 #ifdef PS3_SYSTEM_BUS_DRIVER
 	ps3_ohci_driver_unregister(&PS3_SYSTEM_BUS_DRIVER);

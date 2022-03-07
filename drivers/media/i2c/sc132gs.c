@@ -6,8 +6,6 @@
  * V0.1.0: MIPI is ok.
  * V0.0X01.0X02 fix mclk issue when probe multiple camera.
  * V0.0X01.0X03 add enum_frame_interval function.
- * V0.0X01.0X04 add quick stream on/off
- * V0.0X01.0X05 add function g_mbus_config
  */
 
 #include <linux/clk.h>
@@ -28,7 +26,7 @@
 #include <media/v4l2-subdev.h>
 #include <linux/pinctrl/consumer.h>
 
-#define DRIVER_VERSION			KERNEL_VERSION(0, 0x01, 0x05)
+#define DRIVER_VERSION			KERNEL_VERSION(0, 0x01, 0x03)
 #ifndef V4L2_CID_DIGITAL_GAIN
 #define V4L2_CID_DIGITAL_GAIN		V4L2_CID_GAIN
 #endif
@@ -502,22 +500,10 @@ static long sc132gs_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
 {
 	struct sc132gs *sc132gs = to_sc132gs(sd);
 	long ret = 0;
-	u32 stream = 0;
 
 	switch (cmd) {
 	case RKMODULE_GET_MODULE_INFO:
 		sc132gs_get_module_inf(sc132gs, (struct rkmodule_inf *)arg);
-		break;
-	case RKMODULE_SET_QUICK_STREAM:
-
-		stream = *((u32 *)arg);
-
-		if (stream)
-			ret = sc132gs_write_reg(sc132gs->client, SC132GS_REG_CTRL_MODE,
-				SC132GS_REG_VALUE_08BIT, SC132GS_MODE_STREAMING);
-		else
-			ret = sc132gs_write_reg(sc132gs->client, SC132GS_REG_CTRL_MODE,
-				SC132GS_REG_VALUE_08BIT, SC132GS_MODE_SW_STANDBY);
 		break;
 	default:
 		ret = -ENOIOCTLCMD;
@@ -534,7 +520,6 @@ static long sc132gs_compat_ioctl32(struct v4l2_subdev *sd,
 	void __user *up = compat_ptr(arg);
 	struct rkmodule_inf *inf;
 	long ret;
-	u32 stream = 0;
 
 	switch (cmd) {
 	case RKMODULE_GET_MODULE_INFO:
@@ -548,11 +533,6 @@ static long sc132gs_compat_ioctl32(struct v4l2_subdev *sd,
 		if (!ret)
 			ret = copy_to_user(up, inf, sizeof(*inf));
 		kfree(inf);
-		break;
-	case RKMODULE_SET_QUICK_STREAM:
-		ret = copy_from_user(&stream, up, sizeof(u32));
-		if (!ret)
-			ret = sc132gs_ioctl(sd, cmd, &stream);
 		break;
 	default:
 		ret = -ENOIOCTLCMD;
@@ -850,20 +830,6 @@ static int sc132gs_enum_frame_interval(struct v4l2_subdev *sd,
 	return 0;
 }
 
-static int sc132gs_g_mbus_config(struct v4l2_subdev *sd,
-				struct v4l2_mbus_config *config)
-{
-	u32 val = 0;
-
-	val = 1 << (SC132GS_LANES - 1) |
-	      V4L2_MBUS_CSI2_CHANNEL_0 |
-	      V4L2_MBUS_CSI2_CONTINUOUS_CLOCK;
-	config->type = V4L2_MBUS_CSI2;
-	config->flags = val;
-
-	return 0;
-}
-
 static const struct dev_pm_ops sc132gs_pm_ops = {
 	SET_RUNTIME_PM_OPS(sc132gs_runtime_suspend,
 			   sc132gs_runtime_resume, NULL)
@@ -886,7 +852,6 @@ static const struct v4l2_subdev_core_ops sc132gs_core_ops = {
 static const struct v4l2_subdev_video_ops sc132gs_video_ops = {
 	.s_stream = sc132gs_s_stream,
 	.g_frame_interval = sc132gs_g_frame_interval,
-	.g_mbus_config = sc132gs_g_mbus_config,
 };
 
 static const struct v4l2_subdev_pad_ops sc132gs_pad_ops = {
@@ -923,7 +888,7 @@ static int sc132gs_set_ctrl(struct v4l2_ctrl *ctrl)
 		break;
 	}
 
-	if (!pm_runtime_get_if_in_use(&client->dev))
+	if (pm_runtime_get(&client->dev) <= 0)
 		return 0;
 
 	switch (ctrl->id) {
@@ -1139,13 +1104,12 @@ static int sc132gs_probe(struct i2c_client *client,
 
 #ifdef CONFIG_VIDEO_V4L2_SUBDEV_API
 	sd->internal_ops = &sc132gs_internal_ops;
-	sd->flags |= V4L2_SUBDEV_FL_HAS_DEVNODE |
-		     V4L2_SUBDEV_FL_HAS_EVENTS;
+	sd->flags |= V4L2_SUBDEV_FL_HAS_DEVNODE;
 #endif
 #if defined(CONFIG_MEDIA_CONTROLLER)
 	sc132gs->pad.flags = MEDIA_PAD_FL_SOURCE;
-	sd->entity.function = MEDIA_ENT_F_CAM_SENSOR;
-	ret = media_entity_pads_init(&sd->entity, 1, &sc132gs->pad);
+	sd->entity.type = MEDIA_ENT_T_V4L2_SUBDEV_SENSOR;
+	ret = media_entity_init(&sd->entity, 1, &sc132gs->pad, 0);
 	if (ret < 0)
 		goto err_power_off;
 #endif

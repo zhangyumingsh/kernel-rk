@@ -19,7 +19,7 @@
 #include <linux/irq.h>
 #include <linux/miscdevice.h>
 #include <linux/gpio.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/atomic.h>
 #include <linux/delay.h>
 #include <linux/input.h>
@@ -260,37 +260,26 @@ struct sensor_operate gsensor_mpu6880_ops = {
 };
 
 /****************operate according to sensor chip:end************/
-static int gsensor_mpu6880_probe(struct i2c_client *client,
-				const struct i2c_device_id *devid)
+static struct sensor_operate *gsensor_get_ops(void)
 {
-	return sensor_register_device(client, NULL, devid, &gsensor_mpu6880_ops);
+	return &gsensor_mpu6880_ops;
 }
 
-static int gsensor_mpu6880_remove(struct i2c_client *client)
+static int __init gsensor_mpu6880_init(void)
 {
-	return sensor_unregister_device(client, NULL, &gsensor_mpu6880_ops);
+	struct sensor_operate *ops = gsensor_get_ops();
+	int type = ops->type;
+
+	return sensor_register_slave(type, NULL, NULL, gsensor_get_ops);
 }
 
-static const struct i2c_device_id gsensor_mpu6880_id[] = {
-	{"mpu6880_acc", ACCEL_ID_MPU6880},
-	{}
-};
+static void __exit gsensor_mpu6880_exit(void)
+{
+	struct sensor_operate *ops = gsensor_get_ops();
+	int type = ops->type;
 
-static struct i2c_driver gsensor_mpu6880_driver = {
-	.probe = gsensor_mpu6880_probe,
-	.remove = gsensor_mpu6880_remove,
-	.shutdown = sensor_shutdown,
-	.id_table = gsensor_mpu6880_id,
-	.driver = {
-		.name = "gsensor_mpu6880",
-	#ifdef CONFIG_PM
-		.pm = &sensor_pm_ops,
-	#endif
-	},
-};
+	sensor_unregister_slave(type, NULL, NULL, gsensor_get_ops);
+}
 
-module_i2c_driver(gsensor_mpu6880_driver);
-
-MODULE_AUTHOR("oeh <oeh@rock-chips.com>");
-MODULE_DESCRIPTION("mpu6880 3-Axis accelerometer driver");
-MODULE_LICENSE("GPL");
+module_init(gsensor_mpu6880_init);
+module_exit(gsensor_mpu6880_exit);

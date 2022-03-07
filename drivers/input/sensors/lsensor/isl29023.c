@@ -19,7 +19,7 @@
 #include <linux/irq.h>
 #include <linux/miscdevice.h>
 #include <linux/gpio.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/atomic.h>
 #include <linux/delay.h>
 #include <linux/input.h>
@@ -237,37 +237,32 @@ struct sensor_operate light_isl29023_ops = {
 };
 
 /****************operate according to sensor chip:end************/
-static int light_isl29023_probe(struct i2c_client *client,
-				const struct i2c_device_id *devid)
+
+//function name should not be changed
+static struct sensor_operate *light_get_ops(void)
 {
-	return sensor_register_device(client, NULL, devid, &light_isl29023_ops);
+	return &light_isl29023_ops;
 }
 
-static int light_isl29023_remove(struct i2c_client *client)
+
+static int __init light_isl29023_init(void)
 {
-	return sensor_unregister_device(client, NULL, &light_isl29023_ops);
+	struct sensor_operate *ops = light_get_ops();
+	int result = 0;
+	int type = ops->type;
+	result = sensor_register_slave(type, NULL, NULL, light_get_ops);
+	return result;
 }
 
-static const struct i2c_device_id light_isl29023_id[] = {
-	{"ls_isl29023", LIGHT_ID_ISL29023},
-	{}
-};
+static void __exit light_isl29023_exit(void)
+{
+	struct sensor_operate *ops = light_get_ops();
+	int type = ops->type;
+	sensor_unregister_slave(type, NULL, NULL, light_get_ops);
+}
 
-static struct i2c_driver light_isl29023_driver = {
-	.probe = light_isl29023_probe,
-	.remove = light_isl29023_remove,
-	.shutdown = sensor_shutdown,
-	.id_table = light_isl29023_id,
-	.driver = {
-		.name = "light_isl29023",
-	#ifdef CONFIG_PM
-		.pm = &sensor_pm_ops,
-	#endif
-	},
-};
 
-module_i2c_driver(light_isl29023_driver);
+module_init(light_isl29023_init);
+module_exit(light_isl29023_exit);
 
-MODULE_AUTHOR("luowei <lw@rock-chips.com>");
-MODULE_DESCRIPTION("isl29023 light driver");
-MODULE_LICENSE("GPL");
+

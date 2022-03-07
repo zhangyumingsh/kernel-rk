@@ -20,12 +20,8 @@ DHDCFLAGS += -Wall -Wstrict-prototypes -Dlinux -DLINUX -DBCMDRIVER            \
 	-DWIFI_ACT_FRAME -DARP_OFFLOAD_SUPPORT                                \
 	-DKEEP_ALIVE -DCSCAN -DPKT_FILTER_SUPPORT                             \
 	-DEMBEDDED_PLATFORM -DPNO_SUPPORT                                     \
-	-DCUSTOMER_HW2
-#	-DCUSTOMER_HW2 -DENABLE_INSMOD_NO_FW_LOAD -DGET_OTP_MAC_ENABLE
-
-#ifeq ($(CONFIG_SDIO_CIS_CYW43438)$(CONFIG_SDIO_CIS_CYW43012),)
-#DHDCFLAGS += -DDHD_DONOT_FORWARD_BCMEVENT_AS_NETWORK_PKT
-#endif
+	-DDHD_DONOT_FORWARD_BCMEVENT_AS_NETWORK_PKT                           \
+	-DCUSTOMER_HW2 -DSDTEST -DENABLE_INSMOD_NO_FW_LOAD
 
 #################
 # Common feature
@@ -72,9 +68,10 @@ DHDCFLAGS += -DSUPPORT_PM2_ONLY
 # For special PNO Event keep wake lock for 10sec
 DHDCFLAGS += -DCUSTOM_PNO_EVENT_LOCK_xTIME=10
 DHDCFLAGS += -DMIRACAST_AMPDU_SIZE=8
-
+#Vendor Extension
+DHDCFLAGS += -DWL_VENDOR_EXT_SUPPORT
 #Gscan
-DHDCFLAGS += -DGSCAN_SUPPORT
+# DHDCFLAGS += -DGSCAN_SUPPORT
 #RTT
 DHDCFLAGS += -DRTT_SUPPORT -DRTT_DEBUG
 
@@ -107,7 +104,7 @@ DHDCFLAGS += -DWAIT_DEQUEUE
 DHDCFLAGS += -DDHD_USE_IDLECOUNT
 
 # SKB TAILPAD to avoid out of boundary memory access
-DHDCFLAGS += -DDHDENABLE_TAILPAD
+#DHDCFLAGS += -DDHDENABLE_TAILPAD
 
 # Wi-Fi Direct
 DHDCFLAGS += -DWL_CFG80211_VSDB_PRIORITIZE_SCAN_REQUEST
@@ -149,14 +146,11 @@ DHDCFLAGS += -DCUSTOM_COUNTRY_CODE
 ### Platform dependent START
 DHD_PLATFORM ?= rockchip
 
-#Rochip Platform
 ifeq ($(DHD_PLATFORM), rockchip)
   CONFIG_BCMDHD_SDIO = y
   CONFIG_BCMDHD_OOB = y
-  CONFIG_PLAT_ROCKCHIP = y
-
-  ## We only add here for the flags in our rockchip code
   DHDCFLAGS += -DANDROID_SDIO_RESET
+  ## We only add here for the flags in our rockchip code
   DHDCFLAGS += -DCUSTOM_SDIO_F2_BLKSIZE=256
   DHDCFLAGS += -DDHD_OF_SUPPORT 
   DHDCFLAGS += -DCONFIG_PLAT_ROCKCHIP
@@ -168,9 +162,6 @@ endif
 else
 DHDCFLAGS += -DSDIO_ISR_THREAD
 endif
-  DHDCFLAGS += -DHOST_FLAG
-  DHDCFLAGS += -DLOAD_DHD_WITH_FW_ALIVE
-  FW_ALIVE = 1
 endif
 
 ifeq ($(DHD_PLATFORM), ingenic)
@@ -330,8 +321,9 @@ ifneq ($(CONFIG_BCMDHD_USB),)
   DHDOFILES += dhd_cdc.o dhd_wlfc.o
 endif
 
-ifneq ($(CONFIG_PLAT_ROCKCHIP),)
-  DHDOFILES += dhd_gpio.o
+ifeq ($(DHD_PLATFORM), rockchip)
+DHDOFILES += dhd_gpio.o
+DHDOFILES += rkversion.o
 endif
 
 cywdhd-objs := $(DHDOFILES)

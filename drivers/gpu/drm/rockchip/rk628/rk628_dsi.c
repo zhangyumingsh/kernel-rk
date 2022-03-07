@@ -871,6 +871,12 @@ static struct drm_connector_helper_funcs rk628_dsi_connector_helper_funcs = {
 	.best_encoder = rk628_dsi_connector_best_encoder,
 };
 
+static enum drm_connector_status
+rk628_dsi_connector_detect(struct drm_connector *connector, bool force)
+{
+	return connector_status_connected;
+}
+
 static void rk628_dsi_drm_connector_destroy(struct drm_connector *connector)
 {
 	drm_connector_unregister(connector);
@@ -878,6 +884,8 @@ static void rk628_dsi_drm_connector_destroy(struct drm_connector *connector)
 }
 
 static const struct drm_connector_funcs rk628_dsi_connector_funcs = {
+	.dpms = drm_atomic_helper_connector_dpms,
+	.detect = rk628_dsi_connector_detect,
 	.fill_modes = drm_helper_probe_single_connector_modes,
 	.destroy = rk628_dsi_drm_connector_destroy,
 	.reset = drm_atomic_helper_connector_reset,
@@ -1165,12 +1173,15 @@ static void rk628_dsi_bridge_mode_set(struct drm_bridge *bridge,
 static int rk628_dsi_bridge_attach(struct drm_bridge *bridge)
 {
 	struct rk628_dsi *dsi = bridge_to_dsi(bridge);
+	struct device *dev = dsi->dev;
 	struct drm_connector *connector = &dsi->connector;
 	struct drm_device *drm = bridge->dev;
 	int ret;
 
 	if (!dsi->panel)
 		return -EPROBE_DEFER;
+
+	connector->port = dev->of_node;
 
 	ret = drm_connector_init(drm, connector, &rk628_dsi_connector_funcs,
 				 DRM_MODE_CONNECTOR_DSI);
@@ -1180,13 +1191,8 @@ static int rk628_dsi_bridge_attach(struct drm_bridge *bridge)
 	}
 
 	drm_connector_helper_add(connector, &rk628_dsi_connector_helper_funcs);
-	drm_connector_attach_encoder(connector, bridge->encoder);
-
-	ret = drm_panel_attach(dsi->panel, connector);
-	if (ret) {
-		dev_err(dsi->dev, "Failed to attach panel\n");
-		return ret;
-	}
+	drm_mode_connector_attach_encoder(connector, bridge->encoder);
+	drm_panel_attach(dsi->panel, connector);
 
 	return 0;
 }
@@ -1339,7 +1345,11 @@ static int rk628_dsi_probe(struct platform_device *pdev)
 
 	dsi->base.funcs = &rk628_dsi_bridge_funcs;
 	dsi->base.of_node = dev->of_node;
-	drm_bridge_add(&dsi->base);
+	ret = drm_bridge_add(&dsi->base);
+	if (ret) {
+		dev_err(dev, "failed to add drm_bridge: %d\n", ret);
+		return ret;
+	}
 
 	dsi->host.ops = &rk628_dsi_host_ops;
 	dsi->host.dev = dev;

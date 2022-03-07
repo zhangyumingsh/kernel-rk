@@ -242,37 +242,29 @@ struct sensor_operate gsensor_lsm330_ops = {
 	.report			= sensor_report_value,
 };
 
-static int gsensor_lsm330_probe(struct i2c_client *client,
-				const struct i2c_device_id *devid)
+static struct sensor_operate *gsensor_get_ops(void)
 {
-	return sensor_register_device(client, NULL, devid, &gsensor_lsm330_ops);
+	return &gsensor_lsm330_ops;
 }
 
-static int gsensor_lsm330_remove(struct i2c_client *client)
+static int __init gsensor_lsm330_init(void)
 {
-	return sensor_unregister_device(client, NULL, &gsensor_lsm330_ops);
+	struct sensor_operate *ops = gsensor_get_ops();
+	int result = 0;
+	int type = ops->type;
+
+	result = sensor_register_slave(type, NULL, NULL, gsensor_get_ops);
+
+	return result;
 }
 
-static const struct i2c_device_id gsensor_lsm330_id[] = {
-	{"lsm330_acc", ACCEL_ID_LSM330},
-	{}
-};
+static void __exit gsensor_lsm330_exit(void)
+{
+	struct sensor_operate *ops = gsensor_get_ops();
+	int type = ops->type;
 
-static struct i2c_driver gsensor_lsm330_driver = {
-	.probe = gsensor_lsm330_probe,
-	.remove = gsensor_lsm330_remove,
-	.shutdown = sensor_shutdown,
-	.id_table = gsensor_lsm330_id,
-	.driver = {
-		.name = "gsensor_lsm330",
-#ifdef CONFIG_PM
-		.pm = &sensor_pm_ops,
-#endif
-	},
-};
+	sensor_unregister_slave(type, NULL, NULL, gsensor_get_ops);
+}
 
-module_i2c_driver(gsensor_lsm330_driver);
-
-MODULE_AUTHOR("Bin Yang <yangbin@rock-chips.com>");
-MODULE_DESCRIPTION("lsm330_acc 3-Axis accelerometer driver");
-MODULE_LICENSE("GPL");
+module_init(gsensor_lsm330_init);
+module_exit(gsensor_lsm330_exit);

@@ -9,7 +9,7 @@
 	compatible = "rockchip,linux", "rockchip,px30-robot";
 
 	chosen {
-		bootargs = "console=ttyFIQ0 root=PARTUUID=614e0000-0000 rootwait";
+		bootargs = "swiotlb=1 console=ttyFIQ0 root=PARTUUID=614e0000-0000 rootwait";
 	};
 
 	fiq-debugger {
@@ -25,18 +25,22 @@
 		status = "okay";
 	};
 
+	ramoops {
+		compatible = "ramoops";
+		record-size = <0x0 0x20000>;
+		console-size = <0x0 0x80000>;
+		ftrace-size = <0x0 0x00000>;
+		pmsg-size = <0x0 0x00000>;
+		memory-region = <&ramoops_mem>;
+	};
+
 	reserved-memory {
 		#address-cells = <2>;
 		#size-cells = <2>;
 		ranges;
 
-		ramoops: ramoops@8000000 {
-			compatible = "ramoops";
+		ramoops_mem: ramoops@00000000 {
 			reg = <0x0 0x8000000 0x0 0xa0000>;
-			record-size = <0x20000>;
-			console-size = <0x80000>;
-			ftrace-size = <0x00000>;
-			pmsg-size = <0x00000>;
 		};
 	};
 };

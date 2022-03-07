@@ -226,37 +226,29 @@ struct sensor_operate gyro_lsm330_ops = {
 	.report			= sensor_report_value,
 };
 
-static int gyro_lsm330_probe(struct i2c_client *client,
-			     const struct i2c_device_id *devid)
+static struct sensor_operate *gyro_get_ops(void)
 {
-	return sensor_register_device(client, NULL, devid, &gyro_lsm330_ops);
+	return &gyro_lsm330_ops;
 }
 
-static int gyro_lsm330_remove(struct i2c_client *client)
+static int __init gyro_lsm330_init(void)
 {
-	return sensor_unregister_device(client, NULL, &gyro_lsm330_ops);
+	struct sensor_operate *ops = gyro_get_ops();
+	int result = 0;
+	int type = ops->type;
+
+	result = sensor_register_slave(type, NULL, NULL, gyro_get_ops);
+
+	return result;
 }
 
-static const struct i2c_device_id gyro_lsm330_id[] = {
-	{"lsm330_gyro", GYRO_ID_LSM330},
-	{}
-};
+static void __exit gyro_lsm330_exit(void)
+{
+	struct sensor_operate *ops = gyro_get_ops();
+	int type = ops->type;
 
-static struct i2c_driver gyro_lsm330_driver = {
-	.probe = gyro_lsm330_probe,
-	.remove = gyro_lsm330_remove,
-	.shutdown = sensor_shutdown,
-	.id_table = gyro_lsm330_id,
-	.driver = {
-		.name = "gyro_lsm330",
-	#ifdef CONFIG_PM
-		.pm = &sensor_pm_ops,
-	#endif
-	},
-};
+	sensor_unregister_slave(type, NULL, NULL, gyro_get_ops);
+}
 
-module_i2c_driver(gyro_lsm330_driver);
-
-MODULE_AUTHOR("Bin Yang <yangbin@rock-chips.com>");
-MODULE_DESCRIPTION("lsm330 3-Axis Gyroscope driver");
-MODULE_LICENSE("GPL");
+module_init(gyro_lsm330_init);
+module_exit(gyro_lsm330_exit);

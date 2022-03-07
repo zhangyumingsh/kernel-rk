@@ -1,9 +1,13 @@
-// SPDX-License-Identifier: GPL-2.0+
 /*
  *	uvc_gadget.c  --  USB Video Class Gadget driver
  *
  *	Copyright (C) 2009-2010
  *	    Laurent Pinchart (laurent.pinchart@ideasonboard.com)
+ *
+ *	This program is free software; you can redistribute it and/or modify
+ *	it under the terms of the GNU General Public License as published by
+ *	the Free Software Foundation; either version 2 of the License, or
+ *	(at your option) any later version.
  */
 
 #include <linux/device.h>
@@ -263,11 +267,6 @@ static const struct usb_descriptor_header * const uvc_ss_bulk_streaming[] = {
 	(struct usb_descriptor_header *)&uvc_ss_bulk_streaming_comp,
 	NULL,
 };
-void uvc_set_trace_param(unsigned int trace)
-{
-	uvc_gadget_trace_param = trace;
-}
-EXPORT_SYMBOL(uvc_set_trace_param);
 
 /* --------------------------------------------------------------------------
  * Control requests
@@ -279,10 +278,6 @@ uvc_function_ep0_complete(struct usb_ep *ep, struct usb_request *req)
 	struct uvc_device *uvc = req->context;
 	struct v4l2_event v4l2_event;
 	struct uvc_event *uvc_event = (void *)&v4l2_event.u.data;
-
-	uvc_trace(UVC_TRACE_CONTROL,
-		  "event_setup_out %d, data len %d\n",
-		  uvc->event_setup_out, req->actual);
 
 	if (uvc->event_setup_out) {
 		uvc->event_setup_out = 0;
@@ -302,18 +297,8 @@ uvc_function_setup(struct usb_function *f, const struct usb_ctrlrequest *ctrl)
 	struct v4l2_event v4l2_event;
 	struct uvc_event *uvc_event = (void *)&v4l2_event.u.data;
 
-	/* printk(KERN_INFO "setup request %02x %02x value %04x index %04x %04x\n",
-	 *	ctrl->bRequestType, ctrl->bRequest, le16_to_cpu(ctrl->wValue),
-	 *	le16_to_cpu(ctrl->wIndex), le16_to_cpu(ctrl->wLength));
-	 */
-
-	uvc_trace(UVC_TRACE_CONTROL,
-		  "setup request %02x %02x value %04x index %04x %04x\n",
-		  ctrl->bRequestType, ctrl->bRequest, le16_to_cpu(ctrl->wValue),
-		  le16_to_cpu(ctrl->wIndex), le16_to_cpu(ctrl->wLength));
-
 	if ((ctrl->bRequestType & USB_TYPE_MASK) != USB_TYPE_CLASS) {
-		INFO(f->config->cdev, "invalid request type\n");
+		uvcg_info(f, "invalid request type\n");
 		return -EINVAL;
 	}
 
@@ -348,7 +333,7 @@ uvc_function_get_alt(struct usb_function *f, unsigned interface)
 	struct uvc_device *uvc = to_uvc(f);
 	struct f_uvc_opts *opts;
 
-	INFO(f->config->cdev, "uvc_function_get_alt(%u)\n", interface);
+	uvcg_info(f, "%s(%u)\n", __func__, interface);
 
 	opts = fi_to_f_uvc_opts(f->fi);
 
@@ -379,7 +364,7 @@ uvc_function_set_alt(struct usb_function *f, unsigned interface, unsigned alt)
 	struct f_uvc_opts *opts;
 	int ret;
 
-	INFO(cdev, "uvc_function_set_alt(%u, %u)\n", interface, alt);
+	uvcg_info(f, "%s(%u, %u)\n", __func__, interface, alt);
 
 	opts = fi_to_f_uvc_opts(f->fi);
 
@@ -387,7 +372,7 @@ uvc_function_set_alt(struct usb_function *f, unsigned interface, unsigned alt)
 		if (alt)
 			return -EINVAL;
 
-		INFO(cdev, "reset UVC Control\n");
+		uvcg_info(f, "reset UVC Control\n");
 		usb_ep_disable(uvc->control_ep);
 
 		if (!uvc->control_ep->desc)
@@ -395,14 +380,6 @@ uvc_function_set_alt(struct usb_function *f, unsigned interface, unsigned alt)
 				return -EINVAL;
 
 		usb_ep_enable(uvc->control_ep);
-
-		if (uvc->event_suspend) {
-			memset(&v4l2_event, 0, sizeof(v4l2_event));
-			v4l2_event.type = UVC_EVENT_RESUME;
-			v4l2_event_queue(&uvc->vdev, &v4l2_event);
-			uvc->event_suspend = 0;
-			uvc_trace(UVC_TRACE_SUSPEND, "send UVC_EVENT_RESUME\n");
-		}
 
 		if (uvc->state == UVC_STATE_DISCONNECTED) {
 			memset(&v4l2_event, 0, sizeof(v4l2_event));
@@ -442,7 +419,7 @@ uvc_function_set_alt(struct usb_function *f, unsigned interface, unsigned alt)
 			if (!uvc->video.ep)
 				return -EINVAL;
 
-			INFO(cdev, "reset UVC\n");
+			uvcg_info(f, "reset UVC\n");
 			usb_ep_disable(uvc->video.ep);
 
 			ret = config_ep_by_speed(f->config->cdev->gadget,
@@ -487,7 +464,7 @@ uvc_function_set_alt(struct usb_function *f, unsigned interface, unsigned alt)
 
 		case UVC_STATE_STREAMING:
 			if (!alt) {
-				INFO(cdev, "bulk streaming intf not support alt 0\n");
+				uvcg_info(f, "bulk streaming intf not support alt 0\n");
 				return 0;
 			}
 
@@ -516,7 +493,7 @@ uvc_function_disable(struct usb_function *f)
 	struct uvc_device *uvc = to_uvc(f);
 	struct v4l2_event v4l2_event;
 
-	INFO(f->config->cdev, "uvc_function_disable\n");
+	uvcg_info(f, "%s()\n", __func__);
 
 	memset(&v4l2_event, 0, sizeof(v4l2_event));
 	v4l2_event.type = UVC_EVENT_DISCONNECT;
@@ -527,30 +504,6 @@ uvc_function_disable(struct usb_function *f)
 
 	usb_ep_disable(uvc->video.ep);
 	usb_ep_disable(uvc->control_ep);
-}
-
-static void uvc_function_suspend(struct usb_function *f)
-{
-	struct uvc_device *uvc = to_uvc(f);
-	struct v4l2_event v4l2_event;
-
-	memset(&v4l2_event, 0, sizeof(v4l2_event));
-	v4l2_event.type = UVC_EVENT_SUSPEND;
-	v4l2_event_queue(&uvc->vdev, &v4l2_event);
-	uvc->event_suspend = 1;
-	uvc_trace(UVC_TRACE_SUSPEND, "send UVC_EVENT_SUSPEND\n");
-}
-
-static void uvc_function_resume(struct usb_function *f)
-{
-	struct uvc_device *uvc = to_uvc(f);
-	struct v4l2_event v4l2_event;
-
-	memset(&v4l2_event, 0, sizeof(v4l2_event));
-	v4l2_event.type = UVC_EVENT_RESUME;
-	v4l2_event_queue(&uvc->vdev, &v4l2_event);
-	uvc->event_suspend = 0;
-	uvc_trace(UVC_TRACE_SUSPEND, "send UVC_EVENT_RESUME\n");
 }
 
 /* --------------------------------------------------------------------------
@@ -566,17 +519,16 @@ uvc_function_connect(struct uvc_device *uvc)
 	cdev->gadget->uvc_enabled = true;
 
 	if ((ret = usb_function_activate(&uvc->func)) < 0)
-		INFO(cdev, "UVC connect failed with %d\n", ret);
+		uvcg_info(&uvc->func, "UVC connect failed with %d\n", ret);
 }
 
 void
 uvc_function_disconnect(struct uvc_device *uvc)
 {
-	struct usb_composite_dev *cdev = uvc->func.config->cdev;
 	int ret;
 
 	if ((ret = usb_function_deactivate(&uvc->func)) < 0)
-		INFO(cdev, "UVC disconnect failed with %d\n", ret);
+		uvcg_info(&uvc->func, "UVC disconnect failed with %d\n", ret);
 }
 
 /* --------------------------------------------------------------------------
@@ -606,6 +558,7 @@ uvc_register_video(struct uvc_device *uvc)
 	uvc->vdev.release = video_device_release_empty;
 	uvc->vdev.vfl_dir = VFL_DIR_TX;
 	uvc->vdev.lock = &uvc->video.mutex;
+	uvc->vdev.device_caps = V4L2_CAP_VIDEO_OUTPUT | V4L2_CAP_STREAMING;
 	strlcpy(uvc->vdev.name, cdev->gadget->name, sizeof(uvc->vdev.name));
 
 	video_set_drvdata(&uvc->vdev, uvc);
@@ -794,7 +747,7 @@ uvc_function_bind(struct usb_configuration *c, struct usb_function *f)
 	int ret = -EINVAL;
 	u8 address;
 
-	INFO(cdev, "uvc_function_bind\n");
+	uvcg_info(f, "%s()\n", __func__);
 
 	opts = fi_to_f_uvc_opts(f->fi);
 	/* Sanity check the streaming endpoint module parameters.
@@ -815,8 +768,8 @@ uvc_function_bind(struct usb_configuration *c, struct usb_function *f)
 	if (opts->streaming_maxburst &&
 	    (opts->streaming_maxpacket % 1024) != 0) {
 		opts->streaming_maxpacket = roundup(opts->streaming_maxpacket, 1024);
-		INFO(cdev, "overriding streaming_maxpacket to %d\n",
-		     opts->streaming_maxpacket);
+		uvcg_info(f, "overriding streaming_maxpacket to %d\n",
+			  opts->streaming_maxpacket);
 	}
 
 	/* Fill in the FS/HS/SS Video Streaming specific descriptors from the
@@ -844,12 +797,7 @@ uvc_function_bind(struct usb_configuration *c, struct usb_function *f)
 		uvc_hs_streaming_ep.wMaxPacketSize =
 			cpu_to_le16(max_packet_size |
 				    ((max_packet_mult - 1) << 11));
-
-		/* A high-bandwidth endpoint must specify a bInterval value of 1 */
-		if (max_packet_mult > 1)
-			uvc_hs_streaming_ep.bInterval = 1;
-		else
-			uvc_hs_streaming_ep.bInterval = opts->streaming_interval;
+		uvc_hs_streaming_ep.bInterval = opts->streaming_interval;
 
 		uvc_ss_streaming_ep.wMaxPacketSize =
 			cpu_to_le16(max_packet_size);
@@ -880,7 +828,7 @@ uvc_function_bind(struct usb_configuration *c, struct usb_function *f)
 	/* Allocate endpoints. */
 	ep = usb_ep_autoconfig(cdev->gadget, &uvc_control_ep);
 	if (!ep) {
-		INFO(cdev, "Unable to allocate control EP\n");
+		uvcg_info(f, "Unable to allocate control EP\n");
 		goto error;
 	}
 	uvc->control_ep = ep;
@@ -921,7 +869,7 @@ uvc_function_bind(struct usb_configuration *c, struct usb_function *f)
 	}
 
 	if (!ep) {
-		INFO(cdev, "Unable to allocate streaming EP\n");
+		uvcg_info(f, "Unable to allocate streaming EP\n");
 		goto error;
 	}
 	uvc->video.ep = ep;
@@ -936,9 +884,6 @@ uvc_function_bind(struct usb_configuration *c, struct usb_function *f)
 		uvc_hs_bulk_streaming_ep.bEndpointAddress = address;
 		uvc_ss_bulk_streaming_ep.bEndpointAddress = address;
 	}
-
-	if (opts->device_name)
-		uvc_en_us_strings[UVC_STRING_CONTROL_IDX].s = opts->device_name;
 
 	us = usb_gstrings_attach(cdev, uvc_function_strings,
 				 ARRAY_SIZE(uvc_en_us_strings));
@@ -1014,12 +959,12 @@ uvc_function_bind(struct usb_configuration *c, struct usb_function *f)
 	uvc->control_req->context = uvc;
 
 	if (v4l2_device_register(&cdev->gadget->dev, &uvc->v4l2_dev)) {
-		printk(KERN_INFO "v4l2_device_register failed\n");
+		uvcg_err(f, "failed to register V4L2 device\n");
 		goto error;
 	}
 
 	/* Initialise video. */
-	ret = uvcg_video_init(&uvc->video);
+	ret = uvcg_video_init(&uvc->video, uvc);
 	if (ret < 0)
 		goto error;
 
@@ -1028,7 +973,7 @@ uvc_function_bind(struct usb_configuration *c, struct usb_function *f)
 	/* Register a V4L2 device. */
 	ret = uvc_register_video(uvc);
 	if (ret < 0) {
-		printk(KERN_INFO "Unable to register video device\n");
+		uvcg_err(f, "failed to register video device\n");
 		goto error;
 	}
 
@@ -1054,13 +999,6 @@ static void uvc_free_inst(struct usb_function_instance *f)
 	struct f_uvc_opts *opts = fi_to_f_uvc_opts(f);
 
 	mutex_destroy(&opts->lock);
-
-	if (opts->device_name_allocated) {
-		opts->device_name_allocated = false;
-		kfree(opts->device_name);
-		opts->device_name = NULL;
-	}
-
 	kfree(opts);
 }
 
@@ -1179,7 +1117,6 @@ static struct usb_function_instance *uvc_alloc_inst(void)
 
 	opts->streaming_interval = 1;
 	opts->streaming_maxpacket = 1024;
-	opts->uvc_num_request = UVC_NUM_REQUESTS;
 	opts->pm_qos_latency = 0;
 
 	ret = uvcg_attach_configfs(opts);
@@ -1205,7 +1142,7 @@ static void uvc_unbind(struct usb_configuration *c, struct usb_function *f)
 	struct usb_composite_dev *cdev = c->cdev;
 	struct uvc_device *uvc = to_uvc(f);
 
-	INFO(cdev, "%s\n", __func__);
+	uvcg_info(f, "%s\n", __func__);
 
 	device_remove_file(&uvc->vdev.dev, &dev_attr_function_name);
 	video_unregister_device(&uvc->vdev);
@@ -1265,8 +1202,6 @@ static struct usb_function *uvc_alloc(struct usb_function_instance *fi)
 	uvc->func.disable = uvc_function_disable;
 	uvc->func.setup = uvc_function_setup;
 	uvc->func.free_func = uvc_free;
-	uvc->func.suspend = uvc_function_suspend;
-	uvc->func.resume = uvc_function_resume;
 	uvc->func.bind_deactivated = true;
 
 	return &uvc->func;

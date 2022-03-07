@@ -13,6 +13,11 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
  * General Public License for more details.
  *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307
+ * USA.
+ *
  * Inspired by the original lirc_it87 and lirc_ite8709 drivers, on top of the
  * skeleton provided by the nuvoton-cir driver.
  *
@@ -173,7 +178,7 @@ static void ite_decode_bytes(struct ite_dev *dev, const u8 * data, int
 	u32 sample_period;
 	unsigned long *ldata;
 	unsigned int next_one, next_zero, size;
-	DEFINE_IR_RAW_EVENT(ev);
+	struct ir_raw_event ev = {};
 
 	if (length == 0)
 		return;
@@ -285,14 +290,8 @@ static irqreturn_t ite_cir_isr(int irq, void *data)
 	/* read the interrupt flags */
 	iflags = dev->params.get_irq_causes(dev);
 
-	/* Check for RX overflow */
-	if (iflags & ITE_IRQ_RX_FIFO_OVERRUN) {
-		dev_warn(&dev->rdev->dev, "receive overflow\n");
-		ir_raw_event_reset(dev->rdev);
-	}
-
 	/* check for the receive interrupt */
-	if (iflags & ITE_IRQ_RX_FIFO) {
+	if (iflags & (ITE_IRQ_RX_FIFO | ITE_IRQ_RX_FIFO_OVERRUN)) {
 		/* read the FIFO bytes */
 		rx_bytes =
 			dev->params.get_rx_bytes(dev, rx_buf,
@@ -1513,9 +1512,6 @@ static int ite_probe(struct pnp_dev *pdev, const struct pnp_device_id
 	/* initialize spinlocks */
 	spin_lock_init(&itdev->lock);
 
-	/* initialize raw event */
-	init_ir_raw_event(&itdev->rawir);
-
 	/* set driver data into the pnp device */
 	pnp_set_drvdata(pdev, itdev);
 	itdev->pdev = pdev;
@@ -1567,11 +1563,9 @@ static int ite_probe(struct pnp_dev *pdev, const struct pnp_device_id
 	rdev->close = ite_close;
 	rdev->s_idle = ite_s_idle;
 	rdev->s_rx_carrier_range = ite_set_rx_carrier_range;
-	/* FIFO threshold is 17 bytes, so 17 * 8 samples minimum */
-	rdev->min_timeout = 17 * 8 * ITE_BAUDRATE_DIVISOR *
-			    itdev->params.sample_period;
-	rdev->timeout = IR_DEFAULT_TIMEOUT;
-	rdev->max_timeout = 10 * IR_DEFAULT_TIMEOUT;
+	rdev->min_timeout = ITE_MIN_IDLE_TIMEOUT;
+	rdev->max_timeout = ITE_MAX_IDLE_TIMEOUT;
+	rdev->timeout = ITE_IDLE_TIMEOUT;
 	rdev->rx_resolution = ITE_BAUDRATE_DIVISOR *
 				itdev->params.sample_period;
 	rdev->tx_resolution = ITE_BAUDRATE_DIVISOR *
