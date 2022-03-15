@@ -75,6 +75,14 @@
 			cpu-idle-states = <&CPU_SLEEP>;
 			#cooling-cells = <2>;
 			dynamic-power-coefficient = <187>;
+			power-model {
+				compatible = "simple-power-model";
+				leakage-range= <10 40>;
+				ls = <(-9196) 6360 0>;
+				static-coefficient = <100000>;
+				ts = <83822 206397 (-4300) 71>;
+				thermal-zone = "soc-thermal";
+			};
 		};
 
 		cpu1: cpu@100 {
@@ -266,6 +274,11 @@
 	};
 
 	firmware {
+		optee: optee {
+			compatible = "linaro,optee-tz";
+			method = "smc";
+		};
+
 		scmi: scmi {
 			compatible = "arm,scmi-smc";
 			shmem = <&scmi_shmem>;
@@ -2170,6 +2183,7 @@
 			SYS_STATUS_NORMAL       DMC_FREQ_LEVEL_MID_HIGH
 			SYS_STATUS_REBOOT       DMC_FREQ_LEVEL_HIGH
 			SYS_STATUS_SUSPEND      DMC_FREQ_LEVEL_LOW
+			SYS_STATUS_VIDEO_1080P  DMC_FREQ_LEVEL_MID_LOW
 			SYS_STATUS_VIDEO_4K     DMC_FREQ_LEVEL_MID_HIGH
 			SYS_STATUS_VIDEO_4K_10B DMC_FREQ_LEVEL_MID_HIGH
 			SYS_STATUS_BOOST        DMC_FREQ_LEVEL_HIGH
@@ -2206,12 +2220,17 @@
 		rockchip,low-temp = <0>;
 		rockchip,low-temp-adjust-volt = <
 			/* MHz    MHz    uV */
-			   0      1560   25000
+			   0      1560   75000
 		>;
 		rockchip,leakage-voltage-sel = <
 			1   80    0
 			81  254   1
 		>;
+		rockchip,pvtm-voltage-sel = <
+			0        82000   0
+			82001    100000  1
+		>;
+		rockchip,pvtm-ch = <0 5>;
 
 		opp-1560000000 {
 			opp-hz = /bits/ 64 <1560000000>;
@@ -2219,6 +2238,11 @@
 			opp-microvolt-L0 = <900000>;
 			opp-microvolt-L1 = <850000>;
 		};
+	};
+
+	dmcdbg: dmcdbg {
+		compatible = "rockchip,rk3568-dmcdbg";
+		status = "disabled";
 	};
 
 	pcie2x1: pcie@fe260000 {
