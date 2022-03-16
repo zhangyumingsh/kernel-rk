@@ -70,7 +70,6 @@
 #include <linux/clk.h>
 #include <linux/regulator/consumer.h>
 #include <linux/memory_group_manager.h>
-#include <soc/rockchip/rockchip_opp_select.h>
 
 #include "debug/mali_kbase_debug_ktrace_defs.h"
 
@@ -152,7 +151,7 @@
  * While, the number of clocks could be more than regulators,
  * as mentioned in power_control_init().
  */
-#define BASE_MAX_NR_CLOCKS_REGULATORS (4)
+#define BASE_MAX_NR_CLOCKS_REGULATORS (3)
 
 /* Forward declarations */
 struct kbase_context;
@@ -670,7 +669,6 @@ struct kbase_process {
  * @irqs.flags:            irq flags
  * @clocks:                Pointer to the input clock resources referenced by
  *                         the GPU device node.
- * @scmi_clk:              Pointer to the input scmi clock resources
  * @nr_clocks:             Number of clocks set in the clocks array.
  * @regulators:            Pointer to the structs corresponding to the
  *                         regulators referenced by the GPU device node.
@@ -973,7 +971,6 @@ struct kbase_device {
 	} irqs[3];
 
 	struct clk *clocks[BASE_MAX_NR_CLOCKS_REGULATORS];
-	struct clk *scmi_clk;
 	unsigned int nr_clocks;
 #if IS_ENABLED(CONFIG_REGULATOR)
 	struct regulator *regulators[BASE_MAX_NR_CLOCKS_REGULATORS];
@@ -1061,7 +1058,6 @@ struct kbase_device {
 	struct list_head        kctx_list;
 	struct mutex            kctx_list_lock;
 
-	struct rockchip_opp_info opp_info;
 #ifdef CONFIG_MALI_BIFROST_DEVFREQ
 	struct devfreq_dev_profile devfreq_profile;
 	struct devfreq *devfreq;

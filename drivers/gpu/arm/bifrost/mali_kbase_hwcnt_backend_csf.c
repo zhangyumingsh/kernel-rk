@@ -33,7 +33,7 @@
 #include <linux/completion.h>
 
 #ifndef BASE_MAX_NR_CLOCKS_REGULATORS
-#define BASE_MAX_NR_CLOCKS_REGULATORS 4
+#define BASE_MAX_NR_CLOCKS_REGULATORS 3
 #endif
 
 /* Backend watch dog timer interval in milliseconds: 1 second. */
