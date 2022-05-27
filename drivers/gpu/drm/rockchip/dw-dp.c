@@ -21,6 +21,7 @@
 #include <linux/bitfield.h>
 #include <linux/clk.h>
 #include <linux/component.h>
+#include <linux/extcon-provider.h>
 #include <linux/iopoll.h>
 #include <linux/irq.h>
 #include <linux/of_device.h>
@@ -220,8 +221,17 @@ struct dw_dp_video {
 	u8 bpp;
 };
 
+enum audio_format {
+	AFMT_I2S = 0,
+	AFMT_SPDIF = 1,
+	AFMT_UNUSED,
+};
+
 struct dw_dp_audio {
 	struct platform_device *pdev;
+	hdmi_codec_plugged_cb plugged_cb;
+	struct device *codec_dev;
+	enum audio_format format;
 	u8 channels;
 };
 
@@ -240,8 +250,11 @@ struct dw_dp {
 	struct device *dev;
 	struct regmap *regmap;
 	struct phy *phy;
-	struct clk_bulk_data *clks;
-	int nr_clks;
+	struct clk *apb_clk;
+	struct clk *aux_clk;
+	struct clk *hclk;
+	struct clk *i2s_clk;
+	struct clk *spdif_clk;
 	struct reset_control *rstc;
 	struct regmap *grf;
 	struct completion complete;
@@ -251,6 +264,7 @@ struct dw_dp {
 	struct gpio_desc *hpd_gpio;
 	struct dw_dp_hotplug hotplug;
 	struct mutex irq_lock;
+	struct extcon_dev *extcon;
 
 	struct drm_bridge bridge;
 	struct drm_connector connector;
@@ -266,6 +280,20 @@ struct dw_dp {
 	bool split_mode;
 	struct dw_dp *left;
 	struct dw_dp *right;
+
+	struct drm_property *color_depth_property;
+	struct drm_property *color_format_property;
+	struct drm_property *color_depth_capacity;
+	struct drm_property *color_format_capacity;
+
+	struct rockchip_drm_sub_dev sub_dev;
+};
+
+struct dw_dp_state {
+	struct drm_connector_state state;
+
+	int bpc;
+	int color_format;
 };
 
 enum {
@@ -319,6 +347,11 @@ enum {
 	DPTX_PHY_PATTERN_CP2520_2,
 };
 
+static const unsigned int dw_dp_cable[] = {
+	EXTCON_DISP_DP,
+	EXTCON_NONE,
+};
+
 struct dw_dp_output_format {
 	u32 bus_format;
 	u32 color_format;
@@ -348,6 +381,20 @@ static const struct dw_dp_output_format possible_output_fmts[] = {
 	  DPTX_VM_RGB_6BIT, 6, 18 },
 };
 
+static const struct drm_prop_enum_list color_depth_enum_list[] = {
+	{ 0, "Automatic" },
+	{ 6, "18bit" },
+	{ 8, "24bit" },
+	{ 10, "30bit" },
+};
+
+static const struct drm_prop_enum_list color_format_enum_list[] = {
+	{ RK_IF_FORMAT_RGB, "rgb" },
+	{ RK_IF_FORMAT_YCBCR444, "ycbcr444" },
+	{ RK_IF_FORMAT_YCBCR422, "ycbcr422" },
+	{ RK_IF_FORMAT_YCBCR420, "ycbcr420" },
+};
+
 static const struct dw_dp_output_format *dw_dp_get_output_format(u32 bus_format)
 {
 	unsigned int i;
@@ -372,6 +419,11 @@ static inline struct dw_dp *encoder_to_dp(struct drm_encoder *e)
 static inline struct dw_dp *bridge_to_dp(struct drm_bridge *b)
 {
 	return container_of(b, struct dw_dp, bridge);
+}
+
+static inline struct dw_dp_state *connector_to_dp_state(struct drm_connector_state *cstate)
+{
+	return container_of(cstate, struct dw_dp_state, state);
 }
 
 static int dw_dp_match_by_id(struct device *dev, const void *data)
@@ -457,13 +509,154 @@ dw_dp_connector_detect(struct drm_connector *connector, bool force)
 	return drm_bridge_detect(&dp->bridge);
 }
 
+static void dw_dp_audio_handle_plugged_change(struct dw_dp_audio *audio, bool plugged)
+{
+	if (audio->plugged_cb && audio->codec_dev)
+		audio->plugged_cb(audio->codec_dev, plugged);
+}
+
+static void dw_dp_connector_force(struct drm_connector *connector)
+{
+	struct dw_dp *dp = connector_to_dp(connector);
+
+	if (connector->status == connector_status_connected) {
+		extcon_set_state_sync(dp->extcon, EXTCON_DISP_DP, true);
+		dw_dp_audio_handle_plugged_change(&dp->audio, true);
+	} else {
+		extcon_set_state_sync(dp->extcon, EXTCON_DISP_DP, false);
+		dw_dp_audio_handle_plugged_change(&dp->audio, false);
+	}
+}
+
+static void dw_dp_atomic_connector_reset(struct drm_connector *connector)
+{
+	struct dw_dp_state *dp_state = connector_to_dp_state(connector->state);
+
+	if (connector->state) {
+		__drm_atomic_helper_connector_destroy_state(connector->state);
+		kfree(dp_state);
+	}
+
+	dp_state = kzalloc(sizeof(*dp_state), GFP_KERNEL);
+	if (!dp_state)
+		return;
+
+	__drm_atomic_helper_connector_reset(connector, &dp_state->state);
+	dp_state->bpc = 0;
+	dp_state->color_format = RK_IF_FORMAT_RGB;
+}
+
+static struct drm_connector_state *
+dw_dp_atomic_connector_duplicate_state(struct drm_connector *connector)
+{
+	struct dw_dp_state *cstate, *old_cstate;
+
+	if (WARN_ON(!connector->state))
+		return NULL;
+
+	old_cstate = connector_to_dp_state(connector->state);
+	cstate = kmalloc(sizeof(*cstate), GFP_KERNEL);
+	if (!cstate)
+		return NULL;
+
+	__drm_atomic_helper_connector_duplicate_state(connector, &cstate->state);
+	cstate->bpc = old_cstate->bpc;
+	cstate->color_format = old_cstate->color_format;
+
+	return &cstate->state;
+}
+
+static void dw_dp_atomic_connector_destroy_state(struct drm_connector *connector,
+						 struct drm_connector_state *state)
+{
+	struct dw_dp_state *cstate = connector_to_dp_state(state);
+
+	__drm_atomic_helper_connector_destroy_state(&cstate->state);
+	kfree(cstate);
+}
+
+static int dw_dp_atomic_connector_get_property(struct drm_connector *connector,
+					       const struct drm_connector_state *state,
+					       struct drm_property *property,
+					       uint64_t *val)
+{
+	struct dw_dp *dp = connector_to_dp(connector);
+	struct dw_dp_state *dp_state = connector_to_dp_state((struct drm_connector_state *)state);
+	struct drm_display_info *info = &connector->display_info;
+
+	if (property == dp->color_depth_property) {
+		*val = dp_state->bpc;
+		return 0;
+	} else if (property == dp->color_format_property) {
+		*val = dp_state->color_format;
+		return 0;
+	} else if (property == dp->color_depth_capacity) {
+		*val = BIT(RK_IF_DEPTH_8);
+		switch (info->bpc) {
+		case 16:
+			fallthrough;
+		case 12:
+			fallthrough;
+		case 10:
+			*val |= BIT(RK_IF_DEPTH_10);
+			fallthrough;
+		case 8:
+			*val |= BIT(RK_IF_DEPTH_8);
+			fallthrough;
+		case 6:
+			*val |= BIT(RK_IF_DEPTH_6);
+			fallthrough;
+		default:
+			break;
+		}
+		return 0;
+	} else if (property == dp->color_format_capacity) {
+		*val = info->color_formats;
+		return 0;
+	}
+
+	dev_err(dp->dev, "Unknown property [PROP:%d:%s]\n",
+		  property->base.id, property->name);
+
+	return 0;
+}
+
+static int dw_dp_atomic_connector_set_property(struct drm_connector *connector,
+					       struct drm_connector_state *state,
+					       struct drm_property *property,
+					       uint64_t val)
+{
+	struct dw_dp *dp = connector_to_dp(connector);
+	struct dw_dp_state *dp_state = connector_to_dp_state(state);
+
+	if (property == dp->color_depth_property) {
+		dp_state->bpc = val;
+		return 0;
+	} else if (property == dp->color_format_property) {
+		dp_state->color_format = val;
+		return 0;
+	} else if (property == dp->color_depth_capacity) {
+		return 0;
+	} else if (property == dp->color_format_capacity) {
+		return 0;
+	}
+
+	dev_err(dp->dev, "Unknown property [PROP:%d:%s]\n",
+		 property->base.id, property->name);
+
+	return -EINVAL;
+}
+
 static const struct drm_connector_funcs dw_dp_connector_funcs = {
 	.detect			= dw_dp_connector_detect,
 	.fill_modes		= drm_helper_probe_single_connector_modes,
 	.destroy		= drm_connector_cleanup,
-	.reset			= drm_atomic_helper_connector_reset,
-	.atomic_duplicate_state	= drm_atomic_helper_connector_duplicate_state,
-	.atomic_destroy_state	= drm_atomic_helper_connector_destroy_state,
+	.force			= dw_dp_connector_force,
+	.reset			= dw_dp_atomic_connector_reset,
+	.atomic_duplicate_state	= dw_dp_atomic_connector_duplicate_state,
+	.atomic_destroy_state	= dw_dp_atomic_connector_destroy_state,
+	.atomic_get_property	= dw_dp_atomic_connector_get_property,
+	.atomic_set_property	= dw_dp_atomic_connector_set_property,
 };
 
 static int dw_dp_connector_get_modes(struct drm_connector *connector)
@@ -498,8 +691,50 @@ static int dw_dp_connector_get_modes(struct drm_connector *connector)
 	return num_modes;
 }
 
+static int dw_dp_connector_atomic_check(struct drm_connector *conn,
+					struct drm_atomic_state *state)
+{
+	struct drm_connector_state *old_state, *new_state;
+	struct dw_dp_state *dp_old_state, *dp_new_state;
+	struct drm_crtc_state *crtc_state;
+	struct dw_dp *dp = connector_to_dp(conn);
+
+	old_state = drm_atomic_get_old_connector_state(state, conn);
+	new_state = drm_atomic_get_new_connector_state(state, conn);
+	dp_old_state = connector_to_dp_state(old_state);
+	dp_new_state = connector_to_dp_state(new_state);
+
+	if (!new_state->crtc)
+		return 0;
+
+	crtc_state = drm_atomic_get_new_crtc_state(state, new_state->crtc);
+
+	if ((dp_new_state->bpc != 0) && (dp_new_state->bpc != 6) && (dp_new_state->bpc != 8) &&
+	    (dp_new_state->bpc != 10)) {
+		dev_err(dp->dev, "set invalid bpc:%d\n", dp_new_state->bpc);
+		return -EINVAL;
+	}
+
+	if ((dp_new_state->color_format < RK_IF_FORMAT_RGB) ||
+	    (dp_new_state->color_format > RK_IF_FORMAT_YCBCR420)) {
+		dev_err(dp->dev, "set invalid color format:%d\n", dp_new_state->color_format);
+		return -EINVAL;
+	}
+
+	if ((dp_old_state->bpc != dp_new_state->bpc) ||
+	    (dp_old_state->color_format != dp_new_state->color_format)) {
+		if ((dp_old_state->bpc == 0) && (dp_new_state->bpc == 0))
+			dev_info(dp->dev, "still auto set color mode\n");
+		else
+			crtc_state->mode_changed = true;
+	}
+
+	return 0;
+}
+
 static const struct drm_connector_helper_funcs dw_dp_connector_helper_funcs = {
 	.get_modes = dw_dp_connector_get_modes,
+	.atomic_check = dw_dp_connector_atomic_check,
 };
 
 static void dw_dp_link_caps_reset(struct drm_dp_link_caps *caps)
@@ -1175,13 +1410,15 @@ static int dw_dp_send_vsc_sdp(struct dw_dp *dp)
 		break;
 	}
 
-	if (video->color_format == DRM_COLOR_FORMAT_RGB444)
+	if (video->color_format == DRM_COLOR_FORMAT_RGB444) {
 		vsc.colorimetry = DP_COLORIMETRY_DEFAULT;
-	else
+		vsc.dynamic_range = DP_DYNAMIC_RANGE_VESA;
+	} else {
 		vsc.colorimetry = DP_COLORIMETRY_BT709_YCC;
+		vsc.dynamic_range = DP_DYNAMIC_RANGE_CTA;
+	}
 
 	vsc.bpc = video->bpc;
-	vsc.dynamic_range = DP_DYNAMIC_RANGE_CTA;
 	vsc.content_type = DP_CONTENT_TYPE_NOT_DEFINED;
 
 	dw_dp_vsc_sdp_pack(&vsc, &sdp);
@@ -1485,12 +1722,6 @@ static void dw_dp_hpd_init(struct dw_dp *dp)
 
 static void dw_dp_aux_init(struct dw_dp *dp)
 {
-	regmap_update_bits(dp->regmap, DPTX_SOFT_RESET_CTRL, AUX_RESET,
-			   FIELD_PREP(AUX_RESET, 1));
-	usleep_range(10, 20);
-	regmap_update_bits(dp->regmap, DPTX_SOFT_RESET_CTRL, AUX_RESET,
-			   FIELD_PREP(AUX_RESET, 0));
-
 	regmap_update_bits(dp->regmap, DPTX_GENERAL_INTERRUPT_ENABLE,
 			   AUX_REPLY_EVENT_EN,
 			   FIELD_PREP(AUX_REPLY_EVENT_EN, 1));
@@ -1498,18 +1729,6 @@ static void dw_dp_aux_init(struct dw_dp *dp)
 
 static void dw_dp_init(struct dw_dp *dp)
 {
-	regmap_update_bits(dp->regmap, DPTX_SOFT_RESET_CTRL, CONTROLLER_RESET,
-			   FIELD_PREP(CONTROLLER_RESET, 1));
-	usleep_range(10, 20);
-	regmap_update_bits(dp->regmap, DPTX_SOFT_RESET_CTRL, CONTROLLER_RESET,
-			   FIELD_PREP(CONTROLLER_RESET, 0));
-
-	regmap_update_bits(dp->regmap, DPTX_SOFT_RESET_CTRL, PHY_SOFT_RESET,
-			   FIELD_PREP(PHY_SOFT_RESET, 1));
-	usleep_range(10, 20);
-	regmap_update_bits(dp->regmap, DPTX_SOFT_RESET_CTRL, PHY_SOFT_RESET,
-			   FIELD_PREP(PHY_SOFT_RESET, 0));
-
 	regmap_update_bits(dp->regmap, DPTX_CCTL, DEFAULT_FAST_LINK_TRAIN_EN,
 			   FIELD_PREP(DEFAULT_FAST_LINK_TRAIN_EN, 0));
 
@@ -1710,6 +1929,57 @@ static int dw_dp_bridge_mode_valid(struct drm_bridge *bridge,
 	return MODE_OK;
 }
 
+static void dw_dp_loader_protect(struct drm_encoder *encoder, bool on)
+{
+	struct dw_dp *dp = encoder_to_dp(encoder);
+	struct dw_dp_link *link = &dp->link;
+	struct drm_connector *conn = &dp->connector;
+	struct drm_display_info *di = &conn->display_info;
+
+	u32 value;
+
+	if (on) {
+		di->color_formats = DRM_COLOR_FORMAT_RGB444;
+		di->bpc = 8;
+
+		regmap_read(dp->regmap, DPTX_PHYIF_CTRL, &value);
+		switch (FIELD_GET(PHY_LANES, value)) {
+		case 2:
+			link->lanes = 4;
+			break;
+		case 1:
+			link->lanes = 2;
+			break;
+		case 0:
+			fallthrough;
+		default:
+			link->lanes = 1;
+			break;
+		}
+
+		switch (FIELD_GET(PHY_RATE, value)) {
+		case 3:
+			link->rate = 810000;
+			break;
+		case 2:
+			link->rate = 540000;
+			break;
+		case 1:
+			link->rate = 270000;
+			break;
+		case 0:
+			fallthrough;
+		default:
+			link->rate = 162000;
+			break;
+		}
+
+		phy_power_on(dp->phy);
+	} else {
+		phy_power_off(dp->phy);
+	}
+}
+
 static int dw_dp_bridge_attach(struct drm_bridge *bridge,
 			       enum drm_bridge_attach_flags flags)
 {
@@ -1740,6 +2010,11 @@ static int dw_dp_bridge_attach(struct drm_bridge *bridge,
 				 &dw_dp_connector_helper_funcs);
 
 	drm_connector_attach_encoder(connector, bridge->encoder);
+
+	dp->sub_dev.connector = connector;
+	dp->sub_dev.of_node = dp->dev->of_node;
+	dp->sub_dev.loader_protect = dw_dp_loader_protect;
+	rockchip_drm_register_sub_dev(&dp->sub_dev);
 
 	return 0;
 }
@@ -1837,6 +2112,26 @@ static void dw_dp_bridge_atomic_enable(struct drm_bridge *bridge,
 	}
 }
 
+static void dw_dp_reset(struct dw_dp *dp)
+{
+	int val;
+
+	disable_irq(dp->irq);
+	regmap_update_bits(dp->regmap, DPTX_SOFT_RESET_CTRL, CONTROLLER_RESET,
+			   FIELD_PREP(CONTROLLER_RESET, 1));
+	udelay(10);
+	regmap_update_bits(dp->regmap, DPTX_SOFT_RESET_CTRL, CONTROLLER_RESET,
+			   FIELD_PREP(CONTROLLER_RESET, 0));
+
+	dw_dp_init(dp);
+	if (!dp->hpd_gpio) {
+		regmap_read_poll_timeout(dp->regmap, DPTX_HPD_STATUS, val,
+					 FIELD_GET(HPD_HOT_PLUG, val), 200, 200000);
+		regmap_write(dp->regmap, DPTX_HPD_STATUS, HPD_HOT_PLUG);
+	}
+	enable_irq(dp->irq);
+}
+
 static void dw_dp_bridge_atomic_disable(struct drm_bridge *bridge,
 					struct drm_bridge_state *old_bridge_state)
 {
@@ -1845,6 +2140,7 @@ static void dw_dp_bridge_atomic_disable(struct drm_bridge *bridge,
 	dw_dp_video_disable(dp);
 	dw_dp_link_disable(dp);
 	bitmap_zero(dp->sdp_reg_bank, SDP_REG_BANK_SIZE);
+	dw_dp_reset(dp);
 }
 
 static enum drm_connector_status dw_dp_detect_dpcd(struct dw_dp *dp)
@@ -1877,6 +2173,14 @@ static enum drm_connector_status dw_dp_bridge_detect(struct drm_bridge *bridge)
 	else
 		status = connector_status_disconnected;
 
+	if (status == connector_status_connected) {
+		extcon_set_state_sync(dp->extcon, EXTCON_DISP_DP, true);
+		dw_dp_audio_handle_plugged_change(&dp->audio, true);
+	} else {
+		extcon_set_state_sync(dp->extcon, EXTCON_DISP_DP, false);
+		dw_dp_audio_handle_plugged_change(&dp->audio, false);
+	}
+
 	return status;
 }
 
@@ -1905,6 +2209,7 @@ static u32 *dw_dp_bridge_atomic_get_output_bus_fmts(struct drm_bridge *bridge,
 					unsigned int *num_output_fmts)
 {
 	struct dw_dp *dp = bridge_to_dp(bridge);
+	struct dw_dp_state *dp_state = connector_to_dp_state(conn_state);
 	struct dw_dp_link *link = &dp->link;
 	struct drm_display_info *di = &conn_state->connector->display_info;
 	struct drm_display_mode mode = crtc_state->mode;
@@ -1941,6 +2246,11 @@ static u32 *dw_dp_bridge_atomic_get_output_bus_fmts(struct drm_bridge *bridge,
 		if (!dw_dp_bandwidth_ok(dp, &mode, fmt->bpp, link->lanes, link->rate))
 			continue;
 
+		if (dp_state->bpc != 0) {
+			if ((fmt->bpc != dp_state->bpc) ||
+			    (fmt->color_format != BIT(dp_state->color_format)))
+				continue;
+		}
 		output_fmts[j++] = fmt->bus_format;
 	}
 
@@ -2120,14 +2430,19 @@ static int dw_dp_audio_hw_params(struct device *dev, void *data,
 	switch (daifmt->fmt) {
 	case HDMI_SPDIF:
 		audio_inf_select = 0x1;
+		audio->format = AFMT_SPDIF;
 		break;
 	case HDMI_I2S:
 		audio_inf_select = 0x0;
+		audio->format = AFMT_I2S;
 		break;
 	default:
 		dev_err(dp->dev, "invalid daifmt %d\n", daifmt->fmt);
 		return -EINVAL;
 	}
+
+	clk_prepare_enable(dp->spdif_clk);
+	clk_prepare_enable(dp->i2s_clk);
 
 	regmap_update_bits(dp->regmap, DPTX_AUD_CONFIG1,
 			   AUDIO_DATA_IN_EN | NUM_CHANNELS | AUDIO_DATA_WIDTH |
@@ -2136,6 +2451,13 @@ static int dw_dp_audio_hw_params(struct device *dev, void *data,
 			   FIELD_PREP(NUM_CHANNELS, num_channels) |
 			   FIELD_PREP(AUDIO_DATA_WIDTH, params->sample_width) |
 			   FIELD_PREP(AUDIO_INF_SELECT, audio_inf_select));
+
+	/* Wait for inf switch */
+	usleep_range(20, 40);
+	if (audio->format == AFMT_I2S)
+		clk_disable_unprepare(dp->spdif_clk);
+	else if (audio->format == AFMT_SPDIF)
+		clk_disable_unprepare(dp->i2s_clk);
 
 	return 0;
 }
@@ -2204,9 +2526,30 @@ static int dw_dp_audio_startup(struct device *dev, void *data)
 static void dw_dp_audio_shutdown(struct device *dev, void *data)
 {
 	struct dw_dp *dp = dev_get_drvdata(dev);
+	struct dw_dp_audio *audio = &dp->audio;
 
 	regmap_update_bits(dp->regmap, DPTX_AUD_CONFIG1, AUDIO_DATA_IN_EN,
 			   FIELD_PREP(AUDIO_DATA_IN_EN, 0));
+
+	if (audio->format == AFMT_SPDIF)
+		clk_disable_unprepare(dp->spdif_clk);
+	else if (audio->format == AFMT_I2S)
+		clk_disable_unprepare(dp->i2s_clk);
+
+	audio->format = AFMT_UNUSED;
+}
+
+static int dw_dp_audio_hook_plugged_cb(struct device *dev, void *data,
+				       hdmi_codec_plugged_cb fn,
+				       struct device *codec_dev)
+{
+	struct dw_dp *dp = dev_get_drvdata(dev);
+	struct dw_dp_audio *audio = &dp->audio;
+
+	audio->plugged_cb = fn;
+	audio->codec_dev = codec_dev;
+	dw_dp_audio_handle_plugged_change(audio, dw_dp_detect(dp));
+	return 0;
 }
 
 static int dw_dp_audio_get_eld(struct device *dev, void *data, uint8_t *buf,
@@ -2225,6 +2568,7 @@ static const struct hdmi_codec_ops dw_dp_audio_codec_ops = {
 	.audio_startup = dw_dp_audio_startup,
 	.audio_shutdown = dw_dp_audio_shutdown,
 	.get_eld = dw_dp_audio_get_eld,
+	.hook_plugged_cb = dw_dp_audio_hook_plugged_cb
 };
 
 static int dw_dp_register_audio_driver(struct dw_dp *dp)
@@ -2237,6 +2581,7 @@ static int dw_dp_register_audio_driver(struct dw_dp *dp)
 		.max_i2s_channels = 8,
 	};
 
+	audio->format = AFMT_UNUSED;
 	audio->pdev = platform_device_register_data(dp->dev,
 						    HDMI_CODEC_DRV_NAME,
 						    PLATFORM_DEVID_AUTO,
@@ -2264,6 +2609,51 @@ static void dw_dp_aux_unregister(void *data)
 	drm_dp_aux_unregister(&dp->aux);
 }
 
+static int dw_dp_attach_properties(struct drm_connector *connector, struct dw_dp *dp)
+{
+	struct drm_property *prop;
+
+	prop = drm_property_create_enum(connector->dev, 0, RK_IF_PROP_COLOR_DEPTH,
+					color_depth_enum_list,
+					ARRAY_SIZE(color_depth_enum_list));
+	if (!prop) {
+		dev_err(dp->dev, "create color depth prop for dp%d failed\n", dp->id);
+		return -ENOMEM;
+	}
+	dp->color_depth_property = prop;
+	drm_object_attach_property(&connector->base, prop, 0);
+
+	prop = drm_property_create_enum(connector->dev, 0, RK_IF_PROP_COLOR_FORMAT,
+					color_format_enum_list,
+					ARRAY_SIZE(color_format_enum_list));
+	if (!prop) {
+		dev_err(dp->dev, "create color format prop for dp%d failed\n", dp->id);
+		return -ENOMEM;
+	}
+	dp->color_format_property = prop;
+	drm_object_attach_property(&connector->base, prop, 0);
+
+	prop = drm_property_create_range(connector->dev, 0, RK_IF_PROP_COLOR_DEPTH_CAPS,
+					 0, 1 << RK_IF_DEPTH_MAX);
+	if (!prop) {
+		dev_err(dp->dev, "create color depth caps prop for dp%d failed\n", dp->id);
+		return -ENOMEM;
+	}
+	dp->color_depth_capacity = prop;
+	drm_object_attach_property(&connector->base, prop, 0);
+
+	prop = drm_property_create_range(connector->dev, 0, RK_IF_PROP_COLOR_FORMAT_CAPS,
+					 0, 1 << RK_IF_FORMAT_MAX);
+	if (!prop) {
+		dev_err(dp->dev, "create color format caps prop for dp%d failed\n", dp->id);
+		return -ENOMEM;
+	}
+	dp->color_format_capacity = prop;
+	drm_object_attach_property(&connector->base, prop, 0);
+
+	return 0;
+}
+
 static int dw_dp_bind(struct device *dev, struct device *master, void *data)
 {
 	struct dw_dp *dp = dev_get_drvdata(dev);
@@ -2284,6 +2674,10 @@ static int dw_dp_bind(struct device *dev, struct device *master, void *data)
 			dev_err(dev, "failed to attach bridge: %d\n", ret);
 			return ret;
 		}
+
+		ret = dw_dp_attach_properties(&dp->connector, dp);
+		if (ret)
+			return ret;
 	}
 
 	if (dp->right) {
@@ -2298,12 +2692,16 @@ static int dw_dp_bind(struct device *dev, struct device *master, void *data)
 	pm_runtime_enable(dp->dev);
 	pm_runtime_get_sync(dp->dev);
 
+	enable_irq(dp->irq);
+
 	return 0;
 }
 
 static void dw_dp_unbind(struct device *dev, struct device *master, void *data)
 {
 	struct dw_dp *dp = dev_get_drvdata(dev);
+
+	disable_irq(dp->irq);
 
 	pm_runtime_put(dp->dev);
 	pm_runtime_disable(dp->dev);
@@ -2379,11 +2777,30 @@ static int dw_dp_probe(struct platform_device *pdev)
 		return dev_err_probe(dev, PTR_ERR(dp->phy),
 				     "failed to get phy\n");
 
-	ret = devm_clk_bulk_get_all(dev, &dp->clks);
-	if (ret < 1)
-		return dev_err_probe(dev, ret, "failed to get clocks\n");
+	dp->apb_clk = devm_clk_get(dev, "apb");
+	if (IS_ERR(dp->apb_clk))
+		return dev_err_probe(dev, PTR_ERR(dp->apb_clk),
+				     "failed to get apb clock\n");
 
-	dp->nr_clks = ret;
+	dp->aux_clk = devm_clk_get(dev, "aux");
+	if (IS_ERR(dp->aux_clk))
+		return dev_err_probe(dev, PTR_ERR(dp->aux_clk),
+				     "failed to get aux clock\n");
+
+	dp->i2s_clk = devm_clk_get(dev, "i2s");
+	if (IS_ERR(dp->i2s_clk))
+		return dev_err_probe(dev, PTR_ERR(dp->i2s_clk),
+				     "failed to get i2s clock\n");
+
+	dp->spdif_clk = devm_clk_get(dev, "spdif");
+	if (IS_ERR(dp->spdif_clk))
+		return dev_err_probe(dev, PTR_ERR(dp->spdif_clk),
+				     "failed to get spdif clock\n");
+
+	dp->hclk = devm_clk_get_optional(dev, "hclk");
+	if (IS_ERR(dp->hclk))
+		return dev_err_probe(dev, PTR_ERR(dp->hclk),
+				     "failed to get hclk\n");
 
 	dp->rstc = devm_reset_control_get(dev, NULL);
 	if (IS_ERR(dp->rstc))
@@ -2419,6 +2836,16 @@ static int dw_dp_probe(struct platform_device *pdev)
 		dev_err(dev, "failed to request irq: %d\n", ret);
 		return ret;
 	}
+
+	dp->extcon = devm_extcon_dev_allocate(dev, dw_dp_cable);
+	if (IS_ERR(dp->extcon))
+		return dev_err_probe(dev, PTR_ERR(dp->extcon),
+				     "failed to allocate extcon device\n");
+
+	ret = devm_extcon_dev_register(dev, dp->extcon);
+	if (ret)
+		return dev_err_probe(dev, ret,
+				     "failed to register extcon device\n");
 
 	ret = dw_dp_register_audio_driver(dp);
 	if (ret)
@@ -2476,9 +2903,9 @@ static int __maybe_unused dw_dp_runtime_suspend(struct device *dev)
 {
 	struct dw_dp *dp = dev_get_drvdata(dev);
 
-	disable_irq(dp->irq);
-
-	clk_bulk_disable_unprepare(dp->nr_clks, dp->clks);
+	clk_disable_unprepare(dp->aux_clk);
+	clk_disable_unprepare(dp->apb_clk);
+	clk_disable_unprepare(dp->hclk);
 
 	return 0;
 }
@@ -2486,26 +2913,20 @@ static int __maybe_unused dw_dp_runtime_suspend(struct device *dev)
 static int __maybe_unused dw_dp_runtime_resume(struct device *dev)
 {
 	struct dw_dp *dp = dev_get_drvdata(dev);
-	int ret;
 
-	ret = clk_bulk_prepare_enable(dp->nr_clks, dp->clks);
-	if (ret)
-		return ret;
-
-	reset_control_assert(dp->rstc);
-	udelay(10);
-	reset_control_deassert(dp->rstc);
+	clk_prepare_enable(dp->hclk);
+	clk_prepare_enable(dp->apb_clk);
+	clk_prepare_enable(dp->aux_clk);
 
 	dw_dp_init(dp);
-	enable_irq(dp->irq);
 
 	return 0;
 }
 
 static const struct dev_pm_ops dw_dp_pm_ops = {
 	SET_RUNTIME_PM_OPS(dw_dp_runtime_suspend, dw_dp_runtime_resume, NULL)
-	SET_SYSTEM_SLEEP_PM_OPS(pm_runtime_force_suspend,
-				pm_runtime_force_resume)
+	SET_NOIRQ_SYSTEM_SLEEP_PM_OPS(pm_runtime_force_suspend,
+				      pm_runtime_force_resume)
 };
 
 static const struct of_device_id dw_dp_of_match[] = {

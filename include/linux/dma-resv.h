@@ -44,7 +44,7 @@
 #include <linux/slab.h>
 #include <linux/seqlock.h>
 #include <linux/rcupdate.h>
-
+#define dma_resv_wait_timeout dma_resv_wait_timeout_rcu
 extern struct ww_class reservation_ww_class;
 
 /**

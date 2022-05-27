@@ -9,7 +9,7 @@
  *
  */
 #include <linux/delay.h>
-#include <linux/dma-buf-cache.h>
+#include <linux/dma-buf.h>
 #include <linux/dma-iommu.h>
 #include <linux/iommu.h>
 #include <linux/of.h>
@@ -194,7 +194,8 @@ struct mpp_dma_buffer *mpp_dma_import_fd(struct mpp_iommu_info *iommu_info,
 
 	dmabuf = dma_buf_get(fd);
 	if (IS_ERR(dmabuf)) {
-		mpp_err("dma_buf_get fd %d failed\n", fd);
+		ret = PTR_ERR(dmabuf);
+		mpp_err("dma_buf_get fd %d failed(%d)\n", fd, ret);
 		return NULL;
 	}
 	/* A new DMA buffer */
@@ -216,15 +217,15 @@ struct mpp_dma_buffer *mpp_dma_import_fd(struct mpp_iommu_info *iommu_info,
 
 	attach = dma_buf_attach(buffer->dmabuf, dma->dev);
 	if (IS_ERR(attach)) {
-		mpp_err("dma_buf_attach fd %d failed\n", fd);
 		ret = PTR_ERR(attach);
+		mpp_err("dma_buf_attach fd %d failed(%d)\n", fd, ret);
 		goto fail_attach;
 	}
 
 	sgt = dma_buf_map_attachment(attach, buffer->dir);
 	if (IS_ERR(sgt)) {
-		mpp_err("dma_buf_map_attachment fd %d failed\n", fd);
 		ret = PTR_ERR(sgt);
+		mpp_err("dma_buf_map_attachment fd %d failed(%d)\n", fd, ret);
 		goto fail_map;
 	}
 	buffer->iova = sg_dma_address(sgt->sgl);
@@ -234,10 +235,8 @@ struct mpp_dma_buffer *mpp_dma_import_fd(struct mpp_iommu_info *iommu_info,
 	buffer->dma = dma;
 
 	kref_init(&buffer->ref);
-
-	if (!IS_ENABLED(CONFIG_DMABUF_CACHE))
-		/* Increase the reference for used outside the buffer pool */
-		kref_get(&buffer->ref);
+	/* Increase the reference for used outside the buffer pool */
+	kref_get(&buffer->ref);
 
 	mutex_lock(&dma->list_mutex);
 	dma->buffer_count++;
@@ -472,7 +471,13 @@ int mpp_iommu_refresh(struct mpp_iommu_info *info, struct device *dev)
 
 	if (!info)
 		return 0;
-
+	/* call av1 iommu ops */
+	if (IS_ENABLED(CONFIG_ROCKCHIP_MPP_AV1DEC) && info->av1d_iommu) {
+		ret = mpp_av1_iommu_disable(dev);
+		if (ret)
+			return ret;
+		return mpp_av1_iommu_enable(dev);
+	}
 	/* disable iommu */
 	ret = rockchip_iommu_disable(dev);
 	if (ret)
