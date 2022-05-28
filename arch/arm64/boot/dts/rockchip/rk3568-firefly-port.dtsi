@@ -47,11 +47,11 @@
 	};
 
 	rk_headset: rk-headset {
-		status = "disabled";
 		compatible = "rockchip_headset";
-		headset_gpio = <&gpio3 RK_PC2 GPIO_ACTIVE_LOW>;
+		headset_gpio = <&gpio2 RK_PD2 GPIO_ACTIVE_HIGH>;
 		pinctrl-names = "default";
 		pinctrl-0 = <&hp_det>;
+		io-channels = <&saradc 2>;    //HP_HOOK pin
 	};
 
 	vcc2v5_sys: vcc2v5-ddr {

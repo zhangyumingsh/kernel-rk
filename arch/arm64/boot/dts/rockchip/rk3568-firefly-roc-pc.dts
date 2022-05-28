@@ -81,34 +81,34 @@
 	};
 };
 
-&video_phy0 {
-	status = "okay";
-};
+//&video_phy0 {
+//	status = "okay";
+//};
 
-&display_subsystem {
-    status = "okay";
-};
+//&display_subsystem {
+//    status = "okay";
+//};
 
-&gpu {
-	mali-supply = <&vdd_gpu>;
-	status = "okay";
-};
+//&gpu {
+//	mali-supply = <&vdd_gpu>;
+//	status = "okay";
+//};
 
-&hdmi {
-	status = "okay";
-};
+//&hdmi {
+//	status = "okay";
+//};
 
-&hdmi_in_vp0 {
-	status = "okay";
-};
+//&hdmi_in_vp0 {
+//	status = "okay";
+//};
 
-&hdmi_in_vp1 {
-	status = "disabled";
-};
+//&hdmi_in_vp1 {
+//	status = "disabled";
+//};
 
-&hdmi_sound {
-	status = "okay";
-};
+//&hdmi_sound {
+//	status = "okay";
+//};
 
 &route_hdmi {
     status = "okay";
