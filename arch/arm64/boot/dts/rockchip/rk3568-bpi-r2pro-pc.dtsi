@@ -158,9 +158,9 @@
 	status = "disabled";
 };
 
-&spi_wk2xxx {
-	status = "disabled";
-};
+//&spi_wk2xxx {
+//	status = "disabled";
+//};
 
 &pcie30phy {
        status = "okay";
