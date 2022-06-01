@@ -9,6 +9,7 @@
 #include <dt-bindings/gpio/gpio.h>
 #include <dt-bindings/pinctrl/rockchip.h>
 #include "rk3568-firefly-core.dtsi"
+#include "rk3568-linux.dtsi"
 
 / {
 	compatible = "rockchip,rk3568-firefly-port", "rockchip,rk3568";
@@ -46,11 +47,11 @@
 	};
 
 	rk_headset: rk-headset {
-		status = "disabled";
 		compatible = "rockchip_headset";
-		headset_gpio = <&gpio3 RK_PC2 GPIO_ACTIVE_LOW>;
+		headset_gpio = <&gpio2 RK_PD2 GPIO_ACTIVE_HIGH>;
 		pinctrl-names = "default";
 		pinctrl-0 = <&hp_det>;
+		io-channels = <&saradc 2>;    //HP_HOOK pin
 	};
 
 	vcc2v5_sys: vcc2v5-ddr {
@@ -151,6 +152,18 @@
 		BT,reset_gpio    = <&gpio3 RK_PA0 GPIO_ACTIVE_HIGH>;
 		BT,wake_gpio     = <&gpio3 RK_PA1 GPIO_ACTIVE_HIGH>;
 		BT,wake_host_irq = <&gpio3 RK_PA2 GPIO_ACTIVE_HIGH>;
+		status = "disabled";
+	};
+
+	flash_led: flash-led {
+		compatible = "led,rgb13h";
+		label = "pwm-flash-led";
+		led-max-microamp = <20000>;
+		flash-max-microamp = <20000>;
+		flash-max-timeout-us = <1000000>;
+		pwms = <&pwm11 0 25000 0>;
+		rockchip,camera-module-index = <1>;
+		rockchip,camera-module-facing = "front";
 		status = "disabled";
 	};
 };
@@ -516,20 +529,20 @@
 	pinctrl-0 = <&spi1m1_pins>;
 	pinctrl-1 = <&spi1m1_pins_hs>;
 
-	spi_wk2xxx: spi_wk2xxx@00{
-		status = "disabled";
-		compatible = "firefly,spi-wk2xxx";
-		reg = <0x00>;
-		spi-max-frequency = <10000000>;
-		power-gpio = <&pca9555 PCA_IO1_7 GPIO_ACTIVE_HIGH>;
-		reset-gpio = <&pca9555 PCA_IO1_1 GPIO_ACTIVE_HIGH>;
-		irq-gpio = <&gpio0 RK_PA6 IRQ_TYPE_EDGE_FALLING>;
-		cs-gpio = <&gpio3 RK_PA1 GPIO_ACTIVE_HIGH>;
-		/* rk3399 driver support SPI_CPOL | SPI_CPHA | SPI_CS_HIGH */
-		//spi-cpha;     /* SPI mode: CPHA=1 */
-		//spi-cpol;     /* SPI mode: CPOL=1 */
-		//spi-cs-high;
-	};
+//	spi_wk2xxx: spi_wk2xxx@00{
+//		status = "disabled";
+//		compatible = "firefly,spi-wk2xxx";
+//		reg = <0x00>;
+//		spi-max-frequency = <10000000>;
+//		power-gpio = <&pca9555 PCA_IO1_7 GPIO_ACTIVE_HIGH>;
+//		reset-gpio = <&pca9555 PCA_IO1_1 GPIO_ACTIVE_HIGH>;
+//		irq-gpio = <&gpio0 RK_PA6 IRQ_TYPE_EDGE_FALLING>;
+//		cs-gpio = <&gpio3 RK_PA1 GPIO_ACTIVE_HIGH>;
+//		/* rk3399 driver support SPI_CPOL | SPI_CPHA | SPI_CS_HIGH */
+//		//spi-cpha;     /* SPI mode: CPHA=1 */
+//		//spi-cpol;     /* SPI mode: CPOL=1 */
+//		//spi-cs-high;
+//	};
 };
 
 &pwm7 {
@@ -603,7 +616,7 @@
 
 	mxc6655xa {
 		mxc6655xa_irq_gpio: mxc6655xa_irq_gpio {
-			rockchip,pins = <RK_GPIO3 RK_PC1 RK_FUNC_GPIO &pcfg_pull_none>;
+			rockchip,pins = <3 RK_PC1 RK_FUNC_GPIO &pcfg_pull_none>;
 		};
 	};
 };

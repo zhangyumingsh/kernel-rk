@@ -38,6 +38,8 @@ struct iommu_flush_ops {
 	void (*tlb_flush_all)(void *cookie);
 	void (*tlb_flush_walk)(unsigned long iova, size_t size, size_t granule,
 			       void *cookie);
+	void (*tlb_flush_leaf)(unsigned long iova, size_t size, size_t granule,
+			       void *cookie);
 	void (*tlb_add_page)(struct iommu_iotlb_gather *gather,
 			     unsigned long iova, size_t granule, void *cookie);
 };
@@ -226,7 +228,12 @@ io_pgtable_tlb_flush_walk(struct io_pgtable *iop, unsigned long iova,
 	if (iop->cfg.tlb && iop->cfg.tlb->tlb_flush_walk)
 		iop->cfg.tlb->tlb_flush_walk(iova, size, granule, iop->cookie);
 }
-
+static inline void
+io_pgtable_tlb_flush_leaf(struct io_pgtable *iop, unsigned long iova,
+			  size_t size, size_t granule)
+{
+	iop->cfg.tlb->tlb_flush_leaf(iova, size, granule, iop->cookie);
+}
 static inline void
 io_pgtable_tlb_add_page(struct io_pgtable *iop,
 			struct iommu_iotlb_gather * gather, unsigned long iova,

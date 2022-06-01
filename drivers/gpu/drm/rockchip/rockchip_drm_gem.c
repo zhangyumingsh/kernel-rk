@@ -771,6 +771,7 @@ int rockchip_gem_dumb_create(struct drm_file *file_priv,
 	rk_obj = rockchip_gem_create_with_handle(file_priv, dev, args->size,
 						 &args->handle, args->flags);
 
+
 	return PTR_ERR_OR_ZERO(rk_obj);
 }
 

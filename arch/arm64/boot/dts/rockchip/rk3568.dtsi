@@ -13,6 +13,7 @@
 #include <dt-bindings/soc/rockchip-system-status.h>
 #include <dt-bindings/suspend/rockchip-rk3568.h>
 #include <dt-bindings/thermal/thermal.h>
+#include <dt-bindings/display/rockchip_vop.h>
 #include "rk3568-dram-default-timing.dtsi"
 
 / {
@@ -59,6 +60,7 @@
 		spi1 = &spi1;
 		spi2 = &spi2;
 		spi3 = &spi3;
+		spi4 = &sfc; // for U-Boot
 	};
 
 	cpus {
@@ -158,43 +160,67 @@
 
 		opp-408000000 {
 			opp-hz = /bits/ 64 <408000000>;
-			opp-microvolt = <825000 825000 1150000>;
+			opp-microvolt = <850000 850000 1150000>;
+			opp-microvolt-L0 = <850000 850000 1150000>;
+			opp-microvolt-L1 = <825000 825000 1150000>;
+			opp-microvolt-L2 = <825000 825000 1150000>;
 			clock-latency-ns = <40000>;
 		};
 		opp-600000000 {
 			opp-hz = /bits/ 64 <600000000>;
-			opp-microvolt = <825000 825000 1150000>;
+			opp-microvolt = <850000 825000 1150000>;
+			opp-microvolt-L0 = <850000 850000 1150000>;
+			opp-microvolt-L1 = <825000 825000 1150000>;
+			opp-microvolt-L2 = <825000 825000 1150000>;
 			clock-latency-ns = <40000>;
 		};
 		opp-816000000 {
 			opp-hz = /bits/ 64 <816000000>;
-			opp-microvolt = <825000 825000 1150000>;
+			opp-microvolt = <850000 850000 1150000>;
+			opp-microvolt-L0 = <850000 850000 1150000>;
+			opp-microvolt-L1 = <825000 825000 1150000>;
+			opp-microvolt-L2 = <825000 825000 1150000>;
 			clock-latency-ns = <40000>;
 			opp-suspend;
 		};
 		opp-1104000000 {
 			opp-hz = /bits/ 64 <1104000000>;
-			opp-microvolt = <825000 825000 1150000>;
+			opp-microvolt = <900000 900000 1150000>;
+			opp-microvolt-L0 = <900000 900000 1150000>;
+			opp-microvolt-L1 = <825000 825000 1150000>;
+			opp-microvolt-L2 = <825000 825000 1150000>;
 			clock-latency-ns = <40000>;
 		};
 		opp-1416000000 {
 			opp-hz = /bits/ 64 <1416000000>;
-			opp-microvolt = <925000 925000 1150000>;
+			opp-microvolt = <1000000 1000000 1150000>;
+			opp-microvolt-L0 = <1000000 1000000 1150000>;
+			opp-microvolt-L1 = <925000 925000 1150000>;
+			opp-microvolt-L2 = <925000 925000 1150000>;
 			clock-latency-ns = <40000>;
 		};
 		opp-1608000000 {
 			opp-hz = /bits/ 64 <1608000000>;
-			opp-microvolt = <1000000 1000000 1150000>;
+			opp-microvolt = <1075000 1075000 1150000>;
+			opp-microvolt-L0 = <1075000 1075000 1150000>;
+			opp-microvolt-L1 = <1000000 1000000 1150000>;
+			opp-microvolt-L2 = <1000000 1000000 1150000>;
 			clock-latency-ns = <40000>;
 		};
 		opp-1800000000 {
 			opp-hz = /bits/ 64 <1800000000>;
-			opp-microvolt = <1050000 1050000 1150000>;
+			opp-microvolt = <1125000 1125000 1150000>;
+			opp-microvolt-L0 = <1125000 1125000 1150000>;
+			opp-microvolt-L1 = <1050000 1050000 1150000>;
+			opp-microvolt-L2 = <1050000 1050000 1150000>;
 			clock-latency-ns = <40000>;
 		};
 		opp-1992000000 {
 			opp-hz = /bits/ 64 <1992000000>;
 			opp-microvolt = <1150000 1150000 1150000>;
+			opp-microvolt-L0 = <1150000 1150000 1150000>;
+			opp-microvolt-L1 = <1100000 1100000 1150000>;
+			opp-microvolt-L2 = <1075000 1075000 1150000>;
 			clock-latency-ns = <40000>;
 		};
 	};
@@ -360,7 +386,7 @@
 		soc_thermal: soc-thermal {
 			polling-delay-passive = <20>; /* milliseconds */
 			polling-delay = <1000>; /* milliseconds */
-			sustainable-power = <905>; /* milliwatts */
+			sustainable-power = <1475>; /* milliwatts */
 
 			thermal-sensors = <&tsadc 0>;
 			trips {
@@ -800,15 +826,18 @@
 		reg = <0x0 0xfdca8000 0x0 0x8000>;
 	};
 
-	edp_phy: edp-phy@fdcb0000 {
-		compatible = "rockchip,rk3568-edp-phy";
+	edp_phy_grf: syscon@fdcb0000 {
+		compatible = "rockchip,rk3568-edp-phy-grf", "syscon", "simple-mfd";
 		reg = <0x0 0xfdcb0000 0x0 0x8000>;
-		clocks = <&pmucru XIN_OSC0_EDPPHY_G>, <&cru PCLK_EDPPHY_GRF>;
-		clock-names = "refclk", "pclk";
-		resets = <&cru SRST_P_EDPPHY_GRF>;
-		reset-names = "apb";
-		#phy-cells = <0>;
-		status = "disabled";
+		clocks = <&cru PCLK_EDPPHY_GRF>;
+
+		edp_phy: edp-phy {
+			compatible = "rockchip,rk3568-edp-phy";
+			clocks = <&pmucru XIN_OSC0_EDPPHY_G>;
+			clock-names = "refclk";
+			#phy-cells = <0>;
+			status = "disabled";
+		};
 	};
 
 	pcie30_phy_grf: syscon@fdcb8000 {
@@ -1097,38 +1126,68 @@
 			/* MHz    MHz    uV */
 			   0      700    50000
 		>;
+		rockchip,pvtm-voltage-sel = <
+			0        84000   0
+			84001    91000   1
+			91001    100000  2
+		>;
+		rockchip,pvtm-ch = <0 5>;
 
 		opp-200000000 {
 			opp-hz = /bits/ 64 <200000000>;
-			opp-microvolt = <825000 825000 1000000>;
+			opp-microvolt = <850000 850000 1000000>;
+			opp-microvolt-L0 = <850000 850000 1000000>;
+			opp-microvolt-L1 = <825000 825000 1000000>;
+			opp-microvolt-L2 = <825000 825000 1000000>;
 		};
 		opp-300000000 {
 			opp-hz = /bits/ 64 <297000000>;
-			opp-microvolt = <825000 825000 1000000>;
+			opp-microvolt = <850000 850000 1000000>;
+			opp-microvolt-L0 = <850000 850000 1000000>;
+			opp-microvolt-L1 = <825000 825000 1000000>;
+			opp-microvolt-L2 = <825000 825000 1000000>;
 		};
 		opp-400000000 {
 			opp-hz = /bits/ 64 <400000000>;
-			opp-microvolt = <825000 825000 1000000>;
+			opp-microvolt = <850000 850000 1000000>;
+			opp-microvolt-L0 = <850000 850000 1000000>;
+			opp-microvolt-L1 = <825000 825000 1000000>;
+			opp-microvolt-L2 = <825000 825000 1000000>;
 		};
 		opp-600000000 {
 			opp-hz = /bits/ 64 <600000000>;
-			opp-microvolt = <825000 825000 1000000>;
+			opp-microvolt = <875000 875000 1000000>;
+			opp-microvolt-L0 = <875000 875000 1000000>;
+			opp-microvolt-L1 = <825000 825000 1000000>;
+			opp-microvolt-L2 = <825000 825000 1000000>;
 		};
 		opp-700000000 {
 			opp-hz = /bits/ 64 <700000000>;
-			opp-microvolt = <850000 850000 1000000>;
+			opp-microvolt = <900000 900000 1000000>;
+			opp-microvolt-L0 = <900000 900000 1000000>;
+			opp-microvolt-L1 = <850000 850000 1000000>;
+			opp-microvolt-L2 = <850000 850000 1000000>;
 		};
 		opp-800000000 {
 			opp-hz = /bits/ 64 <800000000>;
-			opp-microvolt = <875000 875000 1000000>;
+			opp-microvolt = <925000 925000 1000000>;
+			opp-microvolt-L0 = <925000 925000 1000000>;
+			opp-microvolt-L1 = <875000 875000 1000000>;
+			opp-microvolt-L2 = <875000 875000 1000000>;
 		};
 		opp-900000000 {
 			opp-hz = /bits/ 64 <900000000>;
-			opp-microvolt = <925000 925000 1000000>;
+			opp-microvolt = <975000 975000 1000000>;
+			opp-microvolt-L0 = <975000 975000 1000000>;
+			opp-microvolt-L1 = <925000 925000 1000000>;
+			opp-microvolt-L2 = <900000 900000 1000000>;
 		};
 		opp-1000000000 {
 			opp-hz = /bits/ 64 <1000000000>;
 			opp-microvolt = <1000000 1000000 1000000>;
+			opp-microvolt-L0 = <1000000 1000000 1000000>;
+			opp-microvolt-L1 = <950000 950000 1000000>;
+			opp-microvolt-L2 = <925000 925000 1000000>;
 			status = "disabled";
 		};
 	};
@@ -1149,22 +1208,26 @@
 		nvmem-cells = <&core_pvtm>;
 		nvmem-cell-names = "pvtm";
 		rockchip,pvtm-voltage-sel = <
-			0        82000   0
-			82001    93000   1
-			93001    100000  2
+			0        84000   0
+			84001    91000   1
+			91001    100000  2
 		>;
 		rockchip,pvtm-ch = <0 5>;
 
+		opp-700000000 {
+			opp-hz = /bits/ 64 <700000000>;
+			opp-microvolt = <0>;
+		};
+		opp-900000000 {
+			opp-hz = /bits/ 64 <900000000>;
+			opp-microvolt = <900000>;
+		};
 		opp-1000000000 {
 			opp-hz = /bits/ 64 <1000000000>;
 			opp-microvolt = <950000>;
 			opp-microvolt-L0 = <950000>;
 			opp-microvolt-L1 = <925000>;
 			opp-microvolt-L2 = <0>;
-		};
-		opp-900000000 {
-			opp-hz = /bits/ 64 <900000000>;
-			opp-microvolt = <0>;
 		};
 	};
 
@@ -1181,65 +1244,51 @@
 	};
 
 	gpu: gpu@fde60000 {
-		compatible = "arm,mali-bifrost";
+		compatible = "rockchip,rk3568-mali", "arm,mali-bifrost";
 		reg = <0x0 0xfde60000 0x0 0x4000>;
-
-		interrupts = <GIC_SPI 39 IRQ_TYPE_LEVEL_HIGH>,
+		interrupts = <GIC_SPI 40 IRQ_TYPE_LEVEL_HIGH>,
 			     <GIC_SPI 41 IRQ_TYPE_LEVEL_HIGH>,
-			     <GIC_SPI 40 IRQ_TYPE_LEVEL_HIGH>;
-		interrupt-names = "GPU", "MMU", "JOB";
-
-		upthreshold = <40>;
-		downdifferential = <10>;
-
+			     <GIC_SPI 39 IRQ_TYPE_LEVEL_HIGH>;
+		interrupt-names = "job", "mmu", "gpu";
 		clocks = <&scmi_clk 1>, <&cru CLK_GPU>;
-		clock-names = "clk_mali", "clk_gpu";
-		power-domains = <&power RK3568_PD_GPU>;
+		clock-names = "gpu", "bus";
 		#cooling-cells = <2>;
 		operating-points-v2 = <&gpu_opp_table>;
-
+		power-domains = <&power RK3568_PD_GPU>;
 		status = "disabled";
-		gpu_power_model: power-model {
-			compatible = "simple-power-model";
-			leakage-range= <5 15>;
-			ls = <(-24002) 22823 0>;
-			static-coefficient = <100000>;
-			dynamic-coefficient = <953>;
-			ts = <(-108890) 63610 (-1355) 20>;
-			thermal-zone = "gpu-thermal";
-		};
 	};
 
 	gpu_opp_table: opp-table2 {
 		compatible = "operating-points-v2";
 
-		mbist-vmin = <825000 900000 950000>;
-		nvmem-cells = <&gpu_leakage>, <&core_pvtm>, <&mbist_vmin>;
-		nvmem-cell-names = "leakage", "pvtm", "mbist-vmin";
-
 		opp-200000000 {
 			opp-hz = /bits/ 64 <200000000>;
 			opp-microvolt = <825000>;
 		};
+
 		opp-300000000 {
 			opp-hz = /bits/ 64 <300000000>;
 			opp-microvolt = <825000>;
 		};
+
 		opp-400000000 {
 			opp-hz = /bits/ 64 <400000000>;
 			opp-microvolt = <825000>;
 		};
+
 		opp-600000000 {
 			opp-hz = /bits/ 64 <600000000>;
 			opp-microvolt = <825000>;
 		};
+
 		opp-700000000 {
 			opp-hz = /bits/ 64 <700000000>;
 			opp-microvolt = <900000>;
 		};
+
 		opp-800000000 {
 			opp-hz = /bits/ 64 <800000000>;
-			opp-microvolt = <950000>;
+			opp-microvolt = <1000000>;
 		};
 	};
 
@@ -1453,9 +1502,9 @@
 		nvmem-cells = <&core_pvtm>;
 		nvmem-cell-names = "pvtm";
 		rockchip,pvtm-voltage-sel = <
-			0        82000   0
-			82001    93000   1
-			93001    100000  2
+			0        84000   0
+			84001    91000   1
+			91001    100000  2
 		>;
 		rockchip,pvtm-ch = <0 5>;
 
@@ -1489,8 +1538,7 @@
 
 	rkvdec: rkvdec@fdf80200 {
 		compatible = "rockchip,rkv-decoder-rk3568", "rockchip,rkv-decoder-v2";
-		reg = <0x0 0xfdf80200 0x0 0x400>, <0x0 0xfdf80100 0x0 0x100>;
-		reg-names = "regs", "link";
+		reg = <0x0 0xfdf80200 0x0 0x400>;
 		interrupts = <GIC_SPI 91 IRQ_TYPE_LEVEL_HIGH>;
 		interrupt-names = "irq_dec";
 		clocks = <&cru ACLK_RKVDEC>, <&cru HCLK_RKVDEC>,
@@ -1520,7 +1568,6 @@
 		/* rcb_iova: start and size */
 		rockchip,rcb-iova = <0x10000000 65536>;
 		rockchip,rcb-min-width = <512>;
-		rockchip,task-capacity = <16>;
 		status = "disabled";
 	};
 
@@ -1726,7 +1773,7 @@
 				#address-cells = <1>;
 				#size-cells = <0>;
 				reg = <0>;
-
+				rockchip,plane-mask = <(1 << ROCKCHIP_VOP2_CLUSTER0 | 1 << ROCKCHIP_VOP2_ESMART0)>;
 				vp0_out_dsi0: endpoint@0 {
 					reg = <0>;
 					remote-endpoint = <&dsi0_in_vp0>;
@@ -1806,7 +1853,6 @@
 		clocks = <&cru ACLK_VOP>, <&cru HCLK_VOP>;
 		clock-names = "aclk", "iface";
 		#iommu-cells = <0>;
-		rockchip,disable-device-link-resume;
 		status = "disabled";
 	};
 
@@ -1814,12 +1860,12 @@
 		compatible = "rockchip,rk3568-mipi-dsi";
 		reg = <0x0 0xfe060000 0x0 0x10000>;
 		interrupts = <GIC_SPI 68 IRQ_TYPE_LEVEL_HIGH>;
-		clocks = <&cru PCLK_DSITX_0>, <&cru HCLK_VO>;
-		clock-names = "pclk", "hclk";
+		clocks = <&cru PCLK_DSITX_0>, <&cru HCLK_VO>, <&video_phy0>;
+		clock-names = "pclk", "hclk", "hs_clk";
 		resets = <&cru SRST_P_DSITX_0>;
 		reset-names = "apb";
 		phys = <&video_phy0>;
-		phy-names = "dphy";
+		phy-names = "mipi_dphy";
 		power-domains = <&power RK3568_PD_VO>;
 		rockchip,grf = <&grf>;
 		#address-cells = <1>;
@@ -1854,12 +1900,12 @@
 		compatible = "rockchip,rk3568-mipi-dsi";
 		reg = <0x0 0xfe070000 0x0 0x10000>;
 		interrupts = <GIC_SPI 69 IRQ_TYPE_LEVEL_HIGH>;
-		clocks = <&cru PCLK_DSITX_1>, <&cru HCLK_VO>;
-		clock-names = "pclk", "hclk";
+		clocks = <&cru PCLK_DSITX_1>, <&cru HCLK_VO>, <&video_phy1>;
+		clock-names = "pclk", "hclk", "hs_clk";
 		resets = <&cru SRST_P_DSITX_1>;
 		reset-names = "apb";
 		phys = <&video_phy1>;
-		phy-names = "dphy";
+		phy-names = "mipi_dphy";
 		power-domains = <&power RK3568_PD_VO>;
 		rockchip,grf = <&grf>;
 		#address-cells = <1>;
@@ -1912,8 +1958,8 @@
 			#address-cells = <1>;
 			#size-cells = <0>;
 
-			port@0 {
-				reg = <0>;
+			hdmi_in: port {
+				//reg = <0>;
 				#address-cells = <1>;
 				#size-cells = <0>;
 
@@ -1922,7 +1968,6 @@
 					remote-endpoint = <&vp0_out_hdmi>;
 					status = "disabled";
 				};
-
 				hdmi_in_vp1: endpoint@1 {
 					reg = <1>;
 					remote-endpoint = <&vp1_out_hdmi>;
@@ -2183,7 +2228,6 @@
 			SYS_STATUS_NORMAL       DMC_FREQ_LEVEL_MID_HIGH
 			SYS_STATUS_REBOOT       DMC_FREQ_LEVEL_HIGH
 			SYS_STATUS_SUSPEND      DMC_FREQ_LEVEL_LOW
-			SYS_STATUS_VIDEO_1080P  DMC_FREQ_LEVEL_MID_LOW
 			SYS_STATUS_VIDEO_4K     DMC_FREQ_LEVEL_MID_HIGH
 			SYS_STATUS_VIDEO_4K_10B DMC_FREQ_LEVEL_MID_HIGH
 			SYS_STATUS_BOOST        DMC_FREQ_LEVEL_HIGH
@@ -2227,8 +2271,8 @@
 			81  254   1
 		>;
 		rockchip,pvtm-voltage-sel = <
-			0        82000   0
-			82001    100000  1
+			0        84000   0
+			84001    100000  1
 		>;
 		rockchip,pvtm-ch = <0 5>;
 
@@ -2238,11 +2282,6 @@
 			opp-microvolt-L0 = <900000>;
 			opp-microvolt-L1 = <850000>;
 		};
-	};
-
-	dmcdbg: dmcdbg {
-		compatible = "rockchip,rk3568-dmcdbg";
-		status = "disabled";
 	};
 
 	pcie2x1: pcie@fe260000 {
@@ -2270,6 +2309,7 @@
 				<0 0 0 4 &pcie2x1_intc 3>;
 		linux,pci-domain = <0>;
 		num-ib-windows = <6>;
+		num-viewport = <8>;
 		num-ob-windows = <2>;
 		max-link-speed = <2>;
 		msi-map = <0x0 &its 0x0 0x1000>;
@@ -2277,9 +2317,10 @@
 		phys = <&combphy2_psq PHY_TYPE_PCIE>;
 		phy-names = "pcie-phy";
 		power-domains = <&power RK3568_PD_PIPE>;
-		ranges = <0x00000800 0x0 0x00000000 0x3 0x00000000 0x0 0x800000
-			  0x81000000 0x0 0x00800000 0x3 0x00800000 0x0 0x100000
-			  0x83000000 0x0 0x00900000 0x3 0x00900000 0x0 0x3f700000>;
+		ranges = <0x00000800 0x0 0xf4000000 0x0 0xf4000000 0x0 0x100000
+			  0x81000000 0x0 0xf4100000 0x0 0xf4100000 0x0 0x100000
+			  0x82000000 0x0 0xf4200000 0x0 0xf4200000 0x0 0x1e00000
+			  0xc3000000 0x3 0x00000000 0x3 0x00000000 0x0 0x40000000>;
 		reg = <0x3 0xc0000000 0x0 0x400000>,
 		      <0x0 0xfe260000 0x0 0x10000>;
 		reg-names = "pcie-dbi", "pcie-apb";
@@ -2322,15 +2363,17 @@
 		linux,pci-domain = <1>;
 		num-ib-windows = <6>;
 		num-ob-windows = <2>;
+		num-viewport = <8>;
 		max-link-speed = <3>;
 		msi-map = <0x1000 &its 0x1000 0x1000>;
 		num-lanes = <1>;
 		phys = <&pcie30phy>;
 		phy-names = "pcie-phy";
 		power-domains = <&power RK3568_PD_PIPE>;
-		ranges = <0x00000800 0x0 0x40000000 0x3 0x40000000 0x0 0x800000
-			  0x81000000 0x0 0x40800000 0x3 0x40800000 0x0 0x100000
-			  0x83000000 0x0 0x40900000 0x3 0x40900000 0x0 0x3f700000>;
+		ranges = <0x00000800 0x0 0xf2000000 0x0 0xf2000000 0x0 0x100000
+			  0x81000000 0x0 0xf2100000 0x0 0xf2100000 0x0 0x100000
+			  0x82000000 0x0 0xf2200000 0x0 0xf2200000 0x0 0x1e00000
+			  0xc3000000 0x3 0x40000000 0x3 0x40000000 0x0 0x40000000>;
 		reg = <0x3 0xc0400000 0x0 0x400000>,
 		      <0x0 0xfe270000 0x0 0x10000>;
 		reg-names = "pcie-dbi", "pcie-apb";
@@ -2373,6 +2416,7 @@
 				<0 0 0 4 &pcie3x2_intc 3>;
 		linux,pci-domain = <2>;
 		num-ib-windows = <6>;
+		num-viewport = <8>;
 		num-ob-windows = <2>;
 		max-link-speed = <3>;
 		msi-map = <0x2000 &its 0x2000 0x1000>;
@@ -2380,9 +2424,10 @@
 		phys = <&pcie30phy>;
 		phy-names = "pcie-phy";
 		power-domains = <&power RK3568_PD_PIPE>;
-		ranges = <0x00000800 0x0 0x80000000 0x3 0x80000000 0x0 0x800000
-			  0x81000000 0x0 0x80800000 0x3 0x80800000 0x0 0x100000
-			  0x83000000 0x0 0x80900000 0x3 0x80900000 0x0 0x3f700000>;
+		ranges = <0x00000800 0x0 0xf0000000 0x0 0xf0000000 0x0 0x100000
+			  0x81000000 0x0 0xf0100000 0x0 0xf0100000 0x0 0x100000
+			  0x82000000 0x0 0xf0200000 0x0 0xf0200000 0x0 0x1e00000
+			  0xc3000000 0x3 0x80000000 0x3 0x80000000 0x0 0x40000000>;
 		reg = <0x3 0xc0800000 0x0 0x400000>,
 		      <0x0 0xfe280000 0x0 0x10000>;
 		reg-names = "pcie-dbi", "pcie-apb";
@@ -2505,6 +2550,10 @@
 			 <&cru ACLK_EMMC>, <&cru BCLK_EMMC>,
 			 <&cru TCLK_EMMC>;
 		clock-names = "core", "bus", "axi", "block", "timer";
+		resets = <&cru SRST_C_EMMC>, <&cru SRST_H_EMMC>,
+			 <&cru SRST_A_EMMC>, <&cru SRST_B_EMMC>,
+			 <&cru SRST_T_EMMC>;
+		reset-names = "core", "bus", "axi", "block", "timer";
 		status = "disabled";
 	};
 
@@ -3329,33 +3378,31 @@
 		status = "disabled";
 	};
 
-	video_phy0: phy@fe850000 {
-		compatible = "rockchip,rk3568-dsi-dphy", "rockchip,rk3568-video-phy";
+	video_phy0: video-phy@fe850000 {
+		compatible = "rockchip,rk3568-video-phy";
 		reg = <0x0 0xfe850000  0x0 0x10000>,
 		      <0x0 0xfe060000 0x0 0x10000>;
-		reg-names = "phy", "host";
 		clocks = <&pmucru CLK_MIPIDSIPHY0_REF>,
 			 <&cru PCLK_MIPIDSIPHY0>, <&cru PCLK_DSITX_0>;
-		clock-names = "ref", "pclk", "pclk_host";
+		clock-names = "ref", "pclk_phy", "pclk_host";
 		#clock-cells = <0>;
 		resets = <&cru SRST_P_MIPIDSIPHY0>;
-		reset-names = "apb";
+		reset-names = "rst";
 		power-domains = <&power RK3568_PD_VO>;
 		#phy-cells = <0>;
 		status = "disabled";
 	};
 
-	video_phy1: phy@fe860000 {
-		compatible = "rockchip,rk3568-dsi-dphy", "rockchip,rk3568-video-phy";
+	video_phy1: video-phy@fe860000 {
+		compatible = "rockchip,rk3568-video-phy";
 		reg = <0x0 0xfe860000  0x0 0x10000>,
 		      <0x0 0xfe070000 0x0 0x10000>;
-		reg-names = "phy", "host";
 		clocks = <&pmucru CLK_MIPIDSIPHY1_REF>,
 			 <&cru PCLK_MIPIDSIPHY1>, <&cru PCLK_DSITX_1>;
-		clock-names = "ref", "pclk", "pclk_host";
+		clock-names = "ref", "pclk_phy", "pclk_host";
 		#clock-cells = <0>;
 		resets = <&cru SRST_P_MIPIDSIPHY1>;
-		reset-names = "apb";
+		reset-names = "rst";
 		power-domains = <&power RK3568_PD_VO>;
 		#phy-cells = <0>;
 		status = "disabled";
@@ -3465,7 +3512,7 @@
 		#size-cells = <2>;
 		ranges;
 
-		gpio0: gpio0@fdd60000 {
+		gpio0: gpio@fdd60000 {
 			compatible = "rockchip,gpio-bank";
 			reg = <0x0 0xfdd60000 0x0 0x100>;
 			interrupts = <GIC_SPI 33 IRQ_TYPE_LEVEL_HIGH>;
@@ -3473,11 +3520,12 @@
 
 			gpio-controller;
 			#gpio-cells = <2>;
+			gpio-ranges = <&pinctrl 0 0 32>;
 			interrupt-controller;
 			#interrupt-cells = <2>;
 		};
 
-		gpio1: gpio1@fe740000 {
+		gpio1: gpio@fe740000 {
 			compatible = "rockchip,gpio-bank";
 			reg = <0x0 0xfe740000 0x0 0x100>;
 			interrupts = <GIC_SPI 34 IRQ_TYPE_LEVEL_HIGH>;
@@ -3485,11 +3533,12 @@
 
 			gpio-controller;
 			#gpio-cells = <2>;
+			gpio-ranges = <&pinctrl 0 32 32>;
 			interrupt-controller;
 			#interrupt-cells = <2>;
 		};
 
-		gpio2: gpio2@fe750000 {
+		gpio2: gpio@fe750000 {
 			compatible = "rockchip,gpio-bank";
 			reg = <0x0 0xfe750000 0x0 0x100>;
 			interrupts = <GIC_SPI 35 IRQ_TYPE_LEVEL_HIGH>;
@@ -3497,11 +3546,12 @@
 
 			gpio-controller;
 			#gpio-cells = <2>;
+			gpio-ranges = <&pinctrl 0 64 32>;
 			interrupt-controller;
 			#interrupt-cells = <2>;
 		};
 
-		gpio3: gpio3@fe760000 {
+		gpio3: gpio@fe760000 {
 			compatible = "rockchip,gpio-bank";
 			reg = <0x0 0xfe760000 0x0 0x100>;
 			interrupts = <GIC_SPI 36 IRQ_TYPE_LEVEL_HIGH>;
@@ -3509,11 +3559,12 @@
 
 			gpio-controller;
 			#gpio-cells = <2>;
+			gpio-ranges = <&pinctrl 0 96 32>;
 			interrupt-controller;
 			#interrupt-cells = <2>;
 		};
 
-		gpio4: gpio4@fe770000 {
+		gpio4: gpio@fe770000 {
 			compatible = "rockchip,gpio-bank";
 			reg = <0x0 0xfe770000 0x0 0x100>;
 			interrupts = <GIC_SPI 37 IRQ_TYPE_LEVEL_HIGH>;
@@ -3521,10 +3572,22 @@
 
 			gpio-controller;
 			#gpio-cells = <2>;
+			gpio-ranges = <&pinctrl 0 128 32>;
 			interrupt-controller;
 			#interrupt-cells = <2>;
 		};
 	};
 };
 
-#include "rk3568-pinctrl.dtsi"
+&vp0 {
+	rockchip,plane-mask = <(1 << ROCKCHIP_VOP2_CLUSTER0 | 1 << ROCKCHIP_VOP2_ESMART0)>;
+	rockchip,primary-plane = <ROCKCHIP_VOP2_ESMART0>;
+};
+
+&vp1 {
+	rockchip,plane-mask = <(1 << ROCKCHIP_VOP2_CLUSTER1 | 1 << ROCKCHIP_VOP2_ESMART1)>;
+	rockchip,primary-plane = <ROCKCHIP_VOP2_ESMART1>;
+};
+
+
+#include "rk3568-pinctrl-3a.dtsi"

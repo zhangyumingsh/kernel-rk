@@ -13,7 +13,6 @@
 #include <dt-bindings/display/drm_mipi_dsi.h>
 #include <dt-bindings/sensor-dev.h>
 #include "rk3568.dtsi"
-#include "rk3568-linux.dtsi"
 
 / {
 	compatible = "rockchip,rk3568-firefly-core", "rockchip,rk3568";
@@ -48,7 +47,7 @@
 		simple-audio-card,format = "i2s";
 		simple-audio-card,mclk-fs = <128>;
 		simple-audio-card,name = "rockchip,hdmi";
-		status = "disabled";
+		status = "okay";
 
 		simple-audio-card,cpu {
 				sound-dai = <&i2s0_8ch>;
@@ -96,20 +95,21 @@
 		simple-audio-card,format = "i2s";
 		simple-audio-card,name = "rockchip,rk809-codec";
 		simple-audio-card,mclk-fs = <256>;
-		simple-audio-card,widgets =
-                        "Microphone", "Mic Jack",
-                        "Headphone", "Headphone Jack";
-        simple-audio-card,routing =
-                        "Mic Jack", "MICBIAS1",
-                        "IN1P", "Mic Jack",
-                        "Headphone Jack", "HPOL",
-                        "Headphone Jack", "HPOR";
+
 		simple-audio-card,cpu {
 			sound-dai = <&i2s1_8ch>;
 		};
 		simple-audio-card,codec {
 			sound-dai = <&rk809_codec>;
 		};
+	};
+
+	rk_headset: rk-headset {
+		compatible = "rockchip_headset";
+		headset_gpio = <&gpio2 RK_PD2 GPIO_ACTIVE_HIGH>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&hp_det>;
+		io-channels = <&saradc 2>;    //HP_HOOK pin
 	};
 
 	spdif-sound {
@@ -128,14 +128,6 @@
 			status = "okay";
 			compatible = "linux,spdif-dit";
 			#sound-dai-cells = <0>;
-	};
-
-	vad_sound: vad-sound {
-		status = "disabled";
-		compatible = "rockchip,multicodecs-card";
-		rockchip,card-name = "rockchip,rk3568-vad";
-		rockchip,cpu = <&i2s1_8ch>;
-		rockchip,codec = <&rk809_codec>, <&vad>;
 	};
 
 	vcc3v3_sys: vcc3v3-sys {
@@ -175,6 +167,7 @@
 		pinctrl-names = "default";
 		pinctrl-0 = <&vcc5v0_otg_en>;
 		regulator-name = "vcc5v0_otg";
+		regulator-always-on;
 	};
 
 	vcc3v3_lcd0_n: vcc3v3-lcd0-n {
@@ -210,7 +203,15 @@
 
 &dmc {
 	center-supply = <&vdd_logic>;
-	status = "disabled";
+	status = "okay";
+};
+
+&video_phy0 {
+	status = "okay";
+};
+
+&display_subsystem {
+    status = "okay";
 };
 
 &gpu {
@@ -232,6 +233,11 @@
 
 &hdmi_sound {
 	status = "okay";
+};
+
+&route_hdmi {
+	status = "okay";
+	connect = <&vp0_out_hdmi>;
 };
 
 &i2c0 {
@@ -508,17 +514,11 @@
 			clock-names = "mclk";
 			assigned-clocks = <&cru I2S1_MCLKOUT_TX>;
 			assigned-clock-parents = <&cru CLK_I2S1_8CH_TX>;
-			pinctrl-names = "default","spk_gpio";
+			pinctrl-names = "default";
 			pinctrl-0 = <&i2s1m0_mclk>;
-			pinctrl-1 = <&spk_ctl_gpio>;
 			hp-volume = <20>;
 			spk-volume = <3>;
-			//mic-in-differential;
-
-			capture-volume = <0>;
-			io-channels = <&saradc 4>;
-			hp-det-adc-value = <1000>;
-			spk-ctl-gpios = <&gpio3 RK_PC5 GPIO_ACTIVE_HIGH>;
+			mic-in-differential;
 			status = "okay";
 		};
 	};
@@ -710,7 +710,7 @@
 };
 
 &usbdrd_dwc3 {
-	dr_mode = "otg";
+	dr_mode = "host";
 	extcon = <&usb2phy0>;
 	status = "okay";
 };
@@ -725,13 +725,6 @@
 
 &usbhost30 {
 	status = "okay";
-};
-
-&vad {
-	rockchip,audio-src = <&i2s1_8ch>;
-	rockchip,buffer-time-ms = <128>;
-	rockchip,det-channel = <0>;
-	rockchip,mode = <0>;
 };
 
 &vdpu {
@@ -770,21 +763,17 @@
 
 		soc_slppin_gpio: soc_slppin_gpio {
 			rockchip,pins =
-				<0 RK_PA2 RK_FUNC_GPIO &pcfg_output_low_pull_down>;
+				<0 RK_PA2 RK_FUNC_GPIO &pcfg_output_low>;
 		};
 
 		soc_slppin_slp: soc_slppin_slp {
 			rockchip,pins =
-				<0 RK_PA2 1 &pcfg_pull_up>;
+				<0 RK_PA2 1 &pcfg_pull_none>;
 		};
 
 		soc_slppin_rst: soc_slppin_rst {
 			rockchip,pins =
 				<0 RK_PA2 2 &pcfg_pull_none>;
-		};
-
-		spk_ctl_gpio: spk_ctl_gpio {
-			rockchip,pins = <3 RK_PC5 RK_FUNC_GPIO &pcfg_pull_up>;
 		};
 	};
 
@@ -795,6 +784,12 @@
 
 		vcc5v0_otg_en: vcc5v0-otg-en {
 			rockchip,pins = <0 RK_PA5 RK_FUNC_GPIO &pcfg_pull_none>;
+		};
+	};
+
+	headphone {
+		hp_det: hp-det {
+			rockchip,pins = <2 RK_PD2 RK_FUNC_GPIO &pcfg_pull_up>;
 		};
 	};
 };
