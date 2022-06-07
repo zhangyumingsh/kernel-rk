@@ -95,7 +95,7 @@
 dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3566-firefly-roc-pc-old.dtb
 dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3568-firefly-roc-pc.dtb
 dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3568-firefly-roc-pc-old.dtb
-#dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3568-bpi-r2-pro.dtb
+dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3568-bpi-r2-pro.dtb
 dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3568-bpi-r2-pro-old.dtb
 #dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3568-bpi-r2pro-pc_mt7531sw.dtb
 #dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3568-rock-3-a.dtb
