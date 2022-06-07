@@ -13,7 +13,7 @@
 #include <dt-bindings/display/drm_mipi_dsi.h>
 #include <dt-bindings/sensor-dev.h>
 //#include <dt-bindings/display/media-bus-format.h>
-#include "rk3568.dtsi"
+#include "rk3568-old.dtsi"
 
 / {
 	compatible = "rockchip,rk3568-bpi-r2pro-core", "rockchip,rk3568";
