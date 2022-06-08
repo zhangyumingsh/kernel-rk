@@ -20,12 +20,6 @@
 	model = "Pine64 RK3566 Quartz64-A Board";
 	compatible = "rockchip,rk3566-quartz64-a", "rockchip,rk3566";
 
-	chosen: chosen {
-		bootargs = "earlycon=uart8250,mmio32,0xfe660000 console=ttyFIQ0 root=PARTLABEL=rootfs rootfstype=ext4 rw rootwait overlayroot=device:dev=PARTLABEL=userdata,fstype=ext4,mkfs=1";
-	};
-//	chosen: chosen {
-//		bootargs = "earlycon=uart8250,mmio32,0xfe660000 console=ttyFIQ0";
-//
 	fiq-debugger {
 		compatible = "rockchip,fiq-debugger";
 		rockchip,serial-id = <2>;

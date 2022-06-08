@@ -90,7 +90,7 @@
 #dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3568-nvr-demo-v10-linux-spi-nand.dtb
 #dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3568-nvr-demo-v12-linux.dtb
 #dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3568-nvr-demo-v12-linux-spi-nand.dtb
-#dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3566-firefly-roc-pc.dtb
+dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3566-firefly-roc-pc.dtb
 dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3566-firefly-roc-pc-old.dtb
 dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3566-quartz64-a.dtb
 dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3568-firefly-roc-pc.dtb

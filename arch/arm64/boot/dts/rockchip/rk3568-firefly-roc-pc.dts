@@ -390,7 +390,7 @@
 			pinctrl-0 = <&led_user>;
 		};
 
-    };
+    	};
 
 	vcc3v3_lcd0_n: vcc3v3-lcd0-n {
 		compatible = "regulator-fixed";
@@ -997,10 +997,6 @@
 	pinctrl-names = "default";
 	pinctrl-0 = <&sdmmc2m0_bus4 &sdmmc2m0_cmd &sdmmc2m0_clk>;
 	sd-uhs-sdr104;
-	status = "okay";
-};
-
-&sfc {
 	status = "okay";
 };
 
