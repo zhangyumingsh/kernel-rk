@@ -2,7 +2,7 @@
 /*
  * BCMSDH Function Driver for the native SDIO/MMC driver in the Linux Kernel
  *
- * Copyright (C) 1999-2018, Broadcom Corporation
+ * Copyright (C) 1999-2019, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -143,14 +143,14 @@ static int sdioh_probe(struct sdio_func *func)
 #ifdef LOAD_DHD_WITH_FW_ALIVE
 	sdioh_cfg_read(sdioh, SDIO_FUNC_0, SDIOD_CCCR_IORDY, (uint8 *)&ready);
 
-	sd_info(("%s, %d, ready = %08x\n", __func__, __LINE__, ready));
+	sd_err(("%s, %d, ready = %08x\n", __func__, __LINE__, ready));
 	if(ready == (SDIO_FUNC_READY_1|SDIO_FUNC_READY_2)) {
 		alive = FW_ALIVE_MAGIC;	//func->card->nr_parts;
 		card_dev = func->card->cis.device;
 	}
 
-	sd_info(("nr_parts = %08x, card_dev = %08x\n", alive, card_dev));
-#endif
+	sd_info(("alive  = %08x, card_dev = %08x\n", alive, card_dev));
+#endif /* LOAD_DHD_WITH_FW_ALIVE */
 	 sdioh->bcmsdh = bcmsdh_probe(osh, &func->dev, sdioh, adapter, SDIO_BUS, host_idx, rca);
 	 if (sdioh->bcmsdh == NULL) {
 		 sd_err(("%s: bcmsdh_probe failed\n", __FUNCTION__));
@@ -187,6 +187,7 @@ static void sdioh_remove(struct sdio_func *func)
 
 extern int cis_chipvendor;
 extern unsigned short cis_device;
+
 static int bcmsdh_sdmmc_probe(struct sdio_func *func,
                               const struct sdio_device_id *id)
 {
@@ -209,7 +210,7 @@ static int bcmsdh_sdmmc_probe(struct sdio_func *func,
 		while( tuple != NULL) {
 //			printf("Got tuple code=0x%x\n", tuple->code);
 			if(tuple->code == 0x81 && tuple->size == 0x01 && tuple->data[0] == 0x01) {
-				printf("Got the chip vendor, tuple code=0x81\n");
+				printf("Got the chip vendor, tuple code=0x81 , Azurewave Module\n");
 				cis_chipvendor = 0x81;
 				break;
 			}

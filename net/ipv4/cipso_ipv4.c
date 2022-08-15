@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * CIPSO - Commercial IP Security Option
  *
@@ -9,30 +10,15 @@
  *
  * The CIPSO draft specification can be found in the kernel's Documentation
  * directory as well as the following URL:
- *   http://tools.ietf.org/id/draft-ietf-cipso-ipsecurity-01.txt
+ *   https://tools.ietf.org/id/draft-ietf-cipso-ipsecurity-01.txt
  * The FIPS-188 specification can be found at the following URL:
- *   http://www.itl.nist.gov/fipspubs/fip188.htm
+ *   https://www.itl.nist.gov/fipspubs/fip188.htm
  *
  * Author: Paul Moore <paul.moore@hp.com>
- *
  */
 
 /*
  * (c) Copyright Hewlett-Packard Development Company, L.P., 2006, 2008
- *
- * This program is free software;  you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY;  without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See
- * the GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program;  if not, see <http://www.gnu.org/licenses/>.
- *
  */
 
 #include <linux/init.h>
@@ -133,77 +119,6 @@ int cipso_v4_rbm_strictvalid = 1;
 /*
  * Helper Functions
  */
-
-/**
- * cipso_v4_bitmap_walk - Walk a bitmap looking for a bit
- * @bitmap: the bitmap
- * @bitmap_len: length in bits
- * @offset: starting offset
- * @state: if non-zero, look for a set (1) bit else look for a cleared (0) bit
- *
- * Description:
- * Starting at @offset, walk the bitmap from left to right until either the
- * desired bit is found or we reach the end.  Return the bit offset, -1 if
- * not found, or -2 if error.
- */
-static int cipso_v4_bitmap_walk(const unsigned char *bitmap,
-				u32 bitmap_len,
-				u32 offset,
-				u8 state)
-{
-	u32 bit_spot;
-	u32 byte_offset;
-	unsigned char bitmask;
-	unsigned char byte;
-
-	/* gcc always rounds to zero when doing integer division */
-	byte_offset = offset / 8;
-	byte = bitmap[byte_offset];
-	bit_spot = offset;
-	bitmask = 0x80 >> (offset % 8);
-
-	while (bit_spot < bitmap_len) {
-		if ((state && (byte & bitmask) == bitmask) ||
-		    (state == 0 && (byte & bitmask) == 0))
-			return bit_spot;
-
-		if (++bit_spot >= bitmap_len)
-			return -1;
-		bitmask >>= 1;
-		if (bitmask == 0) {
-			byte = bitmap[++byte_offset];
-			bitmask = 0x80;
-		}
-	}
-
-	return -1;
-}
-
-/**
- * cipso_v4_bitmap_setbit - Sets a single bit in a bitmap
- * @bitmap: the bitmap
- * @bit: the bit
- * @state: if non-zero, set the bit (1) else clear the bit (0)
- *
- * Description:
- * Set a single bit in the bitmask.  Returns zero on success, negative values
- * on error.
- */
-static void cipso_v4_bitmap_setbit(unsigned char *bitmap,
-				   u32 bit,
-				   u8 state)
-{
-	u32 byte_spot;
-	u8 bitmask;
-
-	/* gcc always rounds to zero when doing integer division */
-	byte_spot = bit / 8;
-	bitmask = 0x80 >> (bit % 8);
-	if (state)
-		bitmap[byte_spot] |= bitmask;
-	else
-		bitmap[byte_spot] &= ~bitmask;
-}
 
 /**
  * cipso_v4_cache_entry_free - Frees a cache entry
@@ -336,7 +251,7 @@ static int cipso_v4_cache_check(const unsigned char *key,
 		    entry->key_len == key_len &&
 		    memcmp(entry->key, key, key_len) == 0) {
 			entry->activity += 1;
-			atomic_inc(&entry->lsm_data->refcount);
+			refcount_inc(&entry->lsm_data->refcount);
 			secattr->cache = entry->lsm_data;
 			secattr->flags |= NETLBL_SECATTR_CACHE;
 			secattr->type = NETLBL_NLTYPE_CIPSOV4;
@@ -368,7 +283,7 @@ static int cipso_v4_cache_check(const unsigned char *key,
 
 /**
  * cipso_v4_cache_add - Add an entry to the CIPSO cache
- * @skb: the packet
+ * @cipso_ptr: pointer to CIPSO IP option
  * @secattr: the packet's security attributes
  *
  * Description:
@@ -403,7 +318,7 @@ int cipso_v4_cache_add(const unsigned char *cipso_ptr,
 	}
 	entry->key_len = cipso_ptr_len;
 	entry->hash = cipso_v4_map_cache_hash(cipso_ptr, cipso_ptr_len);
-	atomic_inc(&secattr->cache->refcount);
+	refcount_inc(&secattr->cache->refcount);
 	entry->lsm_data = secattr->cache;
 
 	bkt = entry->hash & (CIPSO_V4_CACHE_BUCKETS - 1);
@@ -446,7 +361,7 @@ static struct cipso_v4_doi *cipso_v4_doi_search(u32 doi)
 	struct cipso_v4_doi *iter;
 
 	list_for_each_entry_rcu(iter, &cipso_v4_doi_list, list)
-		if (iter->doi == doi && atomic_read(&iter->refcount))
+		if (iter->doi == doi && refcount_read(&iter->refcount))
 			return iter;
 	return NULL;
 }
@@ -500,7 +415,7 @@ int cipso_v4_doi_add(struct cipso_v4_doi *doi_def,
 		}
 	}
 
-	atomic_set(&doi_def->refcount, 1);
+	refcount_set(&doi_def->refcount, 1);
 
 	spin_lock(&cipso_v4_doi_list_lock);
 	if (cipso_v4_doi_search(doi_def->doi)) {
@@ -557,6 +472,7 @@ void cipso_v4_doi_free(struct cipso_v4_doi *doi_def)
 		kfree(doi_def->map.std->lvl.local);
 		kfree(doi_def->map.std->cat.cipso);
 		kfree(doi_def->map.std->cat.local);
+		kfree(doi_def->map.std);
 		break;
 	}
 	kfree(doi_def);
@@ -583,7 +499,7 @@ static void cipso_v4_doi_free_rcu(struct rcu_head *entry)
 /**
  * cipso_v4_doi_remove - Remove an existing DOI from the CIPSO protocol engine
  * @doi: the DOI value
- * @audit_secid: the LSM secid to use in the audit message
+ * @audit_info: NetLabel audit information
  *
  * Description:
  * Removes a DOI definition from the CIPSO engine.  The NetLabel routines will
@@ -604,16 +520,10 @@ int cipso_v4_doi_remove(u32 doi, struct netlbl_audit *audit_info)
 		ret_val = -ENOENT;
 		goto doi_remove_return;
 	}
-	if (!atomic_dec_and_test(&doi_def->refcount)) {
-		spin_unlock(&cipso_v4_doi_list_lock);
-		ret_val = -EBUSY;
-		goto doi_remove_return;
-	}
 	list_del_rcu(&doi_def->list);
 	spin_unlock(&cipso_v4_doi_list_lock);
 
-	cipso_v4_cache_invalidate();
-	call_rcu(&doi_def->rcu, cipso_v4_doi_free_rcu);
+	cipso_v4_doi_putdef(doi_def);
 	ret_val = 0;
 
 doi_remove_return:
@@ -647,7 +557,7 @@ struct cipso_v4_doi *cipso_v4_doi_getdef(u32 doi)
 	doi_def = cipso_v4_doi_search(doi);
 	if (!doi_def)
 		goto doi_getdef_return;
-	if (!atomic_inc_not_zero(&doi_def->refcount))
+	if (!refcount_inc_not_zero(&doi_def->refcount))
 		doi_def = NULL;
 
 doi_getdef_return:
@@ -668,11 +578,8 @@ void cipso_v4_doi_putdef(struct cipso_v4_doi *doi_def)
 	if (!doi_def)
 		return;
 
-	if (!atomic_dec_and_test(&doi_def->refcount))
+	if (!refcount_dec_and_test(&doi_def->refcount))
 		return;
-	spin_lock(&cipso_v4_doi_list_lock);
-	list_del_rcu(&doi_def->list);
-	spin_unlock(&cipso_v4_doi_list_lock);
 
 	cipso_v4_cache_invalidate();
 	call_rcu(&doi_def->rcu, cipso_v4_doi_free_rcu);
@@ -701,7 +608,7 @@ int cipso_v4_doi_walk(u32 *skip_cnt,
 
 	rcu_read_lock();
 	list_for_each_entry_rcu(iter_doi, &cipso_v4_doi_list, list)
-		if (atomic_read(&iter_doi->refcount) > 0) {
+		if (refcount_read(&iter_doi->refcount) > 0) {
 			if (doi_cnt++ < *skip_cnt)
 				continue;
 			ret_val = callback(iter_doi, cb_arg);
@@ -842,10 +749,10 @@ static int cipso_v4_map_cat_rbm_valid(const struct cipso_v4_doi *doi_def,
 		cipso_cat_size = doi_def->map.std->cat.cipso_size;
 		cipso_array = doi_def->map.std->cat.cipso;
 		for (;;) {
-			cat = cipso_v4_bitmap_walk(bitmap,
-						   bitmap_len_bits,
-						   cat + 1,
-						   1);
+			cat = netlbl_bitmap_walk(bitmap,
+						 bitmap_len_bits,
+						 cat + 1,
+						 1);
 			if (cat < 0)
 				break;
 			if (cat >= cipso_cat_size ||
@@ -911,7 +818,7 @@ static int cipso_v4_map_cat_rbm_hton(const struct cipso_v4_doi *doi_def,
 		}
 		if (net_spot >= net_clen_bits)
 			return -ENOSPC;
-		cipso_v4_bitmap_setbit(net_cat, net_spot, 1);
+		netlbl_bitmap_setbit(net_cat, net_spot, 1);
 
 		if (net_spot > net_spot_max)
 			net_spot_max = net_spot;
@@ -953,10 +860,10 @@ static int cipso_v4_map_cat_rbm_ntoh(const struct cipso_v4_doi *doi_def,
 	}
 
 	for (;;) {
-		net_spot = cipso_v4_bitmap_walk(net_cat,
-						net_clen_bits,
-						net_spot + 1,
-						1);
+		net_spot = netlbl_bitmap_walk(net_cat,
+					      net_clen_bits,
+					      net_spot + 1,
+					      1);
 		if (net_spot < 0) {
 			if (net_spot == -2)
 				return -EFAULT;
@@ -1343,7 +1250,8 @@ static int cipso_v4_parsetag_rbm(const struct cipso_v4_doi *doi_def,
 			return ret_val;
 		}
 
-		secattr->flags |= NETLBL_SECATTR_MLS_CAT;
+		if (secattr->attr.mls.cat)
+			secattr->flags |= NETLBL_SECATTR_MLS_CAT;
 	}
 
 	return 0;
@@ -1524,7 +1432,8 @@ static int cipso_v4_parsetag_rng(const struct cipso_v4_doi *doi_def,
 			return ret_val;
 		}
 
-		secattr->flags |= NETLBL_SECATTR_MLS_CAT;
+		if (secattr->attr.mls.cat)
+			secattr->flags |= NETLBL_SECATTR_MLS_CAT;
 	}
 
 	return 0;
@@ -1618,6 +1527,7 @@ unsigned char *cipso_v4_optptr(const struct sk_buff *skb)
 
 /**
  * cipso_v4_validate - Validate a CIPSO option
+ * @skb: the packet
  * @option: the start of the option, on error it is set to point to the error
  *
  * Description:
@@ -1809,6 +1719,7 @@ void cipso_v4_error(struct sk_buff *skb, int error, u32 gateway)
 {
 	unsigned char optbuf[sizeof(struct ip_options) + 40];
 	struct ip_options *opt = (struct ip_options *)optbuf;
+	int res;
 
 	if (ip_hdr(skb)->protocol == IPPROTO_ICMP || error != -EACCES)
 		return;
@@ -1820,7 +1731,11 @@ void cipso_v4_error(struct sk_buff *skb, int error, u32 gateway)
 
 	memset(opt, 0, sizeof(struct ip_options));
 	opt->optlen = ip_hdr(skb)->ihl*4 - sizeof(struct iphdr);
-	if (__ip_options_compile(dev_net(skb->dev), opt, skb, NULL))
+	rcu_read_lock();
+	res = __ip_options_compile(dev_net(skb->dev), opt, skb, NULL);
+	rcu_read_unlock();
+
+	if (res)
 		return;
 
 	if (gateway)
@@ -1963,7 +1878,8 @@ int cipso_v4_sock_setattr(struct sock *sk,
 
 	sk_inet = inet_sk(sk);
 
-	old = rcu_dereference_protected(sk_inet->inet_opt, sock_owned_by_user(sk));
+	old = rcu_dereference_protected(sk_inet->inet_opt,
+					lockdep_sock_is_held(sk));
 	if (sk_inet->is_icsk) {
 		sk_conn = inet_csk(sk);
 		if (old)
@@ -2143,7 +2059,7 @@ void cipso_v4_sock_delattr(struct sock *sk)
 
 /**
  * cipso_v4_req_delattr - Delete the CIPSO option from a request socket
- * @reg: the request socket
+ * @req: the request socket
  *
  * Description:
  * Removes the CIPSO option from a request socket, if present.
@@ -2235,6 +2151,7 @@ int cipso_v4_sock_getattr(struct sock *sk, struct netlbl_lsm_secattr *secattr)
 /**
  * cipso_v4_skbuff_setattr - Set the CIPSO option on a packet
  * @skb: the packet
+ * @doi_def: the DOI structure
  * @secattr: the security attributes
  *
  * Description:

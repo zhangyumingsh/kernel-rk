@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _ASM_X86_ASM_H
 #define _ASM_X86_ASM_H
 
@@ -6,9 +7,11 @@
 # define __ASM_FORM_RAW(x)     x
 # define __ASM_FORM_COMMA(x) x,
 #else
-# define __ASM_FORM(x)	" " #x " "
-# define __ASM_FORM_RAW(x)     #x
-# define __ASM_FORM_COMMA(x) " " #x ","
+#include <linux/stringify.h>
+
+# define __ASM_FORM(x)	" " __stringify(x) " "
+# define __ASM_FORM_RAW(x)     __stringify(x)
+# define __ASM_FORM_COMMA(x) " " __stringify(x) ","
 #endif
 
 #ifndef __x86_64__
@@ -104,70 +107,74 @@
 
 #endif
 
+/*
+ * Macros to generate condition code outputs from inline assembly,
+ * The output operand must be type "bool".
+ */
+#ifdef __GCC_ASM_FLAG_OUTPUTS__
+# define CC_SET(c) "\n\t/* output condition code " #c "*/\n"
+# define CC_OUT(c) "=@cc" #c
+#else
+# define CC_SET(c) "\n\tset" #c " %[_cc_" #c "]\n"
+# define CC_OUT(c) [_cc_ ## c] "=qm"
+#endif
+
 /* Exception table entry */
 #ifdef __ASSEMBLY__
-# define _ASM_EXTABLE(from,to)					\
+# define _ASM_EXTABLE_HANDLE(from, to, handler)			\
 	.pushsection "__ex_table","a" ;				\
-	.balign 8 ;						\
+	.balign 4 ;						\
 	.long (from) - . ;					\
 	.long (to) - . ;					\
+	.long (handler) - . ;					\
 	.popsection
 
-# define _ASM_EXTABLE_EX(from,to)				\
-	.pushsection "__ex_table","a" ;				\
-	.balign 8 ;						\
-	.long (from) - . ;					\
-	.long (to) - . + 0x7ffffff0 ;				\
-	.popsection
+# define _ASM_EXTABLE(from, to)					\
+	_ASM_EXTABLE_HANDLE(from, to, ex_handler_default)
 
-# define _ASM_NOKPROBE(entry)					\
+# define _ASM_EXTABLE_UA(from, to)				\
+	_ASM_EXTABLE_HANDLE(from, to, ex_handler_uaccess)
+
+# define _ASM_EXTABLE_CPY(from, to)				\
+	_ASM_EXTABLE_HANDLE(from, to, ex_handler_copy)
+
+# define _ASM_EXTABLE_FAULT(from, to)				\
+	_ASM_EXTABLE_HANDLE(from, to, ex_handler_fault)
+
+# ifdef CONFIG_KPROBES
+#  define _ASM_NOKPROBE(entry)					\
 	.pushsection "_kprobe_blacklist","aw" ;			\
 	_ASM_ALIGN ;						\
 	_ASM_PTR (entry);					\
 	.popsection
+# else
+#  define _ASM_NOKPROBE(entry)
+# endif
 
-.macro ALIGN_DESTINATION
-	/* check for bad alignment of destination */
-	movl %edi,%ecx
-	andl $7,%ecx
-	jz 102f				/* already aligned */
-	subl $8,%ecx
-	negl %ecx
-	subl %ecx,%edx
-100:	movb (%rsi),%al
-101:	movb %al,(%rdi)
-	incq %rsi
-	incq %rdi
-	decl %ecx
-	jnz 100b
-102:
-	.section .fixup,"ax"
-103:	addl %ecx,%edx			/* ecx is zerorest also */
-	jmp copy_user_handle_tail
-	.previous
-
-	_ASM_EXTABLE(100b,103b)
-	_ASM_EXTABLE(101b,103b)
-	.endm
-
-#else
-# define _ASM_EXTABLE(from,to)					\
+#else /* ! __ASSEMBLY__ */
+# define _EXPAND_EXTABLE_HANDLE(x) #x
+# define _ASM_EXTABLE_HANDLE(from, to, handler)			\
 	" .pushsection \"__ex_table\",\"a\"\n"			\
-	" .balign 8\n"						\
+	" .balign 4\n"						\
 	" .long (" #from ") - .\n"				\
 	" .long (" #to ") - .\n"				\
+	" .long (" _EXPAND_EXTABLE_HANDLE(handler) ") - .\n"	\
 	" .popsection\n"
 
-# define _ASM_EXTABLE_EX(from,to)				\
-	" .pushsection \"__ex_table\",\"a\"\n"			\
-	" .balign 8\n"						\
-	" .long (" #from ") - .\n"				\
-	" .long (" #to ") - . + 0x7ffffff0\n"			\
-	" .popsection\n"
+# define _ASM_EXTABLE(from, to)					\
+	_ASM_EXTABLE_HANDLE(from, to, ex_handler_default)
+
+# define _ASM_EXTABLE_UA(from, to)				\
+	_ASM_EXTABLE_HANDLE(from, to, ex_handler_uaccess)
+
+# define _ASM_EXTABLE_CPY(from, to)				\
+	_ASM_EXTABLE_HANDLE(from, to, ex_handler_copy)
+
+# define _ASM_EXTABLE_FAULT(from, to)				\
+	_ASM_EXTABLE_HANDLE(from, to, ex_handler_fault)
+
 /* For C file, we already have NOKPROBE_SYMBOL macro */
-#endif
 
-#ifndef __ASSEMBLY__
 /*
  * This output constraint should be used for any inline asm which has a "call"
  * instruction.  Otherwise the asm may be inserted before the frame pointer
@@ -176,6 +183,6 @@
  */
 register unsigned long current_stack_pointer asm(_ASM_SP);
 #define ASM_CALL_CONSTRAINT "+r" (current_stack_pointer)
-#endif
+#endif /* __ASSEMBLY__ */
 
 #endif /* _ASM_X86_ASM_H */

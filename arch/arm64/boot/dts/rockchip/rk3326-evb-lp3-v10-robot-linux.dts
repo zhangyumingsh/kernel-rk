@@ -118,10 +118,6 @@
 	cpu-supply = <&vdd_arm>;
 };
 
-&display_subsystem {
-	status = "okay";
-};
-
 &dfi {
 	status = "okay";
 };
@@ -135,7 +131,8 @@
 	bus-width = <8>;
 	cap-mmc-highspeed;
 	mmc-hs200-1_8v;
-	supports-emmc;
+	no-sdio;
+	no-sd;
 	disable-wp;
 	non-removable;
 	num-slots = <1>;
@@ -404,7 +401,6 @@
 			};
 
 			otg_switch: OTG_SWITCH {
-				regulator-boot-on;
 				regulator-name = "otg_switch";
 			};
 		};
@@ -482,11 +478,6 @@
 		/* hw changed the pwdn to gpio2_b5 */
 		pwdn-gpios = <&gpio2 13 GPIO_ACTIVE_HIGH>;
 
-		rockchip,camera-module-index = <1>;
-		rockchip,camera-module-facing = "front";
-		rockchip,camera-module-name = "CMK-CW2392";
-		rockchip,camera-module-lens-name = "CMK-CW2392";
-
 		port {
 			gc2155_out: endpoint {
 				remote-endpoint = <&cif_in>;
@@ -507,11 +498,6 @@
 
 		/*reset-gpios = <&gpio2 14 GPIO_ACTIVE_HIGH>;*/
 		pwdn-gpios = <&gpio2 14 GPIO_ACTIVE_HIGH>;
-
-		rockchip,camera-module-index = <0>;
-		rockchip,camera-module-facing = "back";
-		rockchip,camera-module-name = "TongJu";
-		rockchip,camera-module-lens-name = "CHT842-MD";
 
 		port {
 			ucam_out: endpoint {
@@ -611,7 +597,8 @@
 	bus-width = <4>;
 	cap-mmc-highspeed;
 	cap-sd-highspeed;
-	supports-sd;
+	no-sdio;
+	no-mmc;
 	card-detect-delay = <800>;
 	ignore-pm-notify;
 	/*cd-gpios = <&gpio2 4 GPIO_ACTIVE_HIGH>; [> CD GPIO <]*/
@@ -627,7 +614,8 @@
 &sdio {
 	bus-width = <4>;
 	cap-sd-highspeed;
-	supports-sdio;
+	no-sd;
+	no-mmc;
 	ignore-pm-notify;
 	keep-power-in-suspend;
 	non-removable;
@@ -669,15 +657,27 @@
 	status = "okay";
 };
 
-&vopb {
+&mpp_srv {
 	status = "okay";
 };
 
-&vopb_mmu {
+&vdpu {
 	status = "okay";
 };
 
-&vpu_combo {
+&vepu {
+	status = "okay";
+};
+
+&vpu_mmu {
+	status = "okay";
+};
+
+&hevc {
+	status = "okay";
+};
+
+&hevc_mmu {
 	status = "okay";
 };
 
@@ -685,32 +685,32 @@
 	cif-pin-m0 {
 		cif_pin_m0: cif-pin-m0 {
 			rockchip,pins =
-				<2 RK_PA0 RK_FUNC_1 &pcfg_pull_none>,/* cif_data2 */
-				<2 RK_PA1 RK_FUNC_1 &pcfg_pull_none>,/* cif_data3 */
-				<2 RK_PA2 RK_FUNC_1 &pcfg_pull_none>,/* cif_data4 */
-				<2 RK_PA3 RK_FUNC_1 &pcfg_pull_none>,/* cif_data5 */
-				<2 RK_PA4 RK_FUNC_1 &pcfg_pull_none>,/* cif_data6 */
-				<2 RK_PA5 RK_FUNC_1 &pcfg_pull_none>,/* cif_data7 */
-				<2 RK_PA6 RK_FUNC_1 &pcfg_pull_none>,/* cif_data8 */
-				<2 RK_PA7 RK_FUNC_1 &pcfg_pull_none>,/* cif_data9 */
-				<2 RK_PB0 RK_FUNC_1 &pcfg_pull_none>,/* cif_sync */
-				<2 RK_PB1 RK_FUNC_1 &pcfg_pull_none>,/* cif_href */
-				<2 RK_PB2 RK_FUNC_1 &pcfg_pull_none>;/* cif_clkin */
+				<2 RK_PA0 1 &pcfg_pull_none>,/* cif_data2 */
+				<2 RK_PA1 1 &pcfg_pull_none>,/* cif_data3 */
+				<2 RK_PA2 1 &pcfg_pull_none>,/* cif_data4 */
+				<2 RK_PA3 1 &pcfg_pull_none>,/* cif_data5 */
+				<2 RK_PA4 1 &pcfg_pull_none>,/* cif_data6 */
+				<2 RK_PA5 1 &pcfg_pull_none>,/* cif_data7 */
+				<2 RK_PA6 1 &pcfg_pull_none>,/* cif_data8 */
+				<2 RK_PA7 1 &pcfg_pull_none>,/* cif_data9 */
+				<2 RK_PB0 1 &pcfg_pull_none>,/* cif_sync */
+				<2 RK_PB1 1 &pcfg_pull_none>,/* cif_href */
+				<2 RK_PB2 1 &pcfg_pull_none>;/* cif_clkin */
 		};
 
 		cif_pin_m1: cif-pin-m1 {
 			rockchip,pins =
-				<3 RK_PA3 RK_FUNC_3 &pcfg_pull_none>,/* cif_data2 */
-				<3 RK_PA5 RK_FUNC_3 &pcfg_pull_none>,/* cif_data3 */
-				<3 RK_PA7 RK_FUNC_3 &pcfg_pull_none>,/* cif_data4 */
-				<3 RK_PB0 RK_FUNC_3 &pcfg_pull_none>,/* cif_data5 */
-				<3 RK_PB1 RK_FUNC_3 &pcfg_pull_none>,/* cif_data6 */
-				<3 RK_PB4 RK_FUNC_3 &pcfg_pull_none>,/* cif_data7 */
-				<3 RK_PB6 RK_FUNC_3 &pcfg_pull_none>,/* cif_data8 */
-				<3 RK_PB7 RK_FUNC_3 &pcfg_pull_none>,/* cif_data9 */
-				<3 RK_PD1 RK_FUNC_3 &pcfg_pull_none>,/* cif_sync */
-				<3 RK_PD2 RK_FUNC_3 &pcfg_pull_none>,/* cif_href */
-				<3 RK_PD3 RK_FUNC_3 &pcfg_pull_none>;/* cif_clkin */
+				<3 RK_PA3 3 &pcfg_pull_none>,/* cif_data2 */
+				<3 RK_PA5 3 &pcfg_pull_none>,/* cif_data3 */
+				<3 RK_PA7 3 &pcfg_pull_none>,/* cif_data4 */
+				<3 RK_PB0 3 &pcfg_pull_none>,/* cif_data5 */
+				<3 RK_PB1 3 &pcfg_pull_none>,/* cif_data6 */
+				<3 RK_PB4 3 &pcfg_pull_none>,/* cif_data7 */
+				<3 RK_PB6 3 &pcfg_pull_none>,/* cif_data8 */
+				<3 RK_PB7 3 &pcfg_pull_none>,/* cif_data9 */
+				<3 RK_PD1 3 &pcfg_pull_none>,/* cif_sync */
+				<3 RK_PD2 3 &pcfg_pull_none>,/* cif_href */
+				<3 RK_PD3 3 &pcfg_pull_none>;/* cif_clkin */
 		};
 	};
 
@@ -727,12 +727,12 @@
 
 		soc_slppin_slp: soc_slppin_slp {
 			rockchip,pins =
-				<0 RK_PA4 RK_FUNC_1 &pcfg_pull_none>;
+				<0 RK_PA4 1 &pcfg_pull_none>;
 		};
 
 		soc_slppin_rst: soc_slppin_rst {
 			rockchip,pins =
-				<0 RK_PA4 RK_FUNC_2 &pcfg_pull_none>;
+				<0 RK_PA4 2 &pcfg_pull_none>;
 		};
 	};
 

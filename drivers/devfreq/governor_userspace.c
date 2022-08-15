@@ -1,12 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
- *  linux/drivers/devfreq/governor_simpleondemand.c
+ *  linux/drivers/devfreq/governor_userspace.c
  *
  *  Copyright (C) 2011 Samsung Electronics
  *	MyungJoo Ham <myungjoo.ham@samsung.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/slab.h>
@@ -41,7 +38,6 @@ static ssize_t store_freq(struct device *dev, struct device_attribute *attr,
 	struct userspace_data *data;
 	unsigned long wanted;
 	int err = 0;
-
 
 	mutex_lock(&devfreq->lock);
 	data = devfreq->data;
@@ -79,8 +75,8 @@ static struct attribute *dev_entries[] = {
 	&dev_attr_set_freq.attr,
 	NULL,
 };
-static struct attribute_group dev_attr_group = {
-	.name	= "userspace",
+static const struct attribute_group dev_attr_group = {
+	.name	= DEVFREQ_GOV_USERSPACE,
 	.attrs	= dev_entries,
 };
 
@@ -123,11 +119,9 @@ static int devfreq_userspace_handler(struct devfreq *devfreq,
 	switch (event) {
 	case DEVFREQ_GOV_START:
 		ret = userspace_init(devfreq);
-		devfreq->last_status.update = true;
 		break;
 	case DEVFREQ_GOV_STOP:
 		userspace_exit(devfreq);
-		devfreq->last_status.update = false;
 		break;
 	default:
 		break;
@@ -137,7 +131,7 @@ static int devfreq_userspace_handler(struct devfreq *devfreq,
 }
 
 static struct devfreq_governor devfreq_userspace = {
-	.name = "userspace",
+	.name = DEVFREQ_GOV_USERSPACE,
 	.get_target_freq = devfreq_userspace_func,
 	.event_handler = devfreq_userspace_handler,
 };

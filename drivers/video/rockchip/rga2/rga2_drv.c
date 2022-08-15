@@ -28,7 +28,7 @@
 #include <linux/irq.h>
 #include <linux/interrupt.h>
 #include <linux/fs.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 #include <linux/miscdevice.h>
 #include <linux/poll.h>
 #include <linux/delay.h>
@@ -45,7 +45,7 @@
 
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 4, 0))
 #include <linux/pm_runtime.h>
-#include <linux/dma-buf.h>
+#include <linux/dma-buf-cache.h>
 #endif
 
 #include "rga2.h"

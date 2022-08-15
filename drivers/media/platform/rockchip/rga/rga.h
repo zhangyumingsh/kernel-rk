@@ -1,15 +1,7 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (C) Fuzhou Rockchip Electronics Co.Ltd
  * Author: Jacob Chen <jacob-chen@iotwrt.com>
- *
- * This software is licensed under the terms of the GNU General Public
- * License version 2, as published by the Free Software Foundation, and
- * may be copied, distributed, and modified under those terms.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 #ifndef __RGA_H__
 #define __RGA_H__
@@ -36,7 +28,6 @@ struct rga_frame {
 	u32 width;
 	u32 height;
 	u32 colorspace;
-	u32 quantization;
 
 	/* Crop */
 	struct v4l2_rect crop;
@@ -87,10 +78,6 @@ struct rockchip_rga {
 	/* ctrl parm lock */
 	spinlock_t ctrl_lock;
 
-	wait_queue_head_t irq_queue;
-
-	void *alloc_ctx;
-
 	struct rga_ctx *curr;
 	dma_addr_t cmdbuf_phy;
 	void *cmdbuf_virt;
@@ -100,20 +87,20 @@ struct rockchip_rga {
 
 struct rga_frame *rga_get_frame(struct rga_ctx *ctx, enum v4l2_buf_type type);
 
-/* RGA Buffers Manage Part */
+/* RGA Buffers Manage */
 extern const struct vb2_ops rga_qops;
 void rga_buf_map(struct vb2_buffer *vb);
 
-/* RGA Hardware Part */
+/* RGA Hardware */
 static inline void rga_write(struct rockchip_rga *rga, u32 reg, u32 value)
 {
 	writel(value, rga->regs + reg);
-}
+};
 
 static inline u32 rga_read(struct rockchip_rga *rga, u32 reg)
 {
 	return readl(rga->regs + reg);
-}
+};
 
 static inline void rga_mod(struct rockchip_rga *rga, u32 reg, u32 val, u32 mask)
 {
@@ -121,9 +108,8 @@ static inline void rga_mod(struct rockchip_rga *rga, u32 reg, u32 val, u32 mask)
 
 	temp |= val & mask;
 	rga_write(rga, reg, temp);
-}
+};
 
-void rga_start(struct rockchip_rga *rga);
-void rga_cmd_set(struct rga_ctx *ctx);
+void rga_hw_start(struct rockchip_rga *rga);
 
 #endif

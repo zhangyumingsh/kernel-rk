@@ -4,37 +4,6 @@
 /dts-v1/;
 #include "rk3288-evb-rk628.dtsi"
 
-/ {
-	model = "Rockchip RK3288 EVB RK628 Board";
-	compatible = "rockchip,rk3288-evb-rk628", "rockchip,rk3288";
-
-	chosen {
-		bootargs = "rootwait earlycon=uart8250,mmio32,0xff690000 vmalloc=496M swiotlb=1 console=ttyFIQ0 androidboot.baseband=N/A androidboot.veritymode=enforcing androidboot.hardware=rk30board androidboot.console=ttyFIQ0 init=/init kpti=0";
-	};
-};
-
-&firmware_android {
-	compatible = "android,firmware";
-	boot_devices = "ff0f0000.dwmmc";
-
-	vbmeta {
-		compatible = "android,vbmeta";
-		parts = "vbmeta,boot,system,vendor,dtbo";
-	};
-
-	fstab {
-		compatible = "android,fstab";
-
-		vendor {
-			compatible = "android,vendor";
-			dev = "/dev/block/by-name/vendor";
-			type = "ext4";
-			mnt_flags = "ro,barrier=1,inode_readahead_blks=8";
-			fsmgr_flags = "wait,avb";
-		};
-	};
-};
-
 &rk628_dsi0 {
 	status = "okay";
 
@@ -351,4 +320,14 @@
 &route_rgb {
 	connect = <&vopl_out_rgb>;
 	status = "disabled";
+};
+
+&vopb {
+	assigned-clocks = <&cru DCLK_VOP0>;
+	assigned-clock-parents = <&cru PLL_GPLL>;
+};
+
+&vopl {
+	assigned-clocks = <&cru DCLK_VOP1>;
+	assigned-clock-parents = <&cru PLL_CPLL>;
 };

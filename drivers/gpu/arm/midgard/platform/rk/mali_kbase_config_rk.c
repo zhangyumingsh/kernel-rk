@@ -21,6 +21,7 @@
 #include <linux/of.h>
 #include <linux/delay.h>
 #include <linux/nvmem-consumer.h>
+#include <linux/rockchip/cpu.h>
 #include <linux/soc/rockchip/pvtm.h>
 #include <linux/thermal.h>
 #include <soc/rockchip/rockchip_opp_select.h>
@@ -430,8 +431,62 @@ static void kbase_platform_rk_remove_sysfs_files(struct device *dev)
 	device_remove_file(dev, &dev_attr_utilisation);
 }
 
+static int rk3288_get_soc_info(struct device *dev, struct device_node *np,
+			       int *bin, int *process)
+{
+	int ret = -EINVAL;
+	u8 value = 0;
+	char *name;
+
+	if (!bin)
+		goto out;
+
+	if (soc_is_rk3288w())
+		name = "performance-w";
+	else
+		name = "performance";
+	if (of_property_match_string(np, "nvmem-cell-names", name) >= 0) {
+		ret = rockchip_nvmem_cell_read_u8(np, name, &value);
+		if (ret) {
+			dev_err(dev, "Failed to get soc performance value\n");
+			goto out;
+		}
+		if (value & 0x2)
+			*bin = 3;
+		else if (value & 0x01)
+			*bin = 2;
+		else
+			*bin = 0;
+	} else {
+		dev_err(dev, "Failed to get bin config\n");
+	}
+	if (*bin >= 0)
+		dev_info(dev, "bin=%d\n", *bin);
+
+out:
+	return ret;
+}
+
+static const struct rockchip_opp_data rk3288_gpu_opp_data = {
+	.get_soc_info = rk3288_get_soc_info,
+};
+
+static const struct of_device_id rockchip_mali_of_match[] = {
+	{
+		.compatible = "rockchip,rk3288",
+		.data = (void *)&rk3288_gpu_opp_data,
+	},
+	{
+		.compatible = "rockchip,rk3288w",
+		.data = (void *)&rk3288_gpu_opp_data,
+	},
+	{},
+};
+
 int kbase_platform_rk_init_opp_table(struct kbase_device *kbdev)
 {
-	return rockchip_init_opp_table(kbdev->dev, NULL,
+	rockchip_get_opp_data(rockchip_mali_of_match, &kbdev->opp_info);
+
+	return rockchip_init_opp_table(kbdev->dev, &kbdev->opp_info,
 				       "gpu_leakage", "mali");
 }

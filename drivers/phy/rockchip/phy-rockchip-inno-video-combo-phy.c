@@ -85,6 +85,13 @@
 #define SAMPLE_CLOCK_DIRECTION_MASK		BIT(4)
 #define SAMPLE_CLOCK_DIRECTION_REVERSE		BIT(4)
 #define SAMPLE_CLOCK_DIRECTION_FORWARD		0
+#define LOWFRE_EN_MASK				BIT(5)
+#define PLL_OUTPUT_FREQUENCY_DIV_BY_1		0
+#define PLL_OUTPUT_FREQUENCY_DIV_BY_2		1
+/* Analog Register Part: reg1e */
+#define PLL_MODE_SEL_MASK			GENMASK(6, 5)
+#define PLL_MODE_SEL_LVDS_MODE			0
+#define PLL_MODE_SEL_MIPI_MODE			BIT(5)
 /* Digital Register Part: reg00 */
 #define REG_DIG_RSTN_MASK			BIT(0)
 #define REG_DIG_RSTN_NORMAL			BIT(0)
@@ -200,7 +207,6 @@ struct inno_video_phy {
 	void __iomem *phy_base;
 	void __iomem *host_base;
 	struct reset_control *rst;
-	enum phy_mode mode;
 
 	struct {
 		struct clk_hw hw;
@@ -447,9 +453,9 @@ static void inno_video_phy_lvds_mode_enable(struct inno_video_phy *inno)
 
 	/* Sample clock reverse direction */
 	phy_update_bits(inno, REGISTER_PART_ANALOG, 0x08,
-			SAMPLE_CLOCK_DIRECTION_MASK,
-			SAMPLE_CLOCK_DIRECTION_REVERSE);
-
+			SAMPLE_CLOCK_DIRECTION_MASK | LOWFRE_EN_MASK,
+			SAMPLE_CLOCK_DIRECTION_REVERSE |
+			PLL_OUTPUT_FREQUENCY_DIV_BY_1);
 	/* Select LVDS mode */
 	phy_update_bits(inno, REGISTER_PART_LVDS, 0x03,
 			MODE_ENABLE_MASK, LVDS_MODE_ENABLE);
@@ -470,6 +476,9 @@ static void inno_video_phy_lvds_mode_enable(struct inno_video_phy *inno)
 					 val, val & PHY_LOCK, 50, 10000);
 	if (ret)
 		dev_err(inno->dev, "PLL is not lock\n");
+	/* Select PLL mode */
+	phy_update_bits(inno, REGISTER_PART_ANALOG, 0x1e,
+			PLL_MODE_SEL_MASK, PLL_MODE_SEL_LVDS_MODE);
 
 	/* Reset LVDS digital logic */
 	phy_update_bits(inno, REGISTER_PART_LVDS, 0x00,
@@ -519,6 +528,7 @@ static void inno_video_phy_ttl_mode_enable(struct inno_video_phy *inno)
 static int inno_video_phy_power_on(struct phy *phy)
 {
 	struct inno_video_phy *inno = phy_get_drvdata(phy);
+	enum phy_mode mode = phy_get_mode(phy);
 
 	clk_prepare_enable(inno->pclk_host);
 	clk_prepare_enable(inno->pclk_phy);
@@ -531,18 +541,16 @@ static int inno_video_phy_power_on(struct phy *phy)
 	phy_update_bits(inno, REGISTER_PART_ANALOG, 0x00,
 			POWER_WORK_MASK, POWER_WORK_ENABLE);
 
-	switch (inno->mode) {
-	case PHY_MODE_VIDEO_MIPI:
+	switch (mode) {
+	case PHY_MODE_MIPI_DPHY:
 		inno_video_phy_mipi_mode_enable(inno);
 		break;
-	case PHY_MODE_VIDEO_LVDS:
+	case PHY_MODE_LVDS:
 		inno_video_phy_lvds_mode_enable(inno);
 		break;
-	case PHY_MODE_VIDEO_TTL:
+	default:
 		inno_video_phy_ttl_mode_enable(inno);
 		break;
-	default:
-		return -EINVAL;
 	}
 
 	return 0;
@@ -578,18 +586,6 @@ static int inno_video_phy_power_off(struct phy *phy)
 
 static int inno_video_phy_set_mode(struct phy *phy, enum phy_mode mode)
 {
-	struct inno_video_phy *inno = phy_get_drvdata(phy);
-
-	switch (mode) {
-	case PHY_MODE_VIDEO_MIPI:
-	case PHY_MODE_VIDEO_LVDS:
-	case PHY_MODE_VIDEO_TTL:
-		inno->mode = mode;
-		break;
-	default:
-		return -EINVAL;
-	}
-
 	return 0;
 }
 
@@ -723,12 +719,15 @@ static int inno_video_phy_pll_register(struct inno_video_phy *inno)
 	struct device *dev = inno->dev;
 	struct clk *clk;
 	const char *parent_name;
-	struct clk_init_data init;
+	struct clk_init_data init = {};
 	int ret;
+	static int phy_pll_num;
+	char pll_name[20] = "video_phy_pll_";
 
 	parent_name = __clk_get_name(inno->ref_clk);
 
-	init.name = "video_phy_pll";
+	strcat(pll_name, phy_pll_num++ ? "1" : "0");
+	init.name = pll_name;
 	init.ops = &inno_video_phy_pll_clk_ops;
 	init.parent_names = &parent_name;
 	init.num_parents = 1;
@@ -855,6 +854,7 @@ static const struct of_device_id inno_video_phy_of_match[] = {
 	{ .compatible = "rockchip,px30-video-phy", },
 	{ .compatible = "rockchip,rk3128-video-phy", },
 	{ .compatible = "rockchip,rk3368-video-phy", },
+	{ .compatible = "rockchip,rk3568-video-phy", },
 	{}
 };
 MODULE_DEVICE_TABLE(of, inno_video_phy_of_match);

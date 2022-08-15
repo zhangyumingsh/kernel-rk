@@ -7,6 +7,8 @@
  * V0.0X01.0X01 add poweron function.
  * V0.0X01.0X02 fix mclk issue when probe multiple camera.
  * V0.0X01.0X03 add enum_frame_interval function.
+ * V0.0X01.0X04 add quick stream on/off
+ * V0.0X01.0X05 add function g_mbus_config
  */
 
 #include <linux/clk.h>
@@ -26,7 +28,7 @@
 #include <media/v4l2-ctrls.h>
 #include <media/v4l2-subdev.h>
 
-#define DRIVER_VERSION			KERNEL_VERSION(0, 0x01, 0x03)
+#define DRIVER_VERSION			KERNEL_VERSION(0, 0x01, 0x05)
 
 #ifndef V4L2_CID_DIGITAL_GAIN
 #define V4L2_CID_DIGITAL_GAIN		V4L2_CID_GAIN
@@ -95,6 +97,8 @@
 #define	ANALOG_GAIN_DEFAULT		0x10
 
 #define OV2735_NAME			"ov2735"
+
+#define OV2735_LANES			2
 
 static const char * const ov2735_supply_names[] = {
 	"avdd",		/* Analog power */
@@ -537,10 +541,23 @@ static long ov2735_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
 {
 	struct ov2735 *ov2735 = to_ov2735(sd);
 	long ret = 0;
+	u32 stream = 0;
 
 	switch (cmd) {
 	case RKMODULE_GET_MODULE_INFO:
 		ov2735_get_module_inf(ov2735, (struct rkmodule_inf *)arg);
+		break;
+	case RKMODULE_SET_QUICK_STREAM:
+
+		stream = *((u32 *)arg);
+
+		if (stream) {
+			ret = ov2735_write_reg(ov2735->client, PAGE_SELECT_REG, PAGE_ONE);
+			ret |= ov2735_write_reg(ov2735->client, STREAM_CTRL_REG, STREAM_ON);
+		} else {
+			ret = ov2735_write_reg(ov2735->client, PAGE_SELECT_REG, PAGE_ONE);
+			ret |= ov2735_write_reg(ov2735->client, STREAM_CTRL_REG, STREAM_OFF);
+		}
 		break;
 	default:
 		ret = -ENOIOCTLCMD;
@@ -558,6 +575,7 @@ static long ov2735_compat_ioctl32(struct v4l2_subdev *sd,
 	struct rkmodule_inf *inf;
 	struct rkmodule_awb_cfg *cfg;
 	long ret;
+	u32 stream = 0;
 
 	switch (cmd) {
 	case RKMODULE_GET_MODULE_INFO:
@@ -583,6 +601,11 @@ static long ov2735_compat_ioctl32(struct v4l2_subdev *sd,
 		if (!ret)
 			ret = ov2735_ioctl(sd, cmd, cfg);
 		kfree(cfg);
+		break;
+	case RKMODULE_SET_QUICK_STREAM:
+		ret = copy_from_user(&stream, up, sizeof(u32));
+		if (!ret)
+			ret = ov2735_ioctl(sd, cmd, &stream);
 		break;
 	default:
 		ret = -ENOIOCTLCMD;
@@ -822,6 +845,20 @@ static int ov2735_enum_frame_interval(struct v4l2_subdev *sd,
 	return 0;
 }
 
+static int ov2735_g_mbus_config(struct v4l2_subdev *sd,
+				struct v4l2_mbus_config *config)
+{
+	u32 val = 0;
+
+	val = 1 << (OV2735_LANES - 1) |
+	      V4L2_MBUS_CSI2_CHANNEL_0 |
+	      V4L2_MBUS_CSI2_CONTINUOUS_CLOCK;
+	config->type = V4L2_MBUS_CSI2;
+	config->flags = val;
+
+	return 0;
+}
+
 static const struct dev_pm_ops ov2735_pm_ops = {
 	SET_RUNTIME_PM_OPS(ov2735_runtime_suspend,
 			   ov2735_runtime_resume, NULL)
@@ -843,6 +880,7 @@ static const struct v4l2_subdev_core_ops ov2735_core_ops = {
 
 static const struct v4l2_subdev_video_ops ov2735_video_ops = {
 	.s_stream = ov2735_s_stream,
+	.g_mbus_config = ov2735_g_mbus_config,
 };
 
 static const struct v4l2_subdev_pad_ops ov2735_pad_ops = {
@@ -878,7 +916,7 @@ static int ov2735_set_ctrl(struct v4l2_ctrl *ctrl)
 					 ov2735->exposure->default_value);
 		break;
 	}
-	if (pm_runtime_get(&client->dev) <= 0)
+	if (!pm_runtime_get_if_in_use(&client->dev))
 		return 0;
 
 	ret = ov2735_write_reg(client, PAGE_SELECT_REG, PAGE_ONE);
@@ -1004,7 +1042,7 @@ static int ov2735_check_sensor_id(struct ov2735 *ov2735,
 	ret = ov2735_write_reg(ov2735->client, PAGE_SELECT_REG, PAGE_ZERO);
 	ret |= ov2735_read_reg(ov2735->client, OV2735_PIDH_ADDR, &pidh);
 	ret |= ov2735_read_reg(ov2735->client, OV2735_PIDL_ADDR, &pidl);
-	if (IS_ERR_VALUE(ret)) {
+	if (ret) {
 		dev_err(dev,
 			"register read failed, camera module powered off?\n");
 		goto err;
@@ -1112,12 +1150,13 @@ static int ov2735_probe(struct i2c_client *client,
 
 #ifdef CONFIG_VIDEO_V4L2_SUBDEV_API
 	sd->internal_ops = &ov2735_internal_ops;
-	sd->flags |= V4L2_SUBDEV_FL_HAS_DEVNODE;
+	sd->flags |= V4L2_SUBDEV_FL_HAS_DEVNODE |
+		     V4L2_SUBDEV_FL_HAS_EVENTS;
 #endif
 #if defined(CONFIG_MEDIA_CONTROLLER)
 	ov2735->pad.flags = MEDIA_PAD_FL_SOURCE;
-	sd->entity.type = MEDIA_ENT_T_V4L2_SUBDEV_SENSOR;
-	ret = media_entity_init(&sd->entity, 1, &ov2735->pad, 0);
+	sd->entity.function = MEDIA_ENT_F_CAM_SENSOR;
+	ret = media_entity_pads_init(&sd->entity, 1, &ov2735->pad);
 	if (ret < 0)
 		goto err_power_off;
 #endif

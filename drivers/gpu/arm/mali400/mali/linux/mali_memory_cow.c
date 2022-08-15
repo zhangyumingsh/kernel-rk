@@ -529,10 +529,10 @@ int mali_mem_cow_cpu_map(mali_mem_backend *mem_bkend, struct vm_area_struct *vma
 
 	list_for_each_entry(m_page, &cow->pages, list) {
 		/* We should use vm_insert_page, but it does a dcache
-		 * flush which makes it way slower than remap_pfn_range or vm_insert_pfn.
+		 * flush which makes it way slower than remap_pfn_range or vmf_insert_pfn.
 		ret = vm_insert_page(vma, addr, page);
 		*/
-		ret = vm_insert_pfn(vma, addr, _mali_page_node_get_pfn(m_page));
+		ret = vmf_insert_pfn(vma, addr, _mali_page_node_get_pfn(m_page));
 
 		if (unlikely(0 != ret)) {
 			return ret;
@@ -569,7 +569,7 @@ _mali_osk_errcode_t mali_mem_cow_cpu_map_pages_locked(mali_mem_backend *mem_bken
 
 	list_for_each_entry(m_page, &cow->pages, list) {
 		if ((count >= offset) && (count < offset + num)) {
-			ret = vm_insert_pfn(vma, vaddr, _mali_page_node_get_pfn(m_page));
+			ret = vmf_insert_pfn(vma, vaddr, _mali_page_node_get_pfn(m_page));
 
 			if (unlikely(0 != ret)) {
 				if (count == offset) {
@@ -683,7 +683,7 @@ void _mali_mem_cow_copy_page(mali_page_node *src_node, mali_page_node *dst_node)
 		/*
 		* use ioremap to map src for BLOCK memory
 		*/
-		src = ioremap_nocache(_mali_page_node_get_dma_addr(src_node), _MALI_OSK_MALI_PAGE_SIZE);
+		src = ioremap(_mali_page_node_get_dma_addr(src_node), _MALI_OSK_MALI_PAGE_SIZE);
 		memcpy(dst, src , _MALI_OSK_MALI_PAGE_SIZE);
 		iounmap(src);
 	}

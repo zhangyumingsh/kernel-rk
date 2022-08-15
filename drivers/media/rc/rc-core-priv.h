@@ -1,16 +1,8 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * Remote Controller core raw events header
  *
  * Copyright (C) 2010 by Mauro Carvalho Chehab
- *
- * This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation version 2 of the License.
- *
- *  This program is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *  GNU General Public License for more details.
  */
 
 #ifndef _RC_CORE_PRIV
@@ -21,6 +13,7 @@
 #define	MAX_IR_EVENT_SIZE	512
 
 #include <linux/slab.h>
+#include <uapi/linux/bpf.h>
 #include <media/rc-core.h>
 
 /**
@@ -66,6 +59,12 @@ struct ir_raw_event_ctrl {
 	/* raw decoder state follows */
 	struct ir_raw_event prev_ev;
 	struct ir_raw_event this_ev;
+
+#ifdef CONFIG_BPF_LIRC_MODE2
+	u32				bpf_sample;
+	struct bpf_prog_array __rcu	*progs;
+#endif
+#if IS_ENABLED(CONFIG_IR_NEC_DECODER)
 	struct nec_dec {
 		int state;
 		unsigned count;
@@ -73,12 +72,16 @@ struct ir_raw_event_ctrl {
 		bool is_nec_x;
 		bool necx_repeat;
 	} nec;
+#endif
+#if IS_ENABLED(CONFIG_IR_RC5_DECODER)
 	struct rc5_dec {
 		int state;
 		u32 bits;
 		unsigned count;
 		bool is_rc5x;
 	} rc5;
+#endif
+#if IS_ENABLED(CONFIG_IR_RC6_DECODER)
 	struct rc6_dec {
 		int state;
 		u8 header;
@@ -87,11 +90,15 @@ struct ir_raw_event_ctrl {
 		unsigned count;
 		unsigned wanted_bits;
 	} rc6;
+#endif
+#if IS_ENABLED(CONFIG_IR_SONY_DECODER)
 	struct sony_dec {
 		int state;
 		u32 bits;
 		unsigned count;
 	} sony;
+#endif
+#if IS_ENABLED(CONFIG_IR_JVC_DECODER)
 	struct jvc_dec {
 		int state;
 		u16 bits;
@@ -100,17 +107,23 @@ struct ir_raw_event_ctrl {
 		bool first;
 		bool toggle;
 	} jvc;
+#endif
+#if IS_ENABLED(CONFIG_IR_SANYO_DECODER)
 	struct sanyo_dec {
 		int state;
 		unsigned count;
 		u64 bits;
 	} sanyo;
+#endif
+#if IS_ENABLED(CONFIG_IR_SHARP_DECODER)
 	struct sharp_dec {
 		int state;
 		unsigned count;
 		u32 bits;
 		unsigned int pulse_len;
 	} sharp;
+#endif
+#if IS_ENABLED(CONFIG_IR_MCE_KBD_DECODER)
 	struct mce_kbd_dec {
 		/* locks key up timer */
 		spinlock_t keylock;
@@ -121,11 +134,15 @@ struct ir_raw_event_ctrl {
 		unsigned count;
 		unsigned wanted_bits;
 	} mce_kbd;
+#endif
+#if IS_ENABLED(CONFIG_IR_XMP_DECODER)
 	struct xmp_dec {
 		int state;
 		unsigned count;
 		u32 durations[16];
 	} xmp;
+#endif
+#if IS_ENABLED(CONFIG_IR_IMON_DECODER)
 	struct imon_dec {
 		int state;
 		int count;
@@ -133,7 +150,18 @@ struct ir_raw_event_ctrl {
 		unsigned int bits;
 		bool stick_keyboard;
 	} imon;
+#endif
+#if IS_ENABLED(CONFIG_IR_RCMM_DECODER)
+	struct rcmm_dec {
+		int state;
+		unsigned int count;
+		u32 bits;
+	} rcmm;
+#endif
 };
+
+/* Mutex for locking raw IR processing and handler change */
+extern struct mutex ir_raw_handler_lock;
 
 /* macros for IR decoders */
 static inline bool geq_margin(unsigned d1, unsigned d2, unsigned margin)
@@ -165,7 +193,6 @@ static inline bool is_timing_event(struct ir_raw_event ev)
 	return !ev.carrier_report && !ev.reset;
 }
 
-#define TO_US(duration)			DIV_ROUND_CLOSEST((duration), 1000)
 #define TO_STR(is_pulse)		((is_pulse) ? "pulse" : "space")
 
 /* functions for IR encoders */
@@ -294,19 +321,31 @@ void ir_raw_init(void);
 #ifdef CONFIG_LIRC
 int lirc_dev_init(void);
 void lirc_dev_exit(void);
-void ir_lirc_raw_event(struct rc_dev *dev, struct ir_raw_event ev);
-void ir_lirc_scancode_event(struct rc_dev *dev, struct lirc_scancode *lsc);
-int ir_lirc_register(struct rc_dev *dev);
-void ir_lirc_unregister(struct rc_dev *dev);
+void lirc_raw_event(struct rc_dev *dev, struct ir_raw_event ev);
+void lirc_scancode_event(struct rc_dev *dev, struct lirc_scancode *lsc);
+int lirc_register(struct rc_dev *dev);
+void lirc_unregister(struct rc_dev *dev);
+struct rc_dev *rc_dev_get_from_fd(int fd);
 #else
 static inline int lirc_dev_init(void) { return 0; }
 static inline void lirc_dev_exit(void) {}
-static inline void ir_lirc_raw_event(struct rc_dev *dev,
-				     struct ir_raw_event ev) { }
-static inline void ir_lirc_scancode_event(struct rc_dev *dev,
-					  struct lirc_scancode *lsc) { }
-static inline int ir_lirc_register(struct rc_dev *dev) { return 0; }
-static inline void ir_lirc_unregister(struct rc_dev *dev) { }
+static inline void lirc_raw_event(struct rc_dev *dev,
+				  struct ir_raw_event ev) { }
+static inline void lirc_scancode_event(struct rc_dev *dev,
+				       struct lirc_scancode *lsc) { }
+static inline int lirc_register(struct rc_dev *dev) { return 0; }
+static inline void lirc_unregister(struct rc_dev *dev) { }
+#endif
+
+/*
+ * bpf interface
+ */
+#ifdef CONFIG_BPF_LIRC_MODE2
+void lirc_bpf_free(struct rc_dev *dev);
+void lirc_bpf_run(struct rc_dev *dev, u32 sample);
+#else
+static inline void lirc_bpf_free(struct rc_dev *dev) { }
+static inline void lirc_bpf_run(struct rc_dev *dev, u32 sample) { }
 #endif
 
 #endif /* _RC_CORE_PRIV */

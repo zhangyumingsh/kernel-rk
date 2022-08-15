@@ -5,8 +5,10 @@
  */
 
 #include <dt-bindings/soc/rockchip-system-status.h>
+#include <linux/clk-provider.h>
 #include <linux/cpu.h>
 #include <linux/cpufreq.h>
+#include <linux/devfreq.h>
 #include <linux/device.h>
 #include <linux/fb.h>
 #include <linux/module.h>
@@ -15,24 +17,31 @@
 #include <linux/of.h>
 #include <linux/platform_device.h>
 #include <linux/pm_opp.h>
-#include <linux/uaccess.h>
+#include <linux/pm_qos.h>
+#include <linux/pm_runtime.h>
+#include <linux/regulator/consumer.h>
+#include <linux/regulator/coupler.h>
+#include <linux/regulator/driver.h>
+#include <linux/regulator/machine.h>
 #include <linux/reboot.h>
 #include <linux/slab.h>
 #include <linux/suspend.h>
 #include <linux/thermal.h>
+#include <linux/uaccess.h>
 #include <linux/version.h>
+#include <linux/delay.h>
+#include <soc/rockchip/rockchip_opp_select.h>
 #include <soc/rockchip/rockchip_system_monitor.h>
 #include <soc/rockchip/rockchip-system-status.h>
 
-#include "../../base/power/opp/opp.h"
-#include "../../devfreq/governor.h"
+#include "../../gpu/drm/rockchip/ebc-dev/ebc_dev.h"
+#include "../../opp/opp.h"
+#include "../../regulator/internal.h"
+#include "../../thermal/thermal_core.h"
 
 #define CPU_REBOOT_FREQ		816000 /* kHz */
 #define VIDEO_1080P_SIZE	(1920 * 1080)
 #define THERMAL_POLLING_DELAY	200 /* milliseconds */
-
-#define devfreq_nb_to_monitor(nb) container_of(nb, struct monitor_dev_info, \
-					       devfreq_nb)
 
 struct video_info {
 	unsigned int width;
@@ -171,9 +180,9 @@ int rockchip_add_system_status_interface(struct device *dev)
 		return -EINVAL;
 	}
 
-	return __compat_only_sysfs_link_entry_to_kobj(&dev->kobj,
-						      system_monitor->kobj,
-						      "system_status");
+	return compat_only_sysfs_link_entry_to_kobj(&dev->kobj,
+						    system_monitor->kobj,
+						    "system_status", NULL);
 }
 EXPORT_SYMBOL(rockchip_add_system_status_interface);
 
@@ -485,78 +494,75 @@ static int rockchip_get_low_temp_volt(struct monitor_dev_info *info,
 static int rockchip_init_temp_opp_table(struct monitor_dev_info *info)
 {
 	struct device *dev = info->dev;
+	struct opp_table *opp_table;
 	struct dev_pm_opp *opp;
 	int delta_volt = 0;
-	int i, max_count, ret = 0;
-	unsigned long rate;
+	int i = 0, max_count;
+	unsigned long low_limit = 0, high_limit = 0;
 	bool reach_max_volt = false;
 	bool reach_high_temp_max_volt = false;
 
 	max_count = dev_pm_opp_get_opp_count(dev);
-	if (max_count <= 0) {
-		ret = max_count ? max_count : -ENODATA;
-		goto out;
-	}
+	if (max_count <= 0)
+		return max_count ? max_count : -ENODATA;
 	info->opp_table = kzalloc(sizeof(*info->opp_table) * max_count,
 				  GFP_KERNEL);
-	if (!info->opp_table) {
-		ret = -ENOMEM;
-		goto out;
+	if (!info->opp_table)
+		return -ENOMEM;
+
+	opp_table = dev_pm_opp_get_opp_table(dev);
+	if (!opp_table) {
+		kfree(info->opp_table);
+		info->opp_table = NULL;
+		return -ENOMEM;
 	}
-
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 11, 0)
-	rcu_read_lock();
-#endif
-	for (i = 0, rate = 0; i < max_count; i++, rate++) {
-		/* find next rate */
-		opp = dev_pm_opp_find_freq_ceil(dev, &rate);
-		if (IS_ERR(opp)) {
-			ret = PTR_ERR(opp);
-			kfree(info->opp_table);
-			info->opp_table = NULL;
-			goto unlock;
-		}
+	mutex_lock(&opp_table->lock);
+	list_for_each_entry(opp, &opp_table->opp_list, node) {
+		if (!opp->available)
+			continue;
 		info->opp_table[i].rate = opp->rate;
-		info->opp_table[i].volt = opp->u_volt;
-		info->opp_table[i].max_volt = opp->u_volt_max;
+		info->opp_table[i].volt = opp->supplies[0].u_volt;
+		info->opp_table[i].max_volt = opp->supplies[0].u_volt_max;
+		if (opp_table->regulator_count > 1)
+			info->opp_table[i].mem_volt = opp->supplies[1].u_volt;
 
-		if (opp->u_volt <= info->high_temp_max_volt) {
+		if (opp->supplies[0].u_volt <= info->high_temp_max_volt) {
 			if (!reach_high_temp_max_volt)
-				info->high_limit = opp->rate;
-			if (opp->u_volt == info->high_temp_max_volt)
+				high_limit = opp->rate;
+			if (opp->supplies[0].u_volt == info->high_temp_max_volt)
 				reach_high_temp_max_volt = true;
 		}
 
 		if (rockchip_get_low_temp_volt(info, opp->rate, &delta_volt))
 			delta_volt = 0;
-		if ((opp->u_volt + delta_volt) <= info->max_volt) {
+		if ((opp->supplies[0].u_volt + delta_volt) <= info->max_volt) {
 			info->opp_table[i].low_temp_volt =
-				opp->u_volt + delta_volt;
+				opp->supplies[0].u_volt + delta_volt;
 			if (info->opp_table[i].low_temp_volt <
 			    info->low_temp_min_volt)
 				info->opp_table[i].low_temp_volt =
 					info->low_temp_min_volt;
 			if (!reach_max_volt)
-				info->low_limit = opp->rate;
+				low_limit = opp->rate;
 			if (info->opp_table[i].low_temp_volt == info->max_volt)
 				reach_max_volt = true;
 		} else {
 			info->opp_table[i].low_temp_volt = info->max_volt;
 		}
+		if (low_limit && low_limit != opp->rate)
+			info->low_limit = low_limit;
+		if (high_limit && high_limit != opp->rate)
+			info->high_limit = high_limit;
 		dev_dbg(dev, "rate=%lu, volt=%lu, low_temp_volt=%lu\n",
 			info->opp_table[i].rate, info->opp_table[i].volt,
 			info->opp_table[i].low_temp_volt);
+		i++;
 	}
-	if (info->low_limit == opp->rate)
-		info->low_limit = 0;
-	if (info->high_limit == opp->rate)
-		info->high_limit = 0;
-unlock:
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 11, 0)
-	rcu_read_unlock();
-#endif
-out:
-	return ret;
+	mutex_unlock(&opp_table->lock);
+
+	dev_pm_opp_put_opp_table(opp_table);
+
+	return 0;
 }
 
 static int monitor_device_parse_wide_temp_config(struct device_node *np,
@@ -591,9 +597,12 @@ static int monitor_device_parse_wide_temp_config(struct device_node *np,
 	else
 		info->high_temp_max_volt = value;
 	rockchip_init_temp_opp_table(info);
-	if (rockchip_get_temp_freq_table(np, "rockchip,high-temp-limit-table",
-					 &info->high_limit_table)) {
-		info->high_limit_table = NULL;
+	rockchip_get_temp_freq_table(np, "rockchip,temp-freq-table",
+				     &info->high_limit_table);
+	if (!info->high_limit_table)
+		rockchip_get_temp_freq_table(np, "rockchip,high-temp-limit-table",
+					     &info->high_limit_table);
+	if (!info->high_limit_table) {
 		if (!of_property_read_u32(np, "rockchip,high-temp-max-freq",
 					  &value)) {
 			high_temp_max_freq = value * 1000;
@@ -655,66 +664,66 @@ static int monitor_device_parse_status_config(struct device_node *np,
 	return ret;
 }
 
+static int monitor_device_parse_early_min_volt(struct device_node *np,
+					       struct monitor_dev_info *info)
+{
+	return of_property_read_u32(np, "rockchip,early-min-microvolt",
+				    &info->early_min_volt);
+}
+
+static int monitor_device_parse_read_margin(struct device_node *np,
+					    struct monitor_dev_info *info)
+{
+	if (of_property_read_bool(np, "volt-mem-read-margin"))
+		return 0;
+	return -EINVAL;
+}
+
+static int monitor_device_parse_scmi_clk(struct device_node *np,
+					 struct monitor_dev_info *info)
+{
+	struct clk *clk;
+
+	clk = clk_get(info->dev, NULL);
+	if (strstr(__clk_get_name(clk), "scmi"))
+		return 0;
+	return -EINVAL;
+}
+
 static int monitor_device_parse_dt(struct device *dev,
 				   struct monitor_dev_info *info)
 {
 	struct device_node *np;
-	int ret = 0;
-	bool is_wide_temp_en = false;
-	bool is_status_limit_en = false;
-	bool is_temp_freq_en = false;
+	int ret;
 
 	np = of_parse_phandle(dev->of_node, "operating-points-v2", 0);
 	if (!np)
 		return -EINVAL;
 
-	if (!monitor_device_parse_wide_temp_config(np, info))
-		is_wide_temp_en = true;
-	if (!monitor_device_parse_status_config(np, info))
-		is_status_limit_en = true;
-	if (!rockchip_get_temp_freq_table(np, "rockchip,temp-freq-table",
-					  &info->temp_freq_table))
-		is_temp_freq_en = true;
-	if (is_wide_temp_en || is_status_limit_en || is_temp_freq_en)
-		ret = 0;
-	else
-		ret = -EINVAL;
+	of_property_read_u32(np, "rockchip,init-freq", &info->init_freq);
+
+	ret = monitor_device_parse_wide_temp_config(np, info);
+	ret &= monitor_device_parse_status_config(np, info);
+	ret &= monitor_device_parse_early_min_volt(np, info);
+	ret &= monitor_device_parse_read_margin(np, info);
+	ret &= monitor_device_parse_scmi_clk(np, info);
 
 	of_node_put(np);
 
 	return ret;
 }
 
-int rockchip_monitor_opp_set_rate(struct monitor_dev_info *info,
-				  unsigned long target_freq)
-{
-	int ret = 0;
-
-	mutex_lock(&info->volt_adjust_mutex);
-	ret = dev_pm_opp_set_rate(info->dev, target_freq);
-	mutex_unlock(&info->volt_adjust_mutex);
-
-	return ret;
-}
-EXPORT_SYMBOL(rockchip_monitor_opp_set_rate);
-
 int rockchip_monitor_cpu_low_temp_adjust(struct monitor_dev_info *info,
 					 bool is_low)
 {
-	struct device *dev = info->dev;
-	unsigned int cpu = cpumask_any(&info->devp->allowed_cpus);
-
 	if (info->low_limit) {
 		if (is_low)
-			info->wide_temp_limit = info->low_limit;
+			freq_qos_update_request(&info->max_temp_freq_req,
+						info->low_limit / 1000);
 		else
-			info->wide_temp_limit = 0;
-		cpufreq_update_policy(cpu);
+			freq_qos_update_request(&info->max_temp_freq_req,
+						FREQ_QOS_MAX_DEFAULT_VALUE);
 	}
-
-	mutex_lock(&info->volt_adjust_mutex);
-	dev_pm_opp_check_rate_volt(dev, false);
-	mutex_unlock(&info->volt_adjust_mutex);
 
 	return 0;
 }
@@ -723,53 +732,38 @@ EXPORT_SYMBOL(rockchip_monitor_cpu_low_temp_adjust);
 int rockchip_monitor_cpu_high_temp_adjust(struct monitor_dev_info *info,
 					  bool is_high)
 {
-	unsigned int cpu = cpumask_any(&info->devp->allowed_cpus);
+	if (!info->high_limit)
+		return 0;
 
 	if (info->high_limit_table) {
-		info->wide_temp_limit = info->high_limit;
-		cpufreq_update_policy(cpu);
-	} else {
-		if (info->high_limit) {
-			if (is_high)
-				info->wide_temp_limit = info->high_limit;
-			else
-				info->wide_temp_limit = 0;
-			cpufreq_update_policy(cpu);
-		}
+		freq_qos_update_request(&info->max_temp_freq_req,
+					info->high_limit / 1000);
+		return 0;
 	}
+
+	if (is_high)
+		freq_qos_update_request(&info->max_temp_freq_req,
+					info->high_limit / 1000);
+	else
+		freq_qos_update_request(&info->max_temp_freq_req,
+					FREQ_QOS_MAX_DEFAULT_VALUE);
 
 	return 0;
 }
 EXPORT_SYMBOL(rockchip_monitor_cpu_high_temp_adjust);
 
-static int rockchip_monitor_update_devfreq(struct devfreq *df)
-{
-	int ret = 0;
-
-#ifdef CONFIG_PM_DEVFREQ
-	mutex_lock(&df->lock);
-	ret = update_devfreq(df);
-	mutex_unlock(&df->lock);
-#endif
-	return ret;
-};
-
 int rockchip_monitor_dev_low_temp_adjust(struct monitor_dev_info *info,
 					 bool is_low)
 {
-	struct devfreq *df;
+	if (!info->low_limit)
+		return 0;
 
-	if (info->low_limit) {
-		if (is_low)
-			info->wide_temp_limit = info->low_limit;
-		else
-			info->wide_temp_limit = 0;
-	}
-
-	if (info->devp && info->devp->data) {
-		df = (struct devfreq *)info->devp->data;
-		rockchip_monitor_update_devfreq(df);
-	}
+	if (is_low)
+		dev_pm_qos_update_request(&info->dev_max_freq_req,
+					  info->low_limit / 1000);
+	else
+		dev_pm_qos_update_request(&info->dev_max_freq_req,
+					  PM_QOS_MAX_FREQUENCY_DEFAULT_VALUE);
 
 	return 0;
 }
@@ -778,26 +772,21 @@ EXPORT_SYMBOL(rockchip_monitor_dev_low_temp_adjust);
 int rockchip_monitor_dev_high_temp_adjust(struct monitor_dev_info *info,
 					  bool is_high)
 {
-	struct devfreq *df;
+	if (!info->high_limit)
+		return 0;
 
 	if (info->high_limit_table) {
-		info->wide_temp_limit = info->high_limit;
-		if (info->devp && info->devp->data) {
-			df = (struct devfreq *)info->devp->data;
-			rockchip_monitor_update_devfreq(df);
-		}
-	} else {
-		if (info->high_limit) {
-			if (is_high)
-				info->wide_temp_limit = info->high_limit;
-			else
-				info->wide_temp_limit = 0;
-			if (info->devp && info->devp->data) {
-				df = (struct devfreq *)info->devp->data;
-				rockchip_monitor_update_devfreq(df);
-			}
-		}
+		dev_pm_qos_update_request(&info->dev_max_freq_req,
+					  info->high_limit / 1000);
+		return 0;
 	}
+
+	if (is_high)
+		dev_pm_qos_update_request(&info->dev_max_freq_req,
+					  info->high_limit / 1000);
+	else
+		dev_pm_qos_update_request(&info->dev_max_freq_req,
+					  PM_QOS_MAX_FREQUENCY_DEFAULT_VALUE);
 
 	return 0;
 }
@@ -807,44 +796,55 @@ static int rockchip_adjust_low_temp_opp_volt(struct monitor_dev_info *info,
 					     bool is_low_temp)
 {
 	struct device *dev = info->dev;
+	struct opp_table *opp_table;
 	struct dev_pm_opp *opp;
-	unsigned long rate;
-	int i, count, ret = 0;
+	int i = 0;
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 11, 0)
-	rcu_read_lock();
-#endif
-	count = dev_pm_opp_get_opp_count(dev);
-	if (count <= 0) {
-		ret = count ? count : -ENODATA;
-		goto out;
-	}
+	opp_table = dev_pm_opp_get_opp_table(dev);
+	if (!opp_table)
+		return -ENOMEM;
 
-	for (i = 0, rate = 0; i < count; i++, rate++) {
-		/* find next rate */
-		opp = dev_pm_opp_find_freq_ceil(dev, &rate);
-		if (IS_ERR(opp)) {
-			ret = PTR_ERR(opp);
-			goto out;
-		}
+	mutex_lock(&opp_table->lock);
+	list_for_each_entry(opp, &opp_table->opp_list, node) {
+		if (!opp->available)
+			continue;
 		if (is_low_temp) {
-			if (opp->u_volt_max < info->opp_table[i].low_temp_volt)
-				opp->u_volt_max =
+			if (opp->supplies[0].u_volt_max <
+			    info->opp_table[i].low_temp_volt)
+				opp->supplies[0].u_volt_max =
 					info->opp_table[i].low_temp_volt;
-			opp->u_volt = info->opp_table[i].low_temp_volt;
-			opp->u_volt_min = opp->u_volt;
+			opp->supplies[0].u_volt =
+				info->opp_table[i].low_temp_volt;
+			opp->supplies[0].u_volt_min = opp->supplies[0].u_volt;
+			if (opp_table->regulator_count > 1) {
+				opp->supplies[1].u_volt_max =
+					opp->supplies[0].u_volt_max;
+				opp->supplies[1].u_volt =
+					opp->supplies[0].u_volt;
+				opp->supplies[1].u_volt_min =
+					opp->supplies[0].u_volt_min;
+			}
 		} else {
-			opp->u_volt_min = info->opp_table[i].volt;
-			opp->u_volt = opp->u_volt_min;
-			opp->u_volt_max = info->opp_table[i].max_volt;
+			opp->supplies[0].u_volt_min = info->opp_table[i].volt;
+			opp->supplies[0].u_volt = opp->supplies[0].u_volt_min;
+			opp->supplies[0].u_volt_max =
+				info->opp_table[i].max_volt;
+			if (opp_table->regulator_count > 1) {
+				opp->supplies[1].u_volt_min =
+					info->opp_table[i].mem_volt;
+				opp->supplies[1].u_volt =
+					opp->supplies[1].u_volt_min;
+				opp->supplies[1].u_volt_max =
+					info->opp_table[i].max_volt;
+			}
 		}
+		i++;
 	}
+	mutex_unlock(&opp_table->lock);
 
-out:
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 11, 0)
-	rcu_read_unlock();
-#endif
-	return ret;
+	dev_pm_opp_put_opp_table(opp_table);
+
+	return 0;
 }
 
 static void rockchip_low_temp_adjust(struct monitor_dev_info *info,
@@ -862,6 +862,9 @@ static void rockchip_low_temp_adjust(struct monitor_dev_info *info,
 		ret = devp->low_temp_adjust(info, is_low);
 	if (!ret)
 		info->is_low_temp = is_low;
+
+	if (devp->update_volt)
+		devp->update_volt(info);
 }
 
 static void rockchip_high_temp_adjust(struct monitor_dev_info *info,
@@ -870,19 +873,32 @@ static void rockchip_high_temp_adjust(struct monitor_dev_info *info,
 	struct monitor_dev_profile *devp = info->devp;
 	int ret = 0;
 
+	if (!devp->high_temp_adjust)
+		return;
+
 	if (info->high_limit_table) {
 		devp->high_temp_adjust(info, is_high);
 	} else {
 		dev_dbg(info->dev, "high_temp %d\n", is_high);
-		if (devp->high_temp_adjust)
-			ret = devp->high_temp_adjust(info, is_high);
+		ret = devp->high_temp_adjust(info, is_high);
 		if (!ret)
 			info->is_high_temp = is_high;
 	}
 }
 
-int rockchip_monitor_suspend_low_temp_adjust(struct monitor_dev_info *info)
+int rockchip_monitor_suspend_low_temp_adjust(int cpu)
 {
+	struct monitor_dev_info *info = NULL, *tmp;
+
+	list_for_each_entry(tmp, &monitor_dev_list, node) {
+		if (tmp->devp->type != MONITOR_TPYE_CPU)
+			continue;
+		if (cpumask_test_cpu(cpu, &tmp->devp->allowed_cpus)) {
+			info = tmp;
+			break;
+		}
+	}
+
 	if (!info || !info->is_low_temp_enabled)
 		return 0;
 
@@ -942,6 +958,9 @@ rockchip_system_monitor_wide_temp_init(struct monitor_dev_info *info)
 {
 	int ret, temp;
 
+	if (!info->opp_table)
+		return;
+
 	/*
 	 * set the init state to low temperature that the voltage will be enough
 	 * when cpu up at low temperature.
@@ -949,7 +968,6 @@ rockchip_system_monitor_wide_temp_init(struct monitor_dev_info *info)
 	if (!info->is_low_temp) {
 		if (info->opp_table)
 			rockchip_adjust_low_temp_opp_volt(info, true);
-		info->wide_temp_limit = info->low_limit;
 		info->is_low_temp = true;
 	}
 
@@ -964,145 +982,363 @@ rockchip_system_monitor_wide_temp_init(struct monitor_dev_info *info)
 		if (info->opp_table)
 			rockchip_adjust_low_temp_opp_volt(info, false);
 		info->is_low_temp = false;
-
-		info->wide_temp_limit = info->high_limit;
 		info->is_high_temp = true;
 	} else if (temp > (info->low_temp + info->temp_hysteresis)) {
 		if (info->opp_table)
 			rockchip_adjust_low_temp_opp_volt(info, false);
 		info->is_low_temp = false;
-		info->wide_temp_limit = 0;
 	}
 }
 
-static int system_monitor_devfreq_notifier_call(struct notifier_block *nb,
-						unsigned long event,
-						void *data)
+static const char *get_rdev_name(struct regulator_dev *rdev)
 {
-	struct monitor_dev_info *info = devfreq_nb_to_monitor(nb);
-	struct devfreq_policy *policy = data;
-
-	if (event != DEVFREQ_ADJUST)
-		return NOTIFY_DONE;
-
-	if (info->wide_temp_limit && info->wide_temp_limit < policy->max)
-		devfreq_verify_within_limits(policy, 0, info->wide_temp_limit);
-
-	return NOTIFY_OK;
+	if (rdev->constraints && rdev->constraints->name)
+		return rdev->constraints->name;
+	else if (rdev->desc->name)
+		return rdev->desc->name;
+	else
+		return "";
 }
 
-static int monitor_set_freq_table(struct device *dev,
-				  struct monitor_dev_info *info)
+static void
+rockchip_system_monitor_early_regulator_init(struct monitor_dev_info *info)
 {
+	struct regulator *reg;
+	struct regulator_dev *rdev;
+
+	if (!info->early_min_volt || !info->regulators)
+		return;
+
+	rdev = info->regulators[0]->rdev;
+	reg = regulator_get(NULL, get_rdev_name(rdev));
+	if (!IS_ERR_OR_NULL(reg)) {
+		info->early_reg = reg;
+		reg->voltage[PM_SUSPEND_ON].min_uV = info->early_min_volt;
+		reg->voltage[PM_SUSPEND_ON].max_uV = rdev->constraints->max_uV;
+	}
+}
+
+static int
+rockchip_system_monitor_freq_qos_requset(struct monitor_dev_info *info)
+{
+	struct devfreq *devfreq;
+	struct cpufreq_policy *policy;
+	int max_default_value = FREQ_QOS_MAX_DEFAULT_VALUE;
+	int ret;
+
+	if (info->is_low_temp && info->low_limit)
+		max_default_value = info->low_limit / 1000;
+	else if (info->is_high_temp && info->high_limit)
+		max_default_value = info->high_limit / 1000;
+
+	if (info->devp->type == MONITOR_TPYE_CPU) {
+		policy = (struct cpufreq_policy *)info->devp->data;
+		ret = freq_qos_add_request(&policy->constraints,
+					   &info->max_temp_freq_req,
+					   FREQ_QOS_MAX,
+					   max_default_value);
+		if (ret < 0) {
+			dev_info(info->dev,
+				 "failed to add temp freq constraint\n");
+			return ret;
+		}
+		ret = freq_qos_add_request(&policy->constraints,
+					   &info->min_sta_freq_req,
+					   FREQ_QOS_MIN,
+					   FREQ_QOS_MIN_DEFAULT_VALUE);
+		if (ret < 0) {
+			dev_info(info->dev,
+				 "failed to add sta freq constraint\n");
+			freq_qos_remove_request(&info->max_temp_freq_req);
+			return ret;
+		}
+		ret = freq_qos_add_request(&policy->constraints,
+					   &info->max_sta_freq_req,
+					   FREQ_QOS_MAX,
+					   FREQ_QOS_MAX_DEFAULT_VALUE);
+		if (ret < 0) {
+			dev_info(info->dev,
+				 "failed to add sta freq constraint\n");
+			freq_qos_remove_request(&info->max_temp_freq_req);
+			freq_qos_remove_request(&info->min_sta_freq_req);
+			return ret;
+		}
+	} else if (info->devp->type == MONITOR_TPYE_DEV) {
+		devfreq = (struct devfreq *)info->devp->data;
+		ret = dev_pm_qos_add_request(devfreq->dev.parent,
+					     &info->dev_max_freq_req,
+					     DEV_PM_QOS_MAX_FREQUENCY,
+					     max_default_value);
+		if (ret < 0) {
+			dev_info(info->dev, "failed to add freq constraint\n");
+			return ret;
+		}
+	}
+
+	return 0;
+}
+
+static int rockchip_system_monitor_parse_supplies(struct device *dev,
+						  struct monitor_dev_info *info)
+{
+	struct opp_table *opp_table;
+	struct dev_pm_set_opp_data *data;
+	int len, count;
+
+	opp_table = dev_pm_opp_get_opp_table(dev);
+	if (IS_ERR(opp_table))
+		return PTR_ERR(opp_table);
+
+	if (opp_table->clk)
+		info->clk = opp_table->clk;
+	if (opp_table->regulators)
+		info->regulators = opp_table->regulators;
+	info->regulator_count = opp_table->regulator_count;
+
+	if (opp_table->regulators && info->devp->set_opp) {
+		count = opp_table->regulator_count;
+		/* space for set_opp_data */
+		len = sizeof(*data);
+		/* space for old_opp.supplies and new_opp.supplies */
+		len += 2 * sizeof(struct dev_pm_opp_supply) * count;
+		data = kzalloc(len, GFP_KERNEL);
+		if (!data)
+			return -ENOMEM;
+		data->old_opp.supplies = (void *)(data + 1);
+		data->new_opp.supplies = data->old_opp.supplies + count;
+		info->set_opp_data = data;
+	}
+
+	dev_pm_opp_put_opp_table(opp_table);
+
+	return 0;
+}
+
+void rockchip_monitor_volt_adjust_lock(struct monitor_dev_info *info)
+{
+	if (info)
+		mutex_lock(&info->volt_adjust_mutex);
+}
+EXPORT_SYMBOL(rockchip_monitor_volt_adjust_lock);
+
+void rockchip_monitor_volt_adjust_unlock(struct monitor_dev_info *info)
+{
+	if (info)
+		mutex_unlock(&info->volt_adjust_mutex);
+}
+EXPORT_SYMBOL(rockchip_monitor_volt_adjust_unlock);
+
+static int rockchip_monitor_enable_opp_clk(struct device *dev,
+					   struct rockchip_opp_info *opp_info)
+{
+	int ret = 0;
+
+	if (!opp_info)
+		return 0;
+
+	ret = clk_bulk_prepare_enable(opp_info->num_clks, opp_info->clks);
+	if (ret) {
+		dev_err(dev, "failed to enable opp clks\n");
+		return ret;
+	}
+
+	return 0;
+}
+
+static void rockchip_monitor_disable_opp_clk(struct device *dev,
+					     struct rockchip_opp_info *opp_info)
+{
+	if (!opp_info)
+		return;
+
+	clk_bulk_disable_unprepare(opp_info->num_clks, opp_info->clks);
+}
+
+static int rockchip_monitor_set_opp(struct monitor_dev_info *info,
+				    unsigned long old_freq,
+				    unsigned long freq,
+				    struct dev_pm_opp_supply *old_supply,
+				    struct dev_pm_opp_supply *new_supply)
+{
+	struct dev_pm_set_opp_data *data;
+	int size;
+
+	data = info->set_opp_data;
+	data->regulators = info->regulators;
+	data->regulator_count = info->regulator_count;
+	data->clk = info->clk;
+	data->dev = info->dev;
+
+	data->old_opp.rate = old_freq;
+	size = sizeof(*old_supply) * info->regulator_count;
+	if (!old_supply)
+		memset(data->old_opp.supplies, 0, size);
+	else
+		memcpy(data->old_opp.supplies, old_supply, size);
+
+	data->new_opp.rate = freq;
+	memcpy(data->new_opp.supplies, new_supply, size);
+
+	return info->devp->set_opp(data);
+}
+
+int rockchip_monitor_check_rate_volt(struct monitor_dev_info *info)
+{
+	struct device *dev = info->dev;
+	struct regulator *vdd_reg = NULL;
+	struct regulator *mem_reg = NULL;
+	struct rockchip_opp_info *opp_info = info->devp->opp_info;
 	struct dev_pm_opp *opp;
-	unsigned long freq, *freq_table;
-	unsigned int i;
-	int count;
+	unsigned long old_rate, new_rate, new_volt, new_mem_volt;
+	int old_volt, old_mem_volt;
+	u32 target_rm = UINT_MAX;
+	bool is_set_clk = true;
+	bool is_set_rm = false;
+	int ret = 0;
 
-	/* Initialize the freq_table from OPP table */
-	count = dev_pm_opp_get_opp_count(dev);
-	if (count <= 0)
-		return -EINVAL;
+	if (!info->regulators || !info->clk)
+		return 0;
 
-	info->max_state = count;
-	freq_table = kcalloc(count, sizeof(*info->freq_table), GFP_KERNEL);
-	if (!freq_table) {
-		info->max_state = 0;
-		return -ENOMEM;
+	mutex_lock(&info->volt_adjust_mutex);
+
+	vdd_reg = info->regulators[0];
+	old_rate = clk_get_rate(info->clk);
+	old_volt = regulator_get_voltage(vdd_reg);
+	if (info->regulator_count > 1) {
+		mem_reg = info->regulators[1];
+		old_mem_volt = regulator_get_voltage(mem_reg);
 	}
 
-	rcu_read_lock();
-	for (i = 0, freq = ULONG_MAX; i < info->max_state; i++, freq--) {
-		opp = dev_pm_opp_find_freq_floor(dev, &freq);
+	if (info->init_freq) {
+		new_rate = info->init_freq * 1000;
+		info->init_freq = 0;
+	} else {
+		new_rate = old_rate;
+	}
+	opp = dev_pm_opp_find_freq_ceil(dev, &new_rate);
+	if (IS_ERR(opp)) {
+		opp = dev_pm_opp_find_freq_floor(dev, &new_rate);
 		if (IS_ERR(opp)) {
-			kfree(freq_table);
-			info->max_state = 0;
-			rcu_read_unlock();
-			return PTR_ERR(opp);
+			ret = PTR_ERR(opp);
+			goto unlock;
 		}
-		freq_table[i] = freq;
 	}
-	rcu_read_unlock();
+	new_volt = opp->supplies[0].u_volt;
+	if (info->regulator_count > 1)
+		new_mem_volt = opp->supplies[1].u_volt;
+	dev_pm_opp_put(opp);
 
-	info->freq_table = freq_table;
-
-	return 0;
-}
-
-static unsigned long monitor_freq_to_state(struct monitor_dev_info *info,
-					   unsigned long freq)
-{
-	unsigned long i = 0;
-
-	if (!info->freq_table) {
-		dev_info(info->dev, "failed to get freq_table");
-		return 0;
-	}
-
-	for (i = 0; i < info->max_state; i++) {
-		if (freq >= info->freq_table[i])
-			return i;
-	}
-
-	return info->max_state - 1;
-}
-
-static int monitor_temp_to_state(struct monitor_dev_info *info,
-				 int temp, unsigned long *state)
-{
-	unsigned long target_state, target_freq = 0;
-	int i;
-
-	if (temp == THERMAL_TEMP_INVALID)
-		return 0;
-	if (info->temp_freq_table) {
-		for (i = 0; info->temp_freq_table[i].freq != UINT_MAX; i++) {
-			if (temp > info->temp_freq_table[i].temp)
-				target_freq = info->temp_freq_table[i].freq;
+	if (old_rate == new_rate) {
+		if (info->regulator_count > 1) {
+			if (old_volt == new_volt &&
+			    new_mem_volt == old_mem_volt)
+				goto unlock;
+		} else if (old_volt == new_volt) {
+			goto unlock;
 		}
-		if (target_freq)
-			*state = monitor_freq_to_state(info,
-						       target_freq * 1000);
-		else
-			*state = 0;
+	}
+	if (!new_volt || (info->regulator_count > 1 && !new_mem_volt))
+		goto unlock;
+
+	if (info->devp->set_opp) {
+		ret = rockchip_monitor_set_opp(info, old_rate, new_rate,
+					       NULL, opp->supplies);
+		goto unlock;
 	}
 
-	if (info->status_min_limit) {
-		target_freq = info->status_min_limit * 1000;
-		target_state = monitor_freq_to_state(info, target_freq);
-		if (*state > target_state)
-			*state = target_state;
+	if (opp_info && opp_info->data && opp_info->data->set_read_margin) {
+		is_set_rm = true;
+		if (info->devp->type == MONITOR_TPYE_DEV) {
+			if (!pm_runtime_active(dev)) {
+				is_set_rm = false;
+				if (opp_info->scmi_clk)
+					is_set_clk = false;
+			}
+		}
 	}
+	rockchip_monitor_enable_opp_clk(dev, opp_info);
+	rockchip_get_read_margin(dev, opp_info, new_volt, &target_rm);
 
-	return 0;
+	dev_dbg(dev, "%s: %lu Hz --> %lu Hz\n", __func__, old_rate, new_rate);
+	if (new_rate >= old_rate) {
+		rockchip_set_intermediate_rate(dev, opp_info, info->clk,
+					       old_rate, new_rate,
+					       true, is_set_clk);
+		if (info->regulator_count > 1) {
+			ret = regulator_set_voltage(mem_reg, new_mem_volt,
+						    INT_MAX);
+			if (ret) {
+				dev_err(dev, "%s: failed to set volt: %lu\n",
+					__func__, new_mem_volt);
+				goto restore_voltage;
+			}
+		}
+		ret = regulator_set_voltage(vdd_reg, new_volt, INT_MAX);
+		if (ret) {
+			dev_err(dev, "%s: failed to set volt: %lu\n",
+				__func__, new_volt);
+			goto restore_voltage;
+		}
+		rockchip_set_read_margin(dev, opp_info, target_rm, is_set_rm);
+		if (is_set_clk && clk_set_rate(info->clk, new_rate)) {
+			dev_err(dev, "%s: failed to set clock rate: %lu\n",
+				__func__, new_rate);
+			goto restore_rm;
+		}
+	} else {
+		rockchip_set_intermediate_rate(dev, opp_info, info->clk,
+					       old_rate, new_rate,
+					       false, is_set_clk);
+		rockchip_set_read_margin(dev, opp_info, target_rm, is_set_rm);
+		if (is_set_clk && clk_set_rate(info->clk, new_rate)) {
+			dev_err(dev, "%s: failed to set clock rate: %lu\n",
+				__func__, new_rate);
+			goto restore_rm;
+		}
+		ret = regulator_set_voltage(vdd_reg, new_volt,
+					    INT_MAX);
+		if (ret) {
+			dev_err(dev, "%s: failed to set volt: %lu\n",
+				__func__, new_volt);
+			goto restore_freq;
+		}
+		if (info->regulator_count > 1) {
+			ret = regulator_set_voltage(mem_reg, new_mem_volt,
+						    INT_MAX);
+			if (ret) {
+				dev_err(dev, "%s: failed to set volt: %lu\n",
+					__func__, new_mem_volt);
+				goto restore_freq;
+			}
+		}
+	}
+	goto disable_clk;
+
+restore_freq:
+	if (is_set_clk && clk_set_rate(info->clk, old_rate))
+		dev_err(dev, "%s: failed to restore old-freq (%lu Hz)\n",
+			__func__, old_rate);
+restore_rm:
+	rockchip_get_read_margin(dev, opp_info, old_volt, &target_rm);
+	rockchip_set_read_margin(dev, opp_info, target_rm, is_set_rm);
+restore_voltage:
+	if (info->regulator_count > 1)
+		regulator_set_voltage(mem_reg, old_mem_volt, INT_MAX);
+	regulator_set_voltage(vdd_reg, old_volt, INT_MAX);
+disable_clk:
+	rockchip_monitor_disable_opp_clk(dev, opp_info);
+unlock:
+	mutex_unlock(&info->volt_adjust_mutex);
+
+	return ret;
 }
-
-int
-rockchip_system_monitor_adjust_cdev_state(struct thermal_cooling_device *cdev,
-					  int temp, unsigned long *state)
-{
-	struct monitor_dev_info *info;
-
-	down_read(&mdev_list_sem);
-	list_for_each_entry(info, &monitor_dev_list, node) {
-		if (cdev->np != info->dev->of_node)
-			continue;
-		monitor_temp_to_state(info, temp, state);
-		break;
-	}
-	up_read(&mdev_list_sem);
-
-	return 0;
-}
-EXPORT_SYMBOL(rockchip_system_monitor_adjust_cdev_state);
+EXPORT_SYMBOL(rockchip_monitor_check_rate_volt);
 
 struct monitor_dev_info *
 rockchip_system_monitor_register(struct device *dev,
 				 struct monitor_dev_profile *devp)
 {
 	struct monitor_dev_info *info;
-	struct devfreq *devfreq;
-	int ret;
 
 	if (!system_monitor)
 		return ERR_PTR(-ENOMEM);
@@ -1113,39 +1349,33 @@ rockchip_system_monitor_register(struct device *dev,
 	info->dev = dev;
 	info->devp = devp;
 
-	ret = monitor_device_parse_dt(dev, info);
-	if (ret)
-		goto free_info;
+	mutex_init(&info->volt_adjust_mutex);
 
-	monitor_set_freq_table(dev, info);
-
-	if (info->devp->type == MONITOR_TPYE_DEV) {
-		info->devfreq_nb.notifier_call =
-			system_monitor_devfreq_notifier_call;
-		devfreq = (struct devfreq *)info->devp->data;
-		devm_devfreq_register_notifier(dev, devfreq, &info->devfreq_nb,
-					       DEVFREQ_POLICY_NOTIFIER);
+	rockchip_system_monitor_parse_supplies(dev, info);
+	if (monitor_device_parse_dt(dev, info)) {
+		rockchip_monitor_check_rate_volt(info);
+		devp->is_checked = true;
+		kfree(info->set_opp_data);
+		kfree(info);
+		return ERR_PTR(-EINVAL);
 	}
 
+	rockchip_system_monitor_early_regulator_init(info);
 	rockchip_system_monitor_wide_temp_init(info);
-	mutex_init(&info->volt_adjust_mutex);
+	rockchip_monitor_check_rate_volt(info);
+	devp->is_checked = true;
+	rockchip_system_monitor_freq_qos_requset(info);
 
 	down_write(&mdev_list_sem);
 	list_add(&info->node, &monitor_dev_list);
 	up_write(&mdev_list_sem);
 
 	return info;
-
-free_info:
-	kfree(info);
-	return ERR_PTR(-EINVAL);
 }
 EXPORT_SYMBOL(rockchip_system_monitor_register);
 
 void rockchip_system_monitor_unregister(struct monitor_dev_info *info)
 {
-	struct devfreq *devfreq;
-
 	if (!info)
 		return;
 
@@ -1153,17 +1383,30 @@ void rockchip_system_monitor_unregister(struct monitor_dev_info *info)
 	list_del(&info->node);
 	up_write(&mdev_list_sem);
 
-	devfreq = (struct devfreq *)info->devp->data;
-	if (info->devp->type == MONITOR_TPYE_DEV)
-		devm_devfreq_unregister_notifier(info->dev, devfreq,
-						 &info->devfreq_nb,
-						 DEVFREQ_TRANSITION_NOTIFIER);
+	if (info->devp->type == MONITOR_TPYE_CPU) {
+		freq_qos_remove_request(&info->max_temp_freq_req);
+		freq_qos_remove_request(&info->min_sta_freq_req);
+		freq_qos_remove_request(&info->max_sta_freq_req);
+	} else {
+		dev_pm_qos_remove_request(&info->dev_max_freq_req);
+	}
+
 	kfree(info->low_temp_adjust_table);
 	kfree(info->opp_table);
-	kfree(info->freq_table);
+	kfree(info->set_opp_data);
 	kfree(info);
 }
 EXPORT_SYMBOL(rockchip_system_monitor_unregister);
+
+static int notify_dummy(struct thermal_zone_device *tz, int trip)
+{
+	return 0;
+}
+
+static struct thermal_governor thermal_gov_dummy = {
+	.name		= "dummy",
+	.throttle	= notify_dummy,
+};
 
 static int rockchip_system_monitor_parse_dt(struct system_monitor *monitor)
 {
@@ -1197,6 +1440,13 @@ static int rockchip_system_monitor_parse_dt(struct system_monitor *monitor)
 		system_monitor->offline_cpus_temp = INT_MAX;
 	of_property_read_u32(np, "rockchip,temp-hysteresis",
 			     &system_monitor->temp_hysteresis);
+
+	if (of_find_property(np, "rockchip,thermal-governor-dummy", NULL)) {
+		if (monitor->tz->governor->unbind_from_tz)
+			monitor->tz->governor->unbind_from_tz(monitor->tz);
+		monitor->tz->governor = &thermal_gov_dummy;
+	}
+
 out:
 	return 0;
 }
@@ -1222,7 +1472,7 @@ static void rockchip_system_monitor_cpu_on_off(void)
 	cpumask_copy(&system_monitor->offline_cpus, &offline_cpus);
 	for_each_cpu(cpu, &system_monitor->offline_cpus) {
 		if (cpu_online(cpu))
-			cpu_down(cpu);
+			remove_cpu(cpu);
 	}
 
 	cpumask_clear(&online_cpus);
@@ -1232,7 +1482,7 @@ static void rockchip_system_monitor_cpu_on_off(void)
 	if (cpumask_empty(&online_cpus))
 		goto out;
 	for_each_cpu(cpu, &online_cpus)
-		cpu_up(cpu);
+		add_cpu(cpu);
 
 out:
 	mutex_unlock(&cpu_on_off_mutex);
@@ -1300,26 +1550,27 @@ static void rockchip_system_status_cpu_limit_freq(struct monitor_dev_info *info,
 						  unsigned long status)
 {
 	unsigned int target_freq = 0;
-	bool is_freq_fixed = false;
-	int cpu;
 
 	if (status & SYS_STATUS_REBOOT) {
-		info->status_min_limit = info->reboot_freq;
-		info->status_max_limit = info->reboot_freq;
-		info->is_status_freq_fixed = true;
-		goto next;
+		freq_qos_update_request(&info->max_sta_freq_req,
+					info->reboot_freq);
+		freq_qos_update_request(&info->min_sta_freq_req,
+					info->reboot_freq);
+		return;
 	}
 
 	if (info->video_4k_freq && (status & SYS_STATUS_VIDEO_4K))
 		target_freq = info->video_4k_freq;
-	if (target_freq == info->status_max_limit &&
-	    info->is_status_freq_fixed == is_freq_fixed)
+
+	if (target_freq == info->status_max_limit)
 		return;
 	info->status_max_limit = target_freq;
-	info->is_status_freq_fixed = is_freq_fixed;
-next:
-	cpu = cpumask_any(&info->devp->allowed_cpus);
-	cpufreq_update_policy(cpu);
+	if (info->status_max_limit)
+		freq_qos_update_request(&info->max_sta_freq_req,
+					info->status_max_limit);
+	else
+		freq_qos_update_request(&info->max_sta_freq_req,
+					FREQ_QOS_MAX_DEFAULT_VALUE);
 }
 
 static void rockchip_system_status_limit_freq(unsigned long status)
@@ -1362,6 +1613,26 @@ static int rockchip_system_status_notifier(struct notifier_block *nb,
 	return NOTIFY_OK;
 }
 
+static int rockchip_system_monitor_set_cpu_uevent_suppress(bool is_suppress)
+{
+	struct monitor_dev_info *info;
+	struct cpufreq_policy *policy;
+
+	list_for_each_entry(info, &monitor_dev_list, node) {
+		if (info->devp->type != MONITOR_TPYE_CPU)
+			continue;
+		policy = (struct cpufreq_policy *)info->devp->data;
+		if (!policy || !policy->cdev)
+			continue;
+		if (is_suppress)
+			dev_set_uevent_suppress(&policy->cdev->device, 1);
+		else
+			dev_set_uevent_suppress(&policy->cdev->device, 0);
+	}
+
+	return 0;
+}
+
 static int monitor_pm_notify(struct notifier_block *nb,
 			     unsigned long mode, void *_unused)
 {
@@ -1370,6 +1641,7 @@ static int monitor_pm_notify(struct notifier_block *nb,
 	case PM_RESTORE_PREPARE:
 	case PM_SUSPEND_PREPARE:
 		atomic_set(&monitor_in_suspend, 1);
+		rockchip_system_monitor_set_cpu_uevent_suppress(true);
 		break;
 	case PM_POST_HIBERNATION:
 	case PM_POST_RESTORE:
@@ -1377,6 +1649,7 @@ static int monitor_pm_notify(struct notifier_block *nb,
 		if (system_monitor->tz)
 			rockchip_system_monitor_thermal_update();
 		atomic_set(&monitor_in_suspend, 0);
+		rockchip_system_monitor_set_cpu_uevent_suppress(false);
 		break;
 	default:
 		break;
@@ -1386,51 +1659,6 @@ static int monitor_pm_notify(struct notifier_block *nb,
 
 static struct notifier_block monitor_pm_nb = {
 	.notifier_call = monitor_pm_notify,
-};
-
-static int rockchip_monitor_cpufreq_policy_notifier(struct notifier_block *nb,
-						    unsigned long event,
-						    void *data)
-{
-	struct monitor_dev_info *info;
-	struct cpufreq_policy *policy = data;
-	int cpu = policy->cpu;
-	unsigned int limit_freq = UINT_MAX;
-
-	if (event != CPUFREQ_ADJUST)
-		return NOTIFY_OK;
-
-	down_read(&mdev_list_sem);
-	list_for_each_entry(info, &monitor_dev_list, node) {
-		if (info->devp->type != MONITOR_TPYE_CPU)
-			continue;
-		if (!cpumask_test_cpu(cpu, &info->devp->allowed_cpus))
-			continue;
-
-		if (info->wide_temp_limit) {
-			if (limit_freq > info->wide_temp_limit / 1000)
-				limit_freq = info->wide_temp_limit / 1000;
-		}
-		if (info->status_max_limit &&
-		    limit_freq > info->status_max_limit)
-			limit_freq = info->status_max_limit;
-
-		if (info->is_status_freq_fixed) {
-			cpufreq_verify_within_limits(policy, limit_freq,
-						     limit_freq);
-			dev_info(info->dev, "min=%u, max=%u\n", policy->min,
-				 policy->max);
-		} else if (limit_freq < policy->max) {
-			cpufreq_verify_within_limits(policy, 0, limit_freq);
-		}
-	}
-	up_read(&mdev_list_sem);
-
-	return NOTIFY_OK;
-}
-
-static struct notifier_block rockchip_monitor_cpufreq_policy_nb = {
-	.notifier_call = rockchip_monitor_cpufreq_policy_notifier,
 };
 
 static int rockchip_monitor_reboot_notifier(struct notifier_block *nb,
@@ -1452,24 +1680,15 @@ static int rockchip_monitor_fb_notifier(struct notifier_block *nb,
 {
 	struct fb_event *event = ptr;
 
-	switch (action) {
-	case FB_EARLY_EVENT_BLANK:
-		switch (*((int *)event->data)) {
-		case FB_BLANK_UNBLANK:
-			rockchip_clear_system_status(SYS_STATUS_SUSPEND);
-			break;
-		default:
-			break;
-		}
+	if (action != FB_EVENT_BLANK)
+		return NOTIFY_OK;
+
+	switch (*((int *)event->data)) {
+	case FB_BLANK_UNBLANK:
+		rockchip_clear_system_status(SYS_STATUS_SUSPEND);
 		break;
-	case FB_EVENT_BLANK:
-		switch (*((int *)event->data)) {
-		case FB_BLANK_POWERDOWN:
-			rockchip_set_system_status(SYS_STATUS_SUSPEND);
-			break;
-		default:
-			break;
-		}
+	case FB_BLANK_POWERDOWN:
+		rockchip_set_system_status(SYS_STATUS_SUSPEND);
 		break;
 	default:
 		break;
@@ -1481,6 +1700,53 @@ static int rockchip_monitor_fb_notifier(struct notifier_block *nb,
 static struct notifier_block rockchip_monitor_fb_nb = {
 	.notifier_call = rockchip_monitor_fb_notifier,
 };
+
+static int rockchip_eink_devfs_notifier(struct notifier_block *nb,
+					unsigned long action, void *ptr)
+{
+	switch (action) {
+	case EBC_ON:
+		rockchip_clear_system_status(SYS_STATUS_LOW_POWER);
+		break;
+	case EBC_OFF:
+		rockchip_set_system_status(SYS_STATUS_LOW_POWER);
+		break;
+	default:
+		break;
+	}
+
+	return NOTIFY_OK;
+}
+
+static struct notifier_block rockchip_monitor_ebc_nb = {
+	.notifier_call = rockchip_eink_devfs_notifier,
+};
+
+static void system_monitor_early_min_volt_function(struct work_struct *work)
+{
+	struct monitor_dev_info *info;
+	struct regulator_dev *rdev;
+	int min_uV, max_uV;
+	int ret;
+
+	down_read(&mdev_list_sem);
+	list_for_each_entry(info, &monitor_dev_list, node) {
+		if (!info->early_min_volt || !info->early_reg)
+			continue;
+		rdev = info->early_reg->rdev;
+		min_uV = rdev->constraints->min_uV;
+		max_uV = rdev->constraints->max_uV;
+		ret = regulator_set_voltage(info->early_reg, min_uV, max_uV);
+		if (ret)
+			dev_err(&rdev->dev,
+				"%s: failed to set volt\n", __func__);
+		regulator_put(info->early_reg);
+	}
+	up_read(&mdev_list_sem);
+}
+
+static DECLARE_DELAYED_WORK(system_monitor_early_min_volt_work,
+			    system_monitor_early_min_volt_function);
 
 static int rockchip_system_monitor_probe(struct platform_device *pdev)
 {
@@ -1517,13 +1783,15 @@ static int rockchip_system_monitor_probe(struct platform_device *pdev)
 	if (register_pm_notifier(&monitor_pm_nb))
 		dev_err(dev, "failed to register suspend notifier\n");
 
-	cpufreq_register_notifier(&rockchip_monitor_cpufreq_policy_nb,
-				  CPUFREQ_POLICY_NOTIFIER);
-
 	register_reboot_notifier(&rockchip_monitor_reboot_nb);
 
 	if (fb_register_client(&rockchip_monitor_fb_nb))
 		dev_err(dev, "failed to register fb nb\n");
+
+	ebc_register_notifier(&rockchip_monitor_ebc_nb);
+
+	schedule_delayed_work(&system_monitor_early_min_volt_work,
+			      msecs_to_jiffies(30000));
 
 	dev_info(dev, "system monitor probe\n");
 

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #include <linux/threads.h>
 #include <asm/processor.h>
 #include <asm/page.h>
@@ -6,6 +7,7 @@
 #include <asm/ppc_asm.h>
 #include <asm/asm-offsets.h>
 #include <asm/mmu.h>
+#include <asm/feature-fixups.h>
 
 /*
  * Structure for storing CPU registers on the save area.
@@ -393,6 +395,7 @@ END_MMU_FTR_SECTION_IFSET(MMU_FTR_USE_HIGH_BATS)
 
 	li	r3,0
 	blr
+_ASM_NOKPROBE_SYMBOL(swsusp_arch_resume)
 
 /* FIXME:This construct is actually not useful since we don't shut
  * down the instruction MMU, we could just flip back MSR-DR on.
@@ -404,4 +407,5 @@ turn_on_mmu:
 	sync
 	isync
 	rfi
+_ASM_NOKPROBE_SYMBOL(turn_on_mmu)
 

@@ -58,7 +58,7 @@ static int kbase_tracking_page_setup(struct kbase_context *kctx, struct vm_area_
  * Shrink (or completely remove) all CPU mappings which reference the shrunk
  * part of the allocation.
  *
- * Note: Caller must be holding the processes mmap_sem lock.
+ * Note: Caller must be holding the processes mmap_lock lock.
  */
 static void kbase_mem_shrink_cpu_mapping(struct kbase_context *kctx,
 		struct kbase_va_region *reg,
@@ -463,100 +463,6 @@ void kbase_mem_evictable_deinit(struct kbase_context *kctx)
 	unregister_shrinker(&kctx->reclaim);
 }
 
-struct kbase_mem_zone_cache_entry {
-	/* List head used to link the cache entry to the memory allocation. */
-	struct list_head zone_node;
-	/* The zone the cacheline is for. */
-	struct zone *zone;
-	/* The number of pages in the allocation which belong to this zone. */
-	u64 count;
-};
-
-static bool kbase_zone_cache_builder(struct kbase_mem_phy_alloc *alloc,
-		size_t start_offset)
-{
-	struct kbase_mem_zone_cache_entry *cache = NULL;
-	size_t i;
-	int ret = 0;
-
-	for (i = start_offset; i < alloc->nents; i++) {
-		struct page *p = phys_to_page(alloc->pages[i]);
-		struct zone *zone = page_zone(p);
-		bool create = true;
-
-		if (cache && (cache->zone == zone)) {
-			/*
-			 * Fast path check as most of the time adjacent
-			 * pages come from the same zone.
-			 */
-			create = false;
-		} else {
-			/*
-			 * Slow path check, walk all the cache entries to see
-			 * if we already know about this zone.
-			 */
-			list_for_each_entry(cache, &alloc->zone_cache, zone_node) {
-				if (cache->zone == zone) {
-					create = false;
-					break;
-				}
-			}
-		}
-
-		/* This zone wasn't found in the cache, create an entry for it */
-		if (create) {
-			cache = kmalloc(sizeof(*cache), GFP_KERNEL);
-			if (!cache) {
-				ret = -ENOMEM;
-				goto bail;
-			}
-			cache->zone = zone;
-			cache->count = 0;
-			list_add(&cache->zone_node, &alloc->zone_cache);
-		}
-
-		cache->count++;
-	}
-	return 0;
-
-bail:
-	return ret;
-}
-
-int kbase_zone_cache_update(struct kbase_mem_phy_alloc *alloc,
-		size_t start_offset)
-{
-	/*
-	 * Bail if the zone cache is empty, only update the cache if it
-	 * existed in the first place.
-	 */
-	if (list_empty(&alloc->zone_cache))
-		return 0;
-
-	return kbase_zone_cache_builder(alloc, start_offset);
-}
-
-int kbase_zone_cache_build(struct kbase_mem_phy_alloc *alloc)
-{
-	/* Bail if the zone cache already exists */
-	if (!list_empty(&alloc->zone_cache))
-		return 0;
-
-	return kbase_zone_cache_builder(alloc, 0);
-}
-
-void kbase_zone_cache_clear(struct kbase_mem_phy_alloc *alloc)
-{
-	struct kbase_mem_zone_cache_entry *walker;
-
-	while(!list_empty(&alloc->zone_cache)){
-		walker = list_first_entry(&alloc->zone_cache,
-				struct kbase_mem_zone_cache_entry, zone_node);
-		list_del(&walker->zone_node);
-		kfree(walker);
-	}
-}
-
 /**
  * kbase_mem_evictable_mark_reclaim - Mark the pages as reclaimable.
  * @alloc: The physical allocation
@@ -564,29 +470,7 @@ void kbase_zone_cache_clear(struct kbase_mem_phy_alloc *alloc)
 static void kbase_mem_evictable_mark_reclaim(struct kbase_mem_phy_alloc *alloc)
 {
 	struct kbase_context *kctx = alloc->imported.kctx;
-	struct kbase_mem_zone_cache_entry *zone_cache;
 	int __maybe_unused new_page_count;
-	int err;
-
-	/* Attempt to build a zone cache of tracking */
-	err = kbase_zone_cache_build(alloc);
-	if (err == 0) {
-		/* Bulk update all the zones */
-		list_for_each_entry(zone_cache, &alloc->zone_cache, zone_node) {
-			zone_page_state_add(zone_cache->count,
-					zone_cache->zone, NR_SLAB_RECLAIMABLE);
-		}
-	} else {
-		/* Fall-back to page by page updates */
-		int i;
-
-		for (i = 0; i < alloc->nents; i++) {
-			struct page *p = phys_to_page(alloc->pages[i]);
-			struct zone *zone = page_zone(p);
-
-			zone_page_state_add(1, zone, NR_SLAB_RECLAIMABLE);
-		}
-	}
 
 	kbase_process_page_usage_dec(kctx, alloc->nents);
 	new_page_count = kbase_atomic_sub_pages(alloc->nents,
@@ -606,38 +490,16 @@ static
 void kbase_mem_evictable_unmark_reclaim(struct kbase_mem_phy_alloc *alloc)
 {
 	struct kbase_context *kctx = alloc->imported.kctx;
-	struct kbase_mem_zone_cache_entry *zone_cache;
 	int __maybe_unused new_page_count;
-	int err;
 
 	new_page_count = kbase_atomic_add_pages(alloc->nents,
 						&kctx->used_pages);
 	kbase_atomic_add_pages(alloc->nents, &kctx->kbdev->memdev.used_pages);
 
 	/* Increase mm counters so that the allocation is accounted for
-	 * against the process and thus is visible to the OOM killer,
-	 * then remove it from the reclaimable accounting. */
+	 * against the process and thus is visible to the OOM killer.
+	 */
 	kbase_process_page_usage_inc(kctx, alloc->nents);
-
-	/* Attempt to build a zone cache of tracking */
-	err = kbase_zone_cache_build(alloc);
-	if (err == 0) {
-		/* Bulk update all the zones */
-		list_for_each_entry(zone_cache, &alloc->zone_cache, zone_node) {
-			zone_page_state_add(-zone_cache->count,
-					zone_cache->zone, NR_SLAB_RECLAIMABLE);
-		}
-	} else {
-		/* Fall-back to page by page updates */
-		int i;
-
-		for (i = 0; i < alloc->nents; i++) {
-			struct page *p = phys_to_page(alloc->pages[i]);
-			struct zone *zone = page_zone(p);
-
-			zone_page_state_add(-1, zone, NR_SLAB_RECLAIMABLE);
-		}
-	}
 
 	KBASE_TLSTREAM_AUX_PAGESALLOC(
 			(u32)kctx->id,
@@ -749,7 +611,7 @@ int kbase_mem_flags_change(struct kbase_context *kctx, u64 gpu_addr, unsigned in
 		real_flags |= KBASE_REG_SHARE_IN;
 
 	/* now we can lock down the context, and find the region */
-	down_write(&current->mm->mmap_sem);
+	down_write(&current->mm->mmap_lock);
 	kbase_gpu_vm_lock(kctx);
 
 	/* Validate the region */
@@ -821,7 +683,7 @@ int kbase_mem_flags_change(struct kbase_context *kctx, u64 gpu_addr, unsigned in
 
 out_unlock:
 	kbase_gpu_vm_unlock(kctx);
-	up_write(&current->mm->mmap_sem);
+	up_write(&current->mm->mmap_lock);
 out:
 	return ret;
 }
@@ -1157,23 +1019,21 @@ static struct kbase_va_region *kbase_mem_from_user_buffer(
 		*flags |= KBASE_MEM_IMPORT_HAVE_PAGES;
 	}
 
-	down_read(&current->mm->mmap_sem);
+	down_read(&current->mm->mmap_lock);
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 6, 0)
 	faulted_pages = get_user_pages(current, current->mm, address, *va_pages,
-			reg->flags & KBASE_REG_GPU_WR ? FOLL_WRITE : 0,
-			pages, NULL);
+			reg->flags & KBASE_REG_GPU_WR, 0, pages, NULL);
 #elif LINUX_VERSION_CODE < KERNEL_VERSION(4, 9, 0)
 	faulted_pages = get_user_pages(address, *va_pages,
-			reg->flags & KBASE_REG_GPU_WR ? FOLL_WRITE : 0,
-			pages, NULL);
+			reg->flags & KBASE_REG_GPU_WR, 0, pages, NULL);
 #else
 	faulted_pages = get_user_pages(address, *va_pages,
 			reg->flags & KBASE_REG_GPU_WR ? FOLL_WRITE : 0,
 			pages, NULL);
 #endif
 
-	up_read(&current->mm->mmap_sem);
+	up_read(&current->mm->mmap_lock);
 
 	if (faulted_pages != *va_pages)
 		goto fault_mismatch;
@@ -1638,7 +1498,7 @@ int kbase_mem_commit(struct kbase_context *kctx, u64 gpu_addr, u64 new_pages)
 		return -EINVAL;
 	}
 
-	down_write(&current->mm->mmap_sem);
+	down_write(&current->mm->mmap_lock);
 	kbase_gpu_vm_lock(kctx);
 
 	/* Validate the region */
@@ -1680,7 +1540,7 @@ int kbase_mem_commit(struct kbase_context *kctx, u64 gpu_addr, u64 new_pages)
 		 * No update to the mm so downgrade the writer lock to a read
 		 * lock so other readers aren't blocked after this point.
 		 */
-		downgrade_write(&current->mm->mmap_sem);
+		downgrade_write(&current->mm->mmap_lock);
 		read_locked = true;
 
 		/* Allocate some more pages */
@@ -1736,9 +1596,9 @@ int kbase_mem_commit(struct kbase_context *kctx, u64 gpu_addr, u64 new_pages)
 out_unlock:
 	kbase_gpu_vm_unlock(kctx);
 	if (read_locked)
-		up_read(&current->mm->mmap_sem);
+		up_read(&current->mm->mmap_lock);
 	else
-		up_write(&current->mm->mmap_sem);
+		up_write(&current->mm->mmap_lock);
 
 	return res;
 }
@@ -1790,12 +1650,19 @@ static void kbase_cpu_vm_close(struct vm_area_struct *vma)
 KBASE_EXPORT_TEST_API(kbase_cpu_vm_close);
 
 
-static int kbase_cpu_vm_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(4, 11, 0))
+static vm_fault_t kbase_cpu_vm_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
 {
+#else
+static vm_fault_t kbase_cpu_vm_fault(struct vm_fault *vmf)
+{
+	struct vm_area_struct *vma = vmf->vma;
+#endif
 	struct kbase_cpu_mapping *map = vma->vm_private_data;
 	pgoff_t rel_pgoff;
 	size_t i;
 	pgoff_t addr;
+	vm_fault_t ret = VM_FAULT_SIGBUS;
 
 	KBASE_DEBUG_ASSERT(map);
 	KBASE_DEBUG_ASSERT(map->count > 0);
@@ -1820,9 +1687,9 @@ static int kbase_cpu_vm_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
 	addr = (pgoff_t)(vmf->address >> PAGE_SHIFT);
 #endif
 	while (i < map->alloc->nents && (addr < vma->vm_end >> PAGE_SHIFT)) {
-		int ret = vm_insert_pfn(vma, addr << PAGE_SHIFT,
+		ret = vmf_insert_pfn(vma, addr << PAGE_SHIFT,
 		    PFN_DOWN(map->alloc->pages[i]));
-		if (ret < 0 && ret != -EBUSY)
+		if (ret != VM_FAULT_NOPAGE)
 			goto locked_bad_fault;
 
 		i++; addr++;
@@ -1834,7 +1701,7 @@ static int kbase_cpu_vm_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
 
 locked_bad_fault:
 	kbase_gpu_vm_unlock(map->kctx);
-	return VM_FAULT_SIGBUS;
+	return ret;
 }
 
 const struct vm_operations_struct kbase_vm_ops = {
@@ -1901,10 +1768,16 @@ static int kbase_cpu_mmap(struct kbase_va_region *reg, struct vm_area_struct *vm
 		vma->vm_flags |= VM_PFNMAP;
 		for (i = 0; i < nr_pages; i++) {
 			unsigned long pfn = PFN_DOWN(page_array[i + start_off]);
+			vm_fault_t ret;
 
-			err = vm_insert_pfn(vma, addr, pfn);
-			if (WARN_ON(err))
+			ret = vmf_insert_pfn(vma, addr, pfn);
+			if (WARN_ON(ret != VM_FAULT_NOPAGE)) {
+				if (ret == VM_FAULT_OOM)
+					err = -ENOMEM;
+				else
+					err = -EFAULT;
 				break;
+			}
 
 			addr += PAGE_SIZE;
 		}
@@ -2084,14 +1957,14 @@ void kbase_os_mem_map_lock(struct kbase_context *kctx)
 {
 	struct mm_struct *mm = current->mm;
 	(void)kctx;
-	down_read(&mm->mmap_sem);
+	down_read(&mm->mmap_lock);
 }
 
 void kbase_os_mem_map_unlock(struct kbase_context *kctx)
 {
 	struct mm_struct *mm = current->mm;
 	(void)kctx;
-	up_read(&mm->mmap_sem);
+	up_read(&mm->mmap_lock);
 }
 
 static int kbasep_reg_mmap(struct kbase_context *kctx,

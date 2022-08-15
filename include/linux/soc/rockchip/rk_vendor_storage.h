@@ -23,13 +23,37 @@
 #define ATTENTION_KEY_ID		10
 #define PLAYREADY_ROOT_KEY_0_ID		11
 #define PLAYREADY_ROOT_KEY_1_ID		12
-#define SENSOR_CALIBRATION_ID		13
+#define HDCP_14_HDMIRX_ID		13
+#define SENSOR_CALIBRATION_ID		14
 #define IMEI_ID				15
 #define LAN_RGMII_DL_ID			16
+#define EINK_VCOM_ID			17
 
+#if IS_REACHABLE(CONFIG_ROCKCHIP_VENDOR_STORAGE)
 int rk_vendor_read(u32 id, void *pbuf, u32 size);
 int rk_vendor_write(u32 id, void *pbuf, u32 size);
 int rk_vendor_register(void *read, void *write);
 bool is_rk_vendor_ready(void);
+#else
+static inline int rk_vendor_read(u32 id, void *pbuf, u32 size)
+{
+	return -1;
+}
+
+static inline int rk_vendor_write(u32 id, void *pbuf, u32 size)
+{
+	return -1;
+}
+
+static inline int rk_vendor_register(void *read, void *write)
+{
+	return -1;
+}
+
+static inline bool is_rk_vendor_ready(void)
+{
+	return false;
+}
+#endif
 
 #endif

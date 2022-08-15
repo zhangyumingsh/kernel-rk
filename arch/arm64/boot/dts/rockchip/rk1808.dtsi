@@ -21,7 +21,6 @@
 	#size-cells = <2>;
 
 	aliases {
-		ethernet0 = &gmac;
 		i2c0 = &i2c0;
 		i2c1 = &i2c1;
 		i2c2 = &i2c2;
@@ -294,6 +293,8 @@
 		clock-frequency = <32768>;
 		clock-output-names = "xin32k";
 		#clock-cells = <0>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&clkin_32k>;
 	};
 
 	pcie0: pcie@fc400000 {
@@ -335,15 +336,12 @@
 			 <&cru SRST_PCIECTL_BUTTON>, <&cru SRST_PCIECTL_PE>,
 			 <&cru SRST_PCIECTL_CORE>, <&cru SRST_PCIECTL_NSTICKY>,
 			 <&cru SRST_PCIECTL_STICKY>, <&cru SRST_PCIECTL_PWR>,
-			 <&cru SRST_PCIE_NIU_A>, <&cru SRST_PCIE_NIU_P>,
-			 <&cru SRST_PCIEPHY_POR>, <&cru SRST_PCIEPHY_P>,
-			 <&cru SRST_PCIEPHY_PIPE>;
+			 <&cru SRST_PCIE_NIU_A>, <&cru SRST_PCIE_NIU_P>;
 		reset-names = "niu-h", "niu-l", "grf-p", "ctl-p",
 			      "ctl-powerup", "ctl-mst-a", "ctl-slv-a",
 			      "ctl-dbi-a", "ctl-button", "ctl-pe",
 			      "ctl-core", "ctl-nsticky", "ctl-sticky",
-			      "ctl-pwr", "ctl-niu-a", "ctl-niu-p",
-			      "phy-por", "phy-p", "phy-pipe";
+			      "ctl-pwr", "ctl-niu-a", "ctl-niu-p";
 		rockchip,usbpciegrf = <&usb_pcie_grf>;
 		rockchip,pmugrf = <&pmugrf>;
 		status = "disabled";
@@ -393,9 +391,15 @@
 
 		npu_pvtm: npu-pvtm {
 			compatible = "rockchip,rk1808-npu-pvtm";
-			clocks = <&cru SCLK_PVTM_NPU>;
-			clock-names = "npu";
+			#address-cells = <1>;
+			#size-cells = <0>;
 			status = "okay";
+
+			pvtm@2 {
+				reg = <2>;
+				clocks = <&cru SCLK_PVTM_NPU>;
+				clock-names = "clk";
+			};
 		};
 
 		rgb: rgb {
@@ -467,9 +471,15 @@
 
 		pmu_pvtm: pmu-pvtm {
 			compatible = "rockchip,rk1808-pmu-pvtm";
-			clocks = <&cru SCLK_PVTM_PMU>;
-			clock-names = "pmu";
+			#address-cells = <1>;
+			#size-cells = <0>;
 			status = "okay";
+
+			pvtm@1 {
+				reg = <1>;
+				clocks = <&cru SCLK_PVTM_PMU>;
+				clock-names = "clk";
+			};
 		};
 
 		reboot-mode {
@@ -498,9 +508,15 @@
 
 		pvtm: pvtm {
 			compatible = "rockchip,rk1808-pvtm";
-			clocks = <&cru SCLK_PVTM_CORE>;
-			clock-names = "core";
+			#address-cells = <1>;
+			#size-cells = <0>;
 			status = "okay";
+
+			pvtm@0 {
+				reg = <0>;
+				clocks = <&cru SCLK_PVTM_CORE>;
+				clock-names = "clk";
+			};
 		};
 	};
 
@@ -644,12 +660,15 @@
 		#reset-cells = <1>;
 
 		assigned-clocks =
+			<&cru SCLK_32K_IOE>,
 			<&cru PLL_GPLL>, <&cru PLL_CPLL>,
 			<&cru PLL_PPLL>, <&cru ARMCLK>,
 			<&cru MSCLK_PERI>, <&cru LSCLK_PERI>,
 			<&cru HSCLK_BUS_PRE>, <&cru MSCLK_BUS_PRE>,
 			<&cru LSCLK_BUS_PRE>;
+		assigned-clock-parents = <&xin32k>;
 		assigned-clock-rates =
+			<32768>,
 			<1188000000>, <1000000000>,
 			<100000000>, <816000000>,
 			<200000000>, <100000000>,
@@ -957,7 +976,7 @@
 		clocks = <&cru ACLK_DMAC>;
 		clock-names = "apb_pclk";
 		#dma-cells = <1>;
-		peripherals-req-type-burst;
+		arm,pl330-periph-burst;
 	};
 
 	uart0: serial@ff430000 {
@@ -1459,7 +1478,7 @@
 		interrupts = <GIC_SPI 56 IRQ_TYPE_LEVEL_HIGH>;
 		interrupt-names = "cif_mmu";
 		clocks = <&cru ACLK_CIF>, <&cru HCLK_CIF>;
-		clock-names = "aclk", "hclk";
+		clock-names = "aclk", "iface";
 		power-domains = <&power RK1808_PD_VIO>;
 		#iommu-cells = <0>;
 		status = "disabled";
@@ -1499,7 +1518,7 @@
 		interrupts = <GIC_SPI 61 IRQ_TYPE_LEVEL_HIGH>;
 		interrupt-names = "vopl_mmu";
 		clocks = <&cru ACLK_VOPLITE>, <&cru HCLK_VOPLITE>;
-		clock-names = "aclk", "hclk";
+		clock-names = "aclk", "iface";
 		power-domains = <&power RK1808_PD_VIO>;
 		#iommu-cells = <0>;
 		status = "disabled";
@@ -1602,7 +1621,7 @@
 		interrupts = <GIC_SPI 62 IRQ_TYPE_LEVEL_HIGH>;
 		interrupt-names = "vopr_mmu";
 		clocks = <&cru ACLK_VOPRAW>, <&cru HCLK_VOPRAW>;
-		clock-names = "aclk", "hclk";
+		clock-names = "aclk", "iface";
 		power-domains = <&power RK1808_PD_VIO>;
 		#iommu-cells = <0>;
 		status = "disabled";
@@ -1632,7 +1651,7 @@
 		interrupt-names = "isp_mmu";
 		clocks = <&cru ACLK_ISP>, <&cru HCLK_ISP>,
 			<&cru SCLK_ISP>;
-		clock-names = "aclk", "hclk", "sclk";
+		clock-names = "aclk", "iface", "sclk";
 		power-domains = <&power RK1808_PD_VIO>;
 		rk_iommu,disable_reset_quirk;
 		#iommu-cells = <0>;
@@ -1662,7 +1681,7 @@
 		interrupts = <GIC_SPI 92 IRQ_TYPE_LEVEL_HIGH>;
 		interrupt-names = "vpu_mmu";
 		clocks = <&cru ACLK_VPU>, <&cru HCLK_VPU>;
-		clock-names = "aclk", "hclk";
+		clock-names = "aclk", "iface";
 		power-domains = <&power RK1808_PD_VPU>;
 		#iommu-cells = <0>;
 		status = "disabled";
@@ -2989,7 +3008,7 @@
 		tsadc {
 			tsadc_otp_gpio: tsadc-otp-gpio {
 				rockchip,pins =
-					<0 RK_PA6 0 &pcfg_pull_none>;
+					<0 RK_PA6 RK_FUNC_GPIO &pcfg_pull_none>;
 			};
 
 			tsadc_otp_out: tsadc-otp-out {

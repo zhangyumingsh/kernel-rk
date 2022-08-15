@@ -1,17 +1,8 @@
-/* ir-rc5-decoder.c - decoder for RC5(x) and StreamZap protocols
- *
- * Copyright (C) 2010 by Mauro Carvalho Chehab
- * Copyright (C) 2010 by Jarod Wilson <jarod@redhat.com>
- *
- * This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation version 2 of the License.
- *
- *  This program is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *  GNU General Public License for more details.
- */
+// SPDX-License-Identifier: GPL-2.0
+// ir-rc5-decoder.c - decoder for RC5(x) and StreamZap protocols
+//
+// Copyright (C) 2010 by Mauro Carvalho Chehab
+// Copyright (C) 2010 by Jarod Wilson <jarod@redhat.com>
 
 /*
  * This decoder handles the 14 bit RC5 protocol, 15 bit "StreamZap" protocol
@@ -25,7 +16,7 @@
 #define RC5_SZ_NBITS		15
 #define RC5X_NBITS		20
 #define CHECK_RC5X_NBITS	8
-#define RC5_UNIT		888888 /* ns */
+#define RC5_UNIT		889 /* us */
 #define RC5_BIT_START		(1 * RC5_UNIT)
 #define RC5_BIT_END		(1 * RC5_UNIT)
 #define RC5X_SPACE		(4 * RC5_UNIT)
@@ -64,7 +55,7 @@ static int ir_rc5_decode(struct rc_dev *dev, struct ir_raw_event ev)
 
 again:
 	dev_dbg(&dev->dev, "RC5(x/sz) decode started at state %i (%uus %s)\n",
-		data->state, TO_US(ev.duration), TO_STR(ev.pulse));
+		data->state, ev.duration, TO_STR(ev.pulse));
 
 	if (!geq_margin(ev.duration, RC5_UNIT, RC5_UNIT / 2))
 		return 0;
@@ -173,7 +164,7 @@ again:
 
 out:
 	dev_dbg(&dev->dev, "RC5(x/sz) decode failed at state %i count %d (%uus %s)\n",
-		data->state, data->count, TO_US(ev.duration), TO_STR(ev.pulse));
+		data->state, data->count, ev.duration, TO_STR(ev.pulse));
 	data->state = STATE_INACTIVE;
 	return -EINVAL;
 }
@@ -299,7 +290,7 @@ static void __exit ir_rc5_decode_exit(void)
 module_init(ir_rc5_decode_init);
 module_exit(ir_rc5_decode_exit);
 
-MODULE_LICENSE("GPL");
+MODULE_LICENSE("GPL v2");
 MODULE_AUTHOR("Mauro Carvalho Chehab and Jarod Wilson");
 MODULE_AUTHOR("Red Hat Inc. (http://www.redhat.com)");
 MODULE_DESCRIPTION("RC5(x/sz) IR protocol decoder");

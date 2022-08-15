@@ -120,7 +120,7 @@
 		};
 	};
 
-	rk_headset {
+	rk_headset: rk-headset {
 		compatible = "rockchip_headset";
 		headset_gpio = <&gpio3 RK_PA4 GPIO_ACTIVE_LOW>;
 		pinctrl-names = "default";
@@ -221,7 +221,8 @@
 	bus-width = <8>;
 	cap-mmc-highspeed;
 	mmc-hs200-1_8v;
-	supports-emmc;
+	no-sdio;
+	no-sd;
 	disable-wp;
 	non-removable;
 	num-slots = <1>;
@@ -545,7 +546,7 @@
 };
 
 &i2c2 {
-	status = "disabled";
+	status = "okay";
 
 	clock-frequency = <100000>;
 
@@ -591,11 +592,11 @@
 };
 
 &isp_mmu {
-	status = "disabled";
+	status = "okay";
 };
 
 &mipi_dphy_rx0 {
-	status = "disabled";
+	status = "okay";
 
 	ports {
 		#address-cells = <1>;
@@ -650,12 +651,12 @@
 
 		soc_slppin_slp: soc_slppin_slp {
 			rockchip,pins =
-				<0 RK_PA4 RK_FUNC_1 &pcfg_pull_none>;
+				<0 RK_PA4 1 &pcfg_pull_none>;
 		};
 
 		soc_slppin_rst: soc_slppin_rst {
 			rockchip,pins =
-				<0 RK_PA4 RK_FUNC_2 &pcfg_pull_none>;
+				<0 RK_PA4 2 &pcfg_pull_none>;
 		};
 	};
 
@@ -682,7 +683,7 @@
 };
 
 &rkisp1 {
-	status = "disabled";
+	status = "okay";
 
 	port {
 		#address-cells = <1>;
@@ -709,7 +710,8 @@
 	bus-width = <4>;
 	cap-mmc-highspeed;
 	cap-sd-highspeed;
-	supports-sd;
+	no-sdio;
+	no-mmc;
 	card-detect-delay = <800>;
 	ignore-pm-notify;
 	/*cd-gpios = <&gpio2 4 GPIO_ACTIVE_HIGH>; [> CD GPIO <]*/
@@ -725,7 +727,8 @@
 &sdio {
 	bus-width = <4>;
 	cap-sd-highspeed;
-	supports-sdio;
+	no-sd;
+	no-mmc;
 	ignore-pm-notify;
 	keep-power-in-suspend;
 	non-removable;
@@ -787,6 +790,26 @@
 	status = "okay";
 };
 
-&vpu_combo {
+&mpp_srv {
+	status = "okay";
+};
+
+&vdpu {
+	status = "okay";
+};
+
+&vepu {
+	status = "okay";
+};
+
+&vpu_mmu {
+	status = "okay";
+};
+
+&hevc {
+	status = "okay";
+};
+
+&hevc_mmu {
 	status = "okay";
 };

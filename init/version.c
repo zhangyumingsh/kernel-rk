@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  *  linux/init/version.c
  *
@@ -7,7 +8,8 @@
  */
 
 #include <generated/compile.h>
-#include <linux/module.h>
+#include <linux/build-salt.h>
+#include <linux/export.h>
 #include <linux/uts.h>
 #include <linux/utsname.h>
 #include <generated/utsrelease.h>
@@ -23,9 +25,7 @@ int version_string(LINUX_VERSION_CODE);
 #endif
 
 struct uts_namespace init_uts_ns = {
-	.kref = {
-		.refcount	= ATOMIC_INIT(2),
-	},
+	.kref = KREF_INIT(2),
 	.name = {
 		.sysname	= UTS_SYSNAME,
 		.nodename	= UTS_NODENAME,
@@ -45,9 +45,11 @@ EXPORT_SYMBOL_GPL(init_uts_ns);
 /* FIXED STRINGS! Don't touch! */
 const char linux_banner[] =
 	"Linux version " UTS_RELEASE " (" LINUX_COMPILE_BY "@"
-	LINUX_COMPILE_HOST ") (" LINUX_BRANCH": "LINUX_COMMIT ") (" LINUX_COMPILER ") " UTS_VERSION "\n";
+	LINUX_COMPILE_HOST ") (" LINUX_COMMIT ") (" XML_NAME ") (" LINUX_COMPILER ") " UTS_VERSION "\n";
 
 const char linux_proc_banner[] =
 	"%s version %s"
 	" (" LINUX_COMPILE_BY "@" LINUX_COMPILE_HOST ")"
-	" ("LINUX_BRANCH ": " LINUX_COMMIT ")" " (" LINUX_COMPILER ") %s\n";
+	" (" LINUX_COMMIT ")" " (" XML_NAME ")" " (" LINUX_COMPILER ") %s\n";
+
+BUILD_SALT;

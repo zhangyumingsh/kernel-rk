@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
  * jaguar1 driver
+ * V0.0X01.0X00 first version.
+ * V0.0X01.0X01 fix kernel5.10 compile error.
  *
  */
 
@@ -38,7 +40,7 @@
 #include "jaguar1_mipi.h"
 #include "jaguar1_drv.h"
 
-#define DRIVER_VERSION				KERNEL_VERSION(0, 0x01, 0x0)
+#define DRIVER_VERSION				KERNEL_VERSION(0, 0x01, 0x1)
 
 #ifndef V4L2_CID_DIGITAL_GAIN
 #define V4L2_CID_DIGITAL_GAIN			V4L2_CID_GAIN
@@ -58,6 +60,10 @@
 
 #define OF_CAMERA_MODULE_REGULATORS		"rockchip,regulator-names"
 #define OF_CAMERA_MODULE_REGULATOR_VOLTAGES	"rockchip,regulator-voltages"
+#define RK_CAMERA_MODULE_DEFAULT_RECT		"rockchip,default_rect"
+
+#define JAGUAR1_DEFAULT_WIDTH		1920
+#define JAGUAR1_DEFAULT_HEIGHT		1080
 
 #define JAGUAR1_NAME				"jaguar1"
 
@@ -87,7 +93,13 @@ struct jaguar1_pixfmt {
 struct jaguar1_framesize {
 	u16 width;
 	u16 height;
+	struct v4l2_fract max_fps;
 	enum NC_VIVO_CH_FORMATDEF fmt_idx;
+};
+
+struct jaguar1_default_rect {
+	unsigned int width;
+	unsigned int height;
 };
 
 struct jaguar1 {
@@ -105,7 +117,7 @@ struct jaguar1 {
 	struct pinctrl_state	*pins_sleep;
 
 	struct v4l2_subdev	subdev;
-	struct media_pad	pad;
+	struct media_pad	pad[PAD_MAX];
 	struct v4l2_ctrl_handler ctrl_handler;
 	struct mutex		mutex;
 	bool			power_on;
@@ -119,45 +131,56 @@ struct jaguar1 {
 	struct v4l2_mbus_framefmt format;
 	const struct jaguar1_framesize *frame_size;
 	int streaming;
+	struct jaguar1_default_rect defrect;
 };
 
 #define to_jaguar1(sd) container_of(sd, struct jaguar1, subdev)
 
 static const struct jaguar1_framesize jaguar1_framesizes[] = {
-#ifdef FORCE_720P
-	{
-		.width		= 1280,
-		.height		= 720,
-		.fmt_idx	= AHD20_720P_25P_EX_Btype,
-	}
-#elif defined CONFIG_VIDEO_ROCKCHIP_USBACM_CONTROL
+#if defined CONFIG_VIDEO_ROCKCHIP_USBACM_CONTROL
 	{
 		.width		= 2560,
 		.height		= 1440,
-		.fmt_idx	= AHD20_720P_25P_EX_Btype,
+		.max_fps = {
+			.numerator = 10000,
+			.denominator = 250000,
+		},
+		.fmt_idx	= AHD20_720P_25P,
 	}
 #else
 	{
 		.width		= 1280,
 		.height		= 720,
+		.max_fps = {
+			.numerator = 10000,
+			.denominator = 250000,
+		},
 		.fmt_idx	= AHD20_720P_25P_EX_Btype,
 	},
 	{
 		.width		= 1920,
 		.height		= 1080,
-		.fmt_idx	= AHD20_720P_25P_EX_Btype,
+		.max_fps = {
+			.numerator = 10000,
+			.denominator = 250000,
+		},
+		.fmt_idx	= AHD20_1080P_25P,
 	},
 	{
 		.width		= 2560,
 		.height		= 1440,
-		.fmt_idx	= AHD20_720P_25P_EX_Btype,
+		.max_fps = {
+			.numerator = 10000,
+			.denominator = 250000,
+		},
+		.fmt_idx	= AHD20_720P_25P,
 	}
 #endif
 };
 
 static const struct jaguar1_pixfmt jaguar1_formats[] = {
 	{
-		.code = MEDIA_BUS_FMT_YVYU8_2X8
+		.code = MEDIA_BUS_FMT_UYVY8_2X8
 	},
 };
 
@@ -352,12 +375,33 @@ err_free_handler:
 
 	return ret;
 }
-static void jaguar1_get_default_format(struct v4l2_mbus_framefmt *format)
+static void jaguar1_get_default_format(struct jaguar1 *jaguar1)
 {
-	format->width = jaguar1_framesizes[0].width;
-	format->height = jaguar1_framesizes[0].height;
+	const struct jaguar1_framesize *fsize = &jaguar1_framesizes[0];
+	const struct jaguar1_framesize *match = NULL;
+	int i = ARRAY_SIZE(jaguar1_framesizes);
+	unsigned int min_err = UINT_MAX;
+	struct v4l2_mbus_framefmt *format = &jaguar1->format;
+	struct jaguar1_default_rect *rect =  &jaguar1->defrect;
+
+	while (i--) {
+		unsigned int err = abs(fsize->width - rect->width)
+				+ abs(fsize->height - rect->height);
+		if (err < min_err) {
+			min_err = err;
+			match = fsize;
+		}
+		fsize++;
+	}
+
+	if (!match)
+		match = &jaguar1_framesizes[0];
+
+	format->width = match->width;
+	format->height = match->height;
 	format->colorspace = V4L2_COLORSPACE_SRGB;
 	format->code = jaguar1_formats[0].code;
+	jaguar1->frame_size = match;
 	format->field = V4L2_FIELD_NONE;
 }
 
@@ -436,10 +480,11 @@ static int jaguar1_enum_frame_sizes(struct v4l2_subdev *sd,
 	return 0;
 }
 
-static int jaguar1_g_mbus_config(struct v4l2_subdev *sd,
+
+static int jaguar1_g_mbus_config(struct v4l2_subdev *sd, unsigned int pad,
 				 struct v4l2_mbus_config *cfg)
 {
-	cfg->type = V4L2_MBUS_CSI2;
+	cfg->type = V4L2_MBUS_CSI2_DPHY;
 	cfg->flags = V4L2_MBUS_CSI2_4_LANE |
 		     V4L2_MBUS_CSI2_CHANNELS;
 
@@ -552,6 +597,19 @@ static int jaguar1_set_fmt(struct v4l2_subdev *sd,
 	return ret;
 }
 
+static int jaguar1_g_frame_interval(struct v4l2_subdev *sd,
+				    struct v4l2_subdev_frame_interval *fi)
+{
+	struct jaguar1 *jaguar1 = to_jaguar1(sd);
+	const struct jaguar1_framesize *size = jaguar1->frame_size;
+
+	mutex_lock(&jaguar1->mutex);
+	fi->interval = size->max_fps;
+	mutex_unlock(&jaguar1->mutex);
+
+	return 0;
+}
+
 static void jaguar1_get_module_inf(struct jaguar1 *jaguar1,
 				   struct rkmodule_inf *inf)
 {
@@ -571,6 +629,9 @@ static long jaguar1_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
 	case RKMODULE_GET_MODULE_INFO:
 		jaguar1_get_module_inf(jaguar1, (struct rkmodule_inf *)arg);
 		break;
+	case RKMODULE_GET_START_STREAM_SEQ:
+		*(int *)arg = RKMODULE_START_STREAM_FRONT;
+		break;
 	default:
 		ret = -ENOTTY;
 		break;
@@ -587,6 +648,7 @@ static long jaguar1_compat_ioctl32(struct v4l2_subdev *sd,
 	struct rkmodule_inf *inf;
 	struct rkmodule_awb_cfg *cfg;
 	long ret;
+	int *seq;
 
 	switch (cmd) {
 	case RKMODULE_GET_MODULE_INFO:
@@ -597,8 +659,11 @@ static long jaguar1_compat_ioctl32(struct v4l2_subdev *sd,
 		}
 
 		ret = jaguar1_ioctl(sd, cmd, inf);
-		if (!ret)
+		if (!ret) {
 			ret = copy_to_user(up, inf, sizeof(*inf));
+			if (ret)
+				ret = -EFAULT;
+		}
 		kfree(inf);
 		break;
 	case RKMODULE_AWB_CFG:
@@ -611,7 +676,24 @@ static long jaguar1_compat_ioctl32(struct v4l2_subdev *sd,
 		ret = copy_from_user(cfg, up, sizeof(*cfg));
 		if (!ret)
 			ret = jaguar1_ioctl(sd, cmd, cfg);
+		else
+			ret = -EFAULT;
 		kfree(cfg);
+		break;
+	case RKMODULE_GET_START_STREAM_SEQ:
+		seq = kzalloc(sizeof(*seq), GFP_KERNEL);
+		if (!seq) {
+			ret = -ENOMEM;
+			return ret;
+		}
+
+		ret = jaguar1_ioctl(sd, cmd, seq);
+		if (!ret) {
+			ret = copy_to_user(up, seq, sizeof(*seq));
+			if (ret)
+				ret = -EFAULT;
+		}
+		kfree(seq);
 		break;
 	default:
 		ret = -ENOIOCTLCMD;
@@ -649,7 +731,7 @@ static const struct dev_pm_ops jaguar1_pm_ops = {
 
 static const struct v4l2_subdev_video_ops jaguar1_video_ops = {
 	.s_stream = jaguar1_stream,
-	.g_mbus_config = jaguar1_g_mbus_config,
+	.g_frame_interval = jaguar1_g_frame_interval,
 };
 
 static const struct v4l2_subdev_pad_ops jaguar1_subdev_pad_ops = {
@@ -657,6 +739,7 @@ static const struct v4l2_subdev_pad_ops jaguar1_subdev_pad_ops = {
 	.enum_frame_size = jaguar1_enum_frame_sizes,
 	.get_fmt = jaguar1_get_fmt,
 	.set_fmt = jaguar1_set_fmt,
+	.get_mbus_config = jaguar1_g_mbus_config,
 };
 
 static const struct v4l2_subdev_core_ops jaguar1_core_ops = {
@@ -734,27 +817,45 @@ static int jaguar1_analyze_dts(struct jaguar1 *jaguar1)
 		str = NULL;
 		elem_index = 0;
 		regulator = jaguar1->regulators.regulator;
-		do {
-			str = of_prop_next_string(prop, str);
-			if (!str) {
-				dev_err(dev, "%s is not match %s in dts\n",
-					OF_CAMERA_MODULE_REGULATORS,
-					OF_CAMERA_MODULE_REGULATOR_VOLTAGES);
-				break;
-			}
-			regulator->regulator =
-				devm_regulator_get_optional(dev, str);
-			if (IS_ERR(regulator->regulator))
-				dev_err(dev, "devm_regulator_get %s failed\n",
-					str);
-			of_property_read_u32_index(
-				np,
-				OF_CAMERA_MODULE_REGULATOR_VOLTAGES,
-				elem_index++,
-				&regulator->min_uV);
-			regulator->max_uV = regulator->min_uV;
-			regulator++;
-		} while (--elem_size);
+		if (regulator) {
+			do {
+				str = of_prop_next_string(prop, str);
+				if (!str) {
+					dev_err(dev, "%s is not match %s in dts\n",
+						OF_CAMERA_MODULE_REGULATORS,
+						OF_CAMERA_MODULE_REGULATOR_VOLTAGES);
+					break;
+				}
+				regulator->regulator =
+					devm_regulator_get_optional(dev, str);
+				if (IS_ERR(regulator->regulator))
+					dev_err(dev, "devm_regulator_get %s failed\n",
+						str);
+				of_property_read_u32_index(
+					np,
+					OF_CAMERA_MODULE_REGULATOR_VOLTAGES,
+					elem_index++,
+					&regulator->min_uV);
+				regulator->max_uV = regulator->min_uV;
+				regulator++;
+			} while (--elem_size);
+		}
+	}
+	if (of_property_read_u32_array(np,
+		RK_CAMERA_MODULE_DEFAULT_RECT,
+		(unsigned int *)&jaguar1->defrect, 2)) {
+		jaguar1->defrect.width = JAGUAR1_DEFAULT_WIDTH;
+		jaguar1->defrect.height = JAGUAR1_DEFAULT_HEIGHT;
+		dev_warn(dev,
+			"can not get module %s from dts, use default wxh(%dx%d)!\n",
+			RK_CAMERA_MODULE_DEFAULT_RECT,
+			JAGUAR1_DEFAULT_WIDTH, JAGUAR1_DEFAULT_HEIGHT);
+	} else {
+		dev_info(dev,
+			"get module %s from dts, wxh(%dx%d)!\n",
+			RK_CAMERA_MODULE_DEFAULT_RECT,
+			jaguar1->defrect.width,
+			jaguar1->defrect.height);
 	}
 
 	jaguar1->pd_gpio = devm_gpiod_get(dev, "pd", GPIOD_OUT_LOW);
@@ -798,7 +899,7 @@ static int jaguar1_probe(struct i2c_client *client,
 	struct jaguar1 *jaguar1;
 	struct v4l2_subdev *sd;
 	__maybe_unused char facing[2];
-	int ret;
+	int ret, index;
 
 	dev_info(dev, "driver version: %02x.%02x.%02x",
 		 DRIVER_VERSION >> 16,
@@ -831,8 +932,7 @@ static int jaguar1_probe(struct i2c_client *client,
 	}
 
 	mutex_init(&jaguar1->mutex);
-	jaguar1_get_default_format(&jaguar1->format);
-	jaguar1->frame_size = &jaguar1_framesizes[0];
+	jaguar1_get_default_format(jaguar1);
 
 	sd = &jaguar1->subdev;
 	v4l2_i2c_subdev_init(sd, client, &jaguar1_subdev_ops);
@@ -860,9 +960,10 @@ static int jaguar1_probe(struct i2c_client *client,
 #endif
 
 #if defined(CONFIG_MEDIA_CONTROLLER)
-	jaguar1->pad.flags = MEDIA_PAD_FL_SOURCE;
-	sd->entity.type = MEDIA_ENT_T_V4L2_SUBDEV_SENSOR;
-	ret = media_entity_init(&sd->entity, 1, &jaguar1->pad, 0);
+	for (index = 0; index < PAD_MAX; index++)
+		jaguar1->pad[index].flags = MEDIA_PAD_FL_SOURCE;
+	sd->entity.function = MEDIA_ENT_F_CAM_SENSOR;
+	ret = media_entity_pads_init(&sd->entity, PAD_MAX, jaguar1->pad);
 	if (ret < 0)
 		goto err_power_off;
 #endif

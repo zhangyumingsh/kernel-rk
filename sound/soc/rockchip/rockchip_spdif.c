@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /* sound/soc/rockchip/rk_spdif.c
  *
  * ALSA SoC Audio Layer - Rockchip I2S Controller driver
@@ -6,10 +7,6 @@
  * Author: Jianqun <jay.xu@rock-chips.com>
  * Copyright (c) 2015 Collabora Ltd.
  * Author: Sjoerd Simons <sjoerd.simons@collabora.co.uk>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #include <linux/module.h>
@@ -44,7 +41,7 @@ struct rk_spdif_dev {
 	struct regmap *regmap;
 };
 
-static const struct of_device_id rk_spdif_match[] = {
+static const struct of_device_id rk_spdif_match[] __maybe_unused = {
 	{ .compatible = "rockchip,rk3066-spdif",
 	  .data = (void *)RK_SPDIF_RK3066 },
 	{ .compatible = "rockchip,rk3188-spdif",
@@ -60,6 +57,10 @@ static const struct of_device_id rk_spdif_match[] = {
 	{ .compatible = "rockchip,rk3368-spdif",
 	  .data = (void *)RK_SPDIF_RK3366 },
 	{ .compatible = "rockchip,rk3399-spdif",
+	  .data = (void *)RK_SPDIF_RK3366 },
+	{ .compatible = "rockchip,rk3568-spdif",
+	  .data = (void *)RK_SPDIF_RK3366 },
+	{ .compatible = "rockchip,rk3588-spdif",
 	  .data = (void *)RK_SPDIF_RK3366 },
 	{},
 };
@@ -111,14 +112,14 @@ static int rk_spdif_hw_params(struct snd_pcm_substream *substream,
 {
 	struct rk_spdif_dev *spdif = snd_soc_dai_get_drvdata(dai);
 	unsigned int val = SPDIF_CFGR_HALFWORD_ENABLE;
-	int mclk;
+	unsigned int mclk_rate = clk_get_rate(spdif->mclk);
+	int bmc, div;
 	int ret;
 
 	/* bmc = 128fs */
-	mclk = 128 * params_rate(params);
-	ret = clk_set_rate(spdif->mclk, mclk);
-	if (ret)
-		return ret;
+	bmc = 128 * params_rate(params);
+	div = DIV_ROUND_CLOSEST(mclk_rate, bmc);
+	val |= SPDIF_CFGR_CLK_DIV(div);
 
 	switch (params_format(params)) {
 	case SNDRV_PCM_FORMAT_S16_LE:
@@ -134,7 +135,6 @@ static int rk_spdif_hw_params(struct snd_pcm_substream *substream,
 		return -EINVAL;
 	}
 
-	val |= SPDIF_CFGR_CLK_DIV(0);
 	ret = regmap_update_bits(spdif->regmap, SPDIF_CFGR,
 				 SPDIF_CFGR_CLK_DIV_MASK |
 				 SPDIF_CFGR_HALFWORD_ENABLE |
@@ -197,7 +197,24 @@ static int rk_spdif_dai_probe(struct snd_soc_dai *dai)
 	return 0;
 }
 
+static int rk_spdif_set_sysclk(struct snd_soc_dai *dai,
+			       int clk_id, unsigned int freq, int dir)
+{
+	struct rk_spdif_dev *spdif = snd_soc_dai_get_drvdata(dai);
+	int ret = 0;
+
+	if (!freq)
+		return 0;
+
+	ret = clk_set_rate(spdif->mclk, freq);
+	if (ret)
+		dev_err(spdif->dev, "Failed to set mclk: %d\n", ret);
+
+	return ret;
+}
+
 static const struct snd_soc_dai_ops rk_spdif_dai_ops = {
+	.set_sysclk = rk_spdif_set_sysclk,
 	.hw_params = rk_spdif_hw_params,
 	.trigger = rk_spdif_trigger,
 };
@@ -314,8 +331,7 @@ static int rk_spdif_probe(struct platform_device *pdev)
 	if (IS_ERR(spdif->mclk))
 		return PTR_ERR(spdif->mclk);
 
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	regs = devm_ioremap_resource(&pdev->dev, res);
+	regs = devm_platform_get_and_ioremap_resource(pdev, 0, &res);
 	if (IS_ERR(regs))
 		return PTR_ERR(regs);
 
@@ -372,35 +388,9 @@ static int rk_spdif_remove(struct platform_device *pdev)
 	return 0;
 }
 
-#ifdef CONFIG_PM_SLEEP
-static int rockchip_spdif_suspend(struct device *dev)
-{
-	struct rk_spdif_dev *spdif = dev_get_drvdata(dev);
-
-	regcache_mark_dirty(spdif->regmap);
-
-	return 0;
-}
-
-static int rockchip_spdif_resume(struct device *dev)
-{
-	struct rk_spdif_dev *spdif = dev_get_drvdata(dev);
-	int ret;
-
-	ret = pm_runtime_get_sync(dev);
-	if (ret < 0)
-		return ret;
-	ret = regcache_sync(spdif->regmap);
-	pm_runtime_put(dev);
-
-	return ret;
-}
-#endif
-
 static const struct dev_pm_ops rk_spdif_pm_ops = {
 	SET_RUNTIME_PM_OPS(rk_spdif_runtime_suspend, rk_spdif_runtime_resume,
 			   NULL)
-	SET_SYSTEM_SLEEP_PM_OPS(rockchip_spdif_suspend, rockchip_spdif_resume)
 };
 
 static struct platform_driver rk_spdif_driver = {

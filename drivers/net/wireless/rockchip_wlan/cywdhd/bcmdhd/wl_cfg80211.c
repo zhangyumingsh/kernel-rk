@@ -2,7 +2,7 @@
 /*
  * Linux cfg80211 driver
  *
- * Copyright (C) 1999-2018, Broadcom Corporation
+ * Copyright (C) 1999-2019, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -25,7 +25,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: wl_cfg80211.c 708612 2018-11-13 06:14:10Z $
+ * $Id: wl_cfg80211.c 715966 2019-05-30 02:36:59Z $
  */
 /* */
 #include <typedefs.h>
@@ -39,7 +39,7 @@
 #include <proto/ethernet.h>
 #include <proto/802.11.h>
 #include <linux/if_arp.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 
 #include <proto/ethernet.h>
 #include <linux/kernel.h>
@@ -93,6 +93,7 @@
 #endif /* !WL_ENABLE_P2P_IF && !WL_CFG80211_P2P_DEV_IF */
 #endif /* WL11U */
 
+module_param(wl_dbg_level, uint, 0664);
 
 #define IW_WSEC_ENABLED(wsec)   ((wsec) & (WEP_ENABLED | TKIP_ENABLED | AES_ENABLED))
 
@@ -1469,9 +1470,10 @@ wl_cfg80211_add_virtual_iface(struct wiphy *wiphy,
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 1, 0))
 	unsigned char name_assign_type,
 #endif /* (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 1, 0)) */
-        enum nl80211_iftype type,
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(4, 12, 0))
-        u32 *flags,
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 12, 0))
+	enum nl80211_iftype type,
+#else
+	enum nl80211_iftype type, u32 *flags,
 #endif
 	struct vif_params *params)
 {
@@ -1941,11 +1943,11 @@ wl_cfg80211_del_virtual_iface(struct wiphy *wiphy, bcm_struct_cfgdev *cfgdev)
 
 static s32
 wl_cfg80211_change_virtual_iface(struct wiphy *wiphy, struct net_device *ndev,
-        enum nl80211_iftype type,
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(4, 12, 0))
-        u32 *flags,
-#endif /* LINUX_VERSION_CODE < KERNEL_VERSION(4, 12, 0) */
-
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 12, 0))
+	enum nl80211_iftype type,
+#else
+	enum nl80211_iftype type, u32 *flags,
+#endif
 	struct vif_params *params)
 {
 	s32 ap = 0;
@@ -2511,7 +2513,7 @@ wl_run_escan(struct bcm_cfg80211 *cfg, struct net_device *ndev,
 
 		err = wldev_iovar_setbuf(ndev, "escan", params, params_size,
 			cfg->escan_ioctl_buf, WLC_IOCTL_MEDLEN, NULL);
-		WL_DBG(("LEGACY_SCAN sync ID: %d, bssidx: %d\n", params->sync_id, bssidx));
+		WL_ERR(("LEGACY_SCAN sync ID: %d, bssidx: %d\n", params->sync_id, bssidx));
 		if (unlikely(err)) {
 			if (err == BCME_EPERM)
 				/* Scan Not permitted at this point of time */
@@ -5744,7 +5746,7 @@ wl_cfg80211_remain_on_channel(struct wiphy *wiphy, bcm_struct_cfgdev *cfgdev,
 				del_timer_sync(&cfg->p2p->listen_timer);
 			}
 
-			_timer = &cfg->p2p->listen_timer;
+			_timer = (struct timer_list *) &cfg->p2p->listen_timer;
 			wl_clr_p2p_status(cfg, LISTEN_EXPIRED);
 
 			INIT_TIMER(_timer, wl_cfgp2p_listen_expired, duration, 0);
@@ -8022,12 +8024,12 @@ wl_cfg80211_stop_ap(
 
 	if (dev_role == NL80211_IFTYPE_AP) {
 		if (bssidx == 0) {
-			/*
-			 * Bring down the AP interface by changing role to STA.
-			 * Don't do a down or "WLC_SET_AP 0" since the shared
-			 * interface may be still running
-			 */
-			if (is_rsdb_supported) {
+		/*
+		 * Bring down the AP interface by changing role to STA.
+		 * Don't do a down or "WLC_SET_AP 0" since the shared
+		 * interface may be still running
+		 */
+		if (is_rsdb_supported) {
 				if ((err = wl_cfg80211_add_del_bss(cfg, dev,
 					bssidx, NL80211_IFTYPE_STATION, 0, NULL)) < 0) {
 					if ((err = wldev_ioctl(dev, WLC_SET_AP, &ap, sizeof(s32),
@@ -9060,6 +9062,7 @@ static void wl_free_wdev(struct bcm_cfg80211 *cfg)
 #if defined(WL_VENDOR_EXT_SUPPORT)
 		wl_cfgvendor_detach(wdev->wiphy);
 #endif /* if defined(WL_VENDOR_EXT_SUPPORT) */
+#ifdef CONFIG_PM
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 11, 0))
 		/* Reset wowlan & wowlan_config before Unregister to avoid  Kernel Panic */
 		WL_DBG(("wl_free_wdev Clearing wowlan Config \n"));
@@ -9069,6 +9072,7 @@ static void wl_free_wdev(struct bcm_cfg80211 *cfg)
 			wdev->wiphy->wowlan_config = NULL;
 		}
 #endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(3, 11, 0) */
+#endif /* CONFIG_PM */
 		wiphy_unregister(wdev->wiphy);
 		wdev->wiphy->dev.parent = NULL;
 		wdev->wiphy = NULL;
@@ -9187,8 +9191,13 @@ static s32 wl_inform_single_bss(struct bcm_cfg80211 *cfg, struct wl_bss_info *bi
 	signal = notif_bss_info->rssi * 100;
 	if (!mgmt->u.probe_resp.timestamp) {
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 39))
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 20, 0))
+		struct timespec64 ts;
+		ktime_get_boottime_ts64(&ts);
+#else
 		struct timespec ts;
 		get_monotonic_boottime(&ts);
+#endif
 		mgmt->u.probe_resp.timestamp = ((u64)ts.tv_sec*1000000)
 				+ ts.tv_nsec / 1000;
 #else
@@ -10144,16 +10153,17 @@ wl_bss_roaming_done(struct bcm_cfg80211 *cfg, struct net_device *ndev,
 	struct wl_connect_info *conn_info = wl_to_conn(cfg);
 	s32 err = 0;
 	u8 *curbssid;
-#if (((LINUX_VERSION_CODE > KERNEL_VERSION(2, 6, 39)) || \
-       defined(WL_COMPAT_WIRELESS)) && (LINUX_VERSION_CODE < KERNEL_VERSION(4, 12, 0)))
+#if (LINUX_VERSION_CODE > KERNEL_VERSION(2, 6, 39))
 	struct wiphy *wiphy = bcmcfg_to_wiphy(cfg);
 	struct ieee80211_supported_band *band;
 	struct ieee80211_channel *notify_channel = NULL;
 	u32 *channel;
 	u32 freq;
-#elif (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 12, 0))
-        struct cfg80211_roam_info info;
+#endif 
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 12, 0))
+	struct cfg80211_roam_info roam_info;
 #endif
+
 
 #ifdef WLFBT
 	uint32 data_len = 0;
@@ -10167,8 +10177,7 @@ wl_bss_roaming_done(struct bcm_cfg80211 *cfg, struct net_device *ndev,
 	wl_update_bss_info(cfg, ndev, true);
 	wl_update_pmklist(ndev, cfg->pmk_list, err);
 
-#if (((LINUX_VERSION_CODE > KERNEL_VERSION(2, 6, 39)) || \
-        defined(WL_COMPAT_WIRELESS)) && (LINUX_VERSION_CODE < KERNEL_VERSION(4, 12, 0)))
+#if (LINUX_VERSION_CODE > KERNEL_VERSION(2, 6, 39))
 	/* channel info for cfg80211_roamed introduced in 2.6.39-rc1 */
 	channel = (u32 *)wl_read_prof(cfg, ndev, WL_PROF_CHAN);
 	if (*channel <= CH_MAX_2G_CHANNEL)
@@ -10190,23 +10199,25 @@ wl_bss_roaming_done(struct bcm_cfg80211 *cfg, struct net_device *ndev,
 	printk("wl_bss_roaming_done succeeded to " MACDBG "\n",
 		MAC2STRDBG((const u8*)(&e->addr)));
 
-#if ((LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 32)) && \
-       (LINUX_VERSION_CODE <= KERNEL_VERSION(2, 6, 39)))
-       cfg80211_roamed(ndev, curbssid, conn_info->req_ie, conn_info->req_ie_len,
-               conn_info->resp_ie, conn_info->resp_ie_len, GFP_KERNEL);
-#elif (((LINUX_VERSION_CODE > KERNEL_VERSION(2, 6, 39)) || \
-       defined(WL_COMPAT_WIRELESS)) && (LINUX_VERSION_CODE < KERNEL_VERSION(4, 12, 0)))
-       cfg80211_roamed(ndev, notify_channel, curbssid, conn_info->req_ie,
-              conn_info->req_ie_len, conn_info->resp_ie, conn_info->resp_ie_len,
-               GFP_KERNEL);
-#elif (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 12, 0))
-       info.bssid = curbssid;
-       info.req_ie = conn_info->req_ie;
-       info.req_ie_len = conn_info->req_ie_len;
-       info.resp_ie = conn_info->resp_ie;
-       info.resp_ie_len = conn_info->resp_ie_len;
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 12, 0))
+//added by Eason 20200528
+	memset(&roam_info, 0, sizeof(roam_info));
+	roam_info.channel = notify_channel;
+	roam_info.bssid = curbssid;
+	roam_info.req_ie = conn_info->req_ie;
+	roam_info.req_ie_len = conn_info->req_ie_len;
+	roam_info.resp_ie = conn_info->resp_ie;
+	roam_info.resp_ie_len = conn_info->resp_ie_len;
 
-       cfg80211_roamed(ndev, &info, GFP_KERNEL);
+	cfg80211_roamed(ndev, &roam_info, GFP_KERNEL);
+#else
+	cfg80211_roamed(ndev,
+#if (LINUX_VERSION_CODE > KERNEL_VERSION(2, 6, 39))
+		notify_channel,
+#endif
+		curbssid,
+		conn_info->req_ie, conn_info->req_ie_len,
+		conn_info->resp_ie, conn_info->resp_ie_len, GFP_KERNEL);
 #endif
 	WL_DBG(("Report roaming result\n"));
 
@@ -10916,8 +10927,13 @@ wl_notify_sched_scan_results(struct bcm_cfg80211 *cfg, struct net_device *ndev,
 
 	WL_DBG(("Enter\n"));
 
-	if (e->event_type == WLC_E_PFN_NET_LOST) {
-		WL_PNO(("PFN NET LOST event. Do Nothing \n"));
+	if ((e->event_type == WLC_E_PFN_NET_LOST) || !data) {
+		WL_PNO(("Do Nothing %d\n", e->event_type));
+		return 0;
+	}
+	if (pfn_result->version != PFN_SCANRESULT_VERSION) {
+		WL_ERR(("Incorrect version %d, expected %d\n", pfn_result->version,
+		       PFN_SCANRESULT_VERSION));
 		return 0;
 	}
 	WL_PNO((">>> PFN NET FOUND event. count:%d \n", n_pfn_results));
@@ -10960,9 +10976,8 @@ wl_notify_sched_scan_results(struct bcm_cfg80211 *cfg, struct net_device *ndev,
 			 * scan request in the form of cfg80211_scan_request. For timebeing, create
 			 * cfg80211_scan_request one out of the received PNO event.
 			 */
-			memcpy(ssid[i].ssid, netinfo->pfnsubnet.SSID,
-				netinfo->pfnsubnet.SSID_len);
-			ssid[i].ssid_len = netinfo->pfnsubnet.SSID_len;
+			ssid[i].ssid_len = MIN(netinfo->pfnsubnet.SSID_len, DOT11_MAX_SSID_LEN);
+			memcpy(ssid[i].ssid, netinfo->pfnsubnet.SSID, ssid[i].ssid_len);
 			request->n_ssids++;
 
 			channel_req = netinfo->pfnsubnet.channel;
@@ -11253,10 +11268,16 @@ void wl_terminate_event_handler(void)
 	}
 }
 
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 15, 0))
+static void wl_scan_timeout(struct timer_list *t)
+{
+	struct bcm_cfg80211 *cfg = from_timer(cfg, t, scan_timeout);
+#else
 static void wl_scan_timeout(unsigned long data)
 {
-	wl_event_msg_t msg;
 	struct bcm_cfg80211 *cfg = (struct bcm_cfg80211 *)data;
+#endif
+	wl_event_msg_t msg;
 	struct wireless_dev *wdev = NULL;
 	struct net_device *ndev = NULL;
 	struct wl_scan_results *bss_list;
@@ -11327,9 +11348,15 @@ static void wl_del_roam_timeout(struct bcm_cfg80211 *cfg)
 
 }
 
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 15, 0))
+static void wl_roam_timeout(struct timer_list *t)
+{
+	struct bcm_cfg80211 *cfg = from_timer(cfg, t, wl_roam_timeout);
+#else
 static void wl_roam_timeout(unsigned long data)
 {
 	struct bcm_cfg80211 *cfg = (struct bcm_cfg80211 *)data;
+#endif
 	dhd_pub_t *dhdp = (dhd_pub_t *)(cfg->pub);
 
 	WL_ERR(("roam timer expired\n"));
@@ -12279,9 +12306,13 @@ static s32 wl_init_scan(struct bcm_cfg80211 *cfg)
 	wl_escan_init_sync_id(cfg);
 
 	/* Init scan_timeout timer */
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 15, 0))
+	timer_setup(&cfg->scan_timeout, wl_scan_timeout, 0);
+#else
 	init_timer(&cfg->scan_timeout);
 	cfg->scan_timeout.data = (unsigned long) cfg;
 	cfg->scan_timeout.function = wl_scan_timeout;
+#endif
 
 	return err;
 }
@@ -12292,9 +12323,13 @@ static s32 wl_init_roam_timeout(struct bcm_cfg80211 *cfg)
 	int err = 0;
 
 	/* Init roam timer */
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 15, 0))
+	timer_setup(&cfg->roam_timeout, wl_roam_timeout, 0);
+#else
 	init_timer(&cfg->roam_timeout);
 	cfg->roam_timeout.data = (unsigned long) cfg;
 	cfg->roam_timeout.function = wl_roam_timeout;
+#endif
 
 	return err;
 }
@@ -12619,7 +12654,7 @@ void wl_cfg80211_detach(void *para)
 static void wl_wakeup_event(struct bcm_cfg80211 *cfg)
 {
 	if (cfg->event_tsk.thr_pid >= 0) {
-		DHD_OS_WAKE_LOCK(cfg->pub);
+		DHD_EVENT_WAKE_LOCK(cfg->pub);
 		up(&cfg->event_tsk.sema);
 	}
 }
@@ -12638,7 +12673,7 @@ static s32 wl_event_handler(void *data)
 	while (down_interruptible (&tsk->sema) == 0) {
 		SMP_RD_BARRIER_DEPENDS();
 		if (tsk->terminated) {
-			DHD_OS_WAKE_UNLOCK(cfg->pub);
+			DHD_EVENT_WAKE_LOCK(cfg->pub);
 			break;
 		}
 		while ((e = wl_deq_event(cfg))) {
@@ -12672,7 +12707,7 @@ static s32 wl_event_handler(void *data)
 fail:
 			wl_put_event(e);
 		}
-		DHD_OS_WAKE_UNLOCK(cfg->pub);
+		DHD_EVENT_WAKE_LOCK(cfg->pub);
 	}
 	WL_ERR(("was terminated\n"));
 	complete_and_exit(&tsk->completed, 0);
@@ -13677,9 +13712,12 @@ s32 wl_cfg80211_down(void *para)
 	(void)para;
 	WL_DBG(("In\n"));
 	cfg = g_bcm_cfg;
-	mutex_lock(&cfg->usr_sync);
-	err = __wl_cfg80211_down(cfg);
-	mutex_unlock(&cfg->usr_sync);
+
+	if (cfg) {
+		mutex_lock(&cfg->usr_sync);
+		err = __wl_cfg80211_down(cfg);
+		mutex_unlock(&cfg->usr_sync);
+	}
 
 	return err;
 }

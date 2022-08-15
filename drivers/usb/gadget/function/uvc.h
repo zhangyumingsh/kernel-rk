@@ -1,13 +1,9 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
 /*
  *	uvc_gadget.h  --  USB Video Class Gadget driver
  *
  *	Copyright (C) 2009-2010
  *	    Laurent Pinchart (laurent.pinchart@ideasonboard.com)
- *
- *	This program is free software; you can redistribute it and/or modify
- *	it under the terms of the GNU General Public License as published by
- *	the Free Software Foundation; either version 2 of the License, or
- *	(at your option) any later version.
  */
 
 #ifndef _UVC_GADGET_H_
@@ -73,6 +69,7 @@ extern unsigned int uvc_gadget_trace_param;
 #define UVC_NUM_REQUESTS			4
 #define UVC_MAX_REQUEST_SIZE			64
 #define UVC_MAX_EVENTS				4
+#define UVC_MAX_NUM_REQUESTS			8
 
 /* ------------------------------------------------------------------------
  * Structures
@@ -81,6 +78,8 @@ extern unsigned int uvc_gadget_trace_param;
 struct uvc_video {
 	struct uvc_device *uvc;
 	struct usb_ep *ep;
+
+	struct work_struct pump;
 
 	/* Frame parameters */
 	u8 bpp;
@@ -92,8 +91,8 @@ struct uvc_video {
 
 	/* Requests */
 	unsigned int req_size;
-	struct usb_request *req[UVC_NUM_REQUESTS];
-	__u8 *req_buffer[UVC_NUM_REQUESTS];
+	struct usb_request *req[UVC_MAX_NUM_REQUESTS];
+	__u8 *req_buffer[UVC_MAX_NUM_REQUESTS];
 	struct list_head req_free;
 	spinlock_t req_lock;
 
@@ -142,6 +141,7 @@ struct uvc_device {
 	/* Events */
 	unsigned int event_length;
 	unsigned int event_setup_out : 1;
+	unsigned int event_suspend : 1;
 };
 
 static inline struct uvc_device *to_uvc(struct usb_function *f)

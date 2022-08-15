@@ -67,6 +67,7 @@
 
 #include <linux/clk.h>
 #include <linux/regulator/consumer.h>
+#include <soc/rockchip/rockchip_opp_select.h>
 
 #if defined(CONFIG_PM)
 #define KBASE_PM_RUNTIME 1
@@ -738,7 +739,7 @@ enum kbase_trace_code {
 #define KBASE_TRACE_FLAG_JOBSLOT  (((u8)1) << 1)
 
 struct kbase_trace {
-	struct timespec timestamp;
+	struct timespec64 timestamp;
 	u32 thread_id;
 	u32 cpu;
 	void *ctx;
@@ -1087,6 +1088,7 @@ struct kbase_device {
 	struct list_head        kctx_list;
 	struct mutex            kctx_list_lock;
 
+	struct rockchip_opp_info opp_info;
 #ifdef CONFIG_MALI_DEVFREQ
 	struct devfreq_dev_profile devfreq_profile;
 	struct devfreq *devfreq;
@@ -1096,7 +1098,7 @@ struct kbase_device {
 	u64 current_core_mask;
 	struct kbase_devfreq_opp *opp_table;
 	int num_opps;
-	struct thermal_opp_info *opp_info;
+	struct monitor_dev_info *mdev_info;
 #ifdef CONFIG_DEVFREQ_THERMAL
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 4, 0)
 	struct devfreq_cooling_device *devfreq_cooling;

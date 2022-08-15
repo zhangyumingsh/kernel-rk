@@ -2,6 +2,7 @@
 
 /* Copyright (c) 2018 Fuzhou Rockchip Electronics Co., Ltd */
 
+#include <linux/fs.h>
 #include <linux/kthread.h>
 #include <linux/miscdevice.h>
 #include <linux/module.h>
@@ -173,7 +174,8 @@ static int flash_vendor_write(u32 id, void *pbuf, u32 size)
 				item->size = size;
 				memcpy(&p_data[item->offset], pbuf, size);
 				g_vendor->free_offset = offset + align_size;
-				g_vendor->free_size = sizeof(g_vendor->data) - g_vendor->free_offset;
+				g_vendor->free_size -= (align_size -
+							alloc_size);
 			} else {
 				memcpy(&p_data[item->offset],
 				       pbuf,
@@ -349,9 +351,13 @@ static int __init vendor_storage_init(void)
 
 static __exit void vendor_storage_deinit(void)
 {
-	if (g_vendor)
+	if (g_vendor) {
 		misc_deregister(&vender_storage_dev);
+		kfree(g_vendor);
+		g_vendor = NULL;
+	}
 }
 
 device_initcall_sync(vendor_storage_init);
 module_exit(vendor_storage_deinit);
+MODULE_LICENSE("GPL");

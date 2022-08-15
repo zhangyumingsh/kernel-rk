@@ -45,18 +45,14 @@
 			reg = <0x80000000 0x0>;
 		};
 
-		ramoops_mem: ramoops@62e00000 {
+		ramoops: ramoops@62e00000 {
+			compatible = "ramoops";
 			reg = <0x62e00000 0xf0000>;
+			record-size = <0x20000>;
+			console-size = <0x80000>;
+			ftrace-size = <0x00000>;
+			pmsg-size = <0x50000>;
 		};
-	};
-
-	ramoops: ramoops {
-		compatible = "ramoops";
-		record-size = <0x0 0x20000>;
-		console-size = <0x0 0x80000>;
-		ftrace-size = <0x0 0x00000>;
-		pmsg-size = <0x0 0x50000>;
-		memory-region = <&ramoops_mem>;
 	};
 
 	gpio_keys: gpio-keys {
@@ -286,7 +282,8 @@
 	bus-width = <8>;
 	cap-mmc-highspeed;
 	mmc-hs200-1_8v;
-	supports-emmc;
+	no-sdio;
+	no-sd;
 	disable-wp;
 	non-removable;
 	num-slots = <1>;
@@ -368,29 +365,29 @@
 &pinctrl {
 	keys {
 		pwr_key: pwr-key {
-			rockchip,pins = <3 23 RK_FUNC_GPIO &pcfg_pull_up>;
+			rockchip,pins = <3 RK_PC7 RK_FUNC_GPIO &pcfg_pull_up>;
 		};
 
 		volume_up_key: volume-up {
-			rockchip,pins = <3 25 RK_FUNC_GPIO &pcfg_pull_up>;
+			rockchip,pins = <3 RK_PD1 RK_FUNC_GPIO &pcfg_pull_up>;
 		};
 	};
 
 	sdmmc {
 		sdmmc_pwr: sdmmc-pwr {
-			rockchip,pins = <1 14 RK_FUNC_GPIO &pcfg_pull_none>;
+			rockchip,pins = <1 RK_PB6 RK_FUNC_GPIO &pcfg_pull_none>;
 		};
 	};
 
 	sdio-pwrseq {
 		wifi_enable_h: wifi-enable-h {
-			rockchip,pins = <2 26 RK_FUNC_GPIO &pcfg_pull_none>;
+			rockchip,pins = <2 RK_PD2 RK_FUNC_GPIO &pcfg_pull_none>;
 		};
 	};
 
 	usb {
 		host_vbus_drv: host-vbus-drv {
-			rockchip,pins = <3 20 RK_FUNC_GPIO &pcfg_pull_none>;
+			rockchip,pins = <3 RK_PC4 RK_FUNC_GPIO &pcfg_pull_none>;
 		};
 
 		otg_vbus_drv: otg-vbus-drv {
@@ -542,7 +539,8 @@
 	ignore-pm-notify;
 	keep-power-in-suspend;
 	max-frequency = <37500000>;
-	supports-sdio;
+	no-sd;
+	no-mmc;
 };
 
 &sdmmc {
@@ -556,7 +554,8 @@
 	disable-wp;
 	max-frequency = <50000000>;
 	num-slots = <1>;
-	supports-sd;
+	no-sdio;
+	no-mmc;
 };
 
 &spdif {

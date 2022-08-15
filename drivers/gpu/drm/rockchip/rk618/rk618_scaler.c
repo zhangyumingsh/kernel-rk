@@ -15,7 +15,8 @@
 #include <linux/regmap.h>
 
 #include <drm/drm_of.h>
-#include <drm/drmP.h>
+#include <drm/drm_encoder.h>
+#include <drm/drm_print.h>
 #include <video/videomode.h>
 
 #define RK618_SCALER_REG0		0x0030
@@ -84,7 +85,7 @@ static void calc_dsp_frm_hst_vst(const struct videomode *src,
 {
 	u32 bp_in, bp_out;
 	u32 v_scale_ratio;
-	long long t_frm_st;
+	u64 t_frm_st;
 	u64 t_bp_in, t_bp_out, t_delta, tin;
 	u32 src_pixclock, dst_pixclock;
 	u32 dsp_htotal, src_htotal, src_vtotal;
@@ -273,10 +274,12 @@ static void rk618_scaler_bridge_mode_set(struct drm_bridge *bridge,
 	struct drm_display_mode *dst = &scl->dst;
 	unsigned long dclk_rate;
 	u64 sclk_rate;
+	struct drm_connector_list_iter conn_iter;
 
 	drm_mode_copy(&scl->src, adjusted);
 
-	drm_for_each_connector(connector, bridge->dev) {
+	drm_connector_list_iter_begin(bridge->dev, &conn_iter);
+	drm_for_each_connector_iter(connector, &conn_iter) {
 		const struct drm_display_mode *mode;
 
 		if (connector->connector_type == DRM_MODE_CONNECTOR_HDMIA)
@@ -292,12 +295,14 @@ static void rk618_scaler_bridge_mode_set(struct drm_bridge *bridge,
 			}
 		}
 	}
+	drm_connector_list_iter_end(&conn_iter);
 
 	dclk_rate = src->clock * 1000;
 	sclk_rate = (u64)dclk_rate * dst->vdisplay * dst->htotal;
 	do_div(sclk_rate, src->vdisplay * src->htotal);
-	sclk_rate = sclk_rate / 1000 * 1000;
-	dst->clock = sclk_rate / 1000;
+	sclk_rate = div_u64(sclk_rate, 1000);
+	dst->clock = sclk_rate;
+	sclk_rate = sclk_rate * 1000;
 	scl->bridge->driver_private = dst;
 
 	DRM_DEV_INFO(scl->dev, "src=%s, dst=%s\n", src->name, dst->name);
@@ -326,15 +331,11 @@ static int rk618_scaler_bridge_attach(struct drm_bridge *bridge)
 		if (!scl->bridge)
 			return -EPROBE_DEFER;
 
-		scl->bridge->encoder = bridge->encoder;
-
-		ret = drm_bridge_attach(bridge->dev, scl->bridge);
+		ret = drm_bridge_attach(bridge->encoder, scl->bridge, bridge);
 		if (ret) {
 			dev_err(dev, "failed to attach bridge\n");
 			return ret;
 		}
-
-		bridge->next = scl->bridge;
 	}
 
 	return 0;
@@ -349,6 +350,7 @@ static const struct drm_bridge_funcs rk618_scaler_bridge_funcs = {
 
 static int rk618_scaler_probe(struct platform_device *pdev)
 {
+	struct rk618 *rk618 = dev_get_drvdata(pdev->dev.parent);
 	struct device *dev = &pdev->dev;
 	struct rk618_scaler *scl;
 	int ret;
@@ -361,11 +363,8 @@ static int rk618_scaler_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	scl->dev = dev;
+	scl->regmap = rk618->regmap;
 	platform_set_drvdata(pdev, scl);
-
-	scl->regmap = dev_get_regmap(dev->parent, NULL);
-	if (!scl->regmap)
-		return -ENODEV;
 
 	scl->vif_clk = devm_clk_get(dev, "vif");
 	if (IS_ERR(scl->vif_clk)) {
@@ -390,11 +389,7 @@ static int rk618_scaler_probe(struct platform_device *pdev)
 
 	scl->base.funcs = &rk618_scaler_bridge_funcs;
 	scl->base.of_node = dev->of_node;
-	ret = drm_bridge_add(&scl->base);
-	if (ret) {
-		dev_err(dev, "failed to add bridge\n");
-		return ret;
-	}
+	drm_bridge_add(&scl->base);
 
 	return 0;
 }

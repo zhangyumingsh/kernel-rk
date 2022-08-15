@@ -218,7 +218,8 @@ static void debug_flush(struct platform_device *pdev)
 #define LINE_MAX 1024
 static DEFINE_KFIFO(fifo, unsigned char, FIFO_SIZE);
 static char console_buf[LINE_MAX]; /* avoid FRAME WARN */
-static bool console_thread_stop;
+static bool console_thread_stop; /* write on console_write */
+static bool console_thread_running; /* write on console_thread */
 static unsigned int console_dropped_messages;
 
 static void console_putc(struct platform_device *pdev, unsigned int c)
@@ -276,8 +277,11 @@ static int console_thread(void *data)
 		unsigned int dropped;
 
 		set_current_state(TASK_INTERRUPTIBLE);
-		if (kfifo_is_empty(&fifo))
+		if (kfifo_is_empty(&fifo)) {
+			smp_store_mb(console_thread_running, false);
 			schedule();
+			smp_store_mb(console_thread_running, true);
+		}
 		if (kthread_should_stop())
 			break;
 		set_current_state(TASK_RUNNING);
@@ -334,7 +338,32 @@ static void console_write(struct platform_device *pdev, const char *s, unsigned 
 			console_dropped_messages++;
 			smp_wmb();
 		} else {
-			wake_up_process(t->console_task);
+			/*
+			 * Avoid dead lock on console_task->pi_lock and console_lock
+			 * when call printk() in try_to_wake_up().
+			 *
+			 * cpu0 hold console_lock, then try lock pi_lock fail:
+			 *   printk()->vprintk_emit()->console_unlock()->try_to_wake_up()
+			 *   ->lock(pi_lock)->deadlock
+			 *
+			 * cpu1 hold pi_lock, then try lock console_lock fail:
+			 *   console_thread()->console_put()->usleep_range()->run_hrtimer()
+			 *   ->hrtimer_wakeup()->try_to_wake_up()[hold_pi_lock]->printk()
+			 *   ->vprintk_emit()->console_trylock_spining()->cpu_relax()->deadlock
+			 *
+			 * if cpu0 does not hold console_lock, cpu1 also deadlock on pi_lock:
+			 *   ...->hrtimer_wakeup()->try_to_wake_up()[hold_pi_lock]->printk()
+			 *   ->vprintk_emit()->console_unlock()->try_to_wake_up()
+			 *   ->lock(pi_lock)->deadlock
+			 *
+			 * so when console_task is running on usleep_range(), printk()
+			 * should not wakeup console_task to avoid lock(pi_lock) again,
+			 * as run_hrtimer() will wakeup console_task later.
+			 * console_thread_running==false guarantee that console_task
+			 * is not running on usleep_range().
+			 */
+			if (!READ_ONCE(console_thread_running))
+				wake_up_process(t->console_task);
 		}
 	}
 }
@@ -350,7 +379,248 @@ static void fiq_enable(struct platform_device *pdev, unsigned int irq, bool on)
 }
 
 #ifdef CONFIG_FIQ_DEBUGGER_TRUST_ZONE
-static struct pt_regs fiq_pt_regs;
+#ifdef CONFIG_ARM_SDE_INTERFACE
+#include <linux/arm_sdei.h>
+#include <asm/smp_plat.h>
+#include <linux/suspend.h>
+void fiq_debugger_fiq_get_(const char *fmt, ...);
+
+static struct rk_fiq_sdei_st {
+	u32 cur_cpu;
+	u32 sw_cpu;
+	u32 cpu_can_sw;
+	int fiq_en;
+	u32 event_id;
+	u32 cpu_off_sw;
+	u32 cpu_sw_event_id;
+} rk_fiq_sdei;
+
+int sdei_fiq_debugger_is_enabled(void)
+{
+	return rk_fiq_sdei.fiq_en;
+}
+
+int fiq_sdei_event_callback(u32 event, struct pt_regs *regs, void *arg)
+{
+	int cpu_id = get_logical_index(read_cpuid_mpidr() &
+				       MPIDR_HWID_BITMASK);
+	fiq_debugger_fiq(regs, cpu_id);
+
+	return 0;
+}
+
+void rk_fiq_sdei_event_sw_cpu(int wait_disable)
+{
+	unsigned long affinity;
+	int cnt = 100000;
+	int ret = 0;
+
+	do {
+		ret = sdei_event_disable_nolock(rk_fiq_sdei.event_id);
+		if (!ret)
+			break;
+		cnt--;
+		udelay(20);
+	} while (wait_disable && cnt);
+
+	affinity = cpu_logical_map(rk_fiq_sdei.sw_cpu) & MPIDR_HWID_BITMASK;
+	ret = sdei_event_routing_set_nolock(rk_fiq_sdei.event_id,
+					    SDEI_EVENT_REGISTER_RM_PE,
+					    affinity);
+	ret = sdei_event_enable_nolock(rk_fiq_sdei.event_id);
+	rk_fiq_sdei.cur_cpu = rk_fiq_sdei.sw_cpu;
+}
+
+int fiq_sdei_sw_cpu_event_callback(u32 event, struct pt_regs *regs, void *arg)
+{
+	int cnt = 10000;
+	int ret = 0;
+	int cpu_id = event - rk_fiq_sdei.cpu_sw_event_id;
+
+	WARN_ON(cpu_id !=
+		get_logical_index(read_cpuid_mpidr() & MPIDR_HWID_BITMASK));
+
+	if (cpu_id == rk_fiq_sdei.sw_cpu) {
+		if (!rk_fiq_sdei.cpu_off_sw) {
+			rk_fiq_sdei.cpu_can_sw = 1;
+		} else {
+			rk_fiq_sdei_event_sw_cpu(1);
+			rk_fiq_sdei.cpu_off_sw = 0;
+		}
+	} else if (cpu_id == rk_fiq_sdei.cur_cpu && !rk_fiq_sdei.cpu_off_sw) {
+		while (!rk_fiq_sdei.cpu_can_sw && cnt) {
+			udelay(10);
+			cnt--;
+		};
+
+		if (rk_fiq_sdei.cpu_can_sw) {
+			rk_fiq_sdei_event_sw_cpu(0);
+			rk_fiq_sdei.cpu_can_sw = 0;
+		}
+	}
+	return ret;
+}
+
+static void _rk_fiq_dbg_sdei_switch_cpu(unsigned int cpu, int cpu_off)
+{
+	if (cpu == rk_fiq_sdei.cur_cpu)
+		return;
+	rk_fiq_sdei.sw_cpu = cpu;
+	rk_fiq_sdei.cpu_can_sw = 0;
+	rk_fiq_sdei.cpu_off_sw = cpu_off;
+	sip_fiq_debugger_sdei_switch_cpu(rk_fiq_sdei.cur_cpu, cpu, cpu_off);
+}
+
+static void rk_fiq_dbg_sdei_switch_cpu(struct platform_device *pdev,
+				       unsigned int cpu)
+{
+	_rk_fiq_dbg_sdei_switch_cpu(cpu, 0);
+}
+
+static int fiq_dbg_sdei_cpu_off_migrate_fiq(unsigned int cpu)
+{
+	unsigned int target_cpu;
+	int cnt = 10000;
+
+	if (rk_fiq_sdei.cur_cpu == cpu) {
+		target_cpu = cpumask_first(cpu_online_mask);
+		_rk_fiq_dbg_sdei_switch_cpu(target_cpu, 1);
+
+		while (rk_fiq_sdei.cur_cpu == cpu && cnt) {
+			udelay(10);
+			cnt--;
+		};
+		if (!cnt)
+			pr_err("%s: from %d to %d err!\n",
+			       __func__, cpu, target_cpu);
+	}
+
+	return 0;
+}
+
+static int fiq_dbg_sdei_pm_callback(struct notifier_block *nb,
+				    unsigned long mode, void *_unused)
+{
+	unsigned int target_cpu;
+
+	switch (mode) {
+	case PM_SUSPEND_PREPARE:
+		target_cpu = cpumask_first(cpu_online_mask);
+		if (target_cpu != 0)
+			pr_err("%s: fiq for core !\n", __func__);
+		else
+			_rk_fiq_dbg_sdei_switch_cpu(target_cpu, 1);
+		break;
+	default:
+	break;
+	}
+	return 0;
+}
+
+static struct notifier_block fiq_dbg_sdei_pm_nb = {
+	.notifier_call = fiq_dbg_sdei_pm_callback,
+};
+
+static int fiq_debugger_sdei_enable(struct rk_fiq_debugger *t)
+{
+	int ret, cpu, i;
+
+	ret = sip_fiq_debugger_sdei_get_event_id(&rk_fiq_sdei.event_id,
+						 &rk_fiq_sdei.cpu_sw_event_id,
+						 NULL);
+
+	if (ret) {
+		pr_err("%s: get event id error!\n", __func__);
+		return ret;
+	}
+
+	ret = cpuhp_setup_state_nocalls(CPUHP_AP_ONLINE_DYN,
+					"soc/rk_sdei_fiq_debugger",
+					NULL,
+					fiq_dbg_sdei_cpu_off_migrate_fiq);
+	if (ret < 0) {
+		pr_err("%s: cpuhp_setup_state_nocalls error! %d\n",
+		       __func__, ret);
+		return ret;
+	}
+
+	if (register_pm_notifier(&fiq_dbg_sdei_pm_nb)) {
+		pr_err("%s: register pm notify error: %d!\n", __func__, ret);
+		return ret;
+	}
+
+	ret = sdei_event_register(rk_fiq_sdei.event_id,
+				  fiq_sdei_event_callback, NULL);
+
+	if (ret) {
+		pr_err("%s: sdei_event_register error!\n", __func__);
+		unregister_pm_notifier(&fiq_dbg_sdei_pm_nb);
+		return ret;
+	}
+
+	rk_fiq_sdei.cur_cpu = 0;
+
+	ret = sdei_event_routing_set(rk_fiq_sdei.event_id,
+				     SDEI_EVENT_REGISTER_RM_PE,
+				     cpu_logical_map(rk_fiq_sdei.cur_cpu));
+
+	if (ret) {
+		pr_err("%s: sdei_event_routing_set error!\n", __func__);
+		goto err;
+	}
+
+	ret = sdei_event_enable(rk_fiq_sdei.event_id);
+	if (ret) {
+		pr_err("%s: sdei_event_enable error!\n", __func__);
+		goto err;
+	}
+
+	for (cpu = 0; cpu < num_possible_cpus(); cpu++) {
+		ret = sdei_event_register(rk_fiq_sdei.cpu_sw_event_id + cpu,
+					  fiq_sdei_sw_cpu_event_callback,
+					  NULL);
+		if (ret) {
+			pr_err("%s: cpu %d sdei_event_register error!\n",
+			       __func__, cpu);
+			goto cpu_sw_err;
+		}
+		ret = sdei_event_routing_set(rk_fiq_sdei.cpu_sw_event_id + cpu,
+					     SDEI_EVENT_REGISTER_RM_PE,
+					     cpu_logical_map(cpu));
+
+		if (ret) {
+			pr_err("%s:cpu %d fiq_sdei_event_routing_set error!\n",
+			       __func__, cpu);
+			goto cpu_sw_err;
+		}
+
+		ret = sdei_event_enable(rk_fiq_sdei.cpu_sw_event_id + cpu);
+		if (ret) {
+			pr_err("%s: cpu %d sdei_event_enable error!\n",
+			       __func__, cpu);
+			goto cpu_sw_err;
+		}
+	}
+
+	t->pdata.switch_cpu = rk_fiq_dbg_sdei_switch_cpu;
+	rk_fiq_sdei.fiq_en = 1;
+	return 0;
+cpu_sw_err:
+	for (i = 0; i < cpu; i++)
+		sdei_event_unregister(rk_fiq_sdei.cpu_sw_event_id + i);
+err:
+	unregister_pm_notifier(&fiq_dbg_sdei_pm_nb);
+	sdei_event_unregister(rk_fiq_sdei.event_id);
+
+	return ret;
+}
+
+#else
+static inline int fiq_debugger_sdei_enable(struct rk_fiq_debugger *t)
+{
+	return -EINVAL;
+}
+#endif
 
 static void rk_fiq_debugger_switch_cpu(struct platform_device *pdev,
 				       unsigned int cpu)
@@ -363,11 +633,9 @@ static void rk_fiq_debugger_enable_debug(struct platform_device *pdev, bool val)
 	sip_fiq_debugger_enable_debug(val);
 }
 
-static void fiq_debugger_uart_irq_tf(struct pt_regs _pt_regs, u64 cpu)
+static void fiq_debugger_uart_irq_tf(struct pt_regs *_pt_regs, u64 cpu)
 {
-	fiq_pt_regs = _pt_regs;
-
-	fiq_debugger_fiq(&fiq_pt_regs, cpu);
+	fiq_debugger_fiq(_pt_regs, cpu);
 }
 
 static int rk_fiq_debugger_uart_dev_resume(struct platform_device *pdev)
@@ -407,24 +675,17 @@ static int fiq_debugger_cpuidle_resume_fiq(struct notifier_block *nb,
  * resume all fiq configure at this sisutation. Here, we migrate fiq to any
  * online cpu.
  */
-static int fiq_debugger_cpu_offine_migrate_fiq(struct notifier_block *nb,
-					       unsigned long action, void *hcpu)
+static int fiq_debugger_cpu_offine_migrate_fiq(unsigned int cpu)
 {
-	int target_cpu, cpu = (long)hcpu;
+	unsigned int target_cpu;
 
-	switch (action) {
-	case CPU_DEAD:
-		if ((sip_fiq_debugger_is_enabled()) &&
-		    (sip_fiq_debugger_get_target_cpu() == cpu)) {
-			target_cpu = cpumask_first(cpu_online_mask);
-			sip_fiq_debugger_switch_cpu(target_cpu);
-		}
-		break;
-	default:
-		break;
+	if ((sip_fiq_debugger_is_enabled()) &&
+	    (sip_fiq_debugger_get_target_cpu() == cpu)) {
+		target_cpu = cpumask_first(cpu_online_mask);
+		sip_fiq_debugger_switch_cpu(target_cpu);
 	}
 
-	return NOTIFY_OK;
+	return 0;
 }
 
 static struct notifier_block fiq_debugger_pm_notifier = {
@@ -432,17 +693,15 @@ static struct notifier_block fiq_debugger_pm_notifier = {
 	.priority = 100,
 };
 
-static struct notifier_block fiq_debugger_cpu_notifier = {
-	.notifier_call = fiq_debugger_cpu_offine_migrate_fiq,
-	.priority = 100,
-};
-
 static int rk_fiq_debugger_register_cpu_pm_notify(void)
 {
 	int err;
 
-	err = register_cpu_notifier(&fiq_debugger_cpu_notifier);
-	if (err) {
+	err = cpuhp_setup_state_nocalls(CPUHP_AP_ONLINE_DYN,
+					"soc/rk_fiq_debugger",
+					NULL,
+					fiq_debugger_cpu_offine_migrate_fiq);
+	if (err < 0) {
 		pr_err("fiq debugger register cpu notifier failed!\n");
 		return err;
 	}
@@ -551,8 +810,11 @@ void rk_serial_debug_init(void __iomem *base, phys_addr_t phy_base,
 	rk_fiq_read(t, UART_USR);
 #ifdef CONFIG_FIQ_DEBUGGER_TRUST_ZONE
 	if ((signal_irq > 0) && (serial_hwirq > 0)) {
-		ret = fiq_debugger_bind_sip_smc(t, phy_base, serial_hwirq,
-						signal_irq, baudrate);
+		ret = fiq_debugger_sdei_enable(t);
+		if (ret)
+			ret = fiq_debugger_bind_sip_smc(t, phy_base,
+							serial_hwirq,
+							signal_irq, baudrate);
 		if (ret)
 			tf_fiq_sup = false;
 		else
@@ -694,13 +956,9 @@ static int __init rk_fiqdbg_probe(struct platform_device *pdev)
 	if (of_property_read_u32(np, "rockchip,irq-mode-enable", &irq_mode))
 		irq_mode = -1;
 
-	if (irq_mode == 1) {
-		signal_irq = -1;
-	} else {
-		signal_irq = irq_of_parse_and_map(np, 0);
-		if (!signal_irq)
-			return -EINVAL;
-	}
+	signal_irq = irq_of_parse_and_map(np, 0);
+	if (!signal_irq)
+		return -EINVAL;
 
 	if (of_property_read_u32(np, "rockchip,wake-irq", &wake_irq))
 		wake_irq = -1;
@@ -730,7 +988,7 @@ static int __init rk_fiqdbg_probe(struct platform_device *pdev)
 	}
 
 	/* parse serial hw irq */
-	if (!of_irq_parse_one(np, 0, &oirq))
+	if (irq_mode != 1 && !of_irq_parse_one(np, 0, &oirq))
 		serial_hwirq = oirq.args[1] + 32;
 
 	/* parse serial phy base address */
@@ -770,7 +1028,18 @@ static int __init rk_fiqdbg_init(void)
 	return platform_driver_probe(&rk_fiqdbg_driver,
 				     rk_fiqdbg_probe);
 }
-arch_initcall_sync(rk_fiqdbg_init);
+
+#if defined(CONFIG_FIQ_DEBUGGER_TRUST_ZONE) && defined(CONFIG_ARM_SDE_INTERFACE)
+fs_initcall(rk_fiqdbg_init);
+#else
+subsys_initcall(rk_fiqdbg_init); /* after of_platform_default_populate_init */
+#endif
+
+static void __exit rk_fiqdbg_exit(void)
+{
+	platform_driver_unregister(&rk_fiqdbg_driver);
+}
+module_exit(rk_fiqdbg_exit);
 
 MODULE_AUTHOR("Huibin Hong <huibin.hong@rock-chips.com>");
 MODULE_DESCRIPTION("Rockchip FIQ Debugger");

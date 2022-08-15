@@ -17,6 +17,7 @@
  * Release Date:  2015/07/10
  */
 
+#include <linux/compat.h>
 #include <linux/interrupt.h>
 #include <linux/i2c.h>
 #include <linux/sched.h>
@@ -28,7 +29,7 @@
 #include <linux/miscdevice.h>
 #include <linux/input.h>
 
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 #include <linux/proc_fs.h>	/*proc */
 
 #include <asm/ioctl.h>

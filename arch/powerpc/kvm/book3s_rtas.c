@@ -1,9 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright 2012 Michael Ellerman, IBM Corporation.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License, version 2, as
- * published by the Free Software Foundation.
  */
 
 #include <linux/kernel.h>
@@ -11,11 +8,12 @@
 #include <linux/kvm.h>
 #include <linux/err.h>
 
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 #include <asm/kvm_book3s.h>
 #include <asm/kvm_ppc.h>
 #include <asm/hvcall.h>
 #include <asm/rtas.h>
+#include <asm/xive.h>
 
 #ifdef CONFIG_KVM_XICS
 static void kvm_rtas_set_xive(struct kvm_vcpu *vcpu, struct rtas_args *args)
@@ -32,7 +30,10 @@ static void kvm_rtas_set_xive(struct kvm_vcpu *vcpu, struct rtas_args *args)
 	server = be32_to_cpu(args->args[1]);
 	priority = be32_to_cpu(args->args[2]);
 
-	rc = kvmppc_xics_set_xive(vcpu->kvm, irq, server, priority);
+	if (xics_on_xive())
+		rc = kvmppc_xive_set_xive(vcpu->kvm, irq, server, priority);
+	else
+		rc = kvmppc_xics_set_xive(vcpu->kvm, irq, server, priority);
 	if (rc)
 		rc = -3;
 out:
@@ -52,7 +53,10 @@ static void kvm_rtas_get_xive(struct kvm_vcpu *vcpu, struct rtas_args *args)
 	irq = be32_to_cpu(args->args[0]);
 
 	server = priority = 0;
-	rc = kvmppc_xics_get_xive(vcpu->kvm, irq, &server, &priority);
+	if (xics_on_xive())
+		rc = kvmppc_xive_get_xive(vcpu->kvm, irq, &server, &priority);
+	else
+		rc = kvmppc_xics_get_xive(vcpu->kvm, irq, &server, &priority);
 	if (rc) {
 		rc = -3;
 		goto out;
@@ -76,7 +80,10 @@ static void kvm_rtas_int_off(struct kvm_vcpu *vcpu, struct rtas_args *args)
 
 	irq = be32_to_cpu(args->args[0]);
 
-	rc = kvmppc_xics_int_off(vcpu->kvm, irq);
+	if (xics_on_xive())
+		rc = kvmppc_xive_int_off(vcpu->kvm, irq);
+	else
+		rc = kvmppc_xics_int_off(vcpu->kvm, irq);
 	if (rc)
 		rc = -3;
 out:
@@ -95,7 +102,10 @@ static void kvm_rtas_int_on(struct kvm_vcpu *vcpu, struct rtas_args *args)
 
 	irq = be32_to_cpu(args->args[0]);
 
-	rc = kvmppc_xics_int_on(vcpu->kvm, irq);
+	if (xics_on_xive())
+		rc = kvmppc_xive_int_on(vcpu->kvm, irq);
+	else
+		rc = kvmppc_xics_int_on(vcpu->kvm, irq);
 	if (rc)
 		rc = -3;
 out:
@@ -219,7 +229,9 @@ int kvmppc_rtas_hcall(struct kvm_vcpu *vcpu)
 	 */
 	args_phys = kvmppc_get_gpr(vcpu, 4) & KVM_PAM;
 
+	vcpu->srcu_idx = srcu_read_lock(&vcpu->kvm->srcu);
 	rc = kvm_read_guest(vcpu->kvm, args_phys, &args, sizeof(args));
+	srcu_read_unlock(&vcpu->kvm->srcu, vcpu->srcu_idx);
 	if (rc)
 		goto fail;
 
@@ -230,6 +242,17 @@ int kvmppc_rtas_hcall(struct kvm_vcpu *vcpu)
 	 * value so we can restore it on the way out.
 	 */
 	orig_rets = args.rets;
+	if (be32_to_cpu(args.nargs) >= ARRAY_SIZE(args.args)) {
+		/*
+		 * Don't overflow our args array: ensure there is room for
+		 * at least rets[0] (even if the call specifies 0 nret).
+		 *
+		 * Each handler must then check for the correct nargs and nret
+		 * values, but they may always return failure in rets[0].
+		 */
+		rc = -EINVAL;
+		goto fail;
+	}
 	args.rets = &args.args[be32_to_cpu(args.nargs)];
 
 	mutex_lock(&vcpu->kvm->arch.rtas_token_lock);
@@ -257,9 +280,17 @@ int kvmppc_rtas_hcall(struct kvm_vcpu *vcpu)
 fail:
 	/*
 	 * We only get here if the guest has called RTAS with a bogus
-	 * args pointer. That means we can't get to the args, and so we
-	 * can't fail the RTAS call. So fail right out to userspace,
-	 * which should kill the guest.
+	 * args pointer or nargs/nret values that would overflow the
+	 * array. That means we can't get to the args, and so we can't
+	 * fail the RTAS call. So fail right out to userspace, which
+	 * should kill the guest.
+	 *
+	 * SLOF should actually pass the hcall return value from the
+	 * rtas handler call in r3, so enter_rtas could be modified to
+	 * return a failure indication in r3 and we could return such
+	 * errors to the guest rather than failing to host userspace.
+	 * However old guests that don't test for failure could then
+	 * continue silently after errors, so for now we won't do this.
 	 */
 	return rc;
 }

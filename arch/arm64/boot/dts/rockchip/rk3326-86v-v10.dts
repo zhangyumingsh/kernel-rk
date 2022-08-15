@@ -11,7 +11,7 @@
 #include <dt-bindings/sensor-dev.h>
 #include "rk3326.dtsi"
 #include "rk3326-863-cif-sensor.dtsi"
-#include "rk3326-android.dtsi"
+#include "px30-android.dtsi"
 
 / {
 	model = "Rockchip rk3326 86v board";
@@ -139,7 +139,7 @@
 		};
 	};
 
-	rk_headset {
+	rk_headset: rk-headset {
 		compatible = "rockchip_headset";
 		headset_gpio = <&gpio2 RK_PC6 GPIO_ACTIVE_LOW>;
 		pinctrl-names = "default";
@@ -228,7 +228,8 @@
 	bus-width = <8>;
 	cap-mmc-highspeed;
 	/*mmc-hs200-1_8v;*/
-	supports-emmc;
+	no-sdio;
+	no-sd;
 	disable-wp;
 	non-removable;
 	num-slots = <1>;
@@ -497,7 +498,6 @@
 			};
 
 			otg_switch: OTG_SWITCH {
-				regulator-boot-on;
 				regulator-name = "otg_switch";
 			};
 		};
@@ -623,18 +623,18 @@
 	lcdc {
 		lcdc_m1_rgb_pins: lcdc-m1-rgb-pins {
 			rockchip,pins =
-				<3 RK_PA0 RK_FUNC_1 &pcfg_pull_none>,		/* LCDC_DCLK */
-				<3 RK_PA4 RK_FUNC_1 &pcfg_pull_none_8ma>,	/* LCDC_D0 */
-				<3 RK_PA6 RK_FUNC_1 &pcfg_pull_none_8ma>,	/* LCDC_D2 */
-				<3 RK_PB2 RK_FUNC_1 &pcfg_pull_none_8ma>,	/* LCDC_D6 */
-				<3 RK_PB3 RK_FUNC_1 &pcfg_pull_none_8ma>,	/* LCDC_D7 */
-				<3 RK_PB5 RK_FUNC_1 &pcfg_pull_none_8ma>,	/* LCDC_D9 */
-				<3 RK_PC0 RK_FUNC_1 &pcfg_pull_none_8ma>,	/* LCDC_D12 */
-				<3 RK_PC1 RK_FUNC_1 &pcfg_pull_none_8ma>,	/* LCDC_D13 */
-				<3 RK_PC2 RK_FUNC_1 &pcfg_pull_none_8ma>,	/* LCDC_D14 */
-				<3 RK_PC3 RK_FUNC_1 &pcfg_pull_none_8ma>,	/* LCDC_D15 */
-				<3 RK_PC4 RK_FUNC_1 &pcfg_pull_none_8ma>,	/* LCDC_D16 */
-				<3 RK_PC5 RK_FUNC_1 &pcfg_pull_none_8ma>;	/* LCDC_D17 */
+				<3 RK_PA0 1 &pcfg_pull_none>,		/* LCDC_DCLK */
+				<3 RK_PA4 1 &pcfg_pull_none_8ma>,	/* LCDC_D0 */
+				<3 RK_PA6 1 &pcfg_pull_none_8ma>,	/* LCDC_D2 */
+				<3 RK_PB2 1 &pcfg_pull_none_8ma>,	/* LCDC_D6 */
+				<3 RK_PB3 1 &pcfg_pull_none_8ma>,	/* LCDC_D7 */
+				<3 RK_PB5 1 &pcfg_pull_none_8ma>,	/* LCDC_D9 */
+				<3 RK_PC0 1 &pcfg_pull_none_8ma>,	/* LCDC_D12 */
+				<3 RK_PC1 1 &pcfg_pull_none_8ma>,	/* LCDC_D13 */
+				<3 RK_PC2 1 &pcfg_pull_none_8ma>,	/* LCDC_D14 */
+				<3 RK_PC3 1 &pcfg_pull_none_8ma>,	/* LCDC_D15 */
+				<3 RK_PC4 1 &pcfg_pull_none_8ma>,	/* LCDC_D16 */
+				<3 RK_PC5 1 &pcfg_pull_none_8ma>;	/* LCDC_D17 */
 		};
 
 		lcdc_m1_sleep_pins: lcdc-m1-sleep-pins {
@@ -667,12 +667,12 @@
 
 		soc_slppin_slp: soc_slppin_slp {
 			rockchip,pins =
-				<0 RK_PA4 RK_FUNC_1 &pcfg_pull_none>;
+				<0 RK_PA4 1 &pcfg_pull_none>;
 		};
 
 		soc_slppin_rst: soc_slppin_rst {
 			rockchip,pins =
-				<0 RK_PA4 RK_FUNC_2 &pcfg_pull_none>;
+				<0 RK_PA4 2 &pcfg_pull_none>;
 		};
 	};
 
@@ -717,7 +717,8 @@
 	bus-width = <4>;
 	cap-mmc-highspeed;
 	cap-sd-highspeed;
-	supports-sd;
+	no-sdio;
+	no-mmc;
 	card-detect-delay = <800>;
 	ignore-pm-notify;
 	sd-uhs-sdr12;
@@ -732,7 +733,8 @@
 &sdio {
 	bus-width = <4>;
 	cap-sd-highspeed;
-	supports-sdio;
+	no-sd;
+	no-mmc;
 	ignore-pm-notify;
 	keep-power-in-suspend;
 	non-removable;
@@ -784,7 +786,35 @@
 	status = "okay";
 };
 
-&vpu_combo {
+&vopl {
+	status = "okay";
+};
+
+&vopl_mmu {
+	status = "okay";
+};
+
+&mpp_srv {
+	status = "okay";
+};
+
+&vdpu {
+	status = "okay";
+};
+
+&vepu {
+	status = "okay";
+};
+
+&vpu_mmu {
+	status = "okay";
+};
+
+&hevc {
+	status = "okay";
+};
+
+&hevc_mmu {
 	status = "okay";
 };
 

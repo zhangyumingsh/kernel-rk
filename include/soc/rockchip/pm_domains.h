@@ -6,12 +6,30 @@
 
 struct device;
 
-#ifdef CONFIG_ROCKCHIP_PM_DOMAINS
+#if IS_ENABLED(CONFIG_ROCKCHIP_PM_DOMAINS)
+int rockchip_pmu_pd_on(struct device *dev);
+int rockchip_pmu_pd_off(struct device *dev);
+bool rockchip_pmu_pd_is_on(struct device *dev);
 int rockchip_pmu_idle_request(struct device *dev, bool idle);
 int rockchip_save_qos(struct device *dev);
 int rockchip_restore_qos(struct device *dev);
 void rockchip_dump_pmu(void);
 #else
+static inline int rockchip_pmu_pd_on(struct device *dev)
+{
+	return -ENOTSUPP;
+}
+
+static inline int rockchip_pmu_pd_off(struct device *dev)
+{
+	return -ENOTSUPP;
+}
+
+static inline bool rockchip_pmu_pd_is_on(struct device *dev)
+{
+	return true;
+}
+
 static inline int rockchip_pmu_idle_request(struct device *dev, bool idle)
 {
 	return -ENOTSUPP;

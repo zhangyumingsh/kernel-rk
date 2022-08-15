@@ -125,19 +125,3 @@
 		};
 	};
 };
-
-&i2c2 {
-	status = "okay";
-};
-
-&isp_mmu {
-	status = "okay";
-};
-
-&ov5695 {
-	status = "disabled";
-};
-
-&rk_isp {
-	status = "okay";
-};

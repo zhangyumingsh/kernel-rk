@@ -1,12 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * ImgTec IR Hardware Decoder found in PowerDown Controller.
  *
  * Copyright 2010-2014 Imagination Technologies Ltd.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by the
- * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.
  *
  * This ties into the input subsystem using the RC-core. Protocol support is
  * provided in separate modules which provide the parameters and scancode
@@ -339,7 +335,7 @@ static void img_ir_decoder_preprocess(struct img_ir_decoder *decoder)
 /**
  * img_ir_decoder_convert() - Generate internal timings in decoder.
  * @decoder:	Decoder to be converted to internal timings.
- * @timings:	Timing register values.
+ * @reg_timings: Timing register values.
  * @clock_hz:	IR clock rate in Hz.
  *
  * Fills out the repeat timings and timing register values for a specific clock
@@ -701,10 +697,6 @@ success:
 static void img_ir_set_protocol(struct img_ir_priv *priv, u64 proto)
 {
 	struct rc_dev *rdev = priv->hw.rdev;
-
-	spin_lock_irq(&rdev->rc_map.lock);
-	rdev->rc_map.rc_type = __ffs64(proto);
-	spin_unlock_irq(&rdev->rc_map.lock);
 
 	mutex_lock(&rdev->lock);
 	rdev->enabled_protocols = proto;

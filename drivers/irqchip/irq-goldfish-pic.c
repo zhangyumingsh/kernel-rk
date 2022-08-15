@@ -1,12 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Driver for MIPS Goldfish Programmable Interrupt Controller.
  *
  * Author: Miodrag Dinic <miodrag.dinic@mips.com>
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License as published by the
- * Free Software Foundation; either version 2 of the License, or (at your
- * option) any later version.
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -113,7 +109,7 @@ static int __init goldfish_pic_of_init(struct device_node *of_node,
 	if (!gfpic->irq_domain) {
 		pr_err("Failed to add irqdomain!\n");
 		ret = -ENOMEM;
-		goto out_iounmap;
+		goto out_destroy_generic_chip;
 	}
 
 	irq_set_chained_handler_and_data(parent_irq,
@@ -122,6 +118,9 @@ static int __init goldfish_pic_of_init(struct device_node *of_node,
 	pr_info("Successfully registered.\n");
 	return 0;
 
+out_destroy_generic_chip:
+	irq_destroy_generic_chip(gc, IRQ_MSK(GFPIC_NR_IRQS),
+				 IRQ_NOPROBE | IRQ_LEVEL, 0);
 out_iounmap:
 	iounmap(gfpic->base);
 out_unmap_irq:

@@ -43,7 +43,7 @@
 #include <dt-bindings/input/input.h>
 
 / {
-	chosen {
+	chosen: chosen {
 		bootargs = "earlycon=uart8250,mmio32,0x11030000";
 	};
 
@@ -61,6 +61,11 @@
 
 	firmware {
 		firmware_android: android {};
+
+		optee: optee {
+			compatible = "linaro,optee-tz";
+			method = "smc";
+		};
 	};
 
 	reserved-memory {
@@ -78,18 +83,14 @@
 			reg = <0x80000000 0x0>;
 		};
 
-		ramoops_mem: ramoops@62e00000 {
+		ramoops: ramoops@62e00000 {
+			compatible = "ramoops";
 			reg = <0x62e00000 0xf0000>;
+			record-size = <0x20000>;
+			console-size = <0x80000>;
+			ftrace-size = <0x00000>;
+			pmsg-size = <0x50000>;
 		};
-	};
-
-	ramoops {
-		compatible = "ramoops";
-		record-size = <0x0 0x20000>;
-		console-size = <0x0 0x80000>;
-		ftrace-size = <0x0 0x00000>;
-		pmsg-size = <0x0 0x50000>;
-		memory-region = <&ramoops_mem>;
 	};
 
 	psci {
@@ -119,7 +120,8 @@
 	bus-width = <8>;
 	cap-mmc-highspeed;
 	mmc-hs200-1_8v;
-	supports-emmc;
+	no-sdio;
+	no-sd;
 	disable-wp;
 	non-removable;
 	num-slots = <1>;
@@ -145,7 +147,8 @@
 	disable-wp;
 	max-frequency = <50000000>;
 	num-slots = <1>;
-	supports-sd;
+	no-sdio;
+	no-mmc;
 };
 
 &sdio {
@@ -157,7 +160,8 @@
 	ignore-pm-notify;
 	keep-power-in-suspend;
 	max-frequency = <150000000>;
-	supports-sdio;
+	no-sd;
+	no-mmc;
 };
 
 &tsadc {
@@ -210,5 +214,9 @@
 };
 
 &rockchip_suspend {
+	status = "okay";
+};
+
+&rng {
 	status = "okay";
 };

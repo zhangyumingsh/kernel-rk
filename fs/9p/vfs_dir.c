@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * linux/fs/9p/vfs_dir.c
  *
@@ -5,22 +6,6 @@
  *
  *  Copyright (C) 2004 by Eric Van Hensbergen <ericvh@gmail.com>
  *  Copyright (C) 2002 by Ron Minnich <rminnich@lanl.gov>
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License version 2
- *  as published by the Free Software Foundation.
- *
- *  This program is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *  GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License
- *  along with this program; if not, write to:
- *  Free Software Foundation
- *  51 Franklin Street, Fifth Floor
- *  Boston, MA  02111-1301  USA
- *
  */
 
 #include <linux/module.h>
@@ -123,7 +108,7 @@ static int v9fs_dir_readdir(struct file *file, struct dir_context *ctx)
 		if (rdir->tail == rdir->head) {
 			struct iov_iter to;
 			int n;
-			iov_iter_kvec(&to, READ | ITER_KVEC, &kvec, 1, buflen);
+			iov_iter_kvec(&to, READ, &kvec, 1, buflen);
 			n = p9_client_read(file->private_data, ctx->pos, &to,
 					   &err);
 			if (err)
@@ -233,7 +218,7 @@ int v9fs_dir_release(struct inode *inode, struct file *filp)
 const struct file_operations v9fs_dir_operations = {
 	.read = generic_read_dir,
 	.llseek = generic_file_llseek,
-	.iterate = v9fs_dir_readdir,
+	.iterate_shared = v9fs_dir_readdir,
 	.open = v9fs_file_open,
 	.release = v9fs_dir_release,
 };
@@ -241,7 +226,7 @@ const struct file_operations v9fs_dir_operations = {
 const struct file_operations v9fs_dir_operations_dotl = {
 	.read = generic_read_dir,
 	.llseek = generic_file_llseek,
-	.iterate = v9fs_dir_readdir_dotl,
+	.iterate_shared = v9fs_dir_readdir_dotl,
 	.open = v9fs_file_open,
 	.release = v9fs_dir_release,
         .fsync = v9fs_file_fsync_dotl,

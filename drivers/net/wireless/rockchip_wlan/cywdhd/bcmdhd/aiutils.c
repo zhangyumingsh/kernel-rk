@@ -3,7 +3,7 @@
  * Misc utility routines for accessing chip-specific features
  * of the SiliconBackplane-based Broadcom chips.
  *
- * Copyright (C) 1999-2018, Broadcom Corporation
+ * Copyright (C) 1999-2019, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -167,9 +167,18 @@ ai_scan(si_t *sih, void *regs, uint devid)
 				}
 				break;
 
+			case BCM43012_CHIP_ID:
+				sii->numcores = ai_core_43012;
+				sii->oob_router = oob_router_43012;
+				memcpy(&cores_info->coreid, &bcm43012_coreid, sii->numcores * 4);
+				memcpy(&cores_info->coresba, &bcm43012_coresba, sii->numcores * 4);
+				memcpy(&cores_info->coresba_size, &bcm43012_coresba_size, sii->numcores * 4);
+				memcpy(&cores_info->wrapba, &bcm43012_wrapba, sii->numcores * 4);
+				memcpy(&cores_info->cia, &bcm43012_cia, sii->numcores * 4);
+				memcpy(&cores_info->cib, &bcm43012_cib, sii->numcores * 4);
+
 			default:
 				break;
-
 		}
 
 		return;

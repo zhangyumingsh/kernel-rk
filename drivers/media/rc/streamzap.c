@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Streamzap Remote Control driver
  *
@@ -15,25 +16,12 @@
  *
  * This driver is based on the USB skeleton driver packaged with the
  * kernel; copyright (C) 2001-2003 Greg Kroah-Hartman (greg@kroah.com)
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation; either version 2 of the License, or
- *  (at your option) any later version.
- *
- *  This program is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *  GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License
- *  along with this program; if not, write to the Free Software
- *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
 #include <linux/device.h>
 #include <linux/module.h>
 #include <linux/slab.h>
+#include <linux/ktime.h>
 #include <linux/usb.h>
 #include <linux/usb/input.h>
 #include <media/rc-core.h>
@@ -46,7 +34,7 @@
 #define USB_STREAMZAP_PRODUCT_ID	0x0000
 
 /* table of devices that work with this driver */
-static struct usb_device_id streamzap_table[] = {
+static const struct usb_device_id streamzap_table[] = {
 	/* Streamzap Remote Control */
 	{ USB_DEVICE(USB_STREAMZAP_VENDOR_ID, USB_STREAMZAP_PRODUCT_ID) },
 	/* Terminating entry */
@@ -96,8 +84,8 @@ struct streamzap_ir {
 	/* sum of signal lengths received since signal start */
 	unsigned long		sum;
 	/* start time of signal; necessary for gap tracking */
-	struct timeval		signal_last;
-	struct timeval		signal_start;
+	ktime_t			signal_last;
+	ktime_t			signal_start;
 	bool			timeout_enabled;
 
 	char			name[128];
@@ -136,22 +124,19 @@ static void sz_push_full_pulse(struct streamzap_ir *sz,
 	struct ir_raw_event rawir = {};
 
 	if (sz->idle) {
-		long deltv;
+		int delta;
 
 		sz->signal_last = sz->signal_start;
-		do_gettimeofday(&sz->signal_start);
+		sz->signal_start = ktime_get_real();
 
-		deltv = sz->signal_start.tv_sec - sz->signal_last.tv_sec;
+		delta = ktime_us_delta(sz->signal_start, sz->signal_last);
 		rawir.pulse = false;
-		if (deltv > 15) {
+		if (delta > (15 * USEC_PER_SEC)) {
 			/* really long time */
 			rawir.duration = IR_MAX_DURATION;
 		} else {
-			rawir.duration = (int)(deltv * 1000000 +
-				sz->signal_start.tv_usec -
-				sz->signal_last.tv_usec);
+			rawir.duration = delta;
 			rawir.duration -= sz->sum;
-			rawir.duration = US_TO_NS(rawir.duration);
 			rawir.duration = (rawir.duration > IR_MAX_DURATION) ?
 					 IR_MAX_DURATION : rawir.duration;
 		}
@@ -165,7 +150,6 @@ static void sz_push_full_pulse(struct streamzap_ir *sz,
 	rawir.duration = ((int) value) * SZ_RESOLUTION;
 	rawir.duration += SZ_RESOLUTION / 2;
 	sz->sum += rawir.duration;
-	rawir.duration = US_TO_NS(rawir.duration);
 	rawir.duration = (rawir.duration > IR_MAX_DURATION) ?
 			 IR_MAX_DURATION : rawir.duration;
 	sz_push(sz, rawir);
@@ -186,7 +170,6 @@ static void sz_push_full_space(struct streamzap_ir *sz,
 	rawir.duration = ((int) value) * SZ_RESOLUTION;
 	rawir.duration += SZ_RESOLUTION / 2;
 	sz->sum += rawir.duration;
-	rawir.duration = US_TO_NS(rawir.duration);
 	sz_push(sz, rawir);
 }
 
@@ -196,7 +179,7 @@ static void sz_push_half_space(struct streamzap_ir *sz,
 	sz_push_full_space(sz, value & SZ_SPACE_MASK);
 }
 
-/**
+/*
  * streamzap_callback - usb IRQ handler callback
  *
  * This procedure is invoked on reception of data from
@@ -326,7 +309,7 @@ out:
 	return NULL;
 }
 
-/**
+/*
  *	streamzap_probe
  *
  *	Called by usb-core to associated with a candidate device
@@ -401,7 +384,7 @@ static int streamzap_probe(struct usb_interface *intf,
 	if (usbdev->descriptor.iManufacturer
 	    && usb_string(usbdev, usbdev->descriptor.iManufacturer,
 			  buf, sizeof(buf)) > 0)
-		strlcpy(name, buf, sizeof(name));
+		strscpy(name, buf, sizeof(name));
 
 	if (usbdev->descriptor.iProduct
 	    && usb_string(usbdev, usbdev->descriptor.iProduct,
@@ -417,16 +400,15 @@ static int streamzap_probe(struct usb_interface *intf,
 	sz->decoder_state = PulseSpace;
 	/* FIXME: don't yet have a way to set this */
 	sz->timeout_enabled = true;
-	sz->rdev->timeout = ((US_TO_NS(SZ_TIMEOUT * SZ_RESOLUTION) &
-				IR_MAX_DURATION) | 0x03000000);
+	sz->rdev->timeout = SZ_TIMEOUT * SZ_RESOLUTION;
 	#if 0
 	/* not yet supported, depends on patches from maxim */
 	/* see also: LIRC_GET_REC_RESOLUTION and LIRC_SET_REC_TIMEOUT */
-	sz->min_timeout = US_TO_NS(SZ_TIMEOUT * SZ_RESOLUTION);
-	sz->max_timeout = US_TO_NS(SZ_TIMEOUT * SZ_RESOLUTION);
+	sz->min_timeout = SZ_TIMEOUT * SZ_RESOLUTION;
+	sz->max_timeout = SZ_TIMEOUT * SZ_RESOLUTION;
 	#endif
 
-	do_gettimeofday(&sz->signal_start);
+	sz->signal_start = ktime_get_real();
 
 	/* Complete final initialisations */
 	usb_fill_int_urb(sz->urb_in, usbdev, pipe, sz->buf_in,
@@ -455,7 +437,7 @@ free_sz:
 	return retval;
 }
 
-/**
+/*
  * streamzap_disconnect
  *
  * Called by the usb core when the device is removed from the system.
@@ -498,7 +480,7 @@ static int streamzap_resume(struct usb_interface *intf)
 	struct streamzap_ir *sz = usb_get_intfdata(intf);
 
 	if (usb_submit_urb(sz->urb_in, GFP_ATOMIC)) {
-		dev_err(sz->dev, "Error sumbiting urb\n");
+		dev_err(sz->dev, "Error submitting urb\n");
 		return -EIO;
 	}
 

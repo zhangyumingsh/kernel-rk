@@ -31,6 +31,7 @@
 #include <linux/bug.h>
 #include <linux/compat.h>
 #include <linux/version.h>
+#include <linux/sched/mm.h>
 
 #include <mali_kbase_config.h>
 #include <mali_kbase.h>
@@ -1016,7 +1017,7 @@ static struct kbase_cpu_mapping *kbasep_find_enclosing_cpu_mapping(
 	unsigned long map_start;
 	size_t map_size;
 
-	lockdep_assert_held(&current->mm->mmap_sem);
+	lockdep_assert_held(&current->mm->mmap_lock);
 
 	if ((uintptr_t) uaddr + size < (uintptr_t) uaddr) /* overflow check */
 		return NULL;
@@ -1431,15 +1432,6 @@ int kbase_alloc_phy_pages_helper(
 			nr_pages_requested, alloc->pages + old_page_count) != 0)
 		goto no_alloc;
 
-	/*
-	 * Request a zone cache update, this scans only the new pages an
-	 * appends their information to the zone cache. if the update
-	 * fails then clear the cache so we fall-back to doing things
-	 * page by page.
-	 */
-	if (kbase_zone_cache_update(alloc, old_page_count) != 0)
-		kbase_zone_cache_clear(alloc);
-
 	KBASE_TLSTREAM_AUX_PAGESALLOC(
 			(u32)alloc->imported.kctx->id,
 			(u64)new_page_count);
@@ -1477,14 +1469,6 @@ int kbase_free_phy_pages_helper(
 	start_free = alloc->pages + alloc->nents - nr_pages_to_free;
 
 	syncback = alloc->properties & KBASE_MEM_PHY_ALLOC_ACCESSED_CACHED;
-
-	/*
-	 * Clear the zone cache, we don't expect JIT allocations to be
-	 * shrunk in parts so there is no point trying to optimize for that
-	 * by scanning for the changes caused by freeing this memory and
-	 * updating the existing cache entries.
-	 */
-	kbase_zone_cache_clear(alloc);
 
 	kbase_mem_pool_free_pages(&kctx->mem_pool,
 				  nr_pages_to_free,
@@ -2182,22 +2166,28 @@ static int kbase_jd_user_buf_map(struct kbase_context *kctx,
 	pinned_pages = get_user_pages(NULL, mm,
 			address,
 			alloc->imported.user_buf.nr_pages,
-			reg->flags & KBASE_REG_GPU_WR ? FOLL_WRITE : 0,
-			pages, NULL);
+			reg->flags & KBASE_REG_GPU_WR,
+			0, pages, NULL);
 #elif LINUX_VERSION_CODE < KERNEL_VERSION(4, 9, 0)
 	pinned_pages = get_user_pages_remote(NULL, mm,
 			address,
 			alloc->imported.user_buf.nr_pages,
-			reg->flags & KBASE_REG_GPU_WR ? FOLL_WRITE : 0,
-			pages, NULL);
+			reg->flags & KBASE_REG_GPU_WR,
+			0, pages, NULL);
 #elif LINUX_VERSION_CODE < KERNEL_VERSION(4, 10, 0)
 	pinned_pages = get_user_pages_remote(NULL, mm,
 			address,
 			alloc->imported.user_buf.nr_pages,
 			reg->flags & KBASE_REG_GPU_WR ? FOLL_WRITE : 0,
 			pages, NULL);
-#else
+#elif LINUX_VERSION_CODE < KERNEL_VERSION(5, 9, 0)
 	pinned_pages = get_user_pages_remote(NULL, mm,
+			address,
+			alloc->imported.user_buf.nr_pages,
+			reg->flags & KBASE_REG_GPU_WR ? FOLL_WRITE : 0,
+			pages, NULL, NULL);
+#else
+	pinned_pages = get_user_pages_remote(mm,
 			address,
 			alloc->imported.user_buf.nr_pages,
 			reg->flags & KBASE_REG_GPU_WR ? FOLL_WRITE : 0,

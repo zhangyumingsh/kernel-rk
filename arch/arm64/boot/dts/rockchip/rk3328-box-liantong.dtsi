@@ -187,6 +187,10 @@
 	};
 };
 
+&avsd {
+	status = "okay";
+};
+
 &codec {
 	#sound-dai-cells = <0>;
 	status = "okay";
@@ -237,7 +241,8 @@
 &emmc {
 	bus-width = <8>;
 	cap-mmc-highspeed;
-	supports-emmc;
+	no-sdio;
+	no-sd;
 	disable-wp;
 	non-removable;
 	num-slots = <1>;
@@ -303,10 +308,6 @@
 	reg = <0x0 0x20000000 0x0 0x0>;
 };
 
-&h265e {
-	status = "okay";
-};
-
 &i2s0 {
 	#sound-dai-cells = <0>;
 	rockchip,bclk-fs = <128>;
@@ -338,11 +339,15 @@
 	pmuio-supply = <&vccio_3v3_reg>;
 };
 
+&mpp_srv {
+	status = "okay";
+};
+
 &pinctrl {
 	sdio-pwrseq {
 		wifi_enable_h: wifi-enable-h {
 		rockchip,pins =
-			<1 18 RK_FUNC_GPIO &pcfg_pull_none>;
+			<1 RK_PC2 RK_FUNC_GPIO &pcfg_pull_none>;
 		};
 	};
 
@@ -361,7 +366,7 @@
 	wireless-bluetooth {
 		uart0_gpios: uart0-gpios {
 		rockchip,pins =
-			<1 10 RK_FUNC_GPIO &pcfg_pull_none>;
+			<1 RK_PB2 RK_FUNC_GPIO &pcfg_pull_none>;
 		};
 	};
 };
@@ -492,6 +497,10 @@
 	vcodec-supply = <&vdd_logic>;
 };
 
+&rkvdec_mmu {
+	status = "okay";
+};
+
 &rockchip_suspend {
 	status = "okay";
 	rockchip,virtual-poweroff = <1>;
@@ -521,7 +530,8 @@
 	num-slots = <1>;
 	pinctrl-names = "default";
 	pinctrl-0 = <&sdmmc1_bus4 &sdmmc1_cmd &sdmmc1_clk>;
-	supports-sdio;
+	no-sd;
+	no-mmc;
 	sd-uhs-sdr104;
 	status = "okay";
 };
@@ -536,7 +546,8 @@
 	num-slots = <1>;
 	pinctrl-names = "default";
 	pinctrl-0 = <&sdmmc0ext_clk &sdmmc0ext_cmd &sdmmc0ext_dectn &sdmmc0ext_bus4>;
-	supports-sd;
+	no-sdio;
+	no-mmc;
 	status = "okay";
 };
 
@@ -549,7 +560,8 @@
 	num-slots = <1>;
 	pinctrl-names = "default";
 	pinctrl-0 = <&sdmmc0_clk &sdmmc0_cmd &sdmmc0_dectn &sdmmc0_bus4>;
-	supports-sd;
+	no-sdio;
+	no-mmc;
 	status = "okay";
 	vmmc-supply = <&vcc_sd>;
 };
@@ -628,7 +640,27 @@
 	status = "okay";
 };
 
+&vdpu {
+	status = "okay";
+};
+
+&vpu_mmu {
+	status = "okay";
+};
+
 &vepu {
+	status = "okay";
+};
+
+&vepu_mmu {
+	status = "okay";
+};
+
+&vepu22 {
+	status = "okay";
+};
+
+&vepu22_mmu {
 	status = "okay";
 };
 
@@ -637,9 +669,5 @@
 };
 
 &vop_mmu {
-	status = "okay";
-};
-
-&vpu_service {
 	status = "okay";
 };

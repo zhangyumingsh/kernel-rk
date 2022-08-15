@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Driver for AzureWave 6007 DVB-C/T USB2.0 and clones
  *
@@ -10,20 +11,11 @@
  * Copyright (c) 2010-2012 Mauro Carvalho Chehab
  *	Driver modified by in order to work with upstream drxk driver, and
  *	tons of bugs got fixed, and converted to use dvb-usb-v2.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation under version 2 of the License.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 
 #include "drxk.h"
 #include "mt2063.h"
-#include "dvb_ca_en50221.h"
+#include <media/dvb_ca_en50221.h>
 #include "dvb_usb.h"
 #include "cypress_firmware.h"
 
@@ -934,7 +926,7 @@ static struct dvb_usb_device_properties az6007_cablestar_hdci_props = {
 	}
 };
 
-static struct usb_device_id az6007_usb_table[] = {
+static const struct usb_device_id az6007_usb_table[] = {
 	{DVB_USB_DEVICE(USB_VID_AZUREWAVE, USB_PID_AZUREWAVE_6007,
 		&az6007_props, "Azurewave 6007", RC_MAP_EMPTY)},
 	{DVB_USB_DEVICE(USB_VID_TERRATEC, USB_PID_TERRATEC_H7,

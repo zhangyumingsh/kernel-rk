@@ -41,6 +41,7 @@
 #include <linux/v4l2-dv-timings.h>
 #include <linux/hdmi.h>
 #include <linux/version.h>
+#include <linux/compat.h>
 #include <linux/rk-camera-module.h>
 #include <media/v4l2-dv-timings.h>
 #include <media/v4l2-device.h>
@@ -61,26 +62,24 @@ MODULE_AUTHOR("Mikhail Khelik <mkhelik@cisco.com>");
 MODULE_AUTHOR("Mats Randgaard <matrandg@cisco.com>");
 MODULE_LICENSE("GPL");
 
-#define DRIVER_VERSION			KERNEL_VERSION(0, 0x01, 0x0)
+#define DRIVER_VERSION			KERNEL_VERSION(0, 0x01, 0x1)
 
 #define EDID_NUM_BLOCKS_MAX 8
 #define EDID_BLOCK_SIZE 128
 
 #define I2C_MAX_XFER_SIZE  (EDID_BLOCK_SIZE + 2)
 
+#define POLL_INTERVAL_CEC_MS	10
 #define POLL_INTERVAL_MS	1000
 
 /* PIXEL_RATE = MIPI_FREQ * 2 * lane / 8bit */
 #define TC35874X_LINK_FREQ_310MHZ	310000000
-#define TC35874X_LINK_FREQ_400MHZ	400000000
 #define TC35874X_PIXEL_RATE_310M	TC35874X_LINK_FREQ_310MHZ
-#define TC35874X_PIXEL_RATE_400M	TC35874X_LINK_FREQ_400MHZ
 
 #define TC35874X_NAME			"tc35874x"
 
 static const s64 link_freq_menu_items[] = {
 	TC35874X_LINK_FREQ_310MHZ,
-	TC35874X_LINK_FREQ_400MHZ,
 };
 
 static const struct v4l2_dv_timings_cap tc35874x_timings_cap = {
@@ -88,7 +87,7 @@ static const struct v4l2_dv_timings_cap tc35874x_timings_cap = {
 	/* keep this initialization for compatibility with GCC < 4.4.6 */
 	.reserved = { 0 },
 	/* Pixel clock from REF_01 p. 20. Min/max height/width are unknown */
-	V4L2_INIT_BT_TIMINGS(1, 10000, 1, 10000, 0, 400000000,
+	V4L2_INIT_BT_TIMINGS(1, 10000, 1, 10000, 0, 310000000,
 			V4L2_DV_BT_STD_CEA861 | V4L2_DV_BT_STD_DMT |
 			V4L2_DV_BT_STD_GTF | V4L2_DV_BT_STD_CVT,
 			V4L2_DV_BT_CAP_PROGRESSIVE | V4L2_DV_BT_CAP_INTERLACED |
@@ -215,6 +214,7 @@ struct tc35874x_state {
 	u8 csi_lanes_in_use;
 
 	struct gpio_desc *reset_gpio;
+	struct cec_adapter *cec_adap;
 
 	u32 module_index;
 	const char *module_facing;
@@ -600,7 +600,7 @@ static void print_avi_infoframe(struct v4l2_subdev *sd)
 
 	i2c_rd(sd, PK_AVI_0HEAD, buffer, HDMI_INFOFRAME_SIZE(AVI));
 
-	if (hdmi_infoframe_unpack(&frame, buffer) < 0) {
+	if (hdmi_infoframe_unpack(&frame, buffer, sizeof(buffer)) < 0) {
 		v4l2_err(sd, "%s: unpack of AVI infoframe failed\n", __func__);
 		return;
 	}
@@ -1042,7 +1042,7 @@ static void tc35874x_format_change(struct v4l2_subdev *sd)
 		v4l2_dbg(1, debug, sd, "%s: No signal\n",
 				__func__);
 	} else {
-		if (!v4l2_match_dv_timings(&state->timings, &timings, 0)) {
+		if (!v4l2_match_dv_timings(&state->timings, &timings, 0, false)) {
 			enable_stream(sd, false);
 			/* automaticly set timing rather than set by userspace */
 			tc35874x_s_dv_timings(sd, &timings);
@@ -1518,20 +1518,26 @@ static int tc35874x_isr(struct v4l2_subdev *sd, u32 status, bool *handled)
 static irqreturn_t tc35874x_irq_handler(int irq, void *dev_id)
 {
 	struct tc35874x_state *state = dev_id;
-	bool handled;
+	bool handled = false;
 
 	tc35874x_isr(&state->sd, 0, &handled);
 
 	return handled ? IRQ_HANDLED : IRQ_NONE;
 }
 
-static void tc35874x_irq_poll_timer(unsigned long arg)
+static void tc35874x_irq_poll_timer(struct timer_list *t)
 {
-	struct tc35874x_state *state = (struct tc35874x_state *)arg;
+	struct tc35874x_state *state = from_timer(state, t, timer);
+	unsigned int msecs;
 
 	schedule_work(&state->work_i2c_poll);
 
-	mod_timer(&state->timer, jiffies + msecs_to_jiffies(POLL_INTERVAL_MS));
+	/*
+	 * If CEC is present, then we need to poll more frequently,
+	 * otherwise we will miss CEC messages.
+	 */
+	msecs = state->cec_adap ? POLL_INTERVAL_CEC_MS : POLL_INTERVAL_MS;
+	mod_timer(&state->timer, jiffies + msecs_to_jiffies(msecs));
 }
 
 static void tc35874x_work_i2c_poll(struct work_struct *work)
@@ -1581,7 +1587,7 @@ static int tc35874x_s_dv_timings(struct v4l2_subdev *sd,
 		v4l2_print_dv_timings(sd->name, "tc35874x_s_dv_timings: ",
 				timings, false);
 
-	if (v4l2_match_dv_timings(&state->timings, timings, 0)) {
+	if (v4l2_match_dv_timings(&state->timings, timings, 0, false)) {
 		v4l2_dbg(1, debug, sd, "%s: no change\n", __func__);
 		return 0;
 	}
@@ -1655,11 +1661,11 @@ static int tc35874x_dv_timings_cap(struct v4l2_subdev *sd,
 }
 
 static int tc35874x_g_mbus_config(struct v4l2_subdev *sd,
-			     struct v4l2_mbus_config *cfg)
+				 unsigned int pad, struct v4l2_mbus_config *cfg)
 {
 	struct tc35874x_state *state = to_state(sd);
 
-	cfg->type = V4L2_MBUS_CSI2;
+	cfg->type = V4L2_MBUS_CSI2_DPHY;
 
 	/* Support for non-continuous CSI-2 clock is missing in the driver */
 	cfg->flags = V4L2_MBUS_CSI2_CONTINUOUS_CLOCK;
@@ -1702,11 +1708,13 @@ static int tc35874x_enum_mbus_code(struct v4l2_subdev *sd,
 {
 	switch (code->index) {
 	case 0:
-		code->code = MEDIA_BUS_FMT_RGB888_1X24;
-		break;
-	case 1:
 		code->code = MEDIA_BUS_FMT_UYVY8_2X8;
 		break;
+	/*
+	case 1:
+		code->code = MEDIA_BUS_FMT_RGB888_1X24;
+		break;
+	*/
 	default:
 		return -EINVAL;
 	}
@@ -1843,17 +1851,10 @@ static int tc35874x_set_fmt(struct v4l2_subdev *sd,
 	mode = tc35874x_find_best_fit(format);
 	state->cur_mode = mode;
 
-	if (state->csi_lanes_in_use == 4) {
-		__v4l2_ctrl_s_ctrl(state->link_freq,
-			link_freq_menu_items[1]);
-		__v4l2_ctrl_s_ctrl_int64(state->pixel_rate,
-			TC35874X_PIXEL_RATE_400M);
-	} else {
-		__v4l2_ctrl_s_ctrl(state->link_freq,
-			link_freq_menu_items[0]);
-		__v4l2_ctrl_s_ctrl_int64(state->pixel_rate,
-			TC35874X_PIXEL_RATE_310M);
-	}
+	__v4l2_ctrl_s_ctrl(state->link_freq,
+		link_freq_menu_items[0]);
+	__v4l2_ctrl_s_ctrl_int64(state->pixel_rate,
+		TC35874X_PIXEL_RATE_310M);
 
 	tc35874x_set_pll(sd);
 	tc35874x_set_csi(sd);
@@ -1997,8 +1998,11 @@ static long tc35874x_compat_ioctl32(struct v4l2_subdev *sd,
 		}
 
 		ret = tc35874x_ioctl(sd, cmd, inf);
-		if (!ret)
+		if (!ret) {
 			ret = copy_to_user(up, inf, sizeof(*inf));
+			if (ret)
+				ret = -EFAULT;
+		}
 		kfree(inf);
 		break;
 	case RKMODULE_AWB_CFG:
@@ -2011,6 +2015,8 @@ static long tc35874x_compat_ioctl32(struct v4l2_subdev *sd,
 		ret = copy_from_user(cfg, up, sizeof(*cfg));
 		if (!ret)
 			ret = tc35874x_ioctl(sd, cmd, cfg);
+		else
+			ret = -EFAULT;
 		kfree(cfg);
 		break;
 	default:
@@ -2048,7 +2054,6 @@ static const struct v4l2_subdev_video_ops tc35874x_video_ops = {
 	.s_dv_timings = tc35874x_s_dv_timings,
 	.g_dv_timings = tc35874x_g_dv_timings,
 	.query_dv_timings = tc35874x_query_dv_timings,
-	.g_mbus_config = tc35874x_g_mbus_config,
 	.s_stream = tc35874x_s_stream,
 	.g_frame_interval = tc35874x_g_frame_interval,
 };
@@ -2063,6 +2068,7 @@ static const struct v4l2_subdev_pad_ops tc35874x_pad_ops = {
 	.set_edid = tc35874x_s_edid,
 	.enum_dv_timings = tc35874x_enum_dv_timings,
 	.dv_timings_cap = tc35874x_dv_timings_cap,
+	.get_mbus_config = tc35874x_g_mbus_config,
 };
 
 static const struct v4l2_subdev_ops tc35874x_ops = {
@@ -2072,8 +2078,27 @@ static const struct v4l2_subdev_ops tc35874x_ops = {
 };
 
 /* --------------- CUSTOM CTRLS --------------- */
+static int tc35874x_get_custom_ctrl(struct v4l2_ctrl *ctrl)
+{
+	int ret = -EINVAL;
+	struct tc35874x_state *state = container_of(ctrl->handler,
+			struct tc35874x_state, hdl);
+	struct v4l2_subdev *sd = &state->sd;
+
+	if (ctrl->id == TC35874X_CID_AUDIO_SAMPLING_RATE) {
+		ret = get_audio_sampling_rate(sd);
+		*ctrl->p_new.p_s32 = ret;
+	}
+
+	return ret;
+}
+
+static const struct v4l2_ctrl_ops tc35874x_custom_ctrl_ops = {
+	.g_volatile_ctrl = tc35874x_get_custom_ctrl,
+};
 
 static const struct v4l2_ctrl_config tc35874x_ctrl_audio_sampling_rate = {
+	.ops = &tc35874x_custom_ctrl_ops,
 	.id = TC35874X_CID_AUDIO_SAMPLING_RATE,
 	.name = "Audio sampling rate",
 	.type = V4L2_CTRL_TYPE_INTEGER,
@@ -2110,7 +2135,7 @@ static void tc35874x_gpio_reset(struct tc35874x_state *state)
 static int tc35874x_probe_of(struct tc35874x_state *state)
 {
 	struct device *dev = &state->i2c_client->dev;
-	struct v4l2_fwnode_endpoint *endpoint;
+	struct v4l2_fwnode_endpoint endpoint = { .bus_type = 0 };
 	struct device_node *ep;
 	struct clk *refclk;
 	u32 bps_pr_lane;
@@ -2130,21 +2155,21 @@ static int tc35874x_probe_of(struct tc35874x_state *state)
 		return -EINVAL;
 	}
 
-	endpoint = v4l2_fwnode_endpoint_alloc_parse(of_fwnode_handle(ep));
-	if (IS_ERR(endpoint)) {
+	ret = v4l2_fwnode_endpoint_alloc_parse(of_fwnode_handle(ep), &endpoint);
+	if (ret) {
 		dev_err(dev, "failed to parse endpoint\n");
-		return PTR_ERR(endpoint);
+		goto put_node;
 	}
 
-	if (endpoint->bus_type != V4L2_MBUS_CSI2 ||
-	    endpoint->bus.mipi_csi2.num_data_lanes == 0 ||
-	    endpoint->nr_of_link_frequencies == 0) {
+	if (endpoint.bus_type != V4L2_MBUS_CSI2_DPHY ||
+	    endpoint.bus.mipi_csi2.num_data_lanes == 0 ||
+	    endpoint.nr_of_link_frequencies == 0) {
 		dev_err(dev, "missing CSI-2 properties in endpoint\n");
 		goto free_endpoint;
 	}
 
-	state->csi_lanes_in_use = endpoint->bus.mipi_csi2.num_data_lanes;
-	state->bus = endpoint->bus.mipi_csi2;
+	state->csi_lanes_in_use = endpoint.bus.mipi_csi2.num_data_lanes;
+	state->bus = endpoint.bus.mipi_csi2;
 
 	ret = clk_prepare_enable(refclk);
 	if (ret) {
@@ -2177,7 +2202,7 @@ static int tc35874x_probe_of(struct tc35874x_state *state)
 	 * The CSI bps per lane must be between 62.5 Mbps and 1 Gbps.
 	 * The default is 594 Mbps for 4-lane 1080p60 or 2-lane 720p60.
 	 */
-	bps_pr_lane = 2 * endpoint->link_frequencies[0];
+	bps_pr_lane = 2 * endpoint.link_frequencies[0];
 	if (bps_pr_lane < 62500000U || bps_pr_lane > 1000000000U) {
 		dev_err(dev, "unsupported bps per lane: %u bps\n", bps_pr_lane);
 		goto disable_clk;
@@ -2223,7 +2248,9 @@ static int tc35874x_probe_of(struct tc35874x_state *state)
 disable_clk:
 	clk_disable_unprepare(refclk);
 free_endpoint:
-	v4l2_fwnode_endpoint_free(endpoint);
+	v4l2_fwnode_endpoint_free(&endpoint);
+put_node:
+	of_node_put(ep);
 	return ret;
 }
 #else
@@ -2313,8 +2340,8 @@ static int tc35874x_probe(struct i2c_client *client,
 		V4L2_CID_LINK_FREQ, 0, 0, link_freq_menu_items);
 
 	state->pixel_rate = v4l2_ctrl_new_std(&state->hdl, NULL,
-		V4L2_CID_PIXEL_RATE, 0, TC35874X_PIXEL_RATE_400M, 1,
-		TC35874X_PIXEL_RATE_400M);
+		V4L2_CID_PIXEL_RATE, 0, TC35874X_PIXEL_RATE_310M, 1,
+		TC35874X_PIXEL_RATE_310M);
 
 	state->detect_tx_5v_ctrl = v4l2_ctrl_new_std(&state->hdl,
 			&tc35874x_ctrl_ops, V4L2_CID_DV_RX_POWER_PRESENT,
@@ -2326,6 +2353,9 @@ static int tc35874x_probe(struct i2c_client *client,
 	/* custom controls */
 	state->audio_sampling_rate_ctrl = v4l2_ctrl_new_custom(&state->hdl,
 			&tc35874x_ctrl_audio_sampling_rate, NULL);
+	if (state->audio_sampling_rate_ctrl)
+		state->audio_sampling_rate_ctrl->flags |=
+			V4L2_CTRL_FLAG_VOLATILE;
 
 	state->audio_present_ctrl = v4l2_ctrl_new_custom(&state->hdl,
 			&tc35874x_ctrl_audio_present, NULL);
@@ -2342,8 +2372,8 @@ static int tc35874x_probe(struct i2c_client *client,
 	}
 
 	state->pad.flags = MEDIA_PAD_FL_SOURCE;
-	sd->entity.type = MEDIA_ENT_T_V4L2_SUBDEV_SENSOR;
-	err = media_entity_init(&sd->entity, 1, &state->pad, 0);
+	sd->entity.function = MEDIA_ENT_F_CAM_SENSOR;
+	err = media_entity_pads_init(&sd->entity, 1, &state->pad);
 	if (err < 0)
 		goto err_hdl;
 
@@ -2394,8 +2424,7 @@ static int tc35874x_probe(struct i2c_client *client,
 	} else {
 		INIT_WORK(&state->work_i2c_poll,
 			  tc35874x_work_i2c_poll);
-		state->timer.data = (unsigned long)state;
-		state->timer.function = tc35874x_irq_poll_timer;
+		timer_setup(&state->timer, tc35874x_irq_poll_timer, 0);
 		state->timer.expires = jiffies +
 				       msecs_to_jiffies(POLL_INTERVAL_MS);
 		add_timer(&state->timer);

@@ -1,11 +1,12 @@
+/* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 /*
  *
- * (C) COPYRIGHT 2012-2013, 2015, 2018 ARM Limited. All rights reserved.
+ * (C) COPYRIGHT 2012-2013, 2015, 2018, 2020-2021 ARM Limited. All rights reserved.
  *
  * This program is free software and is provided to you under the terms of the
  * GNU General Public License version 2 as published by the Free Software
  * Foundation, and any use by you of this program is subject to the terms
- * of such GNU licence.
+ * of such GNU license.
  *
  * This program is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
@@ -16,11 +17,7 @@
  * along with this program; if not, you can access it online at
  * http://www.gnu.org/licenses/gpl-2.0.html.
  *
- * SPDX-License-Identifier: GPL-2.0
- *
  */
-
-
 
 #ifndef _KBASE_UTILITY_H
 #define _KBASE_UTILITY_H
@@ -29,21 +26,10 @@
 #error "Don't include this file directly, use mali_kbase.h instead"
 #endif
 
-/** Test whether the given list entry is a member of the given list.
- *
- * @param base      The head of the list to be tested
- * @param entry     The list entry to be tested
- *
- * @return          true if entry is a member of base
- *                  false otherwise
- */
-bool kbasep_list_member_of(const struct list_head *base, struct list_head *entry);
-
-
 static inline void kbase_timer_setup(struct timer_list *timer,
 				     void (*callback)(struct timer_list *timer))
 {
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0)
+#if KERNEL_VERSION(4, 14, 0) > LINUX_VERSION_CODE
 	setup_timer(timer, (void (*)(unsigned long)) callback,
 			(unsigned long) timer);
 #else

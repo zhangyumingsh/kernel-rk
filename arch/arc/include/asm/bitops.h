@@ -1,9 +1,6 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (C) 2004, 2007-2010, 2011-2012 Synopsys, Inc. (www.synopsys.com)
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #ifndef _ASM_BITOPS_H
@@ -22,7 +19,7 @@
 #include <asm/smp.h>
 #endif
 
-#if defined(CONFIG_ARC_HAS_LLSC)
+#ifdef CONFIG_ARC_HAS_LLSC
 
 /*
  * Hardware assisted Atomic-R-M-W
@@ -88,7 +85,7 @@ static inline int test_and_##op##_bit(unsigned long nr, volatile unsigned long *
 	return (old & (1 << nr)) != 0;					\
 }
 
-#else	/* !CONFIG_ARC_HAS_LLSC */
+#else /* !CONFIG_ARC_HAS_LLSC */
 
 /*
  * Non hardware assisted Atomic-R-M-W
@@ -139,7 +136,7 @@ static inline int test_and_##op##_bit(unsigned long nr, volatile unsigned long *
 	return (old & (1UL << (nr & 0x1f))) != 0;			\
 }
 
-#endif /* CONFIG_ARC_HAS_LLSC */
+#endif
 
 /***************************************
  * Non atomic variants
@@ -224,7 +221,7 @@ static inline __attribute__ ((const)) int clz(unsigned int x)
 	return res;
 }
 
-static inline int constant_fls(int x)
+static inline int constant_fls(unsigned int x)
 {
 	int r = 32;
 
@@ -246,10 +243,8 @@ static inline int constant_fls(int x)
 		x <<= 2;
 		r -= 2;
 	}
-	if (!(x & 0x80000000u)) {
-		x <<= 1;
+	if (!(x & 0x80000000u))
 		r -= 1;
-	}
 	return r;
 }
 
@@ -258,7 +253,7 @@ static inline int constant_fls(int x)
  * @result: [1-32]
  * fls(1) = 1, fls(0x80000000) = 32, fls(0) = 0
  */
-static inline __attribute__ ((const)) int fls(unsigned long x)
+static inline __attribute__ ((const)) int fls(unsigned int x)
 {
 	if (__builtin_constant_p(x))
 	       return constant_fls(x);

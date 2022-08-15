@@ -18,6 +18,7 @@
 #include <linux/of_address.h>
 #include <linux/clk.h>
 #include <linux/clk-provider.h>
+#include <linux/clk/rockchip.h>
 #include <linux/pm_runtime.h>
 #include <linux/regmap.h>
 #include <linux/reset.h>
@@ -29,9 +30,15 @@
 
 #define DRV_NAME "rockchip-i2s-tdm"
 
+#if IS_ENABLED(CONFIG_CPU_PX30) || IS_ENABLED(CONFIG_CPU_RK1808) || IS_ENABLED(CONFIG_CPU_RK3308)
+#define HAVE_SYNC_RESET
+#endif
+
 #define DEFAULT_MCLK_FS				256
 #define CH_GRP_MAX				4  /* The max channel 8 / 2 */
 #define MULTIPLEX_CH_MAX			10
+#define CLK_PPM_MIN				(-1000)
+#define CLK_PPM_MAX				(1000)
 
 struct txrx_config {
 	u32 addr;
@@ -74,20 +81,28 @@ struct rk_i2s_tdm_dev {
 	struct snd_dmaengine_dai_dma_data playback_dma_data;
 	struct reset_control *tx_reset;
 	struct reset_control *rx_reset;
-	struct rk_i2s_soc_data *soc_data;
+	const struct rk_i2s_soc_data *soc_data;
+#ifdef HAVE_SYNC_RESET
 	void __iomem *cru_base;
+	int tx_reset_id;
+	int rx_reset_id;
+#endif
 	bool is_master_mode;
 	bool io_multiplex;
 	bool mclk_calibrate;
 	bool tdm_mode;
+	bool tdm_fsync_half_frame;
 	unsigned int mclk_rx_freq;
 	unsigned int mclk_tx_freq;
+	unsigned int mclk_root0_freq;
+	unsigned int mclk_root1_freq;
+	unsigned int mclk_root0_initial_freq;
+	unsigned int mclk_root1_initial_freq;
 	unsigned int bclk_fs;
 	unsigned int clk_trcm;
 	unsigned int i2s_sdis[CH_GRP_MAX];
 	unsigned int i2s_sdos[CH_GRP_MAX];
-	int tx_reset_id;
-	int rx_reset_id;
+	int clk_ppm;
 	atomic_t refcount;
 	spinlock_t lock; /* xfer lock */
 };
@@ -156,6 +171,7 @@ static inline struct rk_i2s_tdm_dev *to_info(struct snd_soc_dai *dai)
 	return snd_soc_dai_get_drvdata(dai);
 }
 
+#ifdef HAVE_SYNC_RESET
 #if defined(CONFIG_ARM) && !defined(writeq)
 static inline void __raw_writeq(u64 val, volatile void __iomem *addr)
 {
@@ -207,6 +223,8 @@ static void rockchip_snd_xfer_reset_assert(struct rk_i2s_tdm_dev *i2s_tdm,
 		local_irq_restore(flags);
 		break;
 	}
+	/* delay for reset assert done */
+	udelay(10);
 }
 
 static void rockchip_snd_xfer_reset_deassert(struct rk_i2s_tdm_dev *i2s_tdm,
@@ -251,6 +269,8 @@ static void rockchip_snd_xfer_reset_deassert(struct rk_i2s_tdm_dev *i2s_tdm,
 		local_irq_restore(flags);
 		break;
 	}
+	/* delay for reset deassert done */
+	udelay(10);
 }
 
 /*
@@ -262,7 +282,7 @@ static void rockchip_snd_xfer_sync_reset(struct rk_i2s_tdm_dev *i2s_tdm)
 	int tx_id, rx_id;
 	int tx_bank, rx_bank, tx_offset, rx_offset;
 
-	if (!i2s_tdm->cru_base || !i2s_tdm->soc_data)
+	if (!i2s_tdm->cru_base || !i2s_tdm->soc_data || !i2s_tdm->is_master_mode)
 		return;
 
 	tx_id = i2s_tdm->tx_reset_id;
@@ -280,12 +300,14 @@ static void rockchip_snd_xfer_sync_reset(struct rk_i2s_tdm_dev *i2s_tdm)
 
 	rockchip_snd_xfer_reset_assert(i2s_tdm, tx_bank, tx_offset,
 				       rx_bank, rx_offset);
-
-	udelay(150);
-
 	rockchip_snd_xfer_reset_deassert(i2s_tdm, tx_bank, tx_offset,
 					 rx_bank, rx_offset);
 }
+#else
+static inline void rockchip_snd_xfer_sync_reset(struct rk_i2s_tdm_dev *i2s_tdm)
+{
+}
+#endif
 
 /* only used when clk_trcm > 0 */
 static void rockchip_snd_txrxctrl(struct snd_pcm_substream *substream,
@@ -293,9 +315,10 @@ static void rockchip_snd_txrxctrl(struct snd_pcm_substream *substream,
 {
 	struct rk_i2s_tdm_dev *i2s_tdm = to_info(dai);
 	unsigned int val = 0;
+	unsigned long flags;
 	int retry = 10;
 
-	spin_lock(&i2s_tdm->lock);
+	spin_lock_irqsave(&i2s_tdm->lock, flags);
 	if (on) {
 		if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK)
 			regmap_update_bits(i2s_tdm->regmap, I2S_DMACR,
@@ -350,7 +373,7 @@ static void rockchip_snd_txrxctrl(struct snd_pcm_substream *substream,
 			}
 		}
 	}
-	spin_unlock(&i2s_tdm->lock);
+	spin_unlock_irqrestore(&i2s_tdm->lock, flags);
 }
 
 static void rockchip_snd_reset(struct reset_control *rc)
@@ -359,8 +382,11 @@ static void rockchip_snd_reset(struct reset_control *rc)
 		return;
 
 	reset_control_assert(rc);
-	udelay(1);
+	/* delay for reset assert done */
+	udelay(10);
 	reset_control_deassert(rc);
+	/* delay for reset deassert done */
+	udelay(10);
 }
 
 static void rockchip_snd_txctrl(struct rk_i2s_tdm_dev *i2s_tdm, int on)
@@ -384,21 +410,25 @@ static void rockchip_snd_txctrl(struct rk_i2s_tdm_dev *i2s_tdm, int on)
 				   I2S_XFER_TXS_STOP);
 
 		udelay(150);
-		regmap_update_bits(i2s_tdm->regmap, I2S_CLR,
-				   I2S_CLR_TXC,
-				   I2S_CLR_TXC);
+		if (i2s_tdm->is_master_mode) {
+			regmap_update_bits(i2s_tdm->regmap, I2S_CLR,
+					   I2S_CLR_TXC,
+					   I2S_CLR_TXC);
 
-		regmap_read(i2s_tdm->regmap, I2S_CLR, &val);
-
-		/* Should wait for clear operation to finish */
-		while (val) {
 			regmap_read(i2s_tdm->regmap, I2S_CLR, &val);
-			retry--;
-			if (!retry) {
-				dev_warn(i2s_tdm->dev, "reset tx\n");
-				rockchip_snd_reset(i2s_tdm->tx_reset);
-				break;
+
+			/* Should wait for clear operation to finish */
+			while (val) {
+				regmap_read(i2s_tdm->regmap, I2S_CLR, &val);
+				retry--;
+				if (!retry) {
+					dev_warn(i2s_tdm->dev, "reset tx\n");
+					rockchip_snd_reset(i2s_tdm->tx_reset);
+					break;
+				}
 			}
+		} else {
+			rockchip_snd_reset(i2s_tdm->tx_reset);
 		}
 	}
 }
@@ -424,21 +454,25 @@ static void rockchip_snd_rxctrl(struct rk_i2s_tdm_dev *i2s_tdm, int on)
 				   I2S_XFER_RXS_STOP);
 
 		udelay(150);
-		regmap_update_bits(i2s_tdm->regmap, I2S_CLR,
-				   I2S_CLR_RXC,
-				   I2S_CLR_RXC);
+		if (i2s_tdm->is_master_mode) {
+			regmap_update_bits(i2s_tdm->regmap, I2S_CLR,
+					   I2S_CLR_RXC,
+					   I2S_CLR_RXC);
 
-		regmap_read(i2s_tdm->regmap, I2S_CLR, &val);
-
-		/* Should wait for clear operation to finish */
-		while (val) {
 			regmap_read(i2s_tdm->regmap, I2S_CLR, &val);
-			retry--;
-			if (!retry) {
-				dev_warn(i2s_tdm->dev, "reset rx\n");
-				rockchip_snd_reset(i2s_tdm->rx_reset);
-				break;
+
+			/* Should wait for clear operation to finish */
+			while (val) {
+				regmap_read(i2s_tdm->regmap, I2S_CLR, &val);
+				retry--;
+				if (!retry) {
+					dev_warn(i2s_tdm->dev, "reset rx\n");
+					rockchip_snd_reset(i2s_tdm->rx_reset);
+					break;
+				}
 			}
+		} else {
+			rockchip_snd_reset(i2s_tdm->rx_reset);
 		}
 	}
 }
@@ -574,7 +608,10 @@ static int rockchip_i2s_tdm_set_fmt(struct snd_soc_dai *cpu_dai,
 		}
 
 		tdm_val |= TDM_FSYNC_WIDTH_SEL1(1);
-		tdm_val |= TDM_FSYNC_WIDTH_ONE_FRAME;
+		if (i2s_tdm->tdm_fsync_half_frame)
+			tdm_val |= TDM_FSYNC_WIDTH_HALF_FRAME;
+		else
+			tdm_val |= TDM_FSYNC_WIDTH_ONE_FRAME;
 
 		mask = I2S_TXCR_TFS_MASK;
 		regmap_update_bits(i2s_tdm->regmap, I2S_TXCR, mask, val);
@@ -586,6 +623,16 @@ static int rockchip_i2s_tdm_set_fmt(struct snd_soc_dai *cpu_dai,
 				   mask, tdm_val);
 		regmap_update_bits(i2s_tdm->regmap, I2S_TDM_RXCR,
 				   mask, tdm_val);
+
+		if (val == I2S_TXCR_TFS_TDM_I2S && !i2s_tdm->tdm_fsync_half_frame) {
+			/* refine frame width for TDM_I2S_ONE_FRAME */
+			mask = TDM_FRAME_WIDTH_MSK;
+			tdm_val = TDM_FRAME_WIDTH(i2s_tdm->bclk_fs >> 1);
+			regmap_update_bits(i2s_tdm->regmap, I2S_TDM_TXCR,
+					   mask, tdm_val);
+			regmap_update_bits(i2s_tdm->regmap, I2S_TDM_RXCR,
+					   mask, tdm_val);
+		}
 	}
 
 err_pm_put:
@@ -658,13 +705,49 @@ static void rockchip_i2s_tdm_xfer_resume(struct snd_pcm_substream *substream,
 			   I2S_XFER_RXS_START);
 }
 
+static int rockchip_i2s_tdm_clk_set_rate(struct rk_i2s_tdm_dev *i2s_tdm,
+					 struct clk *clk, unsigned long rate,
+					 int ppm)
+{
+	unsigned long rate_target;
+	int delta, ret;
+
+	if (ppm == i2s_tdm->clk_ppm)
+		return 0;
+
+	ret = rockchip_pll_clk_compensation(clk, ppm);
+	if (ret != -ENOSYS)
+		goto out;
+
+	delta = (ppm < 0) ? -1 : 1;
+	delta *= (int)div64_u64((uint64_t)rate * (uint64_t)abs(ppm) + 500000, 1000000);
+
+	rate_target = rate + delta;
+
+	if (!rate_target)
+		return -EINVAL;
+
+	ret = clk_set_rate(clk, rate_target);
+	if (ret)
+		return ret;
+out:
+	if (!ret)
+		i2s_tdm->clk_ppm = ppm;
+
+	return ret;
+}
+
 static int rockchip_i2s_tdm_calibrate_mclk(struct rk_i2s_tdm_dev *i2s_tdm,
 					   struct snd_pcm_substream *substream,
 					   unsigned int lrck_freq)
 {
 	struct clk *mclk_root;
 	struct clk *mclk_parent;
+	unsigned int mclk_root_freq;
+	unsigned int mclk_root_initial_freq;
 	unsigned int mclk_parent_freq;
+	unsigned int div, delta;
+	uint64_t ppm;
 	int ret;
 
 	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK)
@@ -682,6 +765,8 @@ static int rockchip_i2s_tdm_calibrate_mclk(struct rk_i2s_tdm_dev *i2s_tdm,
 	case 96000:
 	case 192000:
 		mclk_root = i2s_tdm->mclk_root0;
+		mclk_root_freq = i2s_tdm->mclk_root0_freq;
+		mclk_root_initial_freq = i2s_tdm->mclk_root0_initial_freq;
 		mclk_parent_freq = DEFAULT_MCLK_FS * 192000;
 		break;
 	case 11025:
@@ -690,6 +775,8 @@ static int rockchip_i2s_tdm_calibrate_mclk(struct rk_i2s_tdm_dev *i2s_tdm,
 	case 88200:
 	case 176400:
 		mclk_root = i2s_tdm->mclk_root1;
+		mclk_root_freq = i2s_tdm->mclk_root1_freq;
+		mclk_root_initial_freq = i2s_tdm->mclk_root1_initial_freq;
 		mclk_parent_freq = DEFAULT_MCLK_FS * 176400;
 		break;
 	default:
@@ -701,6 +788,29 @@ static int rockchip_i2s_tdm_calibrate_mclk(struct rk_i2s_tdm_dev *i2s_tdm,
 	ret = clk_set_parent(mclk_parent, mclk_root);
 	if (ret)
 		goto out;
+
+	ret = rockchip_i2s_tdm_clk_set_rate(i2s_tdm, mclk_root,
+					    mclk_root_freq, 0);
+	if (ret)
+		goto out;
+
+	delta = abs(mclk_root_freq % mclk_parent_freq - mclk_parent_freq);
+	ppm = div64_u64((uint64_t)delta * 1000000, (uint64_t)mclk_root_freq);
+
+	if (ppm) {
+		div = DIV_ROUND_CLOSEST(mclk_root_initial_freq, mclk_parent_freq);
+		if (!div)
+			return -EINVAL;
+
+		mclk_root_freq = mclk_parent_freq * round_up(div, 2);
+
+		ret = clk_set_rate(mclk_root, mclk_root_freq);
+		if (ret)
+			goto out;
+
+		i2s_tdm->mclk_root0_freq = clk_get_rate(i2s_tdm->mclk_root0);
+		i2s_tdm->mclk_root1_freq = clk_get_rate(i2s_tdm->mclk_root1);
+	}
 
 	ret = clk_set_rate(mclk_parent, mclk_parent_freq);
 	if (ret)
@@ -765,6 +875,9 @@ static int rockchip_i2s_io_multiplex(struct snd_pcm_substream *substream,
 	unsigned int val = 0;
 
 	if (!i2s_tdm->io_multiplex)
+		return 0;
+
+	if (IS_ERR(i2s_tdm->grf))
 		return 0;
 
 	if (substream->stream == SNDRV_PCM_STREAM_CAPTURE) {
@@ -844,6 +957,38 @@ static int rockchip_i2s_io_multiplex(struct snd_pcm_substream *substream,
 	return 0;
 }
 
+static bool is_params_dirty(struct snd_pcm_substream *substream,
+			    struct snd_soc_dai *dai,
+			    unsigned int div_bclk,
+			    unsigned int div_lrck,
+			    unsigned int fmt)
+{
+	struct rk_i2s_tdm_dev *i2s_tdm = to_info(dai);
+	unsigned int last_div_bclk, last_div_lrck, last_fmt, val;
+
+	regmap_read(i2s_tdm->regmap, I2S_CLKDIV, &val);
+	last_div_bclk = ((val & I2S_CLKDIV_TXM_MASK) >> I2S_CLKDIV_TXM_SHIFT) + 1;
+	if (last_div_bclk != div_bclk)
+		return true;
+
+	regmap_read(i2s_tdm->regmap, I2S_CKR, &val);
+	last_div_lrck = ((val & I2S_CKR_TSD_MASK) >> I2S_CKR_TSD_SHIFT) + 1;
+	if (last_div_lrck != div_lrck)
+		return true;
+
+	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) {
+		regmap_read(i2s_tdm->regmap, I2S_TXCR, &val);
+		last_fmt = val & (I2S_TXCR_VDW_MASK | I2S_TXCR_CSR_MASK);
+	} else {
+		regmap_read(i2s_tdm->regmap, I2S_RXCR, &val);
+		last_fmt = val & (I2S_RXCR_VDW_MASK | I2S_RXCR_CSR_MASK);
+	}
+	if (last_fmt != fmt)
+		return true;
+
+	return false;
+}
+
 static int rockchip_i2s_trcm_mode(struct snd_pcm_substream *substream,
 				  struct snd_soc_dai *dai,
 				  unsigned int div_bclk,
@@ -851,11 +996,15 @@ static int rockchip_i2s_trcm_mode(struct snd_pcm_substream *substream,
 				  unsigned int fmt)
 {
 	struct rk_i2s_tdm_dev *i2s_tdm = to_info(dai);
+	unsigned long flags;
 
 	if (!i2s_tdm->clk_trcm)
 		return 0;
 
-	spin_lock(&i2s_tdm->lock);
+	if (!is_params_dirty(substream, dai, div_bclk, div_lrck, fmt))
+		return 0;
+
+	spin_lock_irqsave(&i2s_tdm->lock, flags);
 	if (atomic_read(&i2s_tdm->refcount))
 		rockchip_i2s_tdm_xfer_pause(substream, i2s_tdm);
 
@@ -877,9 +1026,66 @@ static int rockchip_i2s_trcm_mode(struct snd_pcm_substream *substream,
 
 	if (atomic_read(&i2s_tdm->refcount))
 		rockchip_i2s_tdm_xfer_resume(substream, i2s_tdm);
-	spin_unlock(&i2s_tdm->lock);
+	spin_unlock_irqrestore(&i2s_tdm->lock, flags);
 
 	return 0;
+}
+
+static int rockchip_i2s_tdm_params_channels(struct snd_pcm_substream *substream,
+					    struct snd_pcm_hw_params *params,
+					    struct snd_soc_dai *dai)
+{
+	struct rk_i2s_tdm_dev *i2s_tdm = to_info(dai);
+	unsigned int reg_fmt, fmt;
+	int ret = 0;
+
+	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK)
+		reg_fmt = I2S_TXCR;
+	else
+		reg_fmt = I2S_RXCR;
+
+	regmap_read(i2s_tdm->regmap, reg_fmt, &fmt);
+	fmt &= I2S_TXCR_TFS_MASK;
+
+	if (fmt == I2S_TXCR_TFS_TDM_I2S && !i2s_tdm->tdm_fsync_half_frame) {
+		switch (params_channels(params)) {
+		case 16:
+			ret = I2S_CHN_8;
+			break;
+		case 12:
+			ret = I2S_CHN_6;
+			break;
+		case 8:
+			ret = I2S_CHN_4;
+			break;
+		case 4:
+			ret = I2S_CHN_2;
+			break;
+		default:
+			ret = -EINVAL;
+			break;
+		}
+	} else {
+		switch (params_channels(params)) {
+		case 8:
+			ret = I2S_CHN_8;
+			break;
+		case 6:
+			ret = I2S_CHN_6;
+			break;
+		case 4:
+			ret = I2S_CHN_4;
+			break;
+		case 2:
+			ret = I2S_CHN_2;
+			break;
+		default:
+			ret = -EINVAL;
+			break;
+		}
+	}
+
+	return ret;
 }
 
 static int rockchip_i2s_tdm_hw_params(struct snd_pcm_substream *substream,
@@ -925,6 +1131,7 @@ static int rockchip_i2s_tdm_hw_params(struct snd_pcm_substream *substream,
 		val |= I2S_TXCR_VDW(24);
 		break;
 	case SNDRV_PCM_FORMAT_S32_LE:
+	case SNDRV_PCM_FORMAT_IEC958_SUBFRAME_LE:
 		val |= I2S_TXCR_VDW(32);
 		break;
 	default:
@@ -932,24 +1139,11 @@ static int rockchip_i2s_tdm_hw_params(struct snd_pcm_substream *substream,
 		goto err;
 	}
 
-	switch (params_channels(params)) {
-	case 8:
-		val |= I2S_CHN_8;
-		break;
-	case 6:
-		val |= I2S_CHN_6;
-		break;
-	case 4:
-		val |= I2S_CHN_4;
-		break;
-	case 2:
-		val |= I2S_CHN_2;
-		break;
-	default:
-		ret = -EINVAL;
+	ret = rockchip_i2s_tdm_params_channels(substream, params, dai);
+	if (ret < 0)
 		goto err;
-	}
 
+	val |= ret;
 	if (i2s_tdm->clk_trcm) {
 		rockchip_i2s_trcm_mode(substream, dai, div_bclk, div_lrck, val);
 	} else if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK) {
@@ -1037,12 +1231,160 @@ static int rockchip_i2s_tdm_set_sysclk(struct snd_soc_dai *cpu_dai, int stream,
 	return 0;
 }
 
+static int rockchip_i2s_tdm_clk_compensation_info(struct snd_kcontrol *kcontrol,
+						  struct snd_ctl_elem_info *uinfo)
+{
+	uinfo->type = SNDRV_CTL_ELEM_TYPE_INTEGER;
+	uinfo->count = 1;
+	uinfo->value.integer.min = CLK_PPM_MIN;
+	uinfo->value.integer.max = CLK_PPM_MAX;
+	uinfo->value.integer.step = 1;
+
+	return 0;
+}
+
+static int rockchip_i2s_tdm_clk_compensation_get(struct snd_kcontrol *kcontrol,
+						 struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_soc_dai *dai = snd_kcontrol_chip(kcontrol);
+	struct rk_i2s_tdm_dev *i2s_tdm = snd_soc_dai_get_drvdata(dai);
+
+	ucontrol->value.integer.value[0] = i2s_tdm->clk_ppm;
+
+	return 0;
+}
+
+static int rockchip_i2s_tdm_clk_compensation_put(struct snd_kcontrol *kcontrol,
+						 struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_soc_dai *dai = snd_kcontrol_chip(kcontrol);
+	struct rk_i2s_tdm_dev *i2s_tdm = snd_soc_dai_get_drvdata(dai);
+	int ret = 0, ppm = 0;
+
+	if ((ucontrol->value.integer.value[0] < CLK_PPM_MIN) ||
+	    (ucontrol->value.integer.value[0] > CLK_PPM_MAX))
+		return -EINVAL;
+
+	ppm = ucontrol->value.integer.value[0];
+
+	ret = rockchip_i2s_tdm_clk_set_rate(i2s_tdm, i2s_tdm->mclk_root0,
+					    i2s_tdm->mclk_root0_freq, ppm);
+	if (ret)
+		return ret;
+
+	if (clk_is_match(i2s_tdm->mclk_root0, i2s_tdm->mclk_root1))
+		return 0;
+
+	ret = rockchip_i2s_tdm_clk_set_rate(i2s_tdm, i2s_tdm->mclk_root1,
+					    i2s_tdm->mclk_root1_freq, ppm);
+
+	return ret;
+}
+
+static struct snd_kcontrol_new rockchip_i2s_tdm_compensation_control = {
+	.iface = SNDRV_CTL_ELEM_IFACE_PCM,
+	.name = "PCM Clk Compensation In PPM",
+	.info = rockchip_i2s_tdm_clk_compensation_info,
+	.get = rockchip_i2s_tdm_clk_compensation_get,
+	.put = rockchip_i2s_tdm_clk_compensation_put,
+};
+
+/* loopback mode select */
+enum {
+	LOOPBACK_MODE_DIS = 0,
+	LOOPBACK_MODE_1,
+	LOOPBACK_MODE_2,
+	LOOPBACK_MODE_2_SWAP,
+};
+
+static const char *const loopback_text[] = {
+	"Disabled",
+	"Mode1",
+	"Mode2",
+	"Mode2 Swap",
+};
+
+static SOC_ENUM_SINGLE_EXT_DECL(loopback_mode, loopback_text);
+
+static int rockchip_i2s_tdm_loopback_get(struct snd_kcontrol *kcontrol,
+					 struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_soc_component *component = snd_soc_kcontrol_component(kcontrol);
+	struct rk_i2s_tdm_dev *i2s_tdm = snd_soc_component_get_drvdata(component);
+	unsigned int reg = 0, mode = 0;
+
+	pm_runtime_get_sync(component->dev);
+	regmap_read(i2s_tdm->regmap, I2S_XFER, &reg);
+	pm_runtime_put(component->dev);
+
+	switch (reg & I2S_XFER_LP_MODE_MASK) {
+	case I2S_XFER_LP_MODE_2_SWAP:
+		mode = LOOPBACK_MODE_2_SWAP;
+		break;
+	case I2S_XFER_LP_MODE_2:
+		mode = LOOPBACK_MODE_2;
+		break;
+	case I2S_XFER_LP_MODE_1:
+		mode = LOOPBACK_MODE_1;
+		break;
+	default:
+		mode = LOOPBACK_MODE_DIS;
+		break;
+	}
+
+	ucontrol->value.enumerated.item[0] = mode;
+
+	return 0;
+}
+
+static int rockchip_i2s_tdm_loopback_put(struct snd_kcontrol *kcontrol,
+					 struct snd_ctl_elem_value *ucontrol)
+{
+	struct snd_soc_component *component = snd_soc_kcontrol_component(kcontrol);
+	struct rk_i2s_tdm_dev *i2s_tdm = snd_soc_component_get_drvdata(component);
+	unsigned int val = 0, mode = ucontrol->value.enumerated.item[0];
+
+	if (mode < LOOPBACK_MODE_DIS ||
+	    mode > LOOPBACK_MODE_2_SWAP)
+		return -EINVAL;
+
+	switch (mode) {
+	case LOOPBACK_MODE_2_SWAP:
+		val = I2S_XFER_LP_MODE_2_SWAP;
+		break;
+	case LOOPBACK_MODE_2:
+		val = I2S_XFER_LP_MODE_2;
+		break;
+	case LOOPBACK_MODE_1:
+		val = I2S_XFER_LP_MODE_1;
+		break;
+	default:
+		val = I2S_XFER_LP_MODE_DIS;
+		break;
+	}
+
+	pm_runtime_get_sync(component->dev);
+	regmap_update_bits(i2s_tdm->regmap, I2S_XFER, I2S_XFER_LP_MODE_MASK, val);
+	pm_runtime_put(component->dev);
+
+	return 0;
+}
+
+static const struct snd_kcontrol_new rockchip_i2s_tdm_snd_controls[] = {
+	SOC_ENUM_EXT("I2STDM Digital Loopback Mode", loopback_mode,
+		     rockchip_i2s_tdm_loopback_get,
+		     rockchip_i2s_tdm_loopback_put),
+};
+
 static int rockchip_i2s_tdm_dai_probe(struct snd_soc_dai *dai)
 {
 	struct rk_i2s_tdm_dev *i2s_tdm = snd_soc_dai_get_drvdata(dai);
 
 	dai->capture_dma_data = &i2s_tdm->capture_dma_data;
 	dai->playback_dma_data = &i2s_tdm->playback_dma_data;
+
+	if (i2s_tdm->mclk_calibrate)
+		snd_soc_add_dai_controls(dai, &rockchip_i2s_tdm_compensation_control, 1);
 
 	return 0;
 }
@@ -1077,6 +1419,8 @@ static const struct snd_soc_dai_ops rockchip_i2s_tdm_dai_ops = {
 
 static const struct snd_soc_component_driver rockchip_i2s_tdm_component = {
 	.name = DRV_NAME,
+	.controls = rockchip_i2s_tdm_snd_controls,
+	.num_controls = ARRAY_SIZE(rockchip_i2s_tdm_snd_controls),
 };
 
 static bool rockchip_i2s_tdm_wr_reg(struct device *dev, unsigned int reg)
@@ -1180,6 +1524,9 @@ static int common_soc_init(struct device *dev, u32 addr)
 	u32 reg = 0, val = 0, trcm = i2s_tdm->clk_trcm;
 	int i;
 
+	if (IS_ERR(i2s_tdm->grf))
+		return 0;
+
 	switch (trcm) {
 	case I2S_CKR_TRCM_TXONLY:
 		/* fall through */
@@ -1218,21 +1565,31 @@ static const struct txrx_config rk3308_txrx_config[] = {
 	{ 0xff310000, 0x308, RK3308_I2S1_CLK_TXONLY, RK3308_I2S1_CLK_RXONLY },
 };
 
-static struct rk_i2s_soc_data px30_i2s_soc_data = {
+static const struct txrx_config rk3568_txrx_config[] = {
+	{ 0xfe410000, 0x504, RK3568_I2S1_CLK_TXONLY, RK3568_I2S1_CLK_RXONLY },
+	{ 0xfe430000, 0x504, RK3568_I2S3_CLK_TXONLY, RK3568_I2S3_CLK_RXONLY },
+	{ 0xfe430000, 0x508, RK3568_I2S3_MCLK_TXONLY, RK3568_I2S3_MCLK_RXONLY },
+};
+
+static const struct txrx_config rv1126_txrx_config[] = {
+	{ 0xff800000, 0x10260, RV1126_I2S0_CLK_TXONLY, RV1126_I2S0_CLK_RXONLY },
+};
+
+static const struct rk_i2s_soc_data px30_i2s_soc_data = {
 	.softrst_offset = 0x0300,
 	.configs = px30_txrx_config,
 	.config_count = ARRAY_SIZE(px30_txrx_config),
 	.init = common_soc_init,
 };
 
-static struct rk_i2s_soc_data rk1808_i2s_soc_data = {
+static const struct rk_i2s_soc_data rk1808_i2s_soc_data = {
 	.softrst_offset = 0x0300,
 	.configs = rk1808_txrx_config,
 	.config_count = ARRAY_SIZE(rk1808_txrx_config),
 	.init = common_soc_init,
 };
 
-static struct rk_i2s_soc_data rk3308_i2s_soc_data = {
+static const struct rk_i2s_soc_data rk3308_i2s_soc_data = {
 	.softrst_offset = 0x0400,
 	.grf_reg_offset = 0x0308,
 	.grf_shift = 5,
@@ -1241,13 +1598,46 @@ static struct rk_i2s_soc_data rk3308_i2s_soc_data = {
 	.init = common_soc_init,
 };
 
+static const struct rk_i2s_soc_data rk3568_i2s_soc_data = {
+	.softrst_offset = 0x0400,
+	.configs = rk3568_txrx_config,
+	.config_count = ARRAY_SIZE(rk3568_txrx_config),
+	.init = common_soc_init,
+};
+
+static const struct rk_i2s_soc_data rv1126_i2s_soc_data = {
+	.softrst_offset = 0x0300,
+	.configs = rv1126_txrx_config,
+	.config_count = ARRAY_SIZE(rv1126_txrx_config),
+	.init = common_soc_init,
+};
+
 static const struct of_device_id rockchip_i2s_tdm_match[] = {
+#ifdef CONFIG_CPU_PX30
 	{ .compatible = "rockchip,px30-i2s-tdm", .data = &px30_i2s_soc_data },
+#endif
+#ifdef CONFIG_CPU_RK1808
 	{ .compatible = "rockchip,rk1808-i2s-tdm", .data = &rk1808_i2s_soc_data },
+#endif
+#ifdef CONFIG_CPU_RK3308
 	{ .compatible = "rockchip,rk3308-i2s-tdm", .data = &rk3308_i2s_soc_data },
+#endif
+#ifdef CONFIG_CPU_RK3568
+	{ .compatible = "rockchip,rk3568-i2s-tdm", .data = &rk3568_i2s_soc_data },
+#endif
+#ifdef CONFIG_CPU_RK3588
+	{ .compatible = "rockchip,rk3588-i2s-tdm", },
+#endif
+#ifdef CONFIG_CPU_RV1106
+	{ .compatible = "rockchip,rv1106-i2s-tdm", },
+#endif
+#ifdef CONFIG_CPU_RV1126
+	{ .compatible = "rockchip,rv1126-i2s-tdm", .data = &rv1126_i2s_soc_data },
+#endif
 	{},
 };
 
+#ifdef HAVE_SYNC_RESET
 static int of_i2s_resetid_get(struct device_node *node,
 			      const char *id)
 {
@@ -1265,6 +1655,7 @@ static int of_i2s_resetid_get(struct device_node *node,
 
 	return args.args[0];
 }
+#endif
 
 static int rockchip_i2s_tdm_dai_prepare(struct platform_device *pdev,
 					struct snd_soc_dai_driver **soc_dai)
@@ -1274,24 +1665,26 @@ static int rockchip_i2s_tdm_dai_prepare(struct platform_device *pdev,
 		.playback = {
 			.stream_name = "Playback",
 			.channels_min = 2,
-			.channels_max = 8,
+			.channels_max = 16,
 			.rates = SNDRV_PCM_RATE_8000_192000,
 			.formats = (SNDRV_PCM_FMTBIT_S8 |
 				    SNDRV_PCM_FMTBIT_S16_LE |
 				    SNDRV_PCM_FMTBIT_S20_3LE |
 				    SNDRV_PCM_FMTBIT_S24_LE |
-				    SNDRV_PCM_FMTBIT_S32_LE),
+				    SNDRV_PCM_FMTBIT_S32_LE |
+				    SNDRV_PCM_FMTBIT_IEC958_SUBFRAME_LE),
 		},
 		.capture = {
 			.stream_name = "Capture",
 			.channels_min = 2,
-			.channels_max = 8,
+			.channels_max = 16,
 			.rates = SNDRV_PCM_RATE_8000_192000,
 			.formats = (SNDRV_PCM_FMTBIT_S8 |
 				    SNDRV_PCM_FMTBIT_S16_LE |
 				    SNDRV_PCM_FMTBIT_S20_3LE |
 				    SNDRV_PCM_FMTBIT_S24_LE |
-				    SNDRV_PCM_FMTBIT_S32_LE),
+				    SNDRV_PCM_FMTBIT_S32_LE |
+				    SNDRV_PCM_FMTBIT_IEC958_SUBFRAME_LE),
 		},
 		.ops = &rockchip_i2s_tdm_dai_ops,
 	};
@@ -1450,12 +1843,14 @@ static int rockchip_i2s_tdm_rx_path_prepare(struct rk_i2s_tdm_dev *i2s_tdm,
 static int rockchip_i2s_tdm_probe(struct platform_device *pdev)
 {
 	struct device_node *node = pdev->dev.of_node;
-	struct device_node *cru_node;
 	const struct of_device_id *of_id;
 	struct rk_i2s_tdm_dev *i2s_tdm;
 	struct snd_soc_dai_driver *soc_dai;
 	struct resource *res;
 	void __iomem *regs;
+#ifdef HAVE_SYNC_RESET
+	bool sync;
+#endif
 	int ret;
 	int val;
 
@@ -1470,11 +1865,11 @@ static int rockchip_i2s_tdm_probe(struct platform_device *pdev)
 	i2s_tdm->dev = &pdev->dev;
 
 	of_id = of_match_device(rockchip_i2s_tdm_match, &pdev->dev);
-	if (!of_id || !of_id->data)
+	if (!of_id)
 		return -EINVAL;
 
 	spin_lock_init(&i2s_tdm->lock);
-	i2s_tdm->soc_data = (struct rk_i2s_soc_data *)of_id->data;
+	i2s_tdm->soc_data = (const struct rk_i2s_soc_data *)of_id->data;
 
 	i2s_tdm->bclk_fs = 64;
 	if (!of_property_read_u32(node, "rockchip,bclk-fs", &val)) {
@@ -1491,16 +1886,24 @@ static int rockchip_i2s_tdm_probe(struct platform_device *pdev)
 		}
 	}
 
+	i2s_tdm->tdm_fsync_half_frame =
+		of_property_read_bool(node, "rockchip,tdm-fsync-half-frame");
+
 	if (of_property_read_bool(node, "rockchip,playback-only"))
 		soc_dai->capture.channels_min = 0;
 	else if (of_property_read_bool(node, "rockchip,capture-only"))
 		soc_dai->playback.channels_min = 0;
 
 	i2s_tdm->grf = syscon_regmap_lookup_by_phandle(node, "rockchip,grf");
-	if (IS_ERR(i2s_tdm->grf))
-		return PTR_ERR(i2s_tdm->grf);
 
-	if (i2s_tdm->clk_trcm) {
+#ifdef HAVE_SYNC_RESET
+	sync = of_device_is_compatible(node, "rockchip,px30-i2s-tdm") ||
+	       of_device_is_compatible(node, "rockchip,rk1808-i2s-tdm") ||
+	       of_device_is_compatible(node, "rockchip,rk3308-i2s-tdm");
+
+	if (i2s_tdm->clk_trcm && sync) {
+		struct device_node *cru_node;
+
 		cru_node = of_parse_phandle(node, "rockchip,cru", 0);
 		i2s_tdm->cru_base = of_iomap(cru_node, 0);
 		if (!i2s_tdm->cru_base)
@@ -1509,6 +1912,7 @@ static int rockchip_i2s_tdm_probe(struct platform_device *pdev)
 		i2s_tdm->tx_reset_id = of_i2s_resetid_get(node, "tx-m");
 		i2s_tdm->rx_reset_id = of_i2s_resetid_get(node, "rx-m");
 	}
+#endif
 
 	i2s_tdm->tx_reset = devm_reset_control_get(&pdev->dev, "tx-m");
 	if (IS_ERR(i2s_tdm->tx_reset)) {
@@ -1561,6 +1965,11 @@ static int rockchip_i2s_tdm_probe(struct platform_device *pdev)
 		i2s_tdm->mclk_root1 = devm_clk_get(&pdev->dev, "mclk_root1");
 		if (IS_ERR(i2s_tdm->mclk_root1))
 			return PTR_ERR(i2s_tdm->mclk_root1);
+
+		i2s_tdm->mclk_root0_initial_freq = clk_get_rate(i2s_tdm->mclk_root0);
+		i2s_tdm->mclk_root1_initial_freq = clk_get_rate(i2s_tdm->mclk_root1);
+		i2s_tdm->mclk_root0_freq = i2s_tdm->mclk_root0_initial_freq;
+		i2s_tdm->mclk_root1_freq = i2s_tdm->mclk_root1_initial_freq;
 	}
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);

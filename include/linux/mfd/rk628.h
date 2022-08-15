@@ -247,11 +247,26 @@ struct rk628 {
 	struct rk628_irq_chip_data *irq_data;
 	struct drm_display_mode src_mode;
 	struct drm_display_mode dst_mode;
+	bool dst_mode_valid;
 };
 
+/**
+ * rk628_scaler_add_src_mode - add source mode for scaler
+ * @rk628: parent device
+ * @connector: DRM connector
+ * If need scale, call the function at last of get_modes.
+ */
 int rk628_scaler_add_src_mode(struct rk628 *rk628,
 			      struct drm_connector *connector);
+
+/**
+ * rk628_mode_copy - rk628 mode copy
+ * @rk628: parent device
+ * @dst: dst mode
+ * @src: src mode
+ * Call the function at mode_set, replace drm_mode_copy.
+ */
 void rk628_mode_copy(struct rk628 *rk628, struct drm_display_mode *dst,
-		     struct drm_display_mode *src);
+		     const struct drm_display_mode *src);
 
 #endif

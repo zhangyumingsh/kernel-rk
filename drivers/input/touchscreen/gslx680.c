@@ -21,6 +21,7 @@
 #include <linux/gpio.h>
 #include <asm/irq.h>
 #include <linux/slab.h>
+#include <linux/uaccess.h>
 #include <linux/workqueue.h>
 #include <linux/proc_fs.h>
 #include <linux/input/mt.h>
@@ -66,7 +67,7 @@ struct fw_data
 #define TPD_PROC_DEBUG
 #ifdef TPD_PROC_DEBUG
 #include <linux/proc_fs.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 #include <linux/seq_file.h>
 //static struct proc_dir_entry *gsl_config_proc = NULL;
 #define GSL_CONFIG_PROC_FILE "gsl_config"

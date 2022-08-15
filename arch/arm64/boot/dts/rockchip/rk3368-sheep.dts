@@ -179,6 +179,17 @@
 		regulator-always-on;
 	};
 
+	vcc_otg_vbus: otg-vbus-regulator {
+		compatible = "regulator-fixed";
+		gpio = <&gpio0 RK_PD1 GPIO_ACTIVE_HIGH>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&otg_vbus_drv>;
+		regulator-name = "vcc_otg_vbus";
+		regulator-min-microvolt = <5000000>;
+		regulator-max-microvolt = <5000000>;
+		enable-active-high;
+	};
+
 	xin32k: xin32k {
 		compatible = "fixed-clock";
 		clock-frequency = <32768>;
@@ -213,7 +224,8 @@
 	bus-width = <8>;
 	cap-mmc-highspeed;
 	mmc-hs200-1_8v;
-	supports-emmc;
+	no-sdio;
+	no-sd;
 	disable-wp;
 	non-removable;
 	num-slots = <1>;
@@ -225,7 +237,8 @@
 	status = "okay";
 	clock-frequency = <37500000>;
 	clock-freq-min-max = <400000 37500000>;
-	supports-sd;
+	no-sdio;
+	no-mmc;
 	cap-mmc-highspeed;
 	cap-sd-highspeed;
 	card-detect-delay = <200>;
@@ -608,6 +621,11 @@
 		phy-supply = <&vcc_host>;
 		status = "okay";
 	};
+
+	u2phy_otg: otg-port {
+		vbus-supply = <&vcc_otg_vbus>;
+		status = "okay";
+	};
 };
 
 &usb_host0_ehci {
@@ -660,6 +678,30 @@
 				pixelclk-active = <0>;
 			};
 		};
+
+		ports {
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			port@0 {
+				reg = <0>;
+				panel_in_dsi: endpoint {
+					remote-endpoint = <&dsi_out_panel>;
+				};
+			};
+		};
+	};
+
+	ports {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		port@1 {
+			reg = <1>;
+			dsi_out_panel: endpoint {
+				remote-endpoint = <&panel_in_dsi>;
+			};
+		};
 	};
 };
 
@@ -679,22 +721,26 @@
 &pinctrl {
 	pmic {
 		pmic_int_l: pmic-int-l {
-			rockchip,pins = <RK_GPIO0 1 RK_FUNC_GPIO &pcfg_pull_up>;
+			rockchip,pins = <0 RK_PA1 RK_FUNC_GPIO &pcfg_pull_up>;
 		};
 		vsel_gpio: vsel-gpio {
-			rockchip,pins = <0 0 RK_FUNC_GPIO &pcfg_pull_down>;
+			rockchip,pins = <0 RK_PA0 RK_FUNC_GPIO &pcfg_pull_down>;
 		};
 	};
 
 	dc_det {
 		dc_irq_gpio: dc-irq-gpio {
-			rockchip,pins = <0 17 RK_FUNC_GPIO &pcfg_pull_up>;
+			rockchip,pins = <0 RK_PC1 RK_FUNC_GPIO &pcfg_pull_up>;
 		};
 	};
 
 	usb2 {
 		host_vbus_drv: host-vbus-drv {
-			rockchip,pins = <RK_GPIO0 4 RK_FUNC_GPIO &pcfg_pull_none>;
+			rockchip,pins = <0 RK_PA4 RK_FUNC_GPIO &pcfg_pull_none>;
+		};
+
+		otg_vbus_drv: otg-bus-drv {
+			rockchip,pins = <0 RK_PD1 RK_FUNC_GPIO &pcfg_pull_none>;
 		};
 	};
 };

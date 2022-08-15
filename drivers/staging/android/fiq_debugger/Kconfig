@@ -1,5 +1,5 @@
 config FIQ_DEBUGGER
-	bool "FIQ Mode Serial Debugger"
+	tristate "FIQ Mode Serial Debugger"
 	default n
 	depends on ARM || ARM64
 	help
@@ -66,6 +66,15 @@ config FIQ_WATCHDOG
 
 config RK_CONSOLE_THREAD
 	bool "Console write by thread"
+	depends on ARCH_ROCKCHIP
 	default n
 	help
 	  Normal kernel printk will write out to UART by "kconsole" kthread
+
+config FIQ_DEBUGGER_FIQ_GLUE
+	bool "Uart FIQ is captured by linux"
+	depends on FIQ_DEBUGGER && ARM
+	select FIQ_GLUE
+	default n
+	help
+	  It is for ARM v7 arch without trust zone.

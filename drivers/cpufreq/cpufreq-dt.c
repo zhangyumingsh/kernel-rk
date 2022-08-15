@@ -1,26 +1,19 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Copyright (C) 2012 Freescale Semiconductor, Inc.
  *
  * Copyright (C) 2014 Linaro.
  * Viresh Kumar <viresh.kumar@linaro.org>
- *
- * The OPP code in function set_target() is reused from
- * drivers/cpufreq/omap-cpufreq.c
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  */
 
 #define pr_fmt(fmt)	KBUILD_MODNAME ": " fmt
 
 #include <linux/clk.h>
 #include <linux/cpu.h>
-#include <linux/cpu_cooling.h>
 #include <linux/cpufreq.h>
-#include <linux/cpufreq-dt.h>
 #include <linux/cpumask.h>
 #include <linux/err.h>
+#include <linux/list.h>
 #include <linux/module.h>
 #include <linux/of.h>
 #include <linux/pm_opp.h>
@@ -28,22 +21,23 @@
 #include <linux/regulator/consumer.h>
 #include <linux/slab.h>
 #include <linux/thermal.h>
+
+#include "cpufreq-dt.h"
 #ifdef CONFIG_ARCH_ROCKCHIP
-#include <soc/rockchip/rockchip_ipa.h>
-#include <soc/rockchip/rockchip_opp_select.h>
-#include <soc/rockchip/rockchip_system_monitor.h>
+#include "rockchip-cpufreq.h"
 #endif
 
 struct private_data {
+	struct list_head node;
+
+	cpumask_var_t cpus;
 	struct device *cpu_dev;
-	struct thermal_cooling_device *cdev;
-#ifdef CONFIG_ARCH_ROCKCHIP
-	struct monitor_dev_info *mdev_info;
-	struct monitor_dev_profile *mdevp;
-	struct ipa_power_model_data *model_data;
-#endif
-	const char *reg_name;
+	struct opp_table *opp_table;
+	struct cpufreq_frequency_table *freq_table;
+	bool have_static_opps;
 };
+
+static LIST_HEAD(priv_list);
 
 static struct freq_attr *cpufreq_dt_attr[] = {
 	&cpufreq_freq_attr_scaling_available_freqs,
@@ -51,18 +45,28 @@ static struct freq_attr *cpufreq_dt_attr[] = {
 	NULL,
 };
 
+static struct private_data *cpufreq_dt_find_data(int cpu)
+{
+	struct private_data *priv;
+
+	list_for_each_entry(priv, &priv_list, node) {
+		if (cpumask_test_cpu(cpu, priv->cpus))
+			return priv;
+	}
+
+	return NULL;
+}
+
 static int set_target(struct cpufreq_policy *policy, unsigned int index)
 {
 	struct private_data *priv = policy->driver_data;
-#ifdef CONFIG_ROCKCHIP_SYSTEM_MONITOR
-	unsigned long target_freq = policy->freq_table[index].frequency * 1000;
+	unsigned long freq = policy->freq_table[index].frequency;
 
-	if (priv->mdev_info)
-		return rockchip_monitor_opp_set_rate(priv->mdev_info,
-						     target_freq);
+#ifdef CONFIG_ARCH_ROCKCHIP
+	return rockchip_cpufreq_opp_set_rate(priv->cpu_dev, freq * 1000);
+#else
+	return dev_pm_opp_set_rate(priv->cpu_dev, freq * 1000);
 #endif
-	return dev_pm_opp_set_rate(priv->cpu_dev,
-				   policy->freq_table[index].frequency * 1000);
 }
 
 /*
@@ -103,81 +107,20 @@ node_put:
 	return name;
 }
 
-static int resources_available(void)
-{
-	struct device *cpu_dev;
-	struct regulator *cpu_reg;
-	struct clk *cpu_clk;
-	int ret = 0;
-	const char *name;
-
-	cpu_dev = get_cpu_device(0);
-	if (!cpu_dev) {
-		pr_err("failed to get cpu0 device\n");
-		return -ENODEV;
-	}
-
-	cpu_clk = clk_get(cpu_dev, NULL);
-	ret = PTR_ERR_OR_ZERO(cpu_clk);
-	if (ret) {
-		/*
-		 * If cpu's clk node is present, but clock is not yet
-		 * registered, we should try defering probe.
-		 */
-		if (ret == -EPROBE_DEFER)
-			dev_dbg(cpu_dev, "clock not ready, retry\n");
-		else
-			dev_err(cpu_dev, "failed to get clock: %d\n", ret);
-
-		return ret;
-	}
-
-	clk_put(cpu_clk);
-
-	name = find_supply_name(cpu_dev);
-	/* Platform doesn't require regulator */
-	if (!name)
-		return 0;
-
-	cpu_reg = regulator_get_optional(cpu_dev, name);
-	ret = PTR_ERR_OR_ZERO(cpu_reg);
-	if (ret) {
-		/*
-		 * If cpu's regulator supply node is present, but regulator is
-		 * not yet registered, we should try defering probe.
-		 */
-		if (ret == -EPROBE_DEFER)
-			dev_dbg(cpu_dev, "cpu0 regulator not ready, retry\n");
-		else
-			dev_dbg(cpu_dev, "no regulator for cpu0: %d\n", ret);
-
-		return ret;
-	}
-
-	regulator_put(cpu_reg);
-	return 0;
-}
-
 static int cpufreq_init(struct cpufreq_policy *policy)
 {
-	struct cpufreq_frequency_table *freq_table;
 	struct private_data *priv;
 	struct device *cpu_dev;
 	struct clk *cpu_clk;
-	struct dev_pm_opp *suspend_opp;
-#ifdef CONFIG_ARCH_ROCKCHIP
-	struct cpumask cpus;
-#endif
 	unsigned int transition_latency;
-	bool opp_v1 = false;
-	const char *name;
-	int ret, scale;
+	int ret;
 
-	cpu_dev = get_cpu_device(policy->cpu);
-	if (!cpu_dev) {
-		pr_err("failed to get cpu%d device\n", policy->cpu);
+	priv = cpufreq_dt_find_data(policy->cpu);
+	if (!priv) {
+		pr_err("failed to find data for cpu%d\n", policy->cpu);
 		return -ENODEV;
 	}
+	cpu_dev = priv->cpu_dev;
 
 	cpu_clk = clk_get(cpu_dev, NULL);
 	if (IS_ERR(cpu_clk)) {
@@ -186,339 +129,242 @@ static int cpufreq_init(struct cpufreq_policy *policy)
 		return ret;
 	}
 
-	/* Get OPP-sharing information from "operating-points-v2" bindings */
-	ret = dev_pm_opp_of_get_sharing_cpus(cpu_dev, policy->cpus);
-	if (ret) {
-		/*
-		 * operating-points-v2 not supported, fallback to old method of
-		 * finding shared-OPPs for backward compatibility.
-		 */
-		if (ret == -ENOENT)
-			opp_v1 = true;
-		else
-			goto out_put_clk;
-	}
+	transition_latency = dev_pm_opp_get_max_transition_latency(cpu_dev);
+	if (!transition_latency)
+		transition_latency = CPUFREQ_ETERNAL;
 
-	/*
-	 * OPP layer will be taking care of regulators now, but it needs to know
-	 * the name of the regulator first.
-	 */
-	name = find_supply_name(cpu_dev);
-	if (name) {
-		ret = dev_pm_opp_set_regulator(cpu_dev, name);
-		if (ret) {
-			dev_err(cpu_dev, "Failed to set regulator for cpu%d: %d\n",
-				policy->cpu, ret);
-			goto out_put_clk;
-		}
-	}
-
-	/*
-	 * Initialize OPP tables for all policy->cpus. They will be shared by
-	 * all CPUs which have marked their CPUs shared with OPP bindings.
-	 *
-	 * For platforms not using operating-points-v2 bindings, we do this
-	 * before updating policy->cpus. Otherwise, we will end up creating
-	 * duplicate OPPs for policy->cpus.
-	 *
-	 * OPPs might be populated at runtime, don't check for error here
-	 */
-#ifdef CONFIG_ARCH_ROCKCHIP
-	ret = dev_pm_opp_of_add_table(cpu_dev);
-	if (ret) {
-		dev_err(cpu_dev, "couldn't find opp table for cpu:%d, %d\n",
-			policy->cpu, ret);
-	} else {
-		cpumask_copy(&cpus, policy->cpus);
-		cpumask_clear_cpu(policy->cpu, &cpus);
-		if (!cpumask_empty(&cpus)) {
-			if (dev_pm_opp_of_cpumask_add_table(&cpus))
-				dev_pm_opp_of_remove_table(cpu_dev);
-		}
-	}
-	scale = rockchip_cpufreq_get_scale(policy->cpu);
-	rockchip_adjust_power_scale(cpu_dev, scale);
-#else
-	dev_pm_opp_of_cpumask_add_table(policy->cpus);
-#endif
-
-	/*
-	 * But we need OPP table to function so if it is not there let's
-	 * give platform code chance to provide it for us.
-	 */
-	ret = dev_pm_opp_get_opp_count(cpu_dev);
-	if (ret <= 0) {
-		dev_dbg(cpu_dev, "OPP table is not ready, deferring probe\n");
-		ret = -EPROBE_DEFER;
-		goto out_free_opp;
-	}
-
-	if (opp_v1) {
-		struct cpufreq_dt_platform_data *pd = cpufreq_get_driver_data();
-
-		if (!pd || !pd->independent_clocks)
-			cpumask_setall(policy->cpus);
-
-		/*
-		 * OPP tables are initialized only for policy->cpu, do it for
-		 * others as well.
-		 */
-		ret = dev_pm_opp_set_sharing_cpus(cpu_dev, policy->cpus);
-		if (ret)
-			dev_err(cpu_dev, "%s: failed to mark OPPs as shared: %d\n",
-				__func__, ret);
-	}
-
-	priv = kzalloc(sizeof(*priv), GFP_KERNEL);
-	if (!priv) {
-		ret = -ENOMEM;
-		goto out_free_opp;
-	}
-
-	priv->reg_name = name;
-
-	ret = dev_pm_opp_init_cpufreq_table(cpu_dev, &freq_table);
-	if (ret) {
-		dev_err(cpu_dev, "failed to init cpufreq table: %d\n", ret);
-		goto out_free_priv;
-	}
-
-	priv->cpu_dev = cpu_dev;
+	cpumask_copy(policy->cpus, priv->cpus);
 	policy->driver_data = priv;
 	policy->clk = cpu_clk;
-
-	rcu_read_lock();
-	suspend_opp = dev_pm_opp_get_suspend_opp(cpu_dev);
-	if (suspend_opp)
-		policy->suspend_freq = dev_pm_opp_get_freq(suspend_opp) / 1000;
-	rcu_read_unlock();
-
-	ret = cpufreq_table_validate_and_show(policy, freq_table);
-	if (ret) {
-		dev_err(cpu_dev, "%s: invalid frequency table: %d\n", __func__,
-			ret);
-		goto out_free_cpufreq_table;
-	}
+	policy->freq_table = priv->freq_table;
+	policy->suspend_freq = dev_pm_opp_get_suspend_opp_freq(cpu_dev) / 1000;
+	policy->cpuinfo.transition_latency = transition_latency;
+	policy->dvfs_possible_from_any_cpu = true;
 
 	/* Support turbo/boost mode */
 	if (policy_has_boost_freq(policy)) {
 		/* This gets disabled by core on driver unregister */
 		ret = cpufreq_enable_boost_support();
 		if (ret)
-			goto out_free_cpufreq_table;
+			goto out_clk_put;
 		cpufreq_dt_attr[1] = &cpufreq_freq_attr_scaling_boost_freqs;
 	}
 
-	transition_latency = dev_pm_opp_get_max_transition_latency(cpu_dev);
-	if (!transition_latency)
-		transition_latency = CPUFREQ_ETERNAL;
-
-	policy->cpuinfo.transition_latency = transition_latency;
-
-        /*
-         * Android: set default parameters for parity between schedutil and
-         * schedfreq
-         */
-	policy->up_transition_delay_us = transition_latency / NSEC_PER_USEC;
-	policy->down_transition_delay_us = 50000; /* 50ms */
-
-#ifdef CONFIG_ARCH_ROCKCHIP
-	priv->mdevp = kzalloc(sizeof(*priv->mdevp), GFP_KERNEL);
-	if (!priv->mdevp)
-		goto check_rate_volt;
-	priv->mdevp->type = MONITOR_TPYE_CPU;
-	priv->mdevp->low_temp_adjust = rockchip_monitor_cpu_low_temp_adjust;
-	priv->mdevp->high_temp_adjust = rockchip_monitor_cpu_high_temp_adjust;
-	cpumask_copy(&priv->mdevp->allowed_cpus, policy->cpus);
-	priv->mdev_info = rockchip_system_monitor_register(cpu_dev,
-							   priv->mdevp);
-	if (IS_ERR(priv->mdev_info)) {
-		kfree(priv->mdevp);
-		priv->mdevp = NULL;
-		dev_dbg(priv->cpu_dev,
-			"running cpufreq without system monitor\n");
-		priv->mdev_info = NULL;
-	}
-check_rate_volt:
-	rockchip_cpufreq_check_rate_volt(cpu_dev);
-#endif
+	dev_pm_opp_of_register_em(cpu_dev, policy->cpus);
 
 	return 0;
 
-out_free_cpufreq_table:
-	dev_pm_opp_free_cpufreq_table(cpu_dev, &freq_table);
-out_free_priv:
-	kfree(priv);
-out_free_opp:
-	dev_pm_opp_of_cpumask_remove_table(policy->cpus);
-	if (name)
-		dev_pm_opp_put_regulator(cpu_dev);
-out_put_clk:
+out_clk_put:
 	clk_put(cpu_clk);
 
 	return ret;
 }
 
+static int cpufreq_online(struct cpufreq_policy *policy)
+{
+	/* We did light-weight tear down earlier, nothing to do here */
+	return 0;
+}
+
+static int cpufreq_offline(struct cpufreq_policy *policy)
+{
+	/*
+	 * Preserve policy->driver_data and don't free resources on light-weight
+	 * tear down.
+	 */
+	return 0;
+}
+
 static int cpufreq_exit(struct cpufreq_policy *policy)
 {
-	struct cpumask cpus;
-	struct private_data *priv = policy->driver_data;
-
-	priv->cpu_dev = get_cpu_device(policy->cpu);
-#ifdef CONFIG_ARCH_ROCKCHIP
-	cpumask_set_cpu(policy->cpu, policy->cpus);
-	if (cpufreq_generic_suspend(policy))
-		pr_err("%s: Failed to suspend driver: %p\n", __func__, policy);
-	cpumask_clear_cpu(policy->cpu, policy->cpus);
-	rockchip_cpufreq_set_scale_rate(priv->cpu_dev, 0);
-	rockchip_system_monitor_unregister(priv->mdev_info);
-	kfree(priv->mdevp);
-	kfree(priv->model_data);
-#endif
-	cpufreq_cooling_unregister(priv->cdev);
-	dev_pm_opp_free_cpufreq_table(priv->cpu_dev, &policy->freq_table);
-	cpumask_copy(&cpus, policy->related_cpus);
-	cpumask_clear_cpu(policy->cpu, &cpus);
-	dev_pm_opp_of_cpumask_remove_table(&cpus);
-	dev_pm_opp_of_remove_table(priv->cpu_dev);
-	if (priv->reg_name)
-		dev_pm_opp_put_regulator(priv->cpu_dev);
-
 	clk_put(policy->clk);
-	kfree(priv);
-
 	return 0;
 }
-
-#ifdef CONFIG_ARCH_ROCKCHIP
-static int cpufreq_get_static_power(cpumask_t *cpumask, int interval,
-				    unsigned long voltage, u32 *power)
-{
-	int cpu = cpumask_first_and(cpumask, cpu_online_mask);
-	struct cpufreq_policy *policy;
-	struct private_data *priv;
-
-	policy = cpufreq_cpu_get(cpu);
-	if (!policy) {
-		*power = 0;
-		return 0;
-	}
-	priv = policy->driver_data;
-	/* Voltage in mV */
-	*power = rockchip_ipa_get_static_power(priv->model_data,
-					       voltage / 1000);
-	cpufreq_cpu_put(policy);
-
-	return 0;
-}
-#endif
-
-static void cpufreq_ready(struct cpufreq_policy *policy)
-{
-	struct private_data *priv = policy->driver_data;
-	struct device_node *np = of_node_get(priv->cpu_dev->of_node);
-
-	if (WARN_ON(!np))
-		return;
-
-	/*
-	 * For now, just loading the cooling device;
-	 * thermal DT code takes care of matching them.
-	 */
-	if (of_find_property(np, "#cooling-cells", NULL)) {
-		u32 power_coefficient = 0;
-
-		of_property_read_u32(np, "dynamic-power-coefficient",
-				     &power_coefficient);
-
-#ifdef CONFIG_ARCH_ROCKCHIP
-		priv->model_data = rockchip_ipa_power_model_init(priv->cpu_dev,
-								 "cpu_leakage");
-		if (!IS_ERR_OR_NULL(priv->model_data)) {
-			priv->cdev = of_cpufreq_power_cooling_register(np,
-					policy->related_cpus, power_coefficient,
-					cpufreq_get_static_power);
-		} else {
-			priv->model_data = NULL;
-			priv->cdev = of_cpufreq_power_cooling_register(np,
-					policy->related_cpus, power_coefficient,
-					NULL);
-		}
-#else
-		priv->cdev = of_cpufreq_power_cooling_register(np,
-				policy->related_cpus, power_coefficient, NULL);
-#endif
-		if (IS_ERR(priv->cdev)) {
-			dev_err(priv->cpu_dev,
-				"running cpufreq without cooling device: %ld\n",
-				PTR_ERR(priv->cdev));
-
-			priv->cdev = NULL;
-		}
-	}
-
-	of_node_put(np);
-}
-
-#ifdef CONFIG_ARCH_ROCKCHIP
-static int rockchip_cpufreq_suspend(struct cpufreq_policy *policy)
-{
-	struct private_data *priv = policy->driver_data;
-	int ret = 0;
-
-	ret = cpufreq_generic_suspend(policy);
-	if (!ret)
-		rockchip_monitor_suspend_low_temp_adjust(priv->mdev_info);
-
-	return ret;
-}
-#endif
 
 static struct cpufreq_driver dt_cpufreq_driver = {
 	.flags = CPUFREQ_STICKY | CPUFREQ_NEED_INITIAL_FREQ_CHECK |
-			 CPUFREQ_HAVE_GOVERNOR_PER_POLICY,
+		 CPUFREQ_IS_COOLING_DEV,
 	.verify = cpufreq_generic_frequency_table_verify,
 	.target_index = set_target,
 	.get = cpufreq_generic_get,
 	.init = cpufreq_init,
 	.exit = cpufreq_exit,
-	.ready = cpufreq_ready,
+	.online = cpufreq_online,
+	.offline = cpufreq_offline,
 	.name = "cpufreq-dt",
 	.attr = cpufreq_dt_attr,
-#ifdef CONFIG_ARCH_ROCKCHIP
-	.suspend = rockchip_cpufreq_suspend,
-#else
 	.suspend = cpufreq_generic_suspend,
-#endif
 };
+
+static int dt_cpufreq_early_init(struct device *dev, int cpu)
+{
+	struct private_data *priv;
+	struct device *cpu_dev;
+	bool fallback = false;
+	const char *reg_name;
+	int ret;
+
+	/* Check if this CPU is already covered by some other policy */
+	if (cpufreq_dt_find_data(cpu))
+		return 0;
+
+	cpu_dev = get_cpu_device(cpu);
+	if (!cpu_dev)
+		return -EPROBE_DEFER;
+
+	priv = devm_kzalloc(dev, sizeof(*priv), GFP_KERNEL);
+	if (!priv)
+		return -ENOMEM;
+
+	if (!alloc_cpumask_var(&priv->cpus, GFP_KERNEL))
+		return -ENOMEM;
+
+	cpumask_set_cpu(cpu, priv->cpus);
+	priv->cpu_dev = cpu_dev;
+
+	/*
+	 * OPP layer will be taking care of regulators now, but it needs to know
+	 * the name of the regulator first.
+	 */
+	reg_name = find_supply_name(cpu_dev);
+	if (reg_name) {
+		priv->opp_table = dev_pm_opp_set_regulators(cpu_dev, &reg_name,
+							    1);
+		if (IS_ERR(priv->opp_table)) {
+			ret = PTR_ERR(priv->opp_table);
+			if (ret != -EPROBE_DEFER)
+				dev_err(cpu_dev, "failed to set regulators: %d\n",
+					ret);
+			goto free_cpumask;
+		}
+	}
+
+	/* Get OPP-sharing information from "operating-points-v2" bindings */
+	ret = dev_pm_opp_of_get_sharing_cpus(cpu_dev, priv->cpus);
+	if (ret) {
+		if (ret != -ENOENT)
+			goto out;
+
+		/*
+		 * operating-points-v2 not supported, fallback to all CPUs share
+		 * OPP for backward compatibility if the platform hasn't set
+		 * sharing CPUs.
+		 */
+		if (dev_pm_opp_get_sharing_cpus(cpu_dev, priv->cpus))
+			fallback = true;
+	}
+
+	/*
+	 * Initialize OPP tables for all priv->cpus. They will be shared by
+	 * all CPUs which have marked their CPUs shared with OPP bindings.
+	 *
+	 * For platforms not using operating-points-v2 bindings, we do this
+	 * before updating priv->cpus. Otherwise, we will end up creating
+	 * duplicate OPPs for the CPUs.
+	 *
+	 * OPPs might be populated at runtime, don't check for error here.
+	 */
+	if (!dev_pm_opp_of_cpumask_add_table(priv->cpus))
+		priv->have_static_opps = true;
+
+	/*
+	 * The OPP table must be initialized, statically or dynamically, by this
+	 * point.
+	 */
+	ret = dev_pm_opp_get_opp_count(cpu_dev);
+	if (ret <= 0) {
+		dev_err(cpu_dev, "OPP table can't be empty\n");
+		ret = -ENODEV;
+		goto out;
+	}
+
+	if (fallback) {
+		cpumask_setall(priv->cpus);
+		ret = dev_pm_opp_set_sharing_cpus(cpu_dev, priv->cpus);
+		if (ret)
+			dev_err(cpu_dev, "%s: failed to mark OPPs as shared: %d\n",
+				__func__, ret);
+	}
+
+#ifdef CONFIG_ARCH_ROCKCHIP
+	rockchip_cpufreq_adjust_power_scale(cpu_dev);
+#endif
+
+	ret = dev_pm_opp_init_cpufreq_table(cpu_dev, &priv->freq_table);
+	if (ret) {
+		dev_err(cpu_dev, "failed to init cpufreq table: %d\n", ret);
+		goto out;
+	}
+
+	list_add(&priv->node, &priv_list);
+	return 0;
+
+out:
+	if (priv->have_static_opps)
+		dev_pm_opp_of_cpumask_remove_table(priv->cpus);
+	if (priv->opp_table)
+		dev_pm_opp_put_regulators(priv->opp_table);
+free_cpumask:
+	free_cpumask_var(priv->cpus);
+	return ret;
+}
+
+static void dt_cpufreq_release(void)
+{
+	struct private_data *priv, *tmp;
+
+	list_for_each_entry_safe(priv, tmp, &priv_list, node) {
+		dev_pm_opp_free_cpufreq_table(priv->cpu_dev, &priv->freq_table);
+		if (priv->have_static_opps)
+			dev_pm_opp_of_cpumask_remove_table(priv->cpus);
+		if (priv->opp_table)
+			dev_pm_opp_put_regulators(priv->opp_table);
+		free_cpumask_var(priv->cpus);
+		list_del(&priv->node);
+	}
+}
 
 static int dt_cpufreq_probe(struct platform_device *pdev)
 {
-	int ret;
+	struct cpufreq_dt_platform_data *data = dev_get_platdata(&pdev->dev);
+	int ret, cpu;
 
-	/*
-	 * All per-cluster (CPUs sharing clock/voltages) initialization is done
-	 * from ->init(). In probe(), we just need to make sure that clk and
-	 * regulators are available. Else defer probe and retry.
-	 *
-	 * FIXME: Is checking this only for CPU0 sufficient ?
-	 */
-	ret = resources_available();
-	if (ret)
-		return ret;
+	/* Request resources early so we can return in case of -EPROBE_DEFER */
+	for_each_possible_cpu(cpu) {
+		ret = dt_cpufreq_early_init(&pdev->dev, cpu);
+		if (ret)
+			goto err;
+	}
 
-	dt_cpufreq_driver.driver_data = dev_get_platdata(&pdev->dev);
+	if (data) {
+		if (data->have_governor_per_policy)
+			dt_cpufreq_driver.flags |= CPUFREQ_HAVE_GOVERNOR_PER_POLICY;
+
+		dt_cpufreq_driver.resume = data->resume;
+		if (data->suspend)
+			dt_cpufreq_driver.suspend = data->suspend;
+		if (data->get_intermediate) {
+			dt_cpufreq_driver.target_intermediate = data->target_intermediate;
+			dt_cpufreq_driver.get_intermediate = data->get_intermediate;
+		}
+	}
 
 	ret = cpufreq_register_driver(&dt_cpufreq_driver);
-	if (ret)
+	if (ret) {
 		dev_err(&pdev->dev, "failed register driver: %d\n", ret);
+		goto err;
+	}
 
+	return 0;
+err:
+	dt_cpufreq_release();
 	return ret;
 }
 
 static int dt_cpufreq_remove(struct platform_device *pdev)
 {
 	cpufreq_unregister_driver(&dt_cpufreq_driver);
+	dt_cpufreq_release();
 	return 0;
 }
 

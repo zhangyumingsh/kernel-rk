@@ -11,7 +11,7 @@
 	compatible = "rockchip,rk3308-evb-v11", "rockchip,rk3308";
 
 	chosen {
-		bootargs = "earlycon=uart8250,mmio32,0xff0c0000 swiotlb=1 console=ttyFIQ0 root=PARTUUID=614e0000-0000 rootfstype=squashfs rootwait snd_aloop.index=7 snd_aloop.use_raw_jiffies=1";
+		bootargs = "earlycon=uart8250,mmio32,0xff0c0000 console=ttyFIQ0 root=PARTUUID=614e0000-0000 rootfstype=squashfs rootwait snd_aloop.index=7 snd_aloop.use_raw_jiffies=1";
 	};
 
 	adc-keys {
@@ -103,7 +103,7 @@
 		rockchip,mclk-fs = <128>;
 		rockchip,cpu = <&i2s_2ch_0>;
 		rockchip,codec = <&dummy_codec>;
-		rockchip,format = "dsp_a";
+		rockchip,format = "dsp_b";
 		rockchip,bitclock-inversion = <0>;
 		rockchip,wait-card-locked = <0>;
 	};
@@ -233,6 +233,15 @@
 		regulator-max-microvolt = <3300000>;
 	};
 
+	vccio_flash: vccio-flash {
+		compatible = "regulator-fixed";
+		regulator-name = "vccio_flash";
+		regulator-always-on;
+		regulator-boot-on;
+		regulator-min-microvolt = <1800000>;
+		regulator-max-microvolt = <1800000>;
+	};
+
 	vcc_phy: vcc-phy-regulator {
 		compatible = "regulator-fixed";
 		regulator-name = "vcc_phy";
@@ -302,7 +311,8 @@
 	bus-width = <8>;
 	cap-mmc-highspeed;
 	mmc-hs200-1_8v;
-	supports-emmc;
+	no-sdio;
+	no-sd;
 	disable-wp;
 	non-removable;
 	num-slots = <1>;
@@ -332,7 +342,7 @@
 	vccio0-supply = <&vcc_io>;
 	vccio1-supply = <&vcc_io>;
 	vccio2-supply = <&vcc_1v8>;
-	vccio3-supply = <&vcc_io>;
+	vccio3-supply = <&vccio_flash>;
 	vccio4-supply = <&vccio_sdio>;
 	vccio5-supply = <&vccio_sd>;
 };
@@ -727,7 +737,8 @@
 &sdio {
 	bus-width = <4>;
 	cap-sd-highspeed;
-	supports-sdio;
+	no-sd;
+	no-mmc;
 	ignore-pm-notify;
 	keep-power-in-suspend;
 	non-removable;
@@ -740,7 +751,8 @@
 	bus-width = <4>;
 	cap-mmc-highspeed;
 	cap-sd-highspeed;
-	supports-sd;
+	no-sdio;
+	no-mmc;
 	card-detect-delay = <300>;
 	sd-uhs-sdr25;
 	sd-uhs-sdr50;

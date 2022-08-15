@@ -30,7 +30,7 @@
 //#include <mach/io.h>
 //#include <mach/irqs.h>
 #include <linux/fs.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 #include <linux/miscdevice.h>
 #include <linux/poll.h>
 #include <linux/delay.h>
@@ -97,27 +97,7 @@ unsigned char RGA_NONUSE;
 unsigned char RGA_INT_FLAG;
 #endif
 
-struct rga_drvdata {
-  	struct miscdevice miscdev;
-	struct device *dev;
-	void *rga_base;
-	int irq;
-
-	struct delayed_work power_off_work;
-	void (*rga_irq_callback)(int rga_retval);   //callback function used by aync call
-	struct wake_lock wake_lock;
-
-    struct clk *pd_rga;
-	struct clk *aclk_rga;
-    struct clk *hclk_rga;
-
-    //#if defined(CONFIG_ION_ROCKCHIP)
-	struct ion_client *ion_client;
-    //#endif
-	char *version;
-};
-
-static struct rga_drvdata *drvdata;
+struct rga_drvdata *drvdata;
 rga_service_info rga_service;
 struct rga_mmu_buf_t rga_mmu_buf;
 
@@ -219,6 +199,7 @@ static const char *rga_get_rotate_mode_str(struct rga_req *req_rga)
 		else if (req_rga->sina == -65536 && req_rga->cosa == 0)
 			/* totate 270 */
 			return "rotate 270 ";
+		return "UNF";
 	case 0x2:
 		return "xmirror";
 	case 0x3:
@@ -842,12 +823,7 @@ static void rga_try_set_reg(void)
 
             rga_copy_reg(reg, 0);
             rga_reg_from_wait_to_run(reg);
-            #ifdef CONFIG_ARM
-            dmac_flush_range(&rga_service.cmd_buff[0], &rga_service.cmd_buff[32]);
-            outer_flush_range(virt_to_phys(&rga_service.cmd_buff[0]),virt_to_phys(&rga_service.cmd_buff[32]));
-            #elif defined(CONFIG_ARM64)
-            __dma_flush_range(&rga_service.cmd_buff[0], &rga_service.cmd_buff[32]);
-            #endif
+			rga_dma_flush_range(&rga_service.cmd_buff[0], &rga_service.cmd_buff[32]);
 
             rga_soft_reset();
 
@@ -1043,7 +1019,7 @@ static int rga_convert_dma_buf(struct rga_req *req)
 
 	if (req->src.uv_addr) {
 		if (RGA_TEST_MSG)
-			pr_err("RGA WARNING : don't input viraddrs when already input fd !");
+			pr_err("WARNING : don't input viraddrs when already input fd !\n");
 		req->src.uv_addr = 0;
 	}
 
@@ -1086,7 +1062,7 @@ static int rga_convert_dma_buf(struct rga_req *req)
 
 	if (req->dst.uv_addr) {
 		if (RGA_TEST_MSG)
-			pr_err("RGA WARNING : don't input viraddrs when already input fd !\n");
+			pr_err("WARNING : don't input viraddrs when already input fd !\n");
 		req->dst.uv_addr = 0;
 	}
 
@@ -2235,15 +2211,7 @@ void rga_slt(void)
 	memset(src1_buf, 0x50, 400 * 200 * 4);
 	memset(dst1_buf, 0x00, 400 * 200 * 4);
 
-#ifdef CONFIG_ARM
-	dmac_flush_range(&src1_buf[0], &src1_buf[400 * 200]);
-	outer_flush_range(virt_to_phys(&src1_buf[0]), virt_to_phys(&src1_buf[400 * 200]));
-	dmac_flush_range(&dst1_buf[0], &dst1_buf[400 * 200]);
-	outer_flush_range(virt_to_phys(&dst1_buf[0]), virt_to_phys(&dst1_buf[400 * 200]));
-#elif defined(CONFIG_ARM64)
-	__dma_flush_range(&src1_buf[0], &src1_buf[400 * 200]);
-	__dma_flush_range(&dst1_buf[0], &dst1_buf[400 * 200]);
-#endif
+	rga_dma_flush_range(&src1_buf[0], &src1_buf[400 * 200]);
 
 	DBG("\n********************************\n");
 	DBG("************ RGA_TEST ************\n");

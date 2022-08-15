@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 
 #ifndef _dhd_config_
 #define _dhd_config_
@@ -250,10 +251,14 @@ typedef struct dhd_conf {
 #ifdef BCMSDIO_TXSEQ_SYNC
 	bool txseq_sync;
 #endif
+#ifdef BCMSDIO_INTSTATUS_WAR
+	uint read_intr_mode;
+#endif
 #endif
 #ifdef BCMPCIE
 	int bus_deepsleep_disable;
 	int flow_ring_queue_threshold;
+	int d2h_intr_method;
 #endif
 	int dpc_cpucore;
 	int rxf_cpucore;
@@ -315,16 +320,22 @@ typedef struct dhd_conf {
 	struct osl_timespec tput_ts;
 	unsigned long net_len;
 #endif
+#ifdef TPUT_MONITOR
+	uint tput_monitor_ms;
+#endif
 #ifdef DHD_TPUT_PATCH
 	bool tput_patch;
 	int mtu;
 	bool pktsetsum;
 #endif
-#if defined(SET_XPS_CPUS)
+#ifdef SET_XPS_CPUS
 	bool xps_cpus;
 #endif
-#if defined(SET_RPS_CPUS)
+#ifdef SET_RPS_CPUS
 	bool rps_cpus;
+#endif
+#ifdef CHECK_DOWNLOAD_FW
+	bool fwchk;
 #endif
 } dhd_conf_t;
 
@@ -337,6 +348,7 @@ void dhd_conf_set_txglom_params(dhd_pub_t *dhd, bool enable);
 #endif
 #ifdef BCMPCIE
 int dhd_conf_get_otp(dhd_pub_t *dhd, si_t *sih);
+bool dhd_conf_legacy_msi_chip(dhd_pub_t *dhd);
 #endif
 void dhd_conf_set_path_params(dhd_pub_t *dhd, char *fw_path, char *nv_path);
 int dhd_conf_set_intiovar(dhd_pub_t *dhd, uint cmd, char *name, int val,

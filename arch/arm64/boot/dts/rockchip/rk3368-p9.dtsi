@@ -253,37 +253,6 @@
 	logic-supply = <&vdd_logic>;
 };
 
-&dfi {
-	status = "okay";
-};
-
-&dmc {
-	status = "okay";
-	center-supply = <&vdd_logic>;
-	devfreq-events = <&dfi>;
-	upthreshold = <60>;
-	downdifferential = <20>;
-	system-status-freq = <
-		/*system status         freq(KHz)*/
-		SYS_STATUS_NORMAL       600000
-		SYS_STATUS_REBOOT       600000
-		SYS_STATUS_SUSPEND      240000
-		SYS_STATUS_VIDEO_1080P  396000
-		SYS_STATUS_VIDEO_4K     600000
-		SYS_STATUS_PERFORMANCE  600000
-		SYS_STATUS_BOOST        396000
-		SYS_STATUS_DUALVIEW     600000
-		SYS_STATUS_ISP          528000
-	>;
-	vop-bw-dmc-freq = <
-	/* min_bw(MB/s) max_bw(MB/s) freq(KHz) */
-		0       582      240000
-		583     99999    396000
-	>;
-	auto-min-freq = <240000>;
-	auto-freq-en = <0>;
-};
-
 &rockchip_suspend {
 	status = "okay";
 	rockchip,sleep-mode-config = <
@@ -309,7 +278,8 @@
 	bus-width = <8>;
 	cap-mmc-highspeed;
 	mmc-hs200-1_8v;
-	supports-emmc;
+	no-sdio;
+	no-sd;
 	disable-wp;
 	non-removable;
 	num-slots = <1>;
@@ -325,7 +295,8 @@
 &sdmmc {
 	clock-frequency = <37500000>;
 	clock-freq-min-max = <400000 37500000>;
-	supports-sd;
+	no-sdio;
+	no-mmc;
 	cap-mmc-highspeed;
 	cap-sd-highspeed;
 	card-detect-delay = <200>;
@@ -339,7 +310,8 @@
 &sdio0 {
 	clock-frequency = <50000000>;
 	clock-freq-min-max = <200000 50000000>;
-	supports-sdio;
+	no-sd;
+	no-mmc;
 	bus-width = <4>;
 	disable-wp;
 	cap-sd-highspeed;
@@ -790,6 +762,30 @@
 				pixelclk-active = <0>;
 			};
 		};
+
+		ports {
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			port@0 {
+				reg = <0>;
+				panel_in_dsi: endpoint {
+					remote-endpoint = <&dsi_out_panel>;
+				};
+			};
+		};
+	};
+
+	ports {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		port@1 {
+			reg = <1>;
+			dsi_out_panel: endpoint {
+				remote-endpoint = <&panel_in_dsi>;
+			};
+		};
 	};
 };
 
@@ -805,40 +801,40 @@
 &pinctrl {
 	pmic {
 		pmic_int_l: pmic-int-l {
-			rockchip,pins = <RK_GPIO0 1 RK_FUNC_GPIO &pcfg_pull_up>;
+			rockchip,pins = <0 RK_PA1 RK_FUNC_GPIO &pcfg_pull_up>;
 		};
 		vsel_gpio: vsel-gpio {
-			rockchip,pins = <0 0 RK_FUNC_GPIO &pcfg_pull_down>;
+			rockchip,pins = <0 RK_PA0 RK_FUNC_GPIO &pcfg_pull_down>;
 		};
 	};
 
 	mpu6500 {
 		mpu6500_irq_gpio: mpu6500-irq-gpio {
-			rockchip,pins = <3 14 RK_FUNC_GPIO &pcfg_pull_none>;
+			rockchip,pins = <3 RK_PB6 RK_FUNC_GPIO &pcfg_pull_none>;
 		};
 	};
 
 	dc_det {
 		dc_irq_gpio: dc-irq-gpio {
-			rockchip,pins = <0 17 RK_FUNC_GPIO &pcfg_pull_up>;
+			rockchip,pins = <0 RK_PC1 RK_FUNC_GPIO &pcfg_pull_up>;
 		};
 	};
 
 	sdio-pwrseq {
 		wifi_enable_h: wifi-enable-h {
-			rockchip,pins = <3 4 RK_FUNC_GPIO &pcfg_pull_none>;
+			rockchip,pins = <3 RK_PA4 RK_FUNC_GPIO &pcfg_pull_none>;
 		};
 	};
 
 	usb2 {
 		host_vbus_drv: host-vbus-drv {
-			rockchip,pins = <RK_GPIO0 4 RK_FUNC_GPIO &pcfg_pull_none>;
+			rockchip,pins = <0 RK_PA4 RK_FUNC_GPIO &pcfg_pull_none>;
 		};
 	};
 
 	wireless-bluetooth {
 		uart0_rts_gpio: uart0-rts-gpio {
-			rockchip,pins = <2 27 RK_FUNC_GPIO &pcfg_pull_none>;
+			rockchip,pins = <2 RK_PD3 RK_FUNC_GPIO &pcfg_pull_none>;
 		};
 	};
 };

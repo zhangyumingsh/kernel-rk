@@ -2,7 +2,7 @@
 /*
  * Misc system wide definitions
  *
- * Copyright (C) 1999-2018, Broadcom Corporation
+ * Copyright (C) 1999-2019, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -25,7 +25,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: bcmdefs.h 588205 2015-09-23 11:54:25Z $
+ * $Id: bcmdefs.h 715966 2019-05-30 02:36:59Z $
  */
 
 #ifndef	_bcmdefs_h_
@@ -389,6 +389,6 @@ extern bool _pciedevenab;
 #endif /* DL_NVRAM */
 
 extern uint32 gFWID;
-
+#define SEC_ENHANCEMENT
 
 #endif /* _bcmdefs_h_ */

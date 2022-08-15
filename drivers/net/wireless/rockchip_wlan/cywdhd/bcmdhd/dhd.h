@@ -5,7 +5,7 @@
  * Provides type definitions and function prototypes used to link the
  * DHD OS, bus, and protocol modules.
  *
- * Copyright (C) 1999-2018, Broadcom Corporation
+ * Copyright (C) 1999-2019, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -28,7 +28,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: dhd.h 674559 2017-10-27 03:07:31Z $
+ * $Id: dhd.h 715966 2019-05-30 02:36:59Z $
  */
 
 /****************
@@ -47,7 +47,7 @@
 #include <linux/random.h>
 #include <linux/spinlock.h>
 #include <linux/ethtool.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 #include <asm/unaligned.h>
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 27)) && defined(CONFIG_HAS_WAKELOCK)
 #include <linux/wakelock.h>
@@ -75,10 +75,10 @@ int get_scheduler_policy(struct task_struct *p);
 #define MAX_RESCHED_CNT 600
 #endif 
 
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 14, 0) && LINUX_VERSION_CODE < \
-	KERNEL_VERSION(3, 18, 0) || defined(CONFIG_BCMDHD_VENDOR_EXT))
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 14, 0) || \
+	defined(CONFIG_BCMDHD_VENDOR_EXT))
 #define WL_VENDOR_EXT_SUPPORT
-#endif /* 3.14.0 <= LINUX_KERNEL_VERSION < 3.18.0 || CONFIG_BCMDHD_VENDOR_EXT */
+#endif /* 3.14.0 <= LINUX_KERNEL_VERSION || CONFIG_BCMDHD_VENDOR_EXT */
 
 #if defined(KEEP_ALIVE)
 /* Default KEEP_ALIVE Period is 55 sec to prevent AP from sending Keep Alive probe frame */
@@ -762,6 +762,12 @@ extern int dhd_os_wd_wake_lock(dhd_pub_t *pub);
 extern int dhd_os_wd_wake_unlock(dhd_pub_t *pub);
 extern int dhd_os_wake_lock_waive(dhd_pub_t *pub);
 extern int dhd_os_wake_lock_restore(dhd_pub_t *pub);
+extern void dhd_event_wake_lock(dhd_pub_t *pub);
+extern void dhd_event_wake_unlock(dhd_pub_t *pub);
+extern void dhd_txfl_wake_lock_timeout(dhd_pub_t *pub, int val);
+extern void dhd_txfl_wake_unlock(dhd_pub_t *pub);
+extern void dhd_os_wake_lock_init(struct dhd_info *dhd);
+extern void dhd_os_wake_lock_destroy(struct dhd_info *dhd);
 #ifdef BCMPCIE_OOB_HOST_WAKE
 extern void dhd_os_oob_irq_wake_lock_timeout(dhd_pub_t *pub, int val);
 extern void dhd_os_oob_irq_wake_unlock(dhd_pub_t *pub);
@@ -807,6 +813,13 @@ inline static void MUTEX_UNLOCK_SOFTAP_SET(dhd_pub_t * dhdp)
 #define DHD_OS_WD_WAKE_LOCK(pub)		dhd_os_wd_wake_lock(pub)
 #define DHD_OS_WD_WAKE_UNLOCK(pub)		dhd_os_wd_wake_unlock(pub)
 
+#define DHD_EVENT_WAKE_LOCK(pub)		dhd_event_wake_lock(pub)
+#define DHD_EVENT_WAKE_UNLOCK(pub)		dhd_event_wake_unlock(pub)
+#define DHD_TXFL_WAKE_LOCK_TIMEOUT(pub, val)	dhd_txfl_wake_lock_timeout(pub, val)
+#define DHD_TXFL_WAKE_UNLOCK(pub)		dhd_txfl_wake_unlock(pub)
+#define DHD_OS_WAKE_LOCK_INIT(dhd) 		dhd_os_wake_lock_init(dhd)
+#define DHD_OS_WAKE_LOCK_DESTROY(dhd)		dhd_os_wake_lock_destroy(dhd)
+
 #ifdef BCMPCIE_OOB_HOST_WAKE
 #define OOB_WAKE_LOCK_TIMEOUT 500
 #define DHD_OS_OOB_IRQ_WAKE_LOCK_TIMEOUT(pub, val)	dhd_os_oob_irq_wake_lock_timeout(pub, val)
@@ -837,6 +850,7 @@ inline static void MUTEX_UNLOCK_SOFTAP_SET(dhd_pub_t * dhdp)
 #define DHD_PACKET_TIMEOUT_MS	500
 #define DHD_EVENT_TIMEOUT_MS	1500
 #define SCAN_WAKE_LOCK_TIMEOUT	10000
+#define MAX_TX_TIMEOUT		500
 
 /* Enum for IOCTL recieved status */
 typedef enum dhd_ioctl_recieved_status
@@ -1094,11 +1108,13 @@ extern int dhd_net2idx(struct dhd_info *dhd, struct net_device *net);
 extern struct net_device * dhd_idx2net(void *pub, int ifidx);
 extern int net_os_send_hang_message(struct net_device *dev);
 extern bool dhd_wowl_cap(void *bus);
+extern int wl_host_event(dhd_pub_t *dhd_pub, int *idx, void *pktdata, uint pktlen,
+	wl_event_msg_t *, void **data_ptr,  void *);
 
-extern int wl_host_event(dhd_pub_t *dhd_pub, int *idx, void *pktdata,
-                         wl_event_msg_t *, void **data_ptr,  void *);
 extern void wl_event_to_host_order(wl_event_msg_t * evt);
-extern int wl_host_event_get_data(void *pktdata, wl_event_msg_t *event, void **data_ptr);
+extern int wl_host_event_get_data(void *pktdata, uint pktlen, bcm_event_msg_u_t *evu);
+extern int wl_process_host_event(dhd_pub_t *dhd_pub, int *idx, void *pktdata, uint pktlen,
+	wl_event_msg_t *, void **data_ptr,  void *);
 
 extern int dhd_wl_ioctl(dhd_pub_t *dhd_pub, int ifindex, wl_ioctl_t *ioc, void *buf, int len);
 extern int dhd_wl_ioctl_cmd(dhd_pub_t *dhd_pub, int cmd, void *arg, int len, uint8 set,
@@ -1502,6 +1518,7 @@ typedef struct wl_evt_pport {
 	dhd_pub_t *dhd_pub;
 	int *ifidx;
 	void *pktdata;
+	uint data_len;
 	void **data_ptr;
 	void *raw_event;
 } wl_evt_pport_t;

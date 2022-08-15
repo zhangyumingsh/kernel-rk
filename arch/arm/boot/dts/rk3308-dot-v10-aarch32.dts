@@ -13,7 +13,7 @@
 	compatible = "rockchip,rk3308-dot-v10-aarch32", "rockchip,rk3308";
 
 	chosen {
-		bootargs = "earlycon=uart8250,mmio32,0xff0c0000 swiotlb=1 console=ttyFIQ0 root=PARTUUID=614e0000-0000 rootfstype=squashfs rootwait snd_aloop.index=7 snd_aloop.use_raw_jiffies=1";
+		bootargs = "earlycon=uart8250,mmio32,0xff0c0000 console=ttyFIQ0 root=PARTUUID=614e0000-0000 rootfstype=squashfs rootwait snd_aloop.index=7 snd_aloop.use_raw_jiffies=1";
 	};
 
 	acodec_sound: acodec-sound {
@@ -237,13 +237,10 @@
 	pinctrl-0 = <&pwm0_pin_pull_down>;
 };
 
-&ramoops_mem {
-	reg = <0x0 0x30000 0x0 0x20000>;
-};
-
 &ramoops {
-	record-size = <0x0 0x00000>;
-	console-size = <0x0 0x20000>;
+	reg = <0x0 0x30000 0x0 0x20000>;
+	record-size = <0x00000>;
+	console-size = <0x20000>;
 };
 
 &rockchip_suspend {
@@ -265,7 +262,8 @@
 	max-frequency = <110000000>;
 	bus-width = <4>;
 	cap-sd-highspeed;
-	supports-sdio;
+	no-sd;
+	no-mmc;
 	ignore-pm-notify;
 	keep-power-in-suspend;
 	non-removable;

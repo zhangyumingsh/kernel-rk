@@ -2,7 +2,7 @@
 /*
  * dw9714 vcm driver
  *
- * Copyright (C) 2019 Fuzhou Rockchip Electronics Co., Ltd.
+ * Copyright (C) 2022 Fuzhou Rockchip Electronics Co., Ltd.
  */
 
 #include <linux/delay.h>
@@ -13,7 +13,8 @@
 #include <linux/version.h>
 #include <media/v4l2-ctrls.h>
 #include <media/v4l2-device.h>
-#include "rk_vcm_head.h"
+#include <linux/rk_vcm_head.h>
+#include <linux/compat.h>
 
 #define DRIVER_VERSION			KERNEL_VERSION(0, 0x01, 0x0)
 #define DW9714_NAME			"dw9714"
@@ -24,6 +25,9 @@
 #define DW9714_DEFAULT_START_CURRENT	0
 #define DW9714_DEFAULT_RATED_CURRENT	100
 #define DW9714_DEFAULT_STEP_MODE	0xd
+#define DW9714_DEFAULT_DLC_EN		0x0
+#define DW9714_DEFAULT_MCLK		0x0
+#define DW9714_DEFAULT_T_SRC		0x0
 #define REG_NULL			0xFF
 
 /* dw9714 device structure */
@@ -44,12 +48,14 @@ struct dw9714_device {
 	unsigned int t_src;
 	unsigned int mclk;
 
-	struct timeval start_move_tv;
-	struct timeval end_move_tv;
+	struct __kernel_old_timeval start_move_tv;
+	struct __kernel_old_timeval end_move_tv;
 	unsigned long move_ms;
 
 	u32 module_index;
 	const char *module_facing;
+	struct rk_cam_vcm_cfg vcm_cfg;
+	int max_ma;
 };
 
 struct TimeTabel_s {
@@ -60,39 +66,39 @@ struct TimeTabel_s {
 	unsigned int step11;
 };
 
-static const struct TimeTabel_s dw9714_lsc_time_table[] = {
-	{0b10000, 136, 272, 544, 1088},
-	{0b10001, 130, 260, 520, 1040},
-	{0b10010, 125, 250, 500, 1000},
-	{0b10011, 120, 240, 480, 960 },
-	{0b10100, 116, 232, 464, 928 },
-	{0b10101, 112, 224, 448, 896 },
-	{0b10110, 108, 216, 432, 864 },
-	{0b10111, 104, 208, 416, 832 },
-	{0b11000, 101, 202, 404, 808 },
-	{0b11001,  98, 196, 392, 784 },
-	{0b11010,  95, 190, 380, 760 },
-	{0b11011,  92, 184, 368, 736 },
-	{0b11100,  89, 178, 356, 712 },
-	{0b11101,  87, 174, 348, 696 },
-	{0b11110,  85, 170, 340, 680 },
-	{0b11111,  83, 166, 332, 664 },
-	{0b00000,  81, 162, 324, 648 },
-	{0b00001,  79, 158, 316, 632 },
-	{0b00010,  77, 155, 310, 620 },
-	{0b00011,  76, 152, 304, 608 },
-	{0b00100,  74, 149, 298, 596 },
-	{0b00101,  73, 146, 292, 584 },
-	{0b00110,  71, 143, 286, 572 },
-	{0b00111,  70, 140, 280, 560 },
-	{0b01000,  69, 138, 276, 552 },
-	{0b01001,  68, 136, 272, 544 },
-	{0b01010,  67, 134, 268, 536 },
-	{0b01011,  66, 132, 264, 528 },
-	{0b01100,  65, 131, 262, 524 },
-	{0b01101,  65, 130, 260, 520 },
-	{0b01110,  64, 129, 258, 516 },
-	{0b01111,  64, 128, 256, 512 },
+static const struct TimeTabel_s dw9714_lsc_time_table[] = {/* 1/10us */
+	{0b10000, 1360, 2720, 5440, 10880},
+	{0b10001, 1300, 2600, 5200, 10400},
+	{0b10010, 1250, 2500, 5000, 10000},
+	{0b10011, 1200, 2400, 4800,  9600},
+	{0b10100, 1160, 2320, 4640,  9280},
+	{0b10101, 1120, 2240, 4480,  8960},
+	{0b10110, 1080, 2160, 4320,  8640},
+	{0b10111, 1040, 2080, 4160,  8320},
+	{0b11000, 1010, 2020, 4040,  8080},
+	{0b11001,  980, 1960, 3920,  7840},
+	{0b11010,  950, 1900, 3800,  7600},
+	{0b11011,  920, 1840, 3680,  7360},
+	{0b11100,  890, 1780, 3560,  7120},
+	{0b11101,  870, 1740, 3480,  6960},
+	{0b11110,  850, 1700, 3400,  6800},
+	{0b11111,  830, 1660, 3320,  6640},
+	{0b00000,  810, 1620, 3240,  6480},
+	{0b00001,  790, 1580, 3160,  6320},
+	{0b00010,  775, 1550, 3100,  6200},
+	{0b00011,  760, 1520, 3040,  6080},
+	{0b00100,  745, 1490, 2980,  5960},
+	{0b00101,  730, 1460, 2920,  5840},
+	{0b00110,  715, 1430, 2860,  5720},
+	{0b00111,  700, 1400, 2800,  5600},
+	{0b01000,  690, 1380, 2760,  5520},
+	{0b01001,  680, 1360, 2720,  5440},
+	{0b01010,  670, 1340, 2680,  5360},
+	{0b01011,  660, 1320, 2640,  5280},
+	{0b01100,  655, 1310, 2620,  5240},
+	{0b01101,  650, 1300, 2600,  5200},
+	{0b01110,  645, 1290, 2580,  5160},
+	{0b01111,  640, 1280, 2560,  5120},
 	{REG_NULL,  0, 0, 0, 0},
 };
 
@@ -227,15 +233,14 @@ static int dw9714_write_msg(struct i2c_client *client,
 static unsigned int dw9714_move_time(struct dw9714_device *dev_vcm,
 	unsigned int move_pos)
 {
+	struct i2c_client *client = v4l2_get_subdevdata(&dev_vcm->sd);
 	unsigned int move_time_ms = 200;
 	unsigned int step_period_lsc = 0;
 	unsigned int step_period_dlc = 0;
-	unsigned int step_period = 0;
-	int i = 0;
-	int table_cnt = 0;
-	unsigned int step_case;
 	unsigned int codes_per_step = 1;
-	struct i2c_client *client = v4l2_get_subdevdata(&dev_vcm->sd);
+	unsigned int step_case;
+	int table_cnt = 0;
+	int i = 0;
 
 	if (dev_vcm->dlc_enable) {
 		step_case = dev_vcm->mclk & 0x3;
@@ -255,9 +260,9 @@ static unsigned int dw9714_move_time(struct dw9714_device *dev_vcm,
 		}
 	}
 
-	if (i >= table_cnt) {
+	if (i >= table_cnt)
 		i = 0;
-	}
+
 	switch (step_case) {
 	case 0:
 		step_period_lsc = dw9714_lsc_time_table[i].step00;
@@ -282,19 +287,17 @@ static unsigned int dw9714_move_time(struct dw9714_device *dev_vcm,
 		break;
 	}
 	codes_per_step = (dev_vcm->step_mode & 0x0c) >> 2;
-	if (codes_per_step > 1) {
+	if (codes_per_step > 1)
 		codes_per_step = 1 << (codes_per_step - 1);
+
+	if (!dev_vcm->dlc_enable) {
+		if (!codes_per_step)
+			move_time_ms = (step_period_lsc * move_pos + 9999) / 10000;
+		else
+			move_time_ms = (step_period_lsc * move_pos / codes_per_step + 9999) / 10000;
+	} else {
+		move_time_ms = (step_period_dlc + 999) / 1000;
 	}
-
-	if (dev_vcm->dlc_enable)
-		step_period = step_period_dlc;
-	else
-		step_period = step_period_lsc;
-
-	if (!codes_per_step)
-		move_time_ms = step_period * move_pos / 1000;
-	else
-		move_time_ms = step_period * move_pos / codes_per_step / 1000;
 
 	return move_time_ms;
 }
@@ -304,12 +307,12 @@ static int dw9714_get_pos(struct dw9714_device *dev_vcm,
 {
 	struct i2c_client *client = v4l2_get_subdevdata(&dev_vcm->sd);
 	int ret;
-	unsigned char lsb;
-	unsigned char msb;
+	unsigned char lsb = 0;
+	unsigned char msb = 0;
 	unsigned int abs_step;
 
 	ret = dw9714_read_msg(client, &msb, &lsb);
-	if (IS_ERR_VALUE(ret))
+	if (ret != 0)
 		goto err;
 
 	abs_step = (((unsigned int)(msb & 0x3FU)) << 4U) |
@@ -336,9 +339,9 @@ static int dw9714_set_pos(struct dw9714_device *dev_vcm,
 	unsigned int dest_pos)
 {
 	int ret;
-	unsigned char lsb;
-	unsigned char msb;
-	unsigned int position;
+	unsigned char lsb = 0;
+	unsigned char msb = 0;
+	unsigned int position = 0;
 	struct i2c_client *client = v4l2_get_subdevdata(&dev_vcm->sd);
 
 	if (dest_pos >= VCMDRV_MAX_LOG)
@@ -356,7 +359,7 @@ static int dw9714_set_pos(struct dw9714_device *dev_vcm,
 	lsb = (((dev_vcm->current_lens_pos & 0x0FU) << 4U) |
 		dev_vcm->step_mode);
 	ret = dw9714_write_msg(client, msb, lsb);
-	if (IS_ERR_VALUE(ret))
+	if (ret != 0)
 		goto err;
 
 	return ret;
@@ -382,7 +385,7 @@ static int dw9714_set_ctrl(struct v4l2_ctrl *ctrl)
 	struct i2c_client *client = v4l2_get_subdevdata(&dev_vcm->sd);
 	unsigned int dest_pos = ctrl->val;
 	int move_pos;
-	long int mv_us;
+	long mv_us;
 	int ret = 0;
 
 	if (ctrl->id == V4L2_CID_FOCUS_ABSOLUTE) {
@@ -391,34 +394,35 @@ static int dw9714_set_ctrl(struct v4l2_ctrl *ctrl)
 				"%s dest_pos is error. %d > %d\n",
 				__func__, dest_pos, VCMDRV_MAX_LOG);
 			return -EINVAL;
-		} else {
-			/* calculate move time */
-			move_pos = dev_vcm->current_related_pos - dest_pos;
-			if (move_pos < 0)
-				move_pos = -move_pos;
+		}
+		/* calculate move time */
+		move_pos = dev_vcm->current_related_pos - dest_pos;
+		if (move_pos < 0)
+			move_pos = -move_pos;
 
-			ret = dw9714_set_pos(dev_vcm, dest_pos);
+		ret = dw9714_set_pos(dev_vcm, dest_pos);
 
+		if (dev_vcm->dlc_enable)
+			dev_vcm->move_ms = dev_vcm->vcm_movefull_t;
+		else
 			dev_vcm->move_ms =
-				((dev_vcm->vcm_movefull_t *
-				(uint32_t)move_pos) /
-				VCMDRV_MAX_LOG);
-			dev_dbg(&client->dev,
-				"dest_pos %d, move_ms %ld\n",
-				dest_pos, dev_vcm->move_ms);
+				((dev_vcm->vcm_movefull_t * (uint32_t)move_pos) / VCMDRV_MAX_LOG);
 
-			dev_vcm->start_move_tv = ns_to_timeval(ktime_get_ns());
-			mv_us = dev_vcm->start_move_tv.tv_usec +
-					dev_vcm->move_ms * 1000;
-			if (mv_us >= 1000000) {
-				dev_vcm->end_move_tv.tv_sec =
-					dev_vcm->start_move_tv.tv_sec + 1;
-				dev_vcm->end_move_tv.tv_usec = mv_us - 1000000;
-			} else {
-				dev_vcm->end_move_tv.tv_sec =
-						dev_vcm->start_move_tv.tv_sec;
-				dev_vcm->end_move_tv.tv_usec = mv_us;
-			}
+		dev_dbg(&client->dev,
+			"dest_pos %d, move_ms %ld\n",
+			dest_pos, dev_vcm->move_ms);
+
+		dev_vcm->start_move_tv = ns_to_kernel_old_timeval(ktime_get_ns());
+		mv_us = dev_vcm->start_move_tv.tv_usec +
+				dev_vcm->move_ms * 1000;
+		if (mv_us >= 1000000) {
+			dev_vcm->end_move_tv.tv_sec =
+				dev_vcm->start_move_tv.tv_sec + 1;
+			dev_vcm->end_move_tv.tv_usec = mv_us - 1000000;
+		} else {
+			dev_vcm->end_move_tv.tv_sec =
+					dev_vcm->start_move_tv.tv_sec;
+			dev_vcm->end_move_tv.tv_usec = mv_us;
 		}
 	}
 
@@ -455,27 +459,68 @@ static const struct v4l2_subdev_internal_ops dw9714_int_ops = {
 	.close = dw9714_close,
 };
 
+static void dw9714_update_vcm_cfg(struct dw9714_device *dev_vcm)
+{
+	struct i2c_client *client = v4l2_get_subdevdata(&dev_vcm->sd);
+	int cur_dist;
+
+	if (dev_vcm->max_ma == 0) {
+		dev_err(&client->dev, "max current is zero");
+		return;
+	}
+
+	cur_dist = dev_vcm->vcm_cfg.rated_ma - dev_vcm->vcm_cfg.start_ma;
+	cur_dist = cur_dist * DW9714_MAX_REG / dev_vcm->max_ma;
+	dev_vcm->step = (cur_dist + (VCMDRV_MAX_LOG - 1)) / VCMDRV_MAX_LOG;
+	dev_vcm->start_current = dev_vcm->vcm_cfg.start_ma *
+				 DW9714_MAX_REG / dev_vcm->max_ma;
+	dev_vcm->rated_current = dev_vcm->start_current +
+				 VCMDRV_MAX_LOG * dev_vcm->step;
+	dev_vcm->step_mode = dev_vcm->vcm_cfg.step_mode;
+
+	dev_dbg(&client->dev,
+		"vcm_cfg: %d, %d, %d, max_ma %d\n",
+		dev_vcm->vcm_cfg.start_ma,
+		dev_vcm->vcm_cfg.rated_ma,
+		dev_vcm->vcm_cfg.step_mode,
+		dev_vcm->max_ma);
+}
+
 static long dw9714_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
 {
-	int ret = 0;
-	struct rk_cam_vcm_tim *vcm_tim;
+	struct dw9714_device *dev_vcm = sd_to_dw9714_vcm(sd);
 	struct i2c_client *client = v4l2_get_subdevdata(sd);
-	struct dw9714_device *dw9714_dev = sd_to_dw9714_vcm(sd);
+	struct rk_cam_vcm_tim *vcm_tim;
+	struct rk_cam_vcm_cfg *vcm_cfg;
+	int ret = 0;
 
 	if (cmd == RK_VIDIOC_VCM_TIMEINFO) {
 		vcm_tim = (struct rk_cam_vcm_tim *)arg;
 
-		vcm_tim->vcm_start_t.tv_sec = dw9714_dev->start_move_tv.tv_sec;
+		vcm_tim->vcm_start_t.tv_sec = dev_vcm->start_move_tv.tv_sec;
 		vcm_tim->vcm_start_t.tv_usec =
-				dw9714_dev->start_move_tv.tv_usec;
-		vcm_tim->vcm_end_t.tv_sec = dw9714_dev->end_move_tv.tv_sec;
-		vcm_tim->vcm_end_t.tv_usec = dw9714_dev->end_move_tv.tv_usec;
+				dev_vcm->start_move_tv.tv_usec;
+		vcm_tim->vcm_end_t.tv_sec = dev_vcm->end_move_tv.tv_sec;
+		vcm_tim->vcm_end_t.tv_usec = dev_vcm->end_move_tv.tv_usec;
 
 		dev_dbg(&client->dev, "dw9714_get_move_res 0x%lx, 0x%lx, 0x%lx, 0x%lx\n",
 			vcm_tim->vcm_start_t.tv_sec,
 			vcm_tim->vcm_start_t.tv_usec,
 			vcm_tim->vcm_end_t.tv_sec,
 			vcm_tim->vcm_end_t.tv_usec);
+	} else if (cmd == RK_VIDIOC_GET_VCM_CFG) {
+		vcm_cfg = (struct rk_cam_vcm_cfg *)arg;
+
+		vcm_cfg->start_ma = dev_vcm->vcm_cfg.start_ma;
+		vcm_cfg->rated_ma = dev_vcm->vcm_cfg.rated_ma;
+		vcm_cfg->step_mode = dev_vcm->vcm_cfg.step_mode;
+	} else if (cmd == RK_VIDIOC_SET_VCM_CFG) {
+		vcm_cfg = (struct rk_cam_vcm_cfg *)arg;
+
+		dev_vcm->vcm_cfg.start_ma = vcm_cfg->start_ma;
+		dev_vcm->vcm_cfg.rated_ma = vcm_cfg->rated_ma;
+		dev_vcm->vcm_cfg.step_mode = vcm_cfg->step_mode;
+		dw9714_update_vcm_cfg(dev_vcm);
 	} else {
 		dev_err(&client->dev,
 			"cmd 0x%x not supported\n", cmd);
@@ -489,17 +534,19 @@ static long dw9714_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
 static long dw9714_compat_ioctl32(struct v4l2_subdev *sd,
 	unsigned int cmd, unsigned long arg)
 {
-	struct rk_cam_vcm_tim vcm_tim;
-	struct rk_cam_compat_vcm_tim compat_vcm_tim;
-	struct rk_cam_compat_vcm_tim __user *p32 = compat_ptr(arg);
 	struct i2c_client *client = v4l2_get_subdevdata(sd);
+	void __user *up = compat_ptr(arg);
+	struct rk_cam_compat_vcm_tim compat_vcm_tim;
+	struct rk_cam_vcm_tim vcm_tim;
+	struct rk_cam_vcm_cfg vcm_cfg;
 	long ret;
 
 	if (cmd == RK_VIDIOC_COMPAT_VCM_TIMEINFO) {
+		struct rk_cam_compat_vcm_tim __user *p32 = up;
+
 		ret = dw9714_ioctl(sd, RK_VIDIOC_VCM_TIMEINFO, &vcm_tim);
 		compat_vcm_tim.vcm_start_t.tv_sec = vcm_tim.vcm_start_t.tv_sec;
-		compat_vcm_tim.vcm_start_t.tv_usec =
-				vcm_tim.vcm_start_t.tv_usec;
+		compat_vcm_tim.vcm_start_t.tv_usec = vcm_tim.vcm_start_t.tv_usec;
 		compat_vcm_tim.vcm_end_t.tv_sec = vcm_tim.vcm_end_t.tv_sec;
 		compat_vcm_tim.vcm_end_t.tv_usec = vcm_tim.vcm_end_t.tv_usec;
 
@@ -511,6 +558,19 @@ static long dw9714_compat_ioctl32(struct v4l2_subdev *sd,
 			&p32->vcm_end_t.tv_sec);
 		put_user(compat_vcm_tim.vcm_end_t.tv_usec,
 			&p32->vcm_end_t.tv_usec);
+	} else if (cmd == RK_VIDIOC_GET_VCM_CFG) {
+		ret = dw9714_ioctl(sd, RK_VIDIOC_GET_VCM_CFG, &vcm_cfg);
+		if (!ret) {
+			ret = copy_to_user(up, &vcm_cfg, sizeof(vcm_cfg));
+			if (ret)
+				ret = -EFAULT;
+		}
+	} else if (cmd == RK_VIDIOC_SET_VCM_CFG) {
+		ret = copy_from_user(&vcm_cfg, up, sizeof(vcm_cfg));
+		if (!ret)
+			ret = dw9714_ioctl(sd, cmd, &vcm_cfg);
+		else
+			ret = -EFAULT;
 	} else {
 		dev_err(&client->dev,
 			"cmd 0x%x not supported\n", cmd);
@@ -562,42 +622,71 @@ static int dw9714_probe(struct i2c_client *client,
 {
 	struct device_node *np = of_node_get(client->dev.of_node);
 	struct dw9714_device *dw9714_dev;
-	int ret;
-	int current_distance;
-	unsigned int start_current;
-	unsigned int rated_current;
-	unsigned int step_mode;
+	unsigned int max_ma, start_ma, rated_ma, step_mode;
+	unsigned int dlc_en, mclk, t_src;
 	struct v4l2_subdev *sd;
 	char facing[2];
-	unsigned char data = 0x0;
+	int ret;
 
 	dev_info(&client->dev, "probing...\n");
-	if (of_property_read_u32(
-		np,
+	if (of_property_read_u32(np,
+		OF_CAMERA_VCMDRV_MAX_CURRENT,
+		(unsigned int *)&max_ma)) {
+		max_ma = DW9714_MAX_CURRENT;
+		dev_info(&client->dev,
+			"could not get module %s from dts!\n",
+			OF_CAMERA_VCMDRV_MAX_CURRENT);
+	}
+	if (max_ma == 0)
+		max_ma = DW9714_MAX_CURRENT;
+
+	if (of_property_read_u32(np,
 		OF_CAMERA_VCMDRV_START_CURRENT,
-		(unsigned int *)&start_current)) {
-		start_current = DW9714_DEFAULT_START_CURRENT;
+		(unsigned int *)&start_ma)) {
+		start_ma = DW9714_DEFAULT_START_CURRENT;
 		dev_info(&client->dev,
 			"could not get module %s from dts!\n",
 			OF_CAMERA_VCMDRV_START_CURRENT);
 	}
-	if (of_property_read_u32(
-		np,
+	if (of_property_read_u32(np,
 		OF_CAMERA_VCMDRV_RATED_CURRENT,
-		(unsigned int *)&rated_current)) {
-		rated_current = DW9714_DEFAULT_RATED_CURRENT;
+		(unsigned int *)&rated_ma)) {
+		rated_ma = DW9714_DEFAULT_RATED_CURRENT;
 		dev_info(&client->dev,
 			"could not get module %s from dts!\n",
 			OF_CAMERA_VCMDRV_RATED_CURRENT);
 	}
-	if (of_property_read_u32(
-		np,
+	if (of_property_read_u32(np,
 		OF_CAMERA_VCMDRV_STEP_MODE,
 		(unsigned int *)&step_mode)) {
 		step_mode = DW9714_DEFAULT_STEP_MODE;
 		dev_info(&client->dev,
 			"could not get module %s from dts!\n",
 			OF_CAMERA_VCMDRV_STEP_MODE);
+	}
+	if (of_property_read_u32(np,
+		OF_CAMERA_VCMDRV_DLC_ENABLE,
+		(unsigned int *)&dlc_en)) {
+		dlc_en = DW9714_DEFAULT_DLC_EN;
+		dev_info(&client->dev,
+			"could not get module %s from dts!\n",
+			OF_CAMERA_VCMDRV_DLC_ENABLE);
+	}
+	if (of_property_read_u32(np,
+		OF_CAMERA_VCMDRV_MCLK,
+		(unsigned int *)&mclk)) {
+		mclk = DW9714_DEFAULT_MCLK;
+		dev_info(&client->dev,
+			"could not get module %s from dts!\n",
+			OF_CAMERA_VCMDRV_MCLK);
+	}
+	if (of_property_read_u32(np,
+		OF_CAMERA_VCMDRV_T_SRC,
+		(unsigned int *)&t_src)) {
+		t_src = DW9714_DEFAULT_T_SRC;
+		dev_info(&client->dev,
+			"could not get module %s from dts!\n",
+			OF_CAMERA_VCMDRV_T_SRC);
 	}
 
 	dw9714_dev = devm_kzalloc(&client->dev, sizeof(*dw9714_dev),
@@ -623,12 +712,12 @@ static int dw9714_probe(struct i2c_client *client,
 	if (ret)
 		goto err_cleanup;
 
-	ret = media_entity_init(&dw9714_dev->sd.entity, 0, NULL, 0);
+	ret = media_entity_pads_init(&dw9714_dev->sd.entity, 0, NULL);
 	if (ret < 0)
 		goto err_cleanup;
 
 	sd = &dw9714_dev->sd;
-	sd->entity.type = MEDIA_ENT_T_V4L2_SUBDEV_LENS;
+	sd->entity.function = MEDIA_ENT_F_LENS;
 
 	memset(facing, 0, sizeof(facing));
 	if (strcmp(dw9714_dev->module_facing, "back") == 0)
@@ -643,48 +732,19 @@ static int dw9714_probe(struct i2c_client *client,
 	if (ret)
 		dev_err(&client->dev, "v4l2 async register subdev failed\n");
 
-	current_distance = rated_current - start_current;
-	current_distance = current_distance * DW9714_MAX_REG /
-						DW9714_MAX_CURRENT;
-	dw9714_dev->step = (current_distance + (VCMDRV_MAX_LOG - 1)) /
-						VCMDRV_MAX_LOG;
-	dw9714_dev->start_current = start_current * DW9714_MAX_REG /
-						DW9714_MAX_CURRENT;
-	dw9714_dev->rated_current = dw9714_dev->start_current +
-						VCMDRV_MAX_LOG *
-						dw9714_dev->step;
-	dw9714_dev->step_mode     = step_mode;
+	dw9714_dev->max_ma = max_ma;
+	dw9714_dev->vcm_cfg.start_ma = start_ma;
+	dw9714_dev->vcm_cfg.rated_ma = rated_ma;
+	dw9714_dev->vcm_cfg.step_mode = step_mode;
+	dw9714_update_vcm_cfg(dw9714_dev);
 	dw9714_dev->move_ms       = 0;
 	dw9714_dev->current_related_pos = VCMDRV_MAX_LOG;
-	dw9714_dev->start_move_tv = ns_to_timeval(ktime_get_ns());
-	dw9714_dev->end_move_tv = ns_to_timeval(ktime_get_ns());
+	dw9714_dev->start_move_tv = ns_to_kernel_old_timeval(ktime_get_ns());
+	dw9714_dev->end_move_tv = ns_to_kernel_old_timeval(ktime_get_ns());
 
-	dw9714_dev->dlc_enable = 0;
-	dw9714_dev->mclk = 0;
-	dw9714_dev->t_src = 0x0;
-
-	ret = dw9714_write_msg(client, 0xEC, 0xA3);
-	if (IS_ERR_VALUE(ret))
-		dev_err(&client->dev,
-			"%s: failed with error %d\n", __func__, ret);
-
-	data = (dw9714_dev->mclk & 0x3) | 0x04 |
-			((dw9714_dev->dlc_enable << 0x3) & 0x08);
-	ret = dw9714_write_msg(client, 0xA1, data);
-	if (IS_ERR_VALUE(ret))
-		dev_err(&client->dev,
-			"%s: failed with error %d\n", __func__, ret);
-
-	data = (dw9714_dev->t_src << 0x5) & 0xf8;
-	ret = dw9714_write_msg(client, 0xF2, data);
-	if (IS_ERR_VALUE(ret))
-		dev_err(&client->dev,
-			"%s: failed with error %d\n", __func__, ret);
-
-	ret = dw9714_write_msg(client, 0xDC, 0x51);
-	if (IS_ERR_VALUE(ret))
-		dev_err(&client->dev,
-			"%s: failed with error %d\n", __func__, ret);
+	dw9714_dev->dlc_enable = dlc_en;
+	dw9714_dev->mclk = mclk;
+	dw9714_dev->t_src = t_src;
 
 	dw9714_dev->vcm_movefull_t =
 		dw9714_move_time(dw9714_dev, DW9714_MAX_REG);
@@ -713,6 +773,47 @@ static int dw9714_remove(struct i2c_client *client)
 	return 0;
 }
 
+static int dw9714_init(struct i2c_client *client)
+{
+	struct v4l2_subdev *sd = i2c_get_clientdata(client);
+	struct dw9714_device *dw9714_dev = sd_to_dw9714_vcm(sd);
+	unsigned char data = 0x0;
+	int ret = 0;
+
+	// need to wait 12ms after poweron
+	usleep_range(12000, 12500);
+
+	ret = dw9714_write_msg(client, 0xEC, 0xA3);
+	if (ret)
+		goto err;
+
+	data = (dw9714_dev->mclk & 0x3) | 0x04 |
+			((dw9714_dev->dlc_enable << 0x3) & 0x08);
+	ret = dw9714_write_msg(client, 0xA1, data);
+	if (ret)
+		goto err;
+
+	data = (dw9714_dev->t_src << 0x3) & 0xf8;
+	ret = dw9714_write_msg(client, 0xF2, data);
+	if (ret)
+		goto err;
+
+	ret = dw9714_write_msg(client, 0xDC, 0x51);
+	if (ret)
+		goto err;
+
+	/* set normal mode */
+	ret = dw9714_write_msg(client, 0xDF, 0x5B);
+	if (ret != 0)
+		dev_err(&client->dev,
+			"%s: failed with error %d\n", __func__, ret);
+
+	return 0;
+err:
+	dev_err(&client->dev, "failed with error %d\n", ret);
+	return -1;
+}
+
 static int __maybe_unused dw9714_vcm_suspend(struct device *dev)
 {
 	return 0;
@@ -720,6 +821,12 @@ static int __maybe_unused dw9714_vcm_suspend(struct device *dev)
 
 static int __maybe_unused dw9714_vcm_resume(struct device *dev)
 {
+	struct i2c_client *client = to_i2c_client(dev);
+	struct v4l2_subdev *sd = i2c_get_clientdata(client);
+	struct dw9714_device *dev_vcm = sd_to_dw9714_vcm(sd);
+
+	dw9714_init(client);
+	dw9714_set_pos(dev_vcm, dev_vcm->current_related_pos);
 	return 0;
 }
 
@@ -730,7 +837,7 @@ static const struct i2c_device_id dw9714_id_table[] = {
 MODULE_DEVICE_TABLE(i2c, dw9714_id_table);
 
 static const struct of_device_id dw9714_of_table[] = {
-	{ .compatible = "silicon touch,dw9714" },
+	{ .compatible = "dongwoon,dw9714" },
 	{ { 0 } }
 };
 MODULE_DEVICE_TABLE(of, dw9714_of_table);

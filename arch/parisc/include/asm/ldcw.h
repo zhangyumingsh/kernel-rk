@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef __PARISC_LDCW_H
 #define __PARISC_LDCW_H
 
@@ -42,7 +43,7 @@
    memory to indicate to the compiler that the assembly code reads
    or writes to items other than those listed in the input and output
    operands.  This may pessimize the code somewhat but __ldcw is
-   usually used within code blocks surrounded by memory barriors.  */
+   usually used within code blocks surrounded by memory barriers.  */
 #define __ldcw(a) ({						\
 	unsigned __ret;						\
 	__asm__ __volatile__(__LDCW " 0(%1),%0"			\
@@ -51,7 +52,7 @@
 })
 
 #ifdef CONFIG_SMP
-# define __lock_aligned __attribute__((__section__(".data..lock_aligned")))
+# define __lock_aligned __section(".data..lock_aligned")
 #endif
 
 #endif /* __PARISC_LDCW_H */

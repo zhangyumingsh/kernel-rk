@@ -1,23 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * OSS compatible sequencer driver
  *
  * synth device handlers
  *
  * Copyright (C) 1998,99 Takashi Iwai <tiwai@suse.de>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307 USA
  */
 
 #include "seq_oss_synth.h"
@@ -71,11 +58,11 @@ struct seq_oss_synth {
 static int max_synth_devs;
 static struct seq_oss_synth *synth_devs[SNDRV_SEQ_OSS_MAX_SYNTH_DEVS];
 static struct seq_oss_synth midi_synth_dev = {
-	-1, /* seq_device */
-	SYNTH_TYPE_MIDI, /* synth_type */
-	0, /* synth_subtype */
-	16, /* nr_voices */
-	"MIDI", /* name */
+	.seq_device = -1,
+	.synth_type = SYNTH_TYPE_MIDI,
+	.synth_subtype = 0,
+	.nr_voices = 16,
+	.name = "MIDI",
 };
 
 static DEFINE_SPINLOCK(register_lock);
@@ -624,7 +611,8 @@ snd_seq_oss_synth_make_info(struct seq_oss_devinfo *dp, int dev, struct synth_in
 
 	if (info->is_midi) {
 		struct midi_info minf;
-		snd_seq_oss_midi_make_info(dp, info->midi_mapped, &minf);
+		if (snd_seq_oss_midi_make_info(dp, info->midi_mapped, &minf))
+			return -ENXIO;
 		inf->synth_type = SYNTH_TYPE_MIDI;
 		inf->synth_subtype = 0;
 		inf->nr_voices = 16;

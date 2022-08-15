@@ -113,10 +113,6 @@
 	cpu-supply = <&vdd_arm>;
 };
 
-&display_subsystem {
-	status = "okay";
-};
-
 &dfi {
 	status = "okay";
 };
@@ -130,7 +126,8 @@
 	bus-width = <8>;
 	cap-mmc-highspeed;
 	mmc-hs200-1_8v;
-	supports-emmc;
+	no-sdio;
+	no-sd;
 	disable-wp;
 	non-removable;
 	num-slots = <1>;
@@ -428,10 +425,6 @@
 		pwdn-gpios = <&gpio2 14 GPIO_ACTIVE_HIGH>;
 		pinctrl-names = "default";
 		pinctrl-0 = <&cif_clkout_m0>;
-		rockchip,camera-module-index = <0>;
-		rockchip,camera-module-facing = "back";
-		rockchip,camera-module-name = "TongJu";
-		rockchip,camera-module-lens-name = "CHT842-MD";
 		port {
 			ucam_out: endpoint {
 				remote-endpoint = <&mipi_in_ucam>;
@@ -530,7 +523,8 @@
 	bus-width = <4>;
 	cap-mmc-highspeed;
 	cap-sd-highspeed;
-	supports-sd;
+	no-sdio;
+	no-mmc;
 	card-detect-delay = <800>;
 	ignore-pm-notify;
 	/*cd-gpios = <&gpio2 4 GPIO_ACTIVE_HIGH>; [> CD GPIO <]*/
@@ -546,7 +540,8 @@
 &sdio {
 	bus-width = <4>;
 	cap-sd-highspeed;
-	supports-sdio;
+	no-sd;
+	no-mmc;
 	ignore-pm-notify;
 	keep-power-in-suspend;
 	non-removable;
@@ -555,23 +550,27 @@
 	status = "okay";
 };
 
-&vopb {
+&mpp_srv {
 	status = "okay";
 };
 
-&vopb_mmu {
+&vdpu {
 	status = "okay";
 };
 
-&vopl {
+&vepu {
 	status = "okay";
 };
 
-&vopl_mmu {
+&vpu_mmu {
 	status = "okay";
 };
 
-&vpu_combo {
+&hevc {
+	status = "okay";
+};
+
+&hevc_mmu {
 	status = "okay";
 };
 
@@ -607,12 +606,12 @@
 
 		soc_slppin_slp: soc_slppin_slp {
 			rockchip,pins =
-				<0 RK_PA4 RK_FUNC_1 &pcfg_pull_none>;
+				<0 RK_PA4 1 &pcfg_pull_none>;
 		};
 
 		soc_slppin_rst: soc_slppin_rst {
 			rockchip,pins =
-				<0 RK_PA4 RK_FUNC_2 &pcfg_pull_none>;
+				<0 RK_PA4 2 &pcfg_pull_none>;
 		};
 	};
 

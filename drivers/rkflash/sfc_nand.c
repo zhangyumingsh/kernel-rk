@@ -101,6 +101,8 @@ static struct nand_info spi_nand_tbl[] = {
 	{ 0xCD, 0xEB, 0x00, 4, 0x40, 1, 2048, 0x4C, 19, 0x4, 0, { 0x04, 0x08, 0xFF, 0xFF }, &sfc_nand_get_ecc_status1 },
 	/* FS35ND04G-S2Y2 1*4096 */
 	{ 0xCD, 0xEC, 0x00, 4, 0x40, 2, 2048, 0x4C, 20, 0x4, 0, { 0x04, 0x08, 0xFF, 0xFF }, &sfc_nand_get_ecc_status1 },
+	/* F35SQA001G */
+	{ 0xCD, 0x71, 0x00, 4, 0x40, 1, 1024, 0x4C, 18, 0x1, 1, { 0x04, 0x08, 0xFF, 0xFF }, &sfc_nand_get_ecc_status1 },
 
 	/* DS35Q1GA-IB */
 	{ 0xE5, 0x71, 0x00, 4, 0x40, 1, 1024, 0x0C, 18, 0x4, 1, { 0x04, 0x14, 0xFF, 0xFF }, &sfc_nand_get_ecc_status1 },
@@ -166,7 +168,7 @@ static struct nand_info spi_nand_tbl[] = {
 };
 
 static struct nand_info *p_nand_info;
-static u32 gp_page_buf[SFC_NAND_PAGE_MAX_SIZE / 4];
+static u32 *gp_page_buf;
 static struct SFNAND_DEV sfc_nand_dev;
 
 static struct nand_info *sfc_nand_get_info(u8 *nand_id)
@@ -715,6 +717,30 @@ u32 sfc_nand_erase_block(u8 cs, u32 addr)
 	return ret;
 }
 
+static u32 sfc_nand_read_cache(u32 row, u32 *p_page_buf, u32 column, u32 len)
+{
+	int ret;
+	u32 plane;
+	struct rk_sfc_op op;
+
+	op.sfcmd.d32 = 0;
+	op.sfcmd.b.cmd = sfc_nand_dev.page_read_cmd;
+	op.sfcmd.b.addrbits = SFC_ADDR_XBITS;
+	op.sfcmd.b.dummybits = 8;
+
+	op.sfctrl.d32 = 0;
+	op.sfctrl.b.datalines = sfc_nand_dev.read_lines;
+	op.sfctrl.b.addrbits = 16;
+
+	plane = p_nand_info->plane_per_die == 2 ? ((row >> 6) & 0x1) << 12 : 0;
+
+	ret = sfc_request(&op, plane | column, p_page_buf, len);
+	if (ret != SFC_OK)
+		return SFC_NAND_HW_ERROR;
+
+	return ret;
+}
+
 u32 sfc_nand_prog_page_raw(u8 cs, u32 addr, u32 *p_page_buf)
 {
 	int ret;
@@ -722,6 +748,7 @@ u32 sfc_nand_prog_page_raw(u8 cs, u32 addr, u32 *p_page_buf)
 	struct rk_sfc_op op;
 	u8 status;
 	u32 page_size = SFC_NAND_SECTOR_FULL_SIZE * p_nand_info->sec_per_page;
+	u32 data_area_size = SFC_NAND_SECTOR_SIZE * p_nand_info->sec_per_page;
 
 	rkflash_print_dio("%s %x %x\n", __func__, addr, p_page_buf[0]);
 	sfc_nand_write_en();
@@ -742,6 +769,21 @@ u32 sfc_nand_prog_page_raw(u8 cs, u32 addr, u32 *p_page_buf)
 	plane = p_nand_info->plane_per_die == 2 ? ((addr >> 6) & 0x1) << 12 : 0;
 	sfc_request(&op, plane, p_page_buf, page_size);
 
+	/*
+	 * At the moment of power lost or dev running in harsh environment, flash
+	 * maybe work in a unkonw state and result in bit flip, when this situation
+	 * is detected by cache recheck, it's better to wait a second for a reliable
+	 * hardware environment to avoid abnormal data written to flash array.
+	 */
+	if (p_nand_info->id0 == MID_GIGADEV) {
+		sfc_nand_read_cache(addr, (u32 *)sfc_nand_dev.recheck_buffer, 0, data_area_size);
+		if (memcmp(sfc_nand_dev.recheck_buffer, p_page_buf, data_area_size)) {
+			rkflash_print_error("%s cache bitflip1\n", __func__);
+			msleep(1000);
+			sfc_request(&op, plane, p_page_buf, page_size);
+		}
+	}
+
 	op.sfcmd.d32 = 0;
 	op.sfcmd.b.cmd = 0x10;
 	op.sfcmd.b.addrbits = SFC_ADDR_24BITS;
@@ -754,7 +796,6 @@ u32 sfc_nand_prog_page_raw(u8 cs, u32 addr, u32 *p_page_buf)
 		return ret;
 
 	ret = sfc_nand_wait_busy(&status, 1000 * 1000);
-
 	if (status & (1 << 3))
 		return SFC_NAND_PROG_ERASE_ERROR;
 
@@ -923,6 +964,7 @@ int sfc_nand_read_id(u8 *data)
 	return ret;
 }
 
+#if defined(CONFIG_RK_SFTL)
 /*
  * Read the 1st page's 1st byte of a phy_blk
  * If not FF, it's bad blk
@@ -977,6 +1019,7 @@ void sfc_nand_ftl_ops_init(void)
 	g_nand_ops.read_page		= sfc_nand_read_page;
 	g_nand_ops.bch_sel		= NULL;
 }
+#endif
 
 static int sfc_nand_enable_QE(void)
 {
@@ -1015,6 +1058,10 @@ u32 sfc_nand_init(void)
 		return (u32)FTL_UNSUPPORTED_FLASH;
 	}
 
+	gp_page_buf = (u32 *)__get_free_pages(GFP_KERNEL | GFP_DMA32, get_order(SFC_NAND_PAGE_MAX_SIZE));
+	if (!gp_page_buf)
+		return -ENOMEM;
+
 	sfc_nand_dev.manufacturer = id_byte[0];
 	sfc_nand_dev.mem_type = id_byte[1];
 	sfc_nand_dev.capacity = p_nand_info->density;
@@ -1027,6 +1074,11 @@ u32 sfc_nand_init(void)
 	sfc_nand_dev.prog_lines = DATA_LINES_X1;
 	sfc_nand_dev.page_read_cmd = 0x03;
 	sfc_nand_dev.page_prog_cmd = 0x02;
+	sfc_nand_dev.recheck_buffer = (u8 *)__get_free_pages(GFP_KERNEL | GFP_DMA32, get_order(SFC_NAND_PAGE_MAX_SIZE));
+	if (!sfc_nand_dev.recheck_buffer) {
+		pr_err("%s recheck_buffer alloc failed\n", __func__);
+		return -ENOMEM;
+	}
 
 	if (p_nand_info->feature & FEA_4BIT_READ) {
 		if ((p_nand_info->has_qe_bits && sfc_nand_enable_QE() == SFC_OK) ||
@@ -1057,6 +1109,8 @@ u32 sfc_nand_init(void)
 void sfc_nand_deinit(void)
 {
 	/* to-do */
+	free_pages((unsigned long)sfc_nand_dev.recheck_buffer, get_order(SFC_NAND_PAGE_MAX_SIZE));
+	free_pages((unsigned long)gp_page_buf, get_order(SFC_NAND_PAGE_MAX_SIZE));
 }
 
 struct SFNAND_DEV *sfc_nand_get_private_dev(void)

@@ -221,7 +221,7 @@ devm_clk_regmap_register_composite(struct device *dev, const char *name,
 	struct clk_hw *mux_hw = NULL, *div_hw = NULL, *gate_hw = NULL;
 	struct clk_hw *fd_hw = NULL;
 	struct clk *clk;
-	struct clk_init_data init;
+	struct clk_init_data init = {};
 	struct clk_regmap_composite *composite;
 	struct clk_ops *clk_composite_ops;
 

@@ -7,7 +7,7 @@
 #include "px30-evb-ddr3-v10-linux.dts"
 
 / {
-	model = "Rockchip PX30 evb ddr3 board";
+	model = "Rockchip linux PX30 evb ddr3 board";
 	compatible = "rockchip,px30-evb-ddr3-v11-linux", "rockchip,px30";
 };
 
@@ -15,7 +15,7 @@
 	status = "okay";
 
 	panel@0 {
-		compatible = "simple-panel-dsi";
+		compatible = "sitronix,st7703", "simple-panel-dsi";
 		reg = <0>;
 		power-supply = <&vcc3v3_lcd>;
 		backlight = <&backlight>;
@@ -267,6 +267,30 @@
 				pixelclk-active = <0>;
 			};
 		};
+
+		ports {
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			port@0 {
+				reg = <0>;
+				panel_in_dsi: endpoint {
+					remote-endpoint = <&dsi_out_panel>;
+				};
+			};
+		};
+
 	};
 
+	ports {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		port@1 {
+			reg = <1>;
+			dsi_out_panel: endpoint {
+				remote-endpoint = <&panel_in_dsi>;
+			};
+		};
+	};
 };

@@ -1,8 +1,7 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * QLogic qlcnic NIC Driver
  * Copyright (c) 2009-2013 QLogic Corporation
- *
- * See LICENSE.qlcnic for copyright and licensing details.
  */
 
 #include <linux/netdevice.h>
@@ -102,7 +101,6 @@
 #define QLCNIC_RESPONSE_DESC	0x05
 #define QLCNIC_LRO_DESC  	0x12
 
-#define QLCNIC_TX_POLL_BUDGET		128
 #define QLCNIC_TCP_HDR_SIZE		20
 #define QLCNIC_TCP_TS_OPTION_SIZE	12
 #define QLCNIC_FETCH_RING_ID(handle)	((handle) >> 63)
@@ -460,7 +458,7 @@ static int qlcnic_tx_pkt(struct qlcnic_adapter *adapter,
 			 struct cmd_desc_type0 *first_desc, struct sk_buff *skb,
 			 struct qlcnic_host_tx_ring *tx_ring)
 {
-	u8 l4proto, opcode = 0, hdr_len = 0;
+	u8 l4proto, opcode = 0, hdr_len = 0, tag_vlan = 0;
 	u16 flags = 0, vlan_tci = 0;
 	int copied, offset, copy_len, size;
 	struct cmd_desc_type0 *hwdesc;
@@ -473,14 +471,16 @@ static int qlcnic_tx_pkt(struct qlcnic_adapter *adapter,
 		flags = QLCNIC_FLAGS_VLAN_TAGGED;
 		vlan_tci = ntohs(vh->h_vlan_TCI);
 		protocol = ntohs(vh->h_vlan_encapsulated_proto);
+		tag_vlan = 1;
 	} else if (skb_vlan_tag_present(skb)) {
 		flags = QLCNIC_FLAGS_VLAN_OOB;
 		vlan_tci = skb_vlan_tag_get(skb);
+		tag_vlan = 1;
 	}
 	if (unlikely(adapter->tx_pvid)) {
-		if (vlan_tci && !(adapter->flags & QLCNIC_TAGGING_ENABLED))
+		if (tag_vlan && !(adapter->flags & QLCNIC_TAGGING_ENABLED))
 			return -EIO;
-		if (vlan_tci && (adapter->flags & QLCNIC_TAGGING_ENABLED))
+		if (tag_vlan && (adapter->flags & QLCNIC_TAGGING_ENABLED))
 			goto set_flags;
 
 		flags = QLCNIC_FLAGS_VLAN_OOB;
@@ -580,7 +580,7 @@ static int qlcnic_map_tx_skb(struct pci_dev *pdev, struct sk_buff *skb,
 			     struct qlcnic_cmd_buffer *pbuf)
 {
 	struct qlcnic_skb_frag *nf;
-	struct skb_frag_struct *frag;
+	skb_frag_t *frag;
 	int i, nr_frags;
 	dma_addr_t map;
 
@@ -772,6 +772,8 @@ netdev_tx_t qlcnic_xmit_frame(struct sk_buff *skb, struct net_device *netdev)
 	tx_ring->tx_stats.tx_bytes += skb->len;
 	tx_ring->tx_stats.xmit_called++;
 
+	/* Ensure writes are complete before HW fetches Tx descriptors */
+	wmb();
 	qlcnic_update_cmd_producer(tx_ring);
 
 	return NETDEV_TX_OK;
@@ -974,7 +976,7 @@ static int qlcnic_poll(struct napi_struct *napi, int budget)
 		work_done = budget;
 
 	if (work_done < budget) {
-		napi_complete(&sds_ring->napi);
+		napi_complete_done(&sds_ring->napi, work_done);
 		if (test_bit(__QLCNIC_DEV_UP, &adapter->state)) {
 			qlcnic_enable_sds_intr(adapter, sds_ring);
 			qlcnic_enable_tx_intr(adapter, tx_ring);
@@ -1018,7 +1020,7 @@ static int qlcnic_rx_poll(struct napi_struct *napi, int budget)
 	work_done = qlcnic_process_rcv_ring(sds_ring, budget);
 
 	if (work_done < budget) {
-		napi_complete(&sds_ring->napi);
+		napi_complete_done(&sds_ring->napi, work_done);
 		if (test_bit(__QLCNIC_DEV_UP, &adapter->state))
 			qlcnic_enable_sds_intr(adapter, sds_ring);
 	}
@@ -1604,7 +1606,7 @@ int qlcnic_82xx_napi_add(struct qlcnic_adapter *adapter,
 	if (qlcnic_check_multi_tx(adapter) && !adapter->ahw->diag_test) {
 		for (ring = 0; ring < adapter->drv_tx_rings; ring++) {
 			tx_ring = &adapter->tx_ring[ring];
-			netif_napi_add(netdev, &tx_ring->napi, qlcnic_tx_poll,
+			netif_tx_napi_add(netdev, &tx_ring->napi, qlcnic_tx_poll,
 				       NAPI_POLL_WEIGHT);
 		}
 	}
@@ -1965,7 +1967,7 @@ static int qlcnic_83xx_msix_sriov_vf_poll(struct napi_struct *napi, int budget)
 		work_done = budget;
 
 	if (work_done < budget) {
-		napi_complete(&sds_ring->napi);
+		napi_complete_done(&sds_ring->napi, work_done);
 		qlcnic_enable_sds_intr(adapter, sds_ring);
 	}
 
@@ -1993,7 +1995,7 @@ static int qlcnic_83xx_poll(struct napi_struct *napi, int budget)
 		work_done = budget;
 
 	if (work_done < budget) {
-		napi_complete(&sds_ring->napi);
+		napi_complete_done(&sds_ring->napi, work_done);
 		qlcnic_enable_sds_intr(adapter, sds_ring);
 	}
 
@@ -2006,7 +2008,6 @@ static int qlcnic_83xx_msix_tx_poll(struct napi_struct *napi, int budget)
 	struct qlcnic_host_tx_ring *tx_ring;
 	struct qlcnic_adapter *adapter;
 
-	budget = QLCNIC_TX_POLL_BUDGET;
 	tx_ring = container_of(napi, struct qlcnic_host_tx_ring, napi);
 	adapter = tx_ring->adapter;
 	work_done = qlcnic_process_cmd_ring(adapter, tx_ring, budget);
@@ -2032,7 +2033,7 @@ static int qlcnic_83xx_rx_poll(struct napi_struct *napi, int budget)
 	adapter = sds_ring->adapter;
 	work_done = qlcnic_83xx_process_rcv_ring(sds_ring, budget);
 	if (work_done < budget) {
-		napi_complete(&sds_ring->napi);
+		napi_complete_done(&sds_ring->napi, work_done);
 		if (test_bit(__QLCNIC_DEV_UP, &adapter->state))
 			qlcnic_enable_sds_intr(adapter, sds_ring);
 	}
@@ -2135,7 +2136,7 @@ int qlcnic_83xx_napi_add(struct qlcnic_adapter *adapter,
 	    !(adapter->flags & QLCNIC_TX_INTR_SHARED)) {
 		for (ring = 0; ring < adapter->drv_tx_rings; ring++) {
 			tx_ring = &adapter->tx_ring[ring];
-			netif_napi_add(netdev, &tx_ring->napi,
+			netif_tx_napi_add(netdev, &tx_ring->napi,
 				       qlcnic_83xx_msix_tx_poll,
 				       NAPI_POLL_WEIGHT);
 		}
@@ -2220,7 +2221,7 @@ void qlcnic_83xx_process_rcv_ring_diag(struct qlcnic_host_sds_ring *sds_ring)
 	if (!opcode)
 		return;
 
-	ring = QLCNIC_FETCH_RING_ID(qlcnic_83xx_hndl(sts_data[0]));
+	ring = QLCNIC_FETCH_RING_ID(sts_data[0]);
 	qlcnic_83xx_process_rcv_diag(adapter, ring, sts_data);
 	desc = &sds_ring->desc_head[consumer];
 	desc->status_desc_data[0] = cpu_to_le64(STATUS_OWNER_PHANTOM);

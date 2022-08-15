@@ -1,22 +1,8 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /* -*- mode: c; c-basic-offset: 8; -*-
  * vim: noexpandtab sw=8 ts=8 sts=0:
  *
  * configfs.h - definitions for the device driver filesystem
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public
- * License as published by the Free Software Foundation; either
- * version 2 of the License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * General Public License for more details.
- *
- * You should have received a copy of the GNU General Public
- * License along with this program; if not, write to the
- * Free Software Foundation, Inc., 59 Temple Place - Suite 330,
- * Boston, MA 021110-1307, USA.
  *
  * Based on sysfs:
  * 	sysfs is Copyright (C) 2001, 2002, 2003 Patrick Mochel
@@ -27,7 +13,7 @@
  *
  * configfs Copyright (C) 2005 Oracle.  All rights reserved.
  *
- * Please read Documentation/filesystems/configfs/configfs.txt before using
+ * Please read Documentation/filesystems/configfs.rst before using
  * the configfs interface, ESPECIALLY the parts about reference counts and
  * item destructors.
  */
@@ -35,14 +21,11 @@
 #ifndef _CONFIGFS_H_
 #define _CONFIGFS_H_
 
-#include <linux/kernel.h>
-#include <linux/types.h>
-#include <linux/list.h>
-#include <linux/kref.h>
-#include <linux/mutex.h>
-#include <linux/err.h>
-
-#include <linux/atomic.h>
+#include <linux/stat.h>   /* S_IRUGO */
+#include <linux/types.h>  /* ssize_t */
+#include <linux/list.h>   /* struct list_head */
+#include <linux/kref.h>   /* struct kref */
+#include <linux/mutex.h>  /* struct mutex */
 
 #define CONFIGFS_ITEM_NAME_LEN	20
 
@@ -51,6 +34,7 @@ struct module;
 struct configfs_item_operations;
 struct configfs_group_operations;
 struct configfs_attribute;
+struct configfs_bin_attribute;
 struct configfs_subsystem;
 
 struct config_item {
@@ -76,7 +60,8 @@ extern void config_item_init_type_name(struct config_item *item,
 				       const char *name,
 				       const struct config_item_type *type);
 
-extern struct config_item * config_item_get(struct config_item *);
+extern struct config_item *config_item_get(struct config_item *);
+extern struct config_item *config_item_get_unless_zero(struct config_item *);
 extern void config_item_put(struct config_item *);
 
 struct config_item_type {
@@ -84,6 +69,7 @@ struct config_item_type {
 	struct configfs_item_operations		*ct_item_ops;
 	struct configfs_group_operations	*ct_group_ops;
 	struct configfs_attribute		**ct_attrs;
+	struct configfs_bin_attribute		**ct_bin_attrs;
 };
 
 /**
@@ -161,6 +147,54 @@ static struct configfs_attribute _pfx##attr_##_name = {	\
 	.store		= _pfx##_name##_store,		\
 }
 
+struct file;
+struct vm_area_struct;
+
+struct configfs_bin_attribute {
+	struct configfs_attribute cb_attr;	/* std. attribute */
+	void *cb_private;			/* for user       */
+	size_t cb_max_size;			/* max core size  */
+	ssize_t (*read)(struct config_item *, void *, size_t);
+	ssize_t (*write)(struct config_item *, const void *, size_t);
+};
+
+#define CONFIGFS_BIN_ATTR(_pfx, _name, _priv, _maxsz)		\
+static struct configfs_bin_attribute _pfx##attr_##_name = {	\
+	.cb_attr = {						\
+		.ca_name	= __stringify(_name),		\
+		.ca_mode	= S_IRUGO | S_IWUSR,		\
+		.ca_owner	= THIS_MODULE,			\
+	},							\
+	.cb_private	= _priv,				\
+	.cb_max_size	= _maxsz,				\
+	.read		= _pfx##_name##_read,			\
+	.write		= _pfx##_name##_write,			\
+}
+
+#define CONFIGFS_BIN_ATTR_RO(_pfx, _name, _priv, _maxsz)	\
+static struct configfs_bin_attribute _pfx##attr_##_name = {	\
+	.cb_attr = {						\
+		.ca_name	= __stringify(_name),		\
+		.ca_mode	= S_IRUGO,			\
+		.ca_owner	= THIS_MODULE,			\
+	},							\
+	.cb_private	= _priv,				\
+	.cb_max_size	= _maxsz,				\
+	.read		= _pfx##_name##_read,			\
+}
+
+#define CONFIGFS_BIN_ATTR_WO(_pfx, _name, _priv, _maxsz)	\
+static struct configfs_bin_attribute _pfx##attr_##_name = {	\
+	.cb_attr = {						\
+		.ca_name	= __stringify(_name),		\
+		.ca_mode	= S_IWUSR,			\
+		.ca_owner	= THIS_MODULE,			\
+	},							\
+	.cb_private	= _priv,				\
+	.cb_max_size	= _maxsz,				\
+	.write		= _pfx##_name##_write,			\
+}
+
 /*
  * If allow_link() exists, the item can symlink(2) out to other
  * items.  If the item is a group, it may support mkdir(2).
@@ -218,7 +252,24 @@ void configfs_unregister_default_group(struct config_group *group);
 
 /* These functions can sleep and can alloc with GFP_KERNEL */
 /* WARNING: These cannot be called underneath configfs callbacks!! */
-int configfs_depend_item(struct configfs_subsystem *subsys, struct config_item *target);
-void configfs_undepend_item(struct configfs_subsystem *subsys, struct config_item *target);
+int configfs_depend_item(struct configfs_subsystem *subsys,
+			 struct config_item *target);
+void configfs_undepend_item(struct config_item *target);
+
+/*
+ * These functions can sleep and can alloc with GFP_KERNEL
+ * NOTE: These should be called only underneath configfs callbacks.
+ * NOTE: First parameter is a caller's subsystem, not target's.
+ * WARNING: These cannot be called on newly created item
+ *        (in make_group()/make_item() callback)
+ */
+int configfs_depend_item_unlocked(struct configfs_subsystem *caller_subsys,
+				  struct config_item *target);
+
+
+static inline void configfs_undepend_item_unlocked(struct config_item *target)
+{
+	configfs_undepend_item(target);
+}
 
 #endif /* _CONFIGFS_H_ */

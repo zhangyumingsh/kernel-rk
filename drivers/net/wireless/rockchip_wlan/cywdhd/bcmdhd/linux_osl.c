@@ -2,7 +2,7 @@
 /*
  * Linux OS Independent Layer
  *
- * Copyright (C) 1999-2018, Broadcom Corporation
+ * Copyright (C) 1999-2019, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -25,7 +25,7 @@
  *
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: linux_osl.c 589291 2015-09-29 07:09:00Z $
+ * $Id: linux_osl.c 709309 2019-01-17 09:04:00Z $
  */
 
 #define LINUX_PORT
@@ -993,6 +993,10 @@ osl_pkt_frmnative(osl_t *osh, void *pkt)
 	/* Increment the packet counter */
 	for (nskb = (struct sk_buff *)pkt; nskb; nskb = nskb->next) {
 		atomic_add(PKTISCHAINED(nskb) ? PKTCCNT(nskb) : 1, &osh->cmn->pktalloced);
+
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 18, 0))
+		nskb->prev = NULL;
+#endif /* LINUX_VERSION_CODE >= KERNEL_VERSION(3, 18, 0) */
 
 #ifdef BCMDBG_CTRACE
 		for (nskb1 = nskb; nskb1 != NULL; nskb1 = nskb2) {
@@ -1979,16 +1983,17 @@ osl_os_get_image_block(char *buf, int len, void *image)
 {
 	struct file *fp = (struct file *)image;
 	int rdlen;
+	loff_t pos;
 
 	if (!image)
 		return 0;
 
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0))
-        rdlen = kernel_read(fp, fp->f_pos, buf, len);
+	pos = fp->f_pos;
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 14, 0))
+	rdlen = kernel_read(fp, (void *) buf, (size_t) len, (loff_t *) &pos);
 #else
-        rdlen = kernel_read(fp, buf, len, (loff_t *)fp->f_pos);
-#endif /* (LINUX_VERSION_CODE < KERNEL_VERSION(4, 14, 0)) */
-
+	rdlen = kernel_read(fp, pos, buf, len);
+#endif
 	if (rdlen > 0)
 		fp->f_pos += rdlen;
 
@@ -2491,7 +2496,6 @@ osl_sec_dma_free_consistent(osl_t *osh, void *va, uint size, dmaaddr_t pa)
 
 #endif /* BCM_SECURE_DMA */
 
-#if 0
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(3, 6, 0) && defined(TSQ_MULTIPLIER)
 #include <linux/kallsyms.h>
 #include <net/sock.h>
@@ -2523,7 +2527,10 @@ osl_pkt_orphan_partial(struct sk_buff *skb)
 	 */
 	fraction = skb->truesize * (TSQ_MULTIPLIER - 1) / TSQ_MULTIPLIER;
 	skb->truesize -= fraction;
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 13, 0))
+	WARN_ON(refcount_sub_and_test(fraction, &skb->sk->sk_wmem_alloc));
+#else
 	atomic_sub(fraction, &skb->sk->sk_wmem_alloc);
+#endif
 }
 #endif /* LINUX_VERSION >= 3.6.0 && TSQ_MULTIPLIER */
-#endif

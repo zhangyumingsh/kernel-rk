@@ -2,7 +2,7 @@
 /*
  * BCMSDH Function Driver for the native SDIO/MMC driver in the Linux Kernel
  *
- * Copyright (C) 1999-2018, Broadcom Corporation
+ * Copyright (C) 1999-2019, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -25,7 +25,7 @@
  *
  * <<Broadcom-WL-IPTag/Proprietary,Open:>>
  *
- * $Id: bcmsdh_sdmmc.c 707694 2018-09-06 02:49:19Z $
+ * $Id: bcmsdh_sdmmc.c 712404 2019-03-20 06:20:25Z $
  */
 #include <typedefs.h>
 
@@ -106,7 +106,7 @@ uint sd_use_dma = TRUE;
  */
 #ifdef BCMSDIOH_TXGLOM
 uint sd_txglom = 1;
-module_param(sd_txglom, uint, 0);
+module_param(sd_txglom, uint, 0664);
 #endif /* BCMSDIOH_TXGLOM */
 
 DHD_PM_RESUME_WAIT_INIT(sdioh_request_byte_wait);

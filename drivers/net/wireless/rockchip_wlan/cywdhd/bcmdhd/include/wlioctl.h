@@ -7,7 +7,7 @@
  *
  * Definitions subject to change without notice.
  *
- * Copyright (C) 1999-2018, Broadcom Corporation
+ * Copyright (C) 1999-2019, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -28,7 +28,7 @@
  * other than the GPL, without Broadcom's express prior written consent.
  * <<Broadcom-WL-IPTag/Open:>>
  *
- * $Id: wlioctl.h 692666 2018-07-30 08:58:07Z $
+ * $Id: wlioctl.h 712434 2019-03-22 05:15:30Z $
  */
 
 #ifndef _wlioctl_h_
@@ -5199,6 +5199,34 @@ typedef BWL_PRE_PACKED_STRUCT struct wlc_ipfo_route_tbl {
 	wlc_ipfo_route_entry_t route_entry[1];
 } BWL_POST_PACKED_STRUCT wlc_ipfo_route_tbl_t;
 
+#ifdef WL_OLDPPR
+#define WL_CLM_NUM_RATES        178
+typedef BWL_PRE_PACKED_STRUCT struct {
+        uint32 flags;
+        chanspec_t chanspec;                    /* txpwr report for this channel */
+        chanspec_t local_chanspec;              /* channel on which we are associated */
+	uint8 local_max;                        /* local max according to the AP */
+	uint8 local_constraint;                 /* local constraint according to the AP */
+	int8  antgain[2];                       /* Ant gain for each band - from SROM */
+	uint8 rf_cores;                         /* count of RF Cores being reported */
+	uint8 est_Pout[4];                      /* Latest tx power out estimate per RF chain */
+	uint8 est_Pout_act[4];                  /* Latest tx power out estimate per RF chain
+	                                         * without adjustment
+	                                         */
+	uint8 est_Pout_cck;                     /* Latest CCK tx power out estimate */
+	uint8 tx_power_max[4];                  /* Maximum target power among all rates */
+	uint8 tx_power_max_rate_ind[4];         /* Index of the rate with the max target power */
+	uint8 user_limit;                       /* User limit */
+	int8 clm_limits[WL_CLM_NUM_RATES];              /* regulatory limits - 20 or 40MHz */
+	int8 clm_limits20in40[WL_CLM_NUM_RATES];        /* regulatory limits - 20in40MHz */
+	int8 sar;                               /* SAR limit for display by wl executable */
+	bool bandwidth_is_20MHz;                                /* 20 or 40MHz bandwidth? */
+	uint board_limit_len;                   /* board limit buffer length */
+	uint target_len;                        /* target limit buffer length */
+	uint8 ppr_buf[1];                       /* ppr serialization buffer */
+} BWL_POST_PACKED_STRUCT tx_pwr_rpt_t_old;
+#endif /* WL_OLDPPR */
+
 #define WL_IPFO_ROUTE_TBL_FIXED_LEN 4
 #define WL_MAX_IPFO_ROUTE_TBL_ENTRY	64
 
@@ -8602,5 +8630,138 @@ typedef struct wl_dltro_get_param {
 typedef struct wl_dltro_max_dltro {
 	uint8 max;	/* Max DLTRO supported */
 } wl_dltro_max_dltro_t;
+
+#ifdef WL_OLDPPR
+/* sslpnphy specifics */
+#define WL_TX_POWER_MCS20_SISO_FIRST_SSN   12       /* Index for first 20MHz MCS SISO rate */
+#define WL_TX_POWER_MCS40_SISO_FIRST_SSN   28       /* Index for first 40MHz MCS SISO rate */
+
+/* TX Power index defines */
+typedef struct cck {
+	uint8 s1x2[WL_NUM_RATES_CCK];	/* Legacy CCK to 2 Tx Chain */
+	uint8 s1x3[WL_NUM_RATES_CCK];	/* Legacy CCK to 3 Tx Chain */
+} cck_t;
+
+typedef struct ofdm {
+	uint8 s1x1[WL_NUM_RATES_OFDM];	/* Legacy OFDM to 1 Tx Chain */
+	uint8 s1x2[WL_NUM_RATES_OFDM];	/* Legacy OFDM to 2 Tx Chain */
+	uint8 s1x3[WL_NUM_RATES_OFDM];	/* Legacy OFDM to 3 Tx Chain */
+} ofdm_t;
+
+typedef struct stbc {
+	uint8 s2x2[WL_NUM_RATES_MCS_1STREAM];		/* STBC 20MHz to 2 Tx Chain */
+	uint8 s2x3[WL_NUM_RATES_MCS_1STREAM];		/* STBC 20MHz to 3 Tx Chain */
+	uint8 u40_s2x2[WL_NUM_RATES_MCS_1STREAM];	/* STBC 40MHz to 2 Tx Chain */
+	uint8 u40_s2x3[WL_NUM_RATES_MCS_1STREAM];	/* STBC 40MHz to 3 Tx Chain */
+	uint8 ul20_s2x2[WL_NUM_RATES_MCS_1STREAM];	/* STBC 20in40MHz to 2 Tx Chain */
+	uint8 ul20_s2x3[WL_NUM_RATES_MCS_1STREAM];	/* STBC 20in40MHz to 3 Tx Chain */
+} stbc_t;
+
+typedef struct n2x2 {
+	uint8 siso[WL_NUM_RATES_MCS_1STREAM];		/* SISO MCS 0-7 */
+	uint8 cdd[WL_NUM_RATES_MCS_1STREAM];		/* CDD MCS 0-7 */
+	uint8 stbc[WL_NUM_RATES_MCS_1STREAM];		/* STBC MCS 0-7 */
+	uint8 sdm[WL_NUM_RATES_MCS_1STREAM];		/* MCS 8-15 */
+} n2x2_t;
+
+typedef struct n3x3 {
+	uint8 s1x1[WL_NUM_RATES_MCS_1STREAM];		/* 1 Nsts to 1 Tx Chain */
+	uint8 s1x2[WL_NUM_RATES_MCS_1STREAM];		/* 1 Nsts to 2 Tx Chain */
+	uint8 s2x2[WL_NUM_RATES_MCS_1STREAM];		/* 2 Nsts to 2 Tx Chain */
+	uint8 s3x3[WL_NUM_RATES_MCS_1STREAM];		/* 3 Nsts to 3 Tx Chain */
+} n3x3_t;
+
+typedef struct n3x3a {
+	uint8 u20s1x3[WL_NUM_RATES_MCS_1STREAM];	/* 20 MHz 1 Nsts to 3 Tx Chain */
+	uint8 u20s2x3[WL_NUM_RATES_MCS_1STREAM];	/* 20 MHz 2 Nsts to 3 Tx Chain */
+	uint8 u40s1x3[WL_NUM_RATES_MCS_1STREAM];	/* 40 MHz 1 Nsts to 3 Tx Chain */
+	uint8 u40s2x3[WL_NUM_RATES_MCS_1STREAM];	/* 40 MHz 2 Nsts to 3 Tx Chain */
+	uint8 ul20s1x3[WL_NUM_RATES_MCS_1STREAM];	/* 20ul 1 Nsts to 3 Tx Chain */
+	uint8 ul20s2x3[WL_NUM_RATES_MCS_1STREAM];	/* 20ul 2 Nsts to 3 Tx Chain */
+} n3x3a_t;
+
+#define WL_NUM_2x2_ELEMENTS		4
+#define WL_NUM_3x3_ELEMENTS		6
+
+typedef struct txppr {
+	/* start of 20MHz tx power limits */
+	uint8 cck[WL_NUM_RATES_CCK];		/* Legacy CCK/DSSS */
+	uint8 ofdm[WL_NUM_RATES_OFDM];		/* 20 MHz Legacy OFDM transmission */
+	uint8 ofdm_cdd[WL_NUM_RATES_OFDM];	/* 20 MHz Legacy OFDM CDD transmission */
+	union {
+		struct n2x2 n;			/* nphy MCS rates */
+		struct n3x3 ht;			/* htphy MCS rates */
+	} u20;
+	/* start of 40MHz tx power limits */
+	uint8 ofdm_40[WL_NUM_RATES_OFDM];	/* 40 MHz Legacy OFDM transmission */
+	uint8 ofdm_40_cdd[WL_NUM_RATES_OFDM];	/* 40 MHz Legacy OFDM CDD transmission */
+	union {
+		struct n2x2 n;
+		struct n3x3 ht;
+	} u40;
+	/* MCS32 tx power limits */
+	uint8 mcs32;
+	/* start of 20in40MHz tx power limits */
+	uint8 cck_20ul[WL_NUM_RATES_CCK];	/* 20 in 40MHz Legacy CCK/DSSS */
+	uint8 ofdm_20ul[WL_NUM_RATES_OFDM];	/* 20 in 40MHz Legacy OFDM transmission */
+	uint8 ofdm_20ul_cdd[WL_NUM_RATES_OFDM]; /* 20 in 40MHz Legacy OFDM CDD transmission */
+	n3x3_t ht20ul;				/* 20 in 40MHz MCS rates */
+	n3x3a_t ht;				/* 1 & 2 Nsts to 3 Tx chain rates */
+	cck_t cck_cdd;				/* 20 MHz CCK CDD 2 and 3 Tx chains */
+	cck_t cck_20ul_cdd;			/* 20 in 40MHz CCK CDD 2 and 3 Tx chains */
+} txppr_t;
+
+/* SROM 8 TX Power defines */
+/* 20MHz */
+#define WL_TX_POWER_CCK_FIRST		OFFSETOF(txppr_t, cck)		/* CCK */
+#define WL_TX_POWER_CCK_CDD_S1x2_FIRST	OFFSETOF(txppr_t, cck_cdd.s1x2)	/* CCK CDD 1x2 rate */
+#define WL_TX_POWER_CCK_CDD_S1x3_FIRST	OFFSETOF(txppr_t, cck_cdd.s1x3)	/* CCK CDD 1x3 rate */
+#define WL_TX_POWER_OFDM20_FIRST	OFFSETOF(txppr_t, ofdm)		/* OFDM SISO */
+#define WL_TX_POWER_OFDM20_CDD_FIRST	OFFSETOF(txppr_t, ofdm_cdd)	/* OFDM CDD rate */
+#define WL_TX_POWER_MCS20_SISO_FIRST	OFFSETOF(txppr_t, u20.n.siso)	/* MCS SISO rate */
+#define WL_TX_POWER_MCS20_CDD_FIRST	OFFSETOF(txppr_t, u20.n.cdd)	/* MCS CDD rate */
+#define WL_TX_POWER_MCS20_STBC_FIRST	OFFSETOF(txppr_t, u20.n.stbc)	/* MCS STBC rate */
+#define WL_TX_POWER_MCS20_SDM_FIRST	OFFSETOF(txppr_t, u20.n.sdm)	/* MCS SDM rate */
+
+#define WL_TX_POWER_20_S1x1_FIRST	OFFSETOF(txppr_t, u20.ht.s1x1)	/* MCS 0-7 rate */
+#define WL_TX_POWER_20_S1x2_FIRST	OFFSETOF(txppr_t, u20.ht.s1x2)	/* MCS 0-7 rate */
+#define WL_TX_POWER_20_S1x3_FIRST	OFFSETOF(txppr_t, ht.u20s1x3)	/* MCS 0-7 rate */
+#define WL_TX_POWER_20_S2x2_FIRST	OFFSETOF(txppr_t, u20.ht.s2x2)	/* MCS 8-15 rate */
+#define WL_TX_POWER_20_S2x3_FIRST	OFFSETOF(txppr_t, ht.u20s2x3)	/* MCS 8-15 rate */
+#define WL_TX_POWER_20_S3x3_FIRST	OFFSETOF(txppr_t, u20.ht.s3x3)	/* MCS 16-23 rate */
+
+/* 40MHz */
+#define WL_TX_POWER_OFDM40_FIRST	OFFSETOF(txppr_t, ofdm_40)	/* OFDM SISO rate */
+#define WL_TX_POWER_OFDM40_CDD_FIRST	OFFSETOF(txppr_t, ofdm_40_cdd)	/* OFDM CDD rate */
+#define WL_TX_POWER_MCS40_SISO_FIRST	OFFSETOF(txppr_t, u40.n.siso)	/* MCS SISO rate */
+#define WL_TX_POWER_MCS40_CDD_FIRST     OFFSETOF(txppr_t, u40.n.cdd)	/* MCS CDD rate */
+#define WL_TX_POWER_MCS40_STBC_FIRST	OFFSETOF(txppr_t, u40.n.stbc)	/* MCS STBC rate */
+#define WL_TX_POWER_MCS40_SDM_FIRST     OFFSETOF(txppr_t, u40.n.sdm)	/* MCS SDM rate */
+
+#define WL_TX_POWER_40_S1x1_FIRST	OFFSETOF(txppr_t, u40.ht.s1x1)	/* MCS 0-7 rate */
+#define WL_TX_POWER_40_S1x2_FIRST	OFFSETOF(txppr_t, u40.ht.s1x2)	/* MCS 0-7 rate */
+#define WL_TX_POWER_40_S1x3_FIRST	OFFSETOF(txppr_t, ht.u40s1x3)	/* MCS 0-7 rate */
+#define WL_TX_POWER_40_S2x2_FIRST	OFFSETOF(txppr_t, u40.ht.s2x2)	/* MCS 8-15 rate */
+#define WL_TX_POWER_40_S2x3_FIRST	OFFSETOF(txppr_t, ht.u40s2x3)	/* MCS 8-15 rate */
+#define WL_TX_POWER_40_S3x3_FIRST	OFFSETOF(txppr_t, u40.ht.s3x3)	/* MCS 16-23 rate */
+#define WL_TX_POWER_MCS_32	        OFFSETOF(txppr_t, mcs32)        /* MCS 32 rate */
+
+/* 20 in 40MHz */
+#define WL_TX_POWER_20UL_CCK_FIRST	OFFSETOF(txppr_t, cck_20ul)
+/* CCK CDD 20in40 1x2 rate */
+#define WL_TX_POWER_CCK_20U_CDD_S1x2_FIRST	OFFSETOF(txppr_t, cck_20ul_cdd.s1x2)
+/* CCK CDD 20in40 1x3 rate */
+#define WL_TX_POWER_CCK_20U_CDD_S1x3_FIRST	OFFSETOF(txppr_t, cck_20ul_cdd.s1x3)
+#define WL_TX_POWER_20UL_OFDM_FIRST	OFFSETOF(txppr_t, ofdm_20ul)
+#define WL_TX_POWER_20UL_OFDM_CDD_FIRST	OFFSETOF(txppr_t, ofdm_20ul_cdd)
+#define WL_TX_POWER_20UL_S1x1_FIRST	OFFSETOF(txppr_t, ht20ul.s1x1) /* MCS 0-7 rate */
+#define WL_TX_POWER_20UL_S1x2_FIRST	OFFSETOF(txppr_t, ht20ul.s1x2) /* MCS 0-7 rate */
+#define WL_TX_POWER_20UL_S1x3_FIRST	OFFSETOF(txppr_t, ht.ul20s1x3) /* MCS 0-7 rate */
+#define WL_TX_POWER_20UL_S2x2_FIRST	OFFSETOF(txppr_t, ht20ul.s2x2) /* MCS 8-15 rate */
+#define WL_TX_POWER_20UL_S2x3_FIRST	OFFSETOF(txppr_t, ht.ul20s2x3) /* MCS 8-15 rate */
+#define WL_TX_POWER_20UL_S3x3_FIRST	OFFSETOF(txppr_t, ht20ul.s3x3) /* MCS 16-23 rate */
+
+
+#endif /* WL_OLDPPR */
 
 #endif /* _wlioctl_h_ */

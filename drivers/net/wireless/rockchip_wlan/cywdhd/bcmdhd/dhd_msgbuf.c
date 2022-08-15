@@ -4,7 +4,7 @@
  * Provides type definitions and function prototypes used to link the
  * DHD OS, bus, and protocol modules.
  *
- * Copyright (C) 1999-2018, Broadcom Corporation
+ * Copyright (C) 1999-2019, Broadcom Corporation
  * 
  *      Unless you and Broadcom execute a separate written software license
  * agreement governing use of this software, this software is licensed to you
@@ -3716,7 +3716,7 @@ dhd_prot_txstatus_process(dhd_pub_t *dhd, void *msg)
 
 		/* Release the Lock when no more tx packets are pending */
 		if (prot->active_tx_count == 0)
-			 DHD_OS_WAKE_UNLOCK(dhd);
+			 DHD_TXFL_WAKE_UNLOCK(dhd);
 
 	} else {
 		DHD_ERROR(("Extra packets are freed\n"));
@@ -4200,7 +4200,7 @@ dhd_prot_txdata(dhd_pub_t *dhd, void *PKTBUF, uint8 ifidx)
 	 * to finish.
 	 */
 	if (prot->active_tx_count == 1)
-		DHD_OS_WAKE_LOCK(dhd);
+		DHD_TXFL_WAKE_LOCK_TIMEOUT(dhd, MAX_TX_TIMEOUT);
 
 	DHD_GENERAL_UNLOCK(dhd, flags);
 

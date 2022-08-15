@@ -87,10 +87,11 @@ static int rk628_read(struct regmap *regmap, u32 reg)
 {
 	int ret;
 	u32 val;
+	struct rk628_efuse_chip *efuse = container_of(regmap, struct rk628_efuse_chip, regmap);
 
 	ret = regmap_read(regmap, reg, &val);
 	if (ret) {
-		pr_err("rk628-efuse:failed to read reg\n");
+		dev_err(efuse->dev, "rk628-efuse:failed to read reg 0x%x\n", reg);
 		return ret;
 	}
 
@@ -100,10 +101,11 @@ static int rk628_read(struct regmap *regmap, u32 reg)
 static int rk628_write(struct regmap *regmap, u32 val, u32 reg)
 {
 	int ret;
+	struct rk628_efuse_chip *efuse = container_of(regmap, struct rk628_efuse_chip, regmap);
 
 	ret = regmap_write(regmap, reg, val);
 	if (ret)
-		pr_err("rk628-efuse:failed to read reg\n");
+		dev_err(efuse->dev, "rk628-efuse:failed to write reg 0x%x\n", reg);
 
 	return ret;
 }
@@ -112,8 +114,9 @@ static void rk628_efuse_timing_init(struct rk628_efuse_chip *efuse)
 {
 	u32 base = efuse->base;
 	/* enable auto mode */
-	rk628_write(efuse->regmap, rk628_read(efuse->regmap, base + RK628_MOD)
-			& (~RK628_USER_MODE), base + RK628_MOD);
+	rk628_write(efuse->regmap,
+		    rk628_read(efuse->regmap, base + RK628_MOD) & (~RK628_USER_MODE),
+		    base + RK628_MOD);
 
 	/* setup efuse timing */
 	rk628_write(efuse->regmap, (T_CSB_P_S << 16) | T_CSB_P_L, base + T_CSB_P);
@@ -132,8 +135,8 @@ static void rk628_efuse_timing_deinit(struct rk628_efuse_chip *efuse)
 {
 	u32 base = efuse->base;
 	/* disable auto mode */
-	rk628_write(efuse->regmap, rk628_read(efuse->regmap, base + RK628_MOD)
-			| RK628_USER_MODE, base + RK628_MOD);
+	rk628_write(efuse->regmap,
+		    rk628_read(efuse->regmap, base + RK628_MOD) | RK628_USER_MODE, base + RK628_MOD);
 
 	/* clear efuse timing */
 	rk628_write(efuse->regmap, 0, base + T_CSB_P);
@@ -233,7 +236,6 @@ static const struct regmap_config rk628_efuse_regmap_config = {
 static const struct of_device_id rk628_efuse_match[] = {
 	{
 		.compatible = "rockchip,rk628-efuse",
-		.data = (void *)&rk628_efuse_read,
 	},
 	{ /* sentinel */ },
 };
@@ -243,16 +245,9 @@ static int __init rk628_efuse_probe(struct platform_device *pdev)
 {
 	struct nvmem_device *nvmem;
 	struct rk628_efuse_chip *efuse;
-	const struct of_device_id *match;
 	struct device *dev = &pdev->dev;
 	struct rk628 *rk628 = dev_get_drvdata(pdev->dev.parent);
 	int ret;
-
-	match = of_match_device(dev->driver->of_match_table, dev);
-	if (!match || !match->data) {
-		dev_err(dev, "failed to get match data\n");
-		return -EINVAL;
-	}
 
 	efuse = devm_kzalloc(&pdev->dev, sizeof(struct rk628_efuse_chip),
 			     GFP_KERNEL);
@@ -278,10 +273,10 @@ static int __init rk628_efuse_probe(struct platform_device *pdev)
 	efuse->base = RK628_EFUSE_BASE;
 	efuse->dev = &pdev->dev;
 	econfig.size = EFUSE_SIZE;
-	econfig.reg_read = match->data;
+	econfig.reg_read = (void *)&rk628_efuse_read;
 	econfig.priv = efuse;
 	econfig.dev = efuse->dev;
-	nvmem = devm_nvmem_register(efuse->dev, &econfig);
+	nvmem = devm_nvmem_register(&econfig);
 	if (IS_ERR(nvmem))
 		return PTR_ERR(nvmem);
 

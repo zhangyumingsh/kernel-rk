@@ -117,8 +117,6 @@ static void rk618_vif_init(struct rk618_vif *vif,
 		     VIF_VS_END(vif_vs_end) | VIF_VTOTAL(vif_vtotal));
 	regmap_write(vif->regmap, RK618_VIF0_REG5,
 		     VIF_VACT_END(vif_vact_end) | VIF_VACT_ST(vif_vact_st));
-	regmap_write(vif->regmap, RK618_IO_CON0,
-		     VIF0_SYNC_MODE_ENABLE);
 }
 
 static void rk618_vif_bridge_enable(struct drm_bridge *bridge)
@@ -133,6 +131,7 @@ static void rk618_vif_bridge_enable(struct drm_bridge *bridge)
 	clk_set_rate(vif->vif_clk, rate);
 	clk_prepare_enable(vif->vif_clk);
 
+	rk618_vif_disable(vif);
 	rk618_vif_init(vif, mode);
 	rk618_vif_enable(vif);
 }
@@ -175,15 +174,11 @@ static int rk618_vif_bridge_attach(struct drm_bridge *bridge)
 		if (!vif->bridge)
 			return -EPROBE_DEFER;
 
-		vif->bridge->encoder = bridge->encoder;
-
-		ret = drm_bridge_attach(bridge->dev, vif->bridge);
+		ret = drm_bridge_attach(bridge->encoder, vif->bridge, bridge);
 		if (ret) {
 			dev_err(dev, "failed to attach bridge\n");
 			return ret;
 		}
-
-		bridge->next = vif->bridge;
 	}
 
 	return 0;
@@ -198,6 +193,7 @@ static const struct drm_bridge_funcs rk618_vif_bridge_funcs = {
 
 static int rk618_vif_probe(struct platform_device *pdev)
 {
+	struct rk618 *rk618 = dev_get_drvdata(pdev->dev.parent);
 	struct device *dev = &pdev->dev;
 	struct rk618_vif *vif;
 	int ret;
@@ -210,11 +206,8 @@ static int rk618_vif_probe(struct platform_device *pdev)
 		return -ENOMEM;
 
 	vif->dev = dev;
+	vif->regmap = rk618->regmap;
 	platform_set_drvdata(pdev, vif);
-
-	vif->regmap = dev_get_regmap(dev->parent, NULL);
-	if (!vif->regmap)
-		return -ENODEV;
 
 	vif->vif_clk = devm_clk_get(dev, "vif");
 	if (IS_ERR(vif->vif_clk)) {
@@ -232,11 +225,7 @@ static int rk618_vif_probe(struct platform_device *pdev)
 
 	vif->base.funcs = &rk618_vif_bridge_funcs;
 	vif->base.of_node = dev->of_node;
-	ret = drm_bridge_add(&vif->base);
-	if (ret) {
-		dev_err(dev, "failed to add bridge\n");
-		return ret;
-	}
+	drm_bridge_add(&vif->base);
 
 	return 0;
 }

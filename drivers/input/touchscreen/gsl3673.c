@@ -59,7 +59,7 @@ static char chip_type;
 	#include "gsl3680_tab106.h"
 	#define TP_SIZE_1366X768
 	#define Y_POL
-#elif defined(CONFIG_TOUCHSCREEN_GSL3673)
+#elif IS_ENABLED(CONFIG_TOUCHSCREEN_GSL3673)
 	#include "gsl3673.h"
 #else
 	#include "gsl3680b_zm97f.h"
@@ -89,7 +89,7 @@ static char chip_type;
 	#define SCREEN_MAX_Y		1536
 #endif
 #define REPORT_DATA_ANDROID_4_0
-#define SLEEP_CLEAR_POINT
+//#define SLEEP_CLEAR_POINT
 
 #ifdef FILTER_POINT
 #define FILTER_MAX	9
@@ -238,8 +238,18 @@ static int gsl3673_init(void)
 
 	this_ts->irq = of_get_named_gpio_flags(np, "irq_gpio_number", 0,
 				(enum of_gpio_flags *)&irq_flags);
+	if (!gpio_is_valid(this_ts->irq)) {
+		dev_err(&this_ts->client->dev, "irq pin invalid\n");
+		return -EINVAL;
+	}
+
 	this_ts->rst = of_get_named_gpio_flags(np, "rst_gpio_number", 0,
 				&rst_flags);
+	if (!gpio_is_valid(this_ts->rst)) {
+		dev_err(&this_ts->client->dev, "rst pin invalid\n");
+		return -EINVAL;
+	}
+
 	if (devm_gpio_request(&this_ts->client->dev, this_ts->rst, NULL) != 0) {
 		dev_err(&this_ts->client->dev, "gpio_request this_ts->rst error\n");
 		return -EIO;
@@ -398,6 +408,8 @@ static int test_i2c(struct i2c_client *client)
 		rc--;
 	msleep(2);
 	ret = gsl_ts_write(client, 0xf0, &write_buf, sizeof(write_buf));
+	if (ret < 0)
+		rc--;
 	msleep(2);
 	ret = gsl_ts_read(client, 0xf0, &read_buf, sizeof(read_buf));
 	if (ret < 0)
@@ -532,7 +544,7 @@ static ssize_t gsl_config_write_proc(struct file *file, const char *buffer,
 				 size_t count, loff_t *data)
 {
 	u8 buf[8] = {0};
-	char temp_buf[CONFIG_LEN];
+	char temp_buf[CONFIG_LEN] = {0};
 	char *path_buf;
 	int tmp = 0;
 	int tmp1 = 0;
@@ -542,8 +554,10 @@ static ssize_t gsl_config_write_proc(struct file *file, const char *buffer,
 		return -EFAULT;
 	}
 	path_buf = kzalloc(count, GFP_KERNEL);
-	if (!path_buf)
+	if (!path_buf) {
 		print_info("alloc path_buf memory error\n");
+		return -EFAULT;
+	}
 	if (copy_from_user(path_buf, buffer, count)) {
 		print_info("copy from user fail\n");
 		goto exit_write_proc_out;
@@ -745,7 +759,7 @@ static void report_data(struct gsl_ts *ts, u16 x, u16 y, u8 pressure, u8 id)
 #endif
 }
 
-void ts_irq_disable(struct gsl_ts *ts)
+static void ts_irq_disable(struct gsl_ts *ts)
 {
 	unsigned long irqflags;
 
@@ -757,7 +771,7 @@ void ts_irq_disable(struct gsl_ts *ts)
 	spin_unlock_irqrestore(&ts->irq_lock, irqflags);
 }
 
-void ts_irq_enable(struct gsl_ts *ts)
+static void ts_irq_enable(struct gsl_ts *ts)
 {
 	unsigned long irqflags = 0;
 
@@ -1035,7 +1049,9 @@ error_unreg_device:
 static int gsl_ts_suspend(struct device *dev)
 {
 	struct gsl_ts *ts = dev_get_drvdata(dev);
+#ifdef SLEEP_CLEAR_POINT
 	int i;
+#endif
 
 	if (!ts->flag_activated)
 		return 0;
@@ -1046,7 +1062,7 @@ static int gsl_ts_suspend(struct device *dev)
 	ts_irq_disable(ts);
 	cancel_work_sync(&ts->work);
 
-	gsl3673_shutdown_low();
+	/*gsl3673_shutdown_low();*/
 #ifdef SLEEP_CLEAR_POINT
 	msleep(10);
 	#ifdef REPORT_DATA_ANDROID_4_0
@@ -1059,6 +1075,9 @@ static int gsl_ts_suspend(struct device *dev)
 	input_mt_sync(ts->input);
 	#endif
 	input_sync(ts->input);
+	msleep(10);
+	report_data(ts, 1, 1, 10, 1);
+	input_sync(ts->input);
 #endif
 	ts->flag_activated = false;
 
@@ -1068,14 +1087,16 @@ static int gsl_ts_suspend(struct device *dev)
 static int gsl_ts_resume(struct device *dev)
 {
 	struct gsl_ts *ts = dev_get_drvdata(dev);
+#ifdef SLEEP_CLEAR_POINT
 	int i;
+#endif
 	int rc;
 
 	if (ts->flag_activated)
 		return 0;
 
-	gsl3673_shutdown_high();
-	mdelay(5);
+	/*gsl3673_shutdown_high();
+	mdelay(5);*/
 	reset_chip(ts->client);
 	startup_chip(ts->client);
 	rc = check_mem_data(ts->client);
@@ -1210,7 +1231,8 @@ static int  gsl_ts_probe(struct i2c_client *client,
 	queue_delayed_work(gsl_monitor_workqueue, &gsl_monitor_work, 1000);
 #endif
 #ifdef TPD_PROC_DEBUG
-	proc_create(GSL_CONFIG_PROC_FILE, 0644, NULL, &gsl_seq_fops);
+	proc_create(GSL_CONFIG_PROC_FILE, 0644, NULL,
+		    (const struct proc_ops *)&gsl_seq_fops);
 	gsl_proc_flag = 0;
 #endif
 	ts->flag_activated = true;

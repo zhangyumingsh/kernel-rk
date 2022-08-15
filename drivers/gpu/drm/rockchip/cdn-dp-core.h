@@ -1,27 +1,16 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
  * Copyright (C) 2016 Chris Zhong <zyw@rock-chips.com>
  * Copyright (C) 2016 ROCKCHIP, Inc.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 
 #ifndef _CDN_DP_CORE_H
 #define _CDN_DP_CORE_H
 
-#include <drm/drmP.h>
-#include <drm/drm_crtc_helper.h>
 #include <drm/drm_dp_helper.h>
 #include <drm/drm_panel.h>
-#ifdef CONFIG_SWITCH
-#include <linux/switch.h>
-#endif
+#include <drm/drm_probe_helper.h>
+
 #include "rockchip_drm_drv.h"
 
 #define MAX_PHY		2
@@ -64,32 +53,10 @@ struct cdn_firmware_header {
 
 struct cdn_dp_port {
 	struct cdn_dp_device *dp;
-	struct notifier_block event_nb;
-	struct extcon_dev *extcon;
 	struct phy *phy;
 	u8 lanes;
 	bool phy_enabled;
 	u8 id;
-};
-
-enum {
-	CDN_DP_HDCP_KSV_LEN = 8,
-	CDN_DP_HDCP_UID_LEN = 16,
-	CDN_DP_HDCP_SHA_LEN = 20,
-	CDN_DP_HDCP_DPK_LEN = 280,
-	CDN_DP_HDCP_KEY_LEN = 308,
-};
-
-/*
- * Size must be divisible by 6
- */
-struct cdn_dp_hdcp_key_1x {
-	u8 ksv[CDN_DP_HDCP_KSV_LEN];
-	u8 device_key[CDN_DP_HDCP_DPK_LEN];
-	u8 sha1[CDN_DP_HDCP_SHA_LEN];
-	u8 uid[CDN_DP_HDCP_UID_LEN];
-	u16 seed;
-	u8 reserved[10];
 };
 
 struct cdn_dp_device {
@@ -99,15 +66,14 @@ struct cdn_dp_device {
 	struct drm_encoder encoder;
 	struct drm_display_mode mode;
 	struct platform_device *audio_pdev;
-	struct work_struct event_work;
+	struct delayed_work event_work;
 	struct edid *edid;
-	struct drm_dp_aux aux;
+	struct rockchip_drm_sub_dev sub_dev;
 
 	struct mutex lock;
 	bool connected;
 	bool active;
 	bool suspended;
-	bool use_fw_training;
 
 	const struct firmware *fw;	/* cdn dp firmware */
 	unsigned int fw_version;	/* cdn fw version */
@@ -125,22 +91,14 @@ struct cdn_dp_device {
 	struct reset_control *core_rst;
 	struct audio_info audio_info;
 	struct video_info video_info;
-	struct drm_dp_link link;
 	struct cdn_dp_port *port[MAX_PHY];
 	u8 ports;
+	u8 max_lanes;
+	unsigned int max_rate;
 	u8 lanes;
 	int active_port;
-	u8 train_set[4];
 
 	u8 dpcd[DP_RECEIVER_CAP_SIZE];
 	bool sink_has_audio;
-#ifdef CONFIG_SWITCH
-	struct switch_dev switchdev;
-#endif
-	bool hdcp_enabled;
-	bool hdcp_desired;
-	struct cdn_dp_hdcp_key_1x key;
-	struct delayed_work hdcp_event_work;
-	struct work_struct hdcp_prop_work;
 };
 #endif  /* _CDN_DP_CORE_H */

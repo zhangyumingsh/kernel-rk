@@ -26,7 +26,7 @@
 #include <linux/fs.h>
 #include <linux/slab.h>
 #include <linux/init.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 #include <asm/io.h>
 #include <linux/interrupt.h>
 #include <linux/ioport.h>
@@ -38,7 +38,7 @@
 #include <linux/proc_fs.h>
 #include <linux/poll.h>
 #include <asm/bitops.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 #include <asm/irq.h>
 #include <linux/moduleparam.h>
 #include <linux/ioport.h>
@@ -743,7 +743,7 @@ static int i2c_client_init(int i2c_bus)
 	if (!i2c_adap)
 		return -EINVAL;
 
-	jaguar1_client = i2c_new_device(i2c_adap, &hi_info);
+	jaguar1_client = i2c_new_client_device(i2c_adap, &hi_info);
 	i2c_put_adapter(i2c_adap);
 
 	return 0;

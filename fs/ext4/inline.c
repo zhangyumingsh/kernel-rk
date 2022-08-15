@@ -1,18 +1,12 @@
+// SPDX-License-Identifier: LGPL-2.1
 /*
  * Copyright (c) 2012 Taobao.
  * Written by Tao Ma <boyu.mt@taobao.com>
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of version 2.1 of the GNU Lesser General Public License
- * as published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
 
+#include <linux/iomap.h>
 #include <linux/fiemap.h>
+#include <linux/iversion.h>
 
 #include "ext4_jbd2.h"
 #include "ext4.h"
@@ -62,7 +56,7 @@ static int get_max_inline_xattr_value_size(struct inode *inode,
 
 	/* Compute min_offs. */
 	for (; !IS_LAST_ENTRY(entry); entry = EXT4_XATTR_NEXT(entry)) {
-		if (!entry->e_value_block && entry->e_value_size) {
+		if (!entry->e_value_inum && entry->e_value_size) {
 			size_t offs = le16_to_cpu(entry->e_value_offs);
 			if (offs < min_offs)
 				min_offs = offs;
@@ -105,9 +99,9 @@ int ext4_get_max_inline_size(struct inode *inode)
 
 	error = ext4_get_inode_loc(inode, &iloc);
 	if (error) {
-		ext4_error_inode(inode, __func__, __LINE__, 0,
-				 "can't get inode location %lu",
-				 inode->i_ino);
+		ext4_error_inode_err(inode, __func__, __LINE__, 0, -error,
+				     "can't get inode location %lu",
+				     inode->i_ino);
 		return 0;
 	}
 
@@ -151,6 +145,12 @@ int ext4_find_inline_data_nolock(struct inode *inode)
 		goto out;
 
 	if (!is.s.not_found) {
+		if (is.s.here->e_value_inum) {
+			EXT4_ERROR_INODE(inode, "inline data xattr refers "
+					 "to an external xattr inode");
+			error = -EFSCORRUPTED;
+			goto out;
+		}
 		EXT4_I(inode)->i_inline_off = (u16)((void *)is.s.here -
 					(void *)ext4_raw_inode(&is.iloc));
 		EXT4_I(inode)->i_inline_size = EXT4_MIN_INLINE_DATA_SIZE +
@@ -216,6 +216,9 @@ static void ext4_write_inline_data(struct inode *inode, struct ext4_iloc *iloc,
 	struct ext4_inode *raw_inode;
 	int cp_len = 0;
 
+	if (unlikely(ext4_forced_shutdown(EXT4_SB(inode->i_sb))))
+		return;
+
 	BUG_ON(!EXT4_I(inode)->i_inline_off);
 	BUG_ON(pos + len > EXT4_I(inode)->i_inline_size);
 
@@ -274,7 +277,7 @@ static int ext4_create_inline_data(handle_t *handle,
 		len = 0;
 	}
 
-	/* Insert the the xttr entry. */
+	/* Insert the xttr entry. */
 	i.value = value;
 	i.value_len = len;
 
@@ -352,7 +355,7 @@ static int ext4_update_inline_data(handle_t *handle, struct inode *inode,
 	if (error)
 		goto out;
 
-	/* Update the xttr entry. */
+	/* Update the xattr entry. */
 	i.value = value;
 	i.value_len = len;
 
@@ -485,7 +488,7 @@ static int ext4_read_inline_page(struct inode *inode, struct page *page)
 	ret = ext4_read_inline_data(inode, kaddr, len, &iloc);
 	flush_dcache_page(page);
 	kunmap_atomic(kaddr);
-	zero_user_segment(page, len, PAGE_CACHE_SIZE);
+	zero_user_segment(page, len, PAGE_SIZE);
 	SetPageUptodate(page);
 	brelse(iloc.bh);
 
@@ -521,7 +524,7 @@ int ext4_readpage_inline(struct inode *inode, struct page *page)
 	if (!page->index)
 		ret = ext4_read_inline_page(inode, page);
 	else if (!PageUptodate(page)) {
-		zero_user_segment(page, 0, PAGE_CACHE_SIZE);
+		zero_user_segment(page, 0, PAGE_SIZE);
 		SetPageUptodate(page);
 	}
 
@@ -597,9 +600,10 @@ retry:
 	if (ret)
 		goto out;
 
-	if (ext4_should_dioread_nolock(inode))
-		ret = __block_write_begin(page, from, to, ext4_get_block_write);
-	else
+	if (ext4_should_dioread_nolock(inode)) {
+		ret = __block_write_begin(page, from, to,
+					  ext4_get_block_unwritten);
+	} else
 		ret = __block_write_begin(page, from, to, ext4_get_block);
 
 	if (!ret && ext4_should_journal_data(inode)) {
@@ -610,7 +614,7 @@ retry:
 
 	if (ret) {
 		unlock_page(page);
-		page_cache_release(page);
+		put_page(page);
 		page = NULL;
 		ext4_orphan_add(handle, inode);
 		ext4_write_unlock_xattr(inode, &no_expand);
@@ -636,7 +640,7 @@ retry:
 out:
 	if (page) {
 		unlock_page(page);
-		page_cache_release(page);
+		put_page(page);
 	}
 	if (sem_held)
 		ext4_write_unlock_xattr(inode, &no_expand);
@@ -709,7 +713,7 @@ int ext4_try_to_write_inline_data(struct address_space *mapping,
 	if (!ext4_has_inline_data(inode)) {
 		ret = 0;
 		unlock_page(page);
-		page_cache_release(page);
+		put_page(page);
 		goto out_up_read;
 	}
 
@@ -759,6 +763,12 @@ int ext4_write_inline_data_end(struct inode *inode, loff_t pos, unsigned len,
 
 	ext4_write_lock_xattr(inode, &no_expand);
 	BUG_ON(!ext4_has_inline_data(inode));
+
+	/*
+	 * ei->i_inline_off may have changed since ext4_write_begin()
+	 * called ext4_try_to_write_inline_data()
+	 */
+	(void) ext4_find_inline_data_nolock(inode);
 
 	kaddr = kmap_atomic(page);
 	ext4_write_inline_data(inode, &iloc, kaddr, pos, len);
@@ -838,7 +848,7 @@ static int ext4_da_convert_inline_data_to_extent(struct address_space *mapping,
 	if (ret) {
 		up_read(&EXT4_I(inode)->xattr_sem);
 		unlock_page(page);
-		page_cache_release(page);
+		put_page(page);
 		ext4_truncate_failed_write(inode);
 		return ret;
 	}
@@ -852,14 +862,14 @@ out:
 	up_read(&EXT4_I(inode)->xattr_sem);
 	if (page) {
 		unlock_page(page);
-		page_cache_release(page);
+		put_page(page);
 	}
 	return ret;
 }
 
 /*
  * Prepare the write for the inline data.
- * If the the data can be written into the inode, we just read
+ * If the data can be written into the inode, we just read
  * the page and make it uptodate, and start the journal.
  * Otherwise read the page, makes it dirty so that it can be
  * handle in writepages(the i_disksize update is left to the
@@ -944,7 +954,7 @@ retry_journal:
 out_release_page:
 	up_read(&EXT4_I(inode)->xattr_sem);
 	unlock_page(page);
-	page_cache_release(page);
+	put_page(page);
 out_journal:
 	ext4_journal_stop(handle);
 out:
@@ -976,7 +986,7 @@ int ext4_da_write_inline_data_end(struct inode *inode, loff_t pos,
 	if (pos+copied > inode->i_size)
 		i_size_write(inode, pos+copied);
 	unlock_page(page);
-	page_cache_release(page);
+	put_page(page);
 
 	/*
 	 * Don't mark the inode dirty under page lock. First, it unnecessarily
@@ -1006,7 +1016,7 @@ void ext4_show_inline_dir(struct inode *dir, struct buffer_head *bh,
 			     offset, de_len, de->name_len, de->name,
 			     de->name_len, le32_to_cpu(de->inode));
 		if (ext4_check_dir_entry(dir, NULL, de, bh,
-					 inline_start, inline_size, offset))
+					 inline_start, inline_size, 0, offset))
 			BUG();
 
 		offset += de_len;
@@ -1024,16 +1034,15 @@ void ext4_show_inline_dir(struct inode *dir, struct buffer_head *bh,
  */
 static int ext4_add_dirent_to_inline(handle_t *handle,
 				     struct ext4_filename *fname,
-				     struct dentry *dentry,
+				     struct inode *dir,
 				     struct inode *inode,
 				     struct ext4_iloc *iloc,
 				     void *inline_start, int inline_size)
 {
-	struct inode	*dir = d_inode(dentry->d_parent);
 	int		err;
 	struct ext4_dir_entry_2 *de;
 
-	err = ext4_find_dest_de(dir, inode, iloc->bh, inline_start,
+	err = ext4_find_dest_de(dir, inode, 0, iloc->bh, inline_start,
 				inline_size, fname, &de);
 	if (err)
 		return err;
@@ -1057,10 +1066,9 @@ static int ext4_add_dirent_to_inline(handle_t *handle,
 	 * happen is that the times are slightly out of date
 	 * and/or different from the directory change time.
 	 */
-	dir->i_mtime = dir->i_ctime = ext4_current_time(dir);
+	dir->i_mtime = dir->i_ctime = current_time(dir);
 	ext4_update_dx_flag(dir);
-	dir->i_version++;
-	ext4_mark_inode_dirty(handle, dir);
+	inode_inc_iversion(dir);
 	return 1;
 }
 
@@ -1112,7 +1120,7 @@ static int ext4_update_inline_dir(handle_t *handle, struct inode *dir,
 	int old_size = EXT4_I(dir)->i_inline_size - EXT4_MIN_INLINE_DATA_SIZE;
 	int new_size = get_max_inline_xattr_value_size(dir, iloc);
 
-	if (new_size - old_size <= EXT4_DIR_REC_LEN(1))
+	if (new_size - old_size <= ext4_dir_rec_len(1, NULL))
 		return -ENOSPC;
 
 	ret = ext4_update_inline_data(handle, dir,
@@ -1144,7 +1152,6 @@ static int ext4_finish_convert_inline_dir(handle_t *handle,
 {
 	int err, csum_size = 0, header_size = 0;
 	struct ext4_dir_entry_2 *de;
-	struct ext4_dir_entry_tail *t;
 	void *target = dir_block->b_data;
 
 	/*
@@ -1170,13 +1177,11 @@ static int ext4_finish_convert_inline_dir(handle_t *handle,
 			inline_size - EXT4_INLINE_DOTDOT_SIZE + header_size,
 			inode->i_sb->s_blocksize - csum_size);
 
-	if (csum_size) {
-		t = EXT4_DIRENT_TAIL(dir_block->b_data,
-				     inode->i_sb->s_blocksize);
-		initialize_dirent_tail(t, inode->i_sb->s_blocksize);
-	}
+	if (csum_size)
+		ext4_initialize_dirent_tail(dir_block,
+					    inode->i_sb->s_blocksize);
 	set_buffer_uptodate(dir_block);
-	err = ext4_handle_dirty_dirent_node(handle, inode, dir_block);
+	err = ext4_handle_dirty_dirblock(handle, inode, dir_block);
 	if (err)
 		return err;
 	set_buffer_verified(dir_block);
@@ -1273,12 +1278,11 @@ out:
  * the new created block.
  */
 int ext4_try_add_inline_entry(handle_t *handle, struct ext4_filename *fname,
-			      struct dentry *dentry, struct inode *inode)
+			      struct inode *dir, struct inode *inode)
 {
-	int ret, inline_size, no_expand;
+	int ret, ret2, inline_size, no_expand;
 	void *inline_start;
 	struct ext4_iloc iloc;
-	struct inode *dir = d_inode(dentry->d_parent);
 
 	ret = ext4_get_inode_loc(dir, &iloc);
 	if (ret)
@@ -1292,7 +1296,7 @@ int ext4_try_add_inline_entry(handle_t *handle, struct ext4_filename *fname,
 						 EXT4_INLINE_DOTDOT_SIZE;
 	inline_size = EXT4_MIN_INLINE_DATA_SIZE - EXT4_INLINE_DOTDOT_SIZE;
 
-	ret = ext4_add_dirent_to_inline(handle, fname, dentry, inode, &iloc,
+	ret = ext4_add_dirent_to_inline(handle, fname, dir, inode, &iloc,
 					inline_start, inline_size);
 	if (ret != -ENOSPC)
 		goto out;
@@ -1313,7 +1317,7 @@ int ext4_try_add_inline_entry(handle_t *handle, struct ext4_filename *fname,
 	if (inline_size) {
 		inline_start = ext4_get_inline_xattr_pos(dir, &iloc);
 
-		ret = ext4_add_dirent_to_inline(handle, fname, dentry,
+		ret = ext4_add_dirent_to_inline(handle, fname, dir,
 						inode, &iloc, inline_start,
 						inline_size);
 
@@ -1329,8 +1333,10 @@ int ext4_try_add_inline_entry(handle_t *handle, struct ext4_filename *fname,
 	ret = ext4_convert_inline_data_nolock(handle, dir, &iloc);
 
 out:
-	ext4_mark_inode_dirty(handle, dir);
 	ext4_write_unlock_xattr(dir, &no_expand);
+	ret2 = ext4_mark_inode_dirty(handle, dir);
+	if (unlikely(ret2 && !ret))
+		ret = ret2;
 	brelse(iloc.bh);
 	return ret;
 }
@@ -1340,11 +1346,11 @@ out:
  * inlined dir.  It returns the number directory entries loaded
  * into the tree.  If there is an error it is returned in err.
  */
-int htree_inlinedir_to_tree(struct file *dir_file,
-			    struct inode *dir, ext4_lblk_t block,
-			    struct dx_hash_info *hinfo,
-			    __u32 start_hash, __u32 start_minor_hash,
-			    int *has_inline_data)
+int ext4_inlinedir_to_tree(struct file *dir_file,
+			   struct inode *dir, ext4_lblk_t block,
+			   struct dx_hash_info *hinfo,
+			   __u32 start_hash, __u32 start_minor_hash,
+			   int *has_inline_data)
 {
 	int err = 0, count = 0;
 	unsigned int parent_ino;
@@ -1355,7 +1361,7 @@ int htree_inlinedir_to_tree(struct file *dir_file,
 	struct ext4_iloc iloc;
 	void *dir_buf = NULL;
 	struct ext4_dir_entry_2 fake;
-	struct ext4_str tmp_str;
+	struct fscrypt_str tmp_str;
 
 	ret = ext4_get_inode_loc(inode, &iloc);
 	if (ret)
@@ -1394,8 +1400,8 @@ int htree_inlinedir_to_tree(struct file *dir_file,
 			fake.name_len = 1;
 			strcpy(fake.name, ".");
 			fake.rec_len = ext4_rec_len_to_disk(
-						EXT4_DIR_REC_LEN(fake.name_len),
-						inline_size);
+					  ext4_dir_rec_len(fake.name_len, NULL),
+					  inline_size);
 			ext4_set_de_type(inode->i_sb, &fake, S_IFDIR);
 			de = &fake;
 			pos = EXT4_INLINE_DOTDOT_OFFSET;
@@ -1404,8 +1410,8 @@ int htree_inlinedir_to_tree(struct file *dir_file,
 			fake.name_len = 2;
 			strcpy(fake.name, "..");
 			fake.rec_len = ext4_rec_len_to_disk(
-						EXT4_DIR_REC_LEN(fake.name_len),
-						inline_size);
+					  ext4_dir_rec_len(fake.name_len, NULL),
+					  inline_size);
 			ext4_set_de_type(inode->i_sb, &fake, S_IFDIR);
 			de = &fake;
 			pos = EXT4_INLINE_DOTDOT_SIZE;
@@ -1414,13 +1420,18 @@ int htree_inlinedir_to_tree(struct file *dir_file,
 			pos += ext4_rec_len_from_disk(de->rec_len, inline_size);
 			if (ext4_check_dir_entry(inode, dir_file, de,
 					 iloc.bh, dir_buf,
-					 inline_size, pos)) {
+					 inline_size, block, pos)) {
 				ret = count;
 				goto out;
 			}
 		}
 
-		ext4fs_dirhash(de->name, de->name_len, hinfo);
+		if (ext4_hash_in_dirent(dir)) {
+			hinfo->hash = EXT4_DIRENT_HASH(de);
+			hinfo->minor_hash = EXT4_DIRENT_MINOR_HASH(de);
+		} else {
+			ext4fs_dirhash(dir, de->name, de->name_len, hinfo);
+		}
 		if ((hinfo->hash < start_hash) ||
 		    ((hinfo->hash == start_hash) &&
 		     (hinfo->minor_hash < start_minor_hash)))
@@ -1432,7 +1443,7 @@ int htree_inlinedir_to_tree(struct file *dir_file,
 		err = ext4_htree_store_dirent(dir_file, hinfo->hash,
 					      hinfo->minor_hash, de, &tmp_str);
 		if (err) {
-			count = err;
+			ret = err;
 			goto out;
 		}
 		count++;
@@ -1502,8 +1513,8 @@ int ext4_read_inline_dir(struct file *file,
 	 * So we will use extra_offset and extra_size to indicate them
 	 * during the inline dir iteration.
 	 */
-	dotdot_offset = EXT4_DIR_REC_LEN(1);
-	dotdot_size = dotdot_offset + EXT4_DIR_REC_LEN(2);
+	dotdot_offset = ext4_dir_rec_len(1, NULL);
+	dotdot_size = dotdot_offset + ext4_dir_rec_len(2, NULL);
 	extra_offset = dotdot_size - EXT4_INLINE_DOTDOT_SIZE;
 	extra_size = extra_offset + inline_size;
 
@@ -1513,7 +1524,7 @@ int ext4_read_inline_dir(struct file *file,
 	 * dirent right now.  Scan from the start of the inline
 	 * dir to make sure.
 	 */
-	if (file->f_version != inode->i_version) {
+	if (!inode_eq_iversion(inode, file->f_version)) {
 		for (i = 0; i < extra_size && i < offset;) {
 			/*
 			 * "." is with offset 0 and
@@ -1538,14 +1549,14 @@ int ext4_read_inline_dir(struct file *file,
 			 * failure will be detected in the
 			 * dirent test below. */
 			if (ext4_rec_len_from_disk(de->rec_len, extra_size)
-				< EXT4_DIR_REC_LEN(1))
+				< ext4_dir_rec_len(1, NULL))
 				break;
 			i += ext4_rec_len_from_disk(de->rec_len,
 						    extra_size);
 		}
 		offset = i;
 		ctx->pos = offset;
-		file->f_version = inode->i_version;
+		file->f_version = inode_query_iversion(inode);
 	}
 
 	while (ctx->pos < extra_size) {
@@ -1566,7 +1577,7 @@ int ext4_read_inline_dir(struct file *file,
 		de = (struct ext4_dir_entry_2 *)
 			(dir_buf + ctx->pos - extra_offset);
 		if (ext4_check_dir_entry(inode, file, de, iloc.bh, dir_buf,
-					 extra_size, ctx->pos))
+					 extra_size, 0, ctx->pos))
 			goto out;
 		if (le32_to_cpu(de->inode)) {
 			if (!dir_emit(ctx, de->name, de->name_len,
@@ -1637,7 +1648,6 @@ out:
 
 struct buffer_head *ext4_find_inline_entry(struct inode *dir,
 					struct ext4_filename *fname,
-					const struct qstr *d_name,
 					struct ext4_dir_entry_2 **res_dir,
 					int *has_inline_data)
 {
@@ -1659,7 +1669,7 @@ struct buffer_head *ext4_find_inline_entry(struct inode *dir,
 						EXT4_INLINE_DOTDOT_SIZE;
 	inline_size = EXT4_MIN_INLINE_DATA_SIZE - EXT4_INLINE_DOTDOT_SIZE;
 	ret = ext4_search_dir(iloc.bh, inline_start, inline_size,
-			      dir, fname, d_name, 0, res_dir);
+			      dir, fname, 0, 0, res_dir);
 	if (ret == 1)
 		goto out_find;
 	if (ret < 0)
@@ -1672,7 +1682,7 @@ struct buffer_head *ext4_find_inline_entry(struct inode *dir,
 	inline_size = ext4_get_inline_size(dir) - EXT4_MIN_INLINE_DATA_SIZE;
 
 	ret = ext4_search_dir(iloc.bh, inline_start, inline_size,
-			      dir, fname, d_name, 0, res_dir);
+			      dir, fname, 0, 0, res_dir);
 	if (ret == 1)
 		goto out_find;
 
@@ -1721,19 +1731,16 @@ int ext4_delete_inline_entry(handle_t *handle,
 	if (err)
 		goto out;
 
-	err = ext4_generic_delete_entry(handle, dir, de_del, bh,
+	err = ext4_generic_delete_entry(dir, de_del, 0, bh,
 					inline_start, inline_size, 0);
 	if (err)
-		goto out;
-
-	BUFFER_TRACE(bh, "call ext4_handle_dirty_metadata");
-	err = ext4_mark_inode_dirty(handle, dir);
-	if (unlikely(err))
 		goto out;
 
 	ext4_show_inline_dir(dir, iloc.bh, inline_start, inline_size);
 out:
 	ext4_write_unlock_xattr(dir, &no_expand);
+	if (likely(err == 0))
+		err = ext4_mark_inode_dirty(handle, dir);
 	brelse(iloc.bh);
 	if (err != -ENOENT)
 		ext4_std_error(dir->i_sb, err);
@@ -1769,7 +1776,7 @@ ext4_get_inline_entry(struct inode *inode,
 	return (struct ext4_dir_entry_2 *)(inline_pos + offset);
 }
 
-int empty_inline_dir(struct inode *dir, int *has_inline_data)
+bool empty_inline_dir(struct inode *dir, int *has_inline_data)
 {
 	int err, inline_size;
 	struct ext4_iloc iloc;
@@ -1777,13 +1784,14 @@ int empty_inline_dir(struct inode *dir, int *has_inline_data)
 	void *inline_pos;
 	unsigned int offset;
 	struct ext4_dir_entry_2 *de;
-	int ret = 1;
+	bool ret = true;
 
 	err = ext4_get_inode_loc(dir, &iloc);
 	if (err) {
-		EXT4_ERROR_INODE(dir, "error %d getting inode %lu block",
-				 err, dir->i_ino);
-		return 1;
+		EXT4_ERROR_INODE_ERR(dir, -err,
+				     "error %d getting inode %lu block",
+				     err, dir->i_ino);
+		return true;
 	}
 
 	down_read(&EXT4_I(dir)->xattr_sem);
@@ -1797,7 +1805,7 @@ int empty_inline_dir(struct inode *dir, int *has_inline_data)
 		ext4_warning(dir->i_sb,
 			     "bad inline directory (dir #%lu) - no `..'",
 			     dir->i_ino);
-		ret = 1;
+		ret = true;
 		goto out;
 	}
 
@@ -1808,19 +1816,19 @@ int empty_inline_dir(struct inode *dir, int *has_inline_data)
 					   &inline_pos, &inline_size);
 		if (ext4_check_dir_entry(dir, NULL, de,
 					 iloc.bh, inline_pos,
-					 inline_size, offset)) {
+					 inline_size, 0, offset)) {
 			ext4_warning(dir->i_sb,
 				     "bad inline directory (dir #%lu) - "
 				     "inode %u, rec_len %u, name_len %d"
-				     "inline size %d\n",
+				     "inline size %d",
 				     dir->i_ino, le32_to_cpu(de->inode),
 				     le16_to_cpu(de->rec_len), de->name_len,
 				     inline_size);
-			ret = 1;
+			ret = true;
 			goto out;
 		}
 		if (le32_to_cpu(de->inode)) {
-			ret = 0;
+			ret = false;
 			goto out;
 		}
 		offset += ext4_rec_len_from_disk(de->rec_len, inline_size);
@@ -1843,51 +1851,42 @@ int ext4_destroy_inline_data(handle_t *handle, struct inode *inode)
 	return ret;
 }
 
-int ext4_inline_data_fiemap(struct inode *inode,
-			    struct fiemap_extent_info *fieinfo,
-			    int *has_inline, __u64 start, __u64 len)
+int ext4_inline_data_iomap(struct inode *inode, struct iomap *iomap)
 {
-	__u64 physical = 0;
-	__u64 inline_len;
-	__u32 flags = FIEMAP_EXTENT_DATA_INLINE | FIEMAP_EXTENT_NOT_ALIGNED |
-		FIEMAP_EXTENT_LAST;
-	int error = 0;
+	__u64 addr;
+	int error = -EAGAIN;
 	struct ext4_iloc iloc;
 
 	down_read(&EXT4_I(inode)->xattr_sem);
-	if (!ext4_has_inline_data(inode)) {
-		*has_inline = 0;
+	if (!ext4_has_inline_data(inode))
 		goto out;
-	}
-	inline_len = min_t(size_t, ext4_get_inline_size(inode),
-			   i_size_read(inode));
-	if (start >= inline_len)
-		goto out;
-	if (start + len < inline_len)
-		inline_len = start + len;
-	inline_len -= start;
 
 	error = ext4_get_inode_loc(inode, &iloc);
 	if (error)
 		goto out;
 
-	physical = (__u64)iloc.bh->b_blocknr << inode->i_sb->s_blocksize_bits;
-	physical += (char *)ext4_raw_inode(&iloc) - iloc.bh->b_data;
-	physical += offsetof(struct ext4_inode, i_block);
+	addr = (__u64)iloc.bh->b_blocknr << inode->i_sb->s_blocksize_bits;
+	addr += (char *)ext4_raw_inode(&iloc) - iloc.bh->b_data;
+	addr += offsetof(struct ext4_inode, i_block);
 
 	brelse(iloc.bh);
+
+	iomap->addr = addr;
+	iomap->offset = 0;
+	iomap->length = min_t(loff_t, ext4_get_inline_size(inode),
+			      i_size_read(inode));
+	iomap->type = IOMAP_INLINE;
+	iomap->flags = 0;
+
 out:
 	up_read(&EXT4_I(inode)->xattr_sem);
-	if (physical)
-		error = fiemap_fill_next_extent(fieinfo, start, physical,
-						inline_len, flags);
-	return (error < 0 ? error : 0);
+	return error;
 }
 
-void ext4_inline_data_truncate(struct inode *inode, int *has_inline)
+int ext4_inline_data_truncate(struct inode *inode, int *has_inline)
 {
 	handle_t *handle;
-	int inline_size, value_len, needed_blocks, no_expand;
+	int inline_size, value_len, needed_blocks, no_expand, err = 0;
 	size_t i_size;
 	void *value = NULL;
 	struct ext4_xattr_ibody_find is = {
@@ -1902,19 +1901,20 @@ void ext4_inline_data_truncate(struct inode *inode, int *has_inline)
 	needed_blocks = ext4_writepage_trans_blocks(inode);
 	handle = ext4_journal_start(inode, EXT4_HT_INODE, needed_blocks);
 	if (IS_ERR(handle))
-		return;
+		return PTR_ERR(handle);
 
 	ext4_write_lock_xattr(inode, &no_expand);
 	if (!ext4_has_inline_data(inode)) {
+		ext4_write_unlock_xattr(inode, &no_expand);
 		*has_inline = 0;
 		ext4_journal_stop(handle);
-		return;
+		return 0;
 	}
 
-	if (ext4_orphan_add(handle, inode))
+	if ((err = ext4_orphan_add(handle, inode)) != 0)
 		goto out;
 
-	if (ext4_get_inode_loc(inode, &is.iloc))
+	if ((err = ext4_get_inode_loc(inode, &is.iloc)) != 0)
 		goto out;
 
 	down_write(&EXT4_I(inode)->i_data_sem);
@@ -1925,24 +1925,29 @@ void ext4_inline_data_truncate(struct inode *inode, int *has_inline)
 	if (i_size < inline_size) {
 		/* Clear the content in the xattr space. */
 		if (inline_size > EXT4_MIN_INLINE_DATA_SIZE) {
-			if (ext4_xattr_ibody_find(inode, &i, &is))
+			if ((err = ext4_xattr_ibody_find(inode, &i, &is)) != 0)
 				goto out_error;
 
 			BUG_ON(is.s.not_found);
 
 			value_len = le32_to_cpu(is.s.here->e_value_size);
 			value = kmalloc(value_len, GFP_NOFS);
-			if (!value)
+			if (!value) {
+				err = -ENOMEM;
 				goto out_error;
+			}
 
-			if (ext4_xattr_ibody_get(inode, i.name_index, i.name,
-						value, value_len))
+			err = ext4_xattr_ibody_get(inode, i.name_index,
+						   i.name, value, value_len);
+			if (err <= 0)
 				goto out_error;
 
 			i.value = value;
 			i.value_len = i_size > EXT4_MIN_INLINE_DATA_SIZE ?
 					i_size - EXT4_MIN_INLINE_DATA_SIZE : 0;
-			if (ext4_xattr_ibody_inline_set(handle, inode, &i, &is))
+			err = ext4_xattr_ibody_inline_set(handle, inode,
+							  &i, &is);
+			if (err)
 				goto out_error;
 		}
 
@@ -1967,13 +1972,14 @@ out:
 	if (inode->i_nlink)
 		ext4_orphan_del(handle, inode);
 
-	inode->i_mtime = inode->i_ctime = ext4_current_time(inode);
-	ext4_mark_inode_dirty(handle, inode);
-	if (IS_SYNC(inode))
-		ext4_handle_sync(handle);
-
+	if (err == 0) {
+		inode->i_mtime = inode->i_ctime = current_time(inode);
+		err = ext4_mark_inode_dirty(handle, inode);
+		if (IS_SYNC(inode))
+			ext4_handle_sync(handle);
+	}
 	ext4_journal_stop(handle);
-	return;
+	return err;
 }
 
 int ext4_convert_inline_data(struct inode *inode)

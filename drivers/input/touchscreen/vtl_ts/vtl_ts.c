@@ -26,7 +26,7 @@
 #include <linux/version.h>
 #include <linux/fs.h>
 #include <linux/proc_fs.h>
-#include <asm/uaccess.h>
+#include <linux/uaccess.h>
 #include <linux/i2c.h>
 #include <linux/delay.h>
 #include <linux/interrupt.h>
@@ -49,7 +49,6 @@
 static DECLARE_WAIT_QUEUE_HEAD(waiter);
 //static struct task_struct *ts_thread = NULL;
 static unsigned char thread_syn_flag =0;
-static volatile unsigned char thread_running_flag =0;
 
 
 // ****************************************************************************
