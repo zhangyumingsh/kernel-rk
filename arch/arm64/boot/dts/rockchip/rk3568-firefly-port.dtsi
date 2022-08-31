@@ -48,7 +48,7 @@
 
 	rk_headset: rk-headset {
 		compatible = "rockchip_headset";
-		headset_gpio = <&gpio2 RK_PD2 GPIO_ACTIVE_HIGH>;
+		headset_gpio = <&gpio3 RK_PC5 GPIO_ACTIVE_HIGH>;
 		pinctrl-names = "default";
 		pinctrl-0 = <&hp_det>;
 		io-channels = <&saradc 2>;    //HP_HOOK pin
