@@ -380,7 +380,8 @@ int rkisp_update_sensor_info(struct rkisp_device *dev)
 	if (ret && ret != -ENOIOCTLCMD)
 		return ret;
 
-	if (sensor->mbus.type == V4L2_MBUS_CSI2_DPHY) {
+	if (sensor->mbus.type == V4L2_MBUS_CSI2_DPHY &&
+	    dev->isp_ver < ISP_V30) {
 		u8 vc = 0;
 
 		memset(dev->csi_dev.mipi_di, 0,
@@ -1529,15 +1530,6 @@ static int rkisp_config_isp(struct rkisp_device *dev)
 
 	/* interrupt mask */
 	irq_mask |= CIF_ISP_FRAME | CIF_ISP_V_START | CIF_ISP_PIC_SIZE_ERROR;
-	if (dev->cap_dev.wrap_line) {
-		irq_mask |= ISP3X_OUT_FRM_QUARTER | ISP3X_OUT_FRM_HALF |
-			    ISP3X_OUT_FRM_END;
-		/* line to irq */
-		rkisp_write(dev, ISP32_ISP_IRQ_CFG0,
-			    (in_crop->height / 2) << 16 | in_crop->height / 4, false);
-		rkisp_write(dev, ISP32_ISP_IRQ_CFG1,
-			    in_crop->height / 4 * 3, false);
-	}
 	if (dev->isp_ver == ISP_V20 || dev->isp_ver == ISP_V21 ||
 	    dev->isp_ver == ISP_V30 || dev->isp_ver == ISP_V32)
 		irq_mask |= ISP2X_LSC_LUT_ERR;
@@ -1695,6 +1687,9 @@ static int rkisp_config_path(struct rkisp_device *dev)
 		v4l2_err(&dev->v4l2_dev, "Invalid input\n");
 		ret = -EINVAL;
 	}
+
+	if (dev->isp_ver == ISP_V32)
+		dpcl |= BIT(0);
 
 	rkisp_unite_set_bits(dev, CIF_VI_DPCL, 0, dpcl, true,
 			     dev->hw_dev->is_unite);
@@ -2663,6 +2658,70 @@ static int rkisp_isp_sd_s_stream(struct v4l2_subdev *sd, int on)
 	return 0;
 }
 
+static void rkisp_rx_buf_free(struct rkisp_device *dev, struct rkisp_rx_buf *dbufs)
+{
+	const struct vb2_mem_ops *g_ops = dev->hw_dev->mem_ops;
+	struct rkisp_rx_buf_pool *pool;
+	int i = 0;
+
+	if (!dbufs)
+		return;
+
+	for (i = 0; i < RKISP_RX_BUF_POOL_MAX; i++) {
+		pool = &dev->pv_pool[i];
+		if (dbufs == pool->dbufs) {
+			if (pool->mem_priv) {
+				g_ops->unmap_dmabuf(pool->mem_priv);
+				g_ops->detach_dmabuf(pool->mem_priv);
+				dma_buf_put(pool->dbufs->dbuf);
+				pool->mem_priv = NULL;
+			}
+			pool->dbufs = NULL;
+			break;
+		}
+	}
+}
+
+static int rkisp_rx_buf_update(struct rkisp_device *dev,
+				  struct rkisp_rx_buf *dbufs)
+{
+	struct rkisp_stream *stream;
+	struct rkisp_rx_buf_pool *pool;
+	int i;
+	u32 val;
+
+	for (i = 0; i < RKISP_RX_BUF_POOL_MAX; i++) {
+		pool = &dev->pv_pool[i];
+		if (dbufs == pool->dbufs)
+			break;
+	}
+
+	if (pool->dbufs == NULL || pool->dbufs != dbufs)
+		return -EINVAL;
+	switch (dbufs->type) {
+	case BUF_SHORT:
+		stream = &dev->dmarx_dev.stream[RKISP_STREAM_RAWRD2];
+		break;
+	case BUF_MIDDLE:
+		stream = &dev->dmarx_dev.stream[RKISP_STREAM_RAWRD0];
+		break;
+	case BUF_LONG:
+	default:
+		stream = &dev->dmarx_dev.stream[RKISP_STREAM_RAWRD1];
+
+	}
+	val = pool->dma;
+	rkisp_write(dev, stream->config->mi.y_base_ad_init, val, false);
+	if (dev->hw_dev->is_unite) {
+		val += (stream->out_fmt.width / 2 - RKMOUDLE_UNITE_EXTEND_PIXEL) *
+			stream->out_isp_fmt.bpp[0] / 8;
+		rkisp_next_write(dev, stream->config->mi.y_base_ad_init, val, false);
+	}
+	v4l2_dbg(2, rkisp_debug, &dev->v4l2_dev,
+		 "%s dma:0x%x vaddr:%p", __func__, (u32)pool->dma, pool->vaddr);
+	return 0;
+}
+
 void rkisp_rx_buf_pool_free(struct rkisp_device *dev)
 {
 	const struct vb2_mem_ops *g_ops = dev->hw_dev->mem_ops;
@@ -2736,7 +2795,10 @@ static int rkisp_rx_buf_pool_init(struct rkisp_device *dev,
 		stream = &dev->dmarx_dev.stream[RKISP_STREAM_RAWRD1];
 
 	}
-	stream->ops->config_mi(stream);
+	if (dbufs->is_first) {
+		stream->ops->config_mi(stream);
+		dbufs->is_first = false;
+	}
 	val = pool->dma;
 	rkisp_write(dev, stream->config->mi.y_base_ad_init, val, false);
 	if (dev->hw_dev->is_unite) {
@@ -2765,6 +2827,8 @@ static int rkisp_sd_s_rx_buffer(struct v4l2_subdev *sd,
 	dbufs = buf;
 	if (!dbufs->is_init)
 		ret = rkisp_rx_buf_pool_init(dev, dbufs);
+	else
+		ret = rkisp_rx_buf_update(dev, dbufs);
 
 	/* TODO qbuf/debuf for more buffer */
 
@@ -3056,9 +3120,11 @@ static long rkisp_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
 {
 	struct rkisp_device *isp_dev = sd_to_isp_dev(sd);
 	struct rkisp_thunderboot_resmem *resmem;
+	struct rkisp32_thunderboot_resmem_head *tb_head_v32;
 	struct rkisp_thunderboot_resmem_head *head;
 	struct rkisp_thunderboot_shmem *shmem;
 	struct isp2x_buf_idxfd *idxfd;
+	struct rkisp_rx_buf *dbufs;
 	void *resmem_va;
 	long ret = 0;
 
@@ -3071,6 +3137,18 @@ static long rkisp_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
 		break;
 	case RKISP_CMD_GET_ISP_INFO:
 		rkisp_get_info(isp_dev, arg);
+		break;
+	case RKISP_CMD_GET_TB_HEAD_V32:
+		if (isp_dev->tb_head.complete != RKISP_TB_OK) {
+			ret = -EINVAL;
+			break;
+		}
+		tb_head_v32 = arg;
+		memcpy(tb_head_v32, &isp_dev->tb_head,
+		       sizeof(struct rkisp_thunderboot_resmem_head));
+		memcpy(&tb_head_v32->cfg, isp_dev->params_vdev.isp32_params,
+		       sizeof(struct isp32_isp_params_cfg));
+		isp_dev->tb_head.complete = 0;
 		break;
 	case RKISP_CMD_GET_SHARED_BUF:
 		if (!IS_ENABLED(CONFIG_VIDEO_ROCKCHIP_THUNDER_BOOT_ISP)) {
@@ -3145,6 +3223,13 @@ static long rkisp_ioctl(struct v4l2_subdev *sd, unsigned int cmd, void *arg)
 	case RKISP_CMD_INFO2DDR:
 		ret = rkisp_params_info2ddr_cfg(&isp_dev->params_vdev, arg);
 		break;
+	case RKISP_CMD_MESHBUF_FREE:
+		rkisp_params_meshbuf_free(&isp_dev->params_vdev, *(u64 *)arg);
+		break;
+	case RKISP_VICAP_CMD_RX_BUFFER_FREE:
+		dbufs = (struct rkisp_rx_buf *)arg;
+		rkisp_rx_buf_free(isp_dev, dbufs);
+		break;
 	default:
 		ret = -ENOIOCTLCMD;
 	}
@@ -3167,6 +3252,7 @@ static long rkisp_compat_ioctl32(struct v4l2_subdev *sd,
 	struct isp2x_buf_idxfd idxfd;
 	struct rkisp_info2ddr info2ddr;
 	long ret = 0;
+	u64 module_id;
 
 	if (!up && cmd != RKISP_CMD_FREE_SHARED_BUF)
 		return -EINVAL;
@@ -3237,6 +3323,11 @@ static long rkisp_compat_ioctl32(struct v4l2_subdev *sd,
 		ret = rkisp_ioctl(sd, cmd, &info2ddr);
 		if (!ret && copy_to_user(up, &info2ddr, sizeof(info2ddr)))
 			ret = -EFAULT;
+		break;
+	case RKISP_CMD_MESHBUF_FREE:
+		if (copy_from_user(&module_id, up, sizeof(module_id)))
+			return -EFAULT;
+		ret = rkisp_ioctl(sd, cmd, &module_id);
 		break;
 	default:
 		ret = -ENOIOCTLCMD;
@@ -3315,6 +3406,7 @@ int rkisp_register_isp_subdev(struct rkisp_device *isp_dev,
 	struct v4l2_subdev *sd = &isp_sdev->sd;
 	int ret;
 
+	mutex_init(&isp_dev->buf_lock);
 	spin_lock_init(&isp_dev->cmsk_lock);
 	spin_lock_init(&isp_dev->rdbk_lock);
 	ret = kfifo_alloc(&isp_dev->rdbk_kfifo,
@@ -3401,7 +3493,10 @@ void rkisp_chk_tb_over(struct rkisp_device *isp_dev)
 	enum rkisp_tb_state tb_state;
 	void *resmem_va;
 
-	if (!isp_dev->resmem_pa || !isp_dev->resmem_size) {
+	if (!isp_dev->hw_dev->is_thunderboot)
+		return;
+
+	if (!isp_dev->is_thunderboot) {
 		v4l2_info(&isp_dev->v4l2_dev,
 			  "no reserved memory for thunderboot\n");
 		if (isp_dev->hw_dev->is_thunderboot) {
@@ -3415,15 +3510,50 @@ void rkisp_chk_tb_over(struct rkisp_device *isp_dev)
 
 	resmem_va = phys_to_virt(isp_dev->resmem_pa);
 	head = (struct rkisp_thunderboot_resmem_head *)resmem_va;
-	if (isp_dev->hw_dev->is_thunderboot) {
-		shm_head_poll_timeout(isp_dev, !!head->enable, 2000, 200 * USEC_PER_MSEC);
-		shm_head_poll_timeout(isp_dev, !!head->complete, 5000, 500 * USEC_PER_MSEC);
-		if (head->complete != RKISP_TB_OK)
-			v4l2_info(&isp_dev->v4l2_dev,
-				  "wait thunderboot over timeout\n");
+	if (isp_dev->is_thunderboot) {
+		dma_sync_single_for_cpu(isp_dev->dev, isp_dev->resmem_addr,
+					sizeof(struct rkisp_thunderboot_resmem_head),
+					DMA_FROM_DEVICE);
+		if (head->enable && !head->complete) {
+			/* notify rtt to stop */
+			head->enable = 0;
+			dma_sync_single_for_device(isp_dev->dev, isp_dev->resmem_addr,
+						   sizeof(struct rkisp_thunderboot_resmem_head),
+						   DMA_FROM_DEVICE);
+		}
+		shm_head_poll_timeout(isp_dev, !!head->complete, 5000, 100 * USEC_PER_MSEC);
+		if (head->complete != RKISP_TB_OK) {
+			v4l2_err(&isp_dev->v4l2_dev, "wait thunderboot over timeout\n");
+		} else {
+			u32 size = 0;
 
+			switch (isp_dev->hw_dev->isp_ver) {
+			case ISP_V32:
+				size = sizeof(struct rkisp32_thunderboot_resmem_head);
+				break;
+			default:
+				break;
+			}
+			if (size && size < isp_dev->resmem_size) {
+				dma_sync_single_for_cpu(isp_dev->dev, isp_dev->resmem_addr,
+							size, DMA_FROM_DEVICE);
+				isp_dev->params_vdev.is_first_cfg = true;
+				if (isp_dev->hw_dev->isp_ver == ISP_V32) {
+					struct rkisp32_thunderboot_resmem_head *tmp = resmem_va;
+
+					memcpy(isp_dev->params_vdev.isp32_params, &tmp->cfg,
+					       sizeof(struct isp32_isp_params_cfg));
+				}
+			} else if (size > isp_dev->resmem_size) {
+				v4l2_err(&isp_dev->v4l2_dev,
+					 "resmem size:%zu no enough for head:%d\n",
+					 isp_dev->resmem_size, size);
+				head->complete = RKISP_TB_NG;
+			}
+		}
+		memcpy(&isp_dev->tb_head, head, sizeof(*head));
 		v4l2_info(&isp_dev->v4l2_dev,
-			  "thunderboot info: %d, %d, %d, %d, %d, %d, 0x%x\n",
+			  "thunderboot info: %d, %d, %d, %d, %d, %d %d\n",
 			  head->enable,
 			  head->complete,
 			  head->frm_total,
@@ -3442,6 +3572,7 @@ void rkisp_chk_tb_over(struct rkisp_device *isp_dev)
 		rkisp_tb_unprotect_clk();
 		rkisp_register_irq(isp_dev->hw_dev);
 		isp_dev->hw_dev->is_thunderboot = false;
+		isp_dev->is_thunderboot = false;
 	}
 }
 #endif

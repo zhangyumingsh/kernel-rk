@@ -1119,6 +1119,7 @@ static void hdmi_config_AVI(struct dw_hdmi_qp *hdmi,
 	}
 
 	frame.scan_mode = HDMI_SCAN_MODE_NONE;
+	frame.video_code = hdmi->vic;
 
 	hdmi_avi_infoframe_pack_only(&frame, buff, 17);
 
@@ -1429,6 +1430,7 @@ static void hdmi_set_op_mode(struct dw_hdmi_qp *hdmi,
 			     const struct drm_connector *connector)
 {
 	int frl_rate;
+	int i;
 
 	/* set sink frl mode disable and wait sink ready */
 	hdmi_writel(hdmi, 0, FLT_CONFIG0);
@@ -1439,6 +1441,7 @@ static void hdmi_set_op_mode(struct dw_hdmi_qp *hdmi,
 	 * or the signal may not be recognized.
 	 */
 	msleep(200);
+
 	if (!link_cfg->frl_mode) {
 		dev_info(hdmi->dev, "dw hdmi qp use tmds mode\n");
 		hdmi_modb(hdmi, 0, OPMODE_FRL, LINK_CONFIG0);
@@ -1456,6 +1459,12 @@ static void hdmi_set_op_mode(struct dw_hdmi_qp *hdmi,
 
 	frl_rate = link_cfg->frl_lanes * link_cfg->rate_per_lane;
 	hdmi_start_flt(hdmi, frl_rate);
+
+	for (i = 0; i < 50; i++) {
+		hdmi_modb(hdmi, PKTSCHED_NULL_TX_EN, PKTSCHED_NULL_TX_EN, PKTSCHED_PKT_EN);
+		mdelay(1);
+		hdmi_modb(hdmi, 0, PKTSCHED_NULL_TX_EN, PKTSCHED_PKT_EN);
+	}
 }
 
 static unsigned long
@@ -1659,6 +1668,15 @@ dw_hdmi_connector_detect(struct drm_connector *connector, bool force)
 		else
 			result = connector_status_disconnected;
 	}
+
+	mutex_lock(&hdmi->mutex);
+	if (result != hdmi->last_connector_result) {
+		dev_dbg(hdmi->dev, "read_hpd result: %d", result);
+		handle_plugged_change(hdmi,
+				      result == connector_status_connected);
+		hdmi->last_connector_result = result;
+	}
+	mutex_unlock(&hdmi->mutex);
 
 	return result;
 }
@@ -2630,7 +2648,10 @@ static const struct file_operations dw_hdmi_status_fops = {
 
 static void dw_hdmi_register_debugfs(struct device *dev, struct dw_hdmi_qp *hdmi)
 {
-	hdmi->debugfs_dir = debugfs_create_dir("dw-hdmi", NULL);
+	u8 buf[11];
+
+	snprintf(buf, sizeof(buf), "dw-hdmi%d", hdmi->plat_data->id);
+	hdmi->debugfs_dir = debugfs_create_dir(buf, NULL);
 	if (IS_ERR(hdmi->debugfs_dir)) {
 		dev_err(dev, "failed to create debugfs dir!\n");
 		return;
@@ -2713,8 +2734,10 @@ __dw_hdmi_probe(struct platform_device *pdev,
 	hdmi_writel(hdmi, 0, MAINUNIT_0_INT_MASK_N);
 	hdmi_writel(hdmi, 0, MAINUNIT_1_INT_MASK_N);
 	hdmi_writel(hdmi, 428571429, TIMER_BASE_CONFIG0);
-	if ((hdmi_readl(hdmi, CMU_STATUS) & DISPLAY_CLK_MONITOR) == DISPLAY_CLK_LOCKED)
+	if ((hdmi_readl(hdmi, CMU_STATUS) & DISPLAY_CLK_MONITOR) == DISPLAY_CLK_LOCKED) {
 		hdmi->initialized = true;
+		hdmi->disabled = false;
+	}
 
 	irq = platform_get_irq(pdev, 0);
 	if (irq < 0) {

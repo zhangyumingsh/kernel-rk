@@ -300,6 +300,7 @@ static int rockchip_gem_alloc_dma(struct rockchip_gem_object *rk_obj,
 	rk_obj->pages = drm_calloc_large(rk_obj->num_pages,
 					 sizeof(*rk_obj->pages));
 	if (!rk_obj->pages) {
+		ret = -ENOMEM;
 		DRM_ERROR("failed to allocate pages.\n");
 		goto err_sg_table_free;
 	}
@@ -770,7 +771,6 @@ int rockchip_gem_dumb_create(struct drm_file *file_priv,
 
 	rk_obj = rockchip_gem_create_with_handle(file_priv, dev, args->size,
 						 &args->handle, args->flags);
-
 
 	return PTR_ERR_OR_ZERO(rk_obj);
 }

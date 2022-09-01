@@ -2078,6 +2078,9 @@
 /* BLS */
 #define ISP32_BLS_BLS2_EN		BIT(5)
 
+/* BAY3D */
+#define ISP32_BAY3D_BWSAVING(a)		(((a) & 0x1) << 13)
+
 /* GIC */
 
 /* LDCH */
@@ -2116,6 +2119,7 @@
 #define ISP3X_GAIN_2DDR_mode(a)		(((a) & 0x3) << 25)
 
 /* DPCC */
+#define ISP3X_DPCC_WORKING		BIT(30)
 
 /* CCM */
 #define ISP3X_CCM_HIGHY_ADJ_DIS		BIT(1)
@@ -2133,6 +2137,8 @@
 #define ISP3X_LSC_ACTIVE_TABLE		BIT(1)
 #define ISP3X_LSC_TABLE_ADDRESS_0	0
 #define ISP3X_LSC_TABLE_ADDRESS_153	153
+
+#define ISP3X_LSC_SECTOR_16X16		BIT(2)
 
 /* RAWAE */
 #define ISP3X_RAWAE_LITE_EN		BIT(0)
