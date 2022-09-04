@@ -34,6 +34,9 @@ int RGA_DEBUG_MM;
 int RGA_DEBUG_CHECK_MODE;
 int RGA_DEBUG_NONUSE;
 int RGA_DEBUG_DEBUG_MODE;
+int RGA_DEBUG_DUMP_IMAGE;
+
+static char g_dump_path[100] = "/data";
 
 static int rga_debug_show(struct seq_file *m, void *data)
 {
@@ -166,10 +169,15 @@ static int rga_version_show(struct seq_file *m, void *data)
 static int rga_load_show(struct seq_file *m, void *data)
 {
 	struct rga_scheduler_t *scheduler = NULL;
+	struct rga_session_manager *session_manager = NULL;
+	struct rga_session *session = NULL;
 	unsigned long flags;
+	int id = 0;
 	int i;
 	int load;
 	u32 busy_time_total;
+
+	session_manager = rga_drvdata->session_manager;
 
 	seq_printf(m, "num of scheduler = %d\n", rga_drvdata->num_of_scheduler);
 	seq_printf(m, "================= load ==================\n");
@@ -193,6 +201,15 @@ static int rga_load_show(struct seq_file *m, void *data)
 		seq_printf(m, "\t load = %d%%\n", load);
 		seq_printf(m, "-----------------------------------\n");
 	}
+
+	mutex_lock(&session_manager->lock);
+
+	idr_for_each_entry(&session_manager->ctx_id_idr, session, id)
+		seq_printf(m, "\t process %d: pid = %d, name: %s\n", id,
+			session->tgid, session->pname);
+
+	mutex_unlock(&session_manager->lock);
+
 	return 0;
 }
 
@@ -277,63 +294,125 @@ static int rga_mm_session_show(struct seq_file *m, void *data)
 	return 0;
 }
 
-static int rga_ctx_manager_show(struct seq_file *m, void *data)
+static int rga_request_manager_show(struct seq_file *m, void *data)
 {
 	int id, i;
-	struct rga_pending_ctx_manager *ctx_manager;
-	struct rga_internal_ctx_t *ctx;
-	struct rga_req *cached_cmd;
+	struct rga_pending_request_manager *request_manager;
+	struct rga_request *request;
+	struct rga_req *task_list;
 	unsigned long flags;
-	int cmd_num = 0;
-	int finished_job_count = 0;
+	int task_count = 0;
+	int finished_task_count = 0;
 
-	ctx_manager = rga_drvdata->pend_ctx_manager;
+	request_manager = rga_drvdata->pend_request_manager;
 
-	seq_puts(m, "rga internal ctx dump:\n");
-	seq_printf(m, "ctx count = %d\n", ctx_manager->ctx_count);
+	seq_puts(m, "rga internal request dump:\n");
+	seq_printf(m, "request count = %d\n", request_manager->request_count);
 	seq_puts(m, "===============================================================\n");
 
-	mutex_lock(&ctx_manager->lock);
+	mutex_lock(&request_manager->lock);
 
-	idr_for_each_entry(&ctx_manager->ctx_id_idr, ctx, id) {
-		seq_printf(m, "------------------ ctx: %d ------------------\n", ctx->id);
+	idr_for_each_entry(&request_manager->request_idr, request, id) {
+		seq_printf(m, "------------------ request: %d ------------------\n", request->id);
 
-		spin_lock_irqsave(&ctx->lock, flags);
+		spin_lock_irqsave(&request->lock, flags);
 
-		cmd_num = ctx->cmd_num;
-		finished_job_count = ctx->finished_job_count;
-		cached_cmd = ctx->cached_cmd;
+		task_count = request->task_count;
+		finished_task_count = request->finished_task_count;
+		task_list = request->task_list;
 
-		spin_unlock_irqrestore(&ctx->lock, flags);
+		spin_unlock_irqrestore(&request->lock, flags);
 
-		if (cached_cmd == NULL) {
-			seq_puts(m, "\t can not find cached cmd from id\n");
+		if (task_list == NULL) {
+			seq_puts(m, "\t can not find task list from id\n");
 			continue;
 		}
 
 		seq_printf(m, "\t set cmd num: %d, finish job sum: %d\n",
-				cmd_num, finished_job_count);
+				task_count, finished_task_count);
 
 		seq_puts(m, "\t cmd dump:\n\n");
 
-		for (i = 0; i < ctx->cmd_num; i++)
-			rga_ctx_cache_cmd_debug_info(m, &(cached_cmd[i]));
+		for (i = 0; i < request->task_count; i++)
+			rga_request_task_debug_info(m, &(task_list[i]));
 
 	}
 
-	mutex_unlock(&ctx_manager->lock);
+	mutex_unlock(&request_manager->lock);
 
 	return 0;
 }
 
+static int rga_dump_path_show(struct seq_file *m, void *data)
+{
+	seq_printf(m, "dump path: %s\n", g_dump_path);
 
-struct rga_debugger_list rga_debugger_root_list[] = {
+	return 0;
+}
+
+static ssize_t rga_dump_path_write(struct file *file, const char __user *ubuf,
+				    size_t len, loff_t *offp)
+{
+	char buf[100];
+
+	if (len > sizeof(buf) - 1)
+		return -EINVAL;
+	if (copy_from_user(buf, ubuf, len))
+		return -EFAULT;
+	buf[len - 1] = '\0';
+
+	snprintf(g_dump_path, sizeof(buf), "%s", buf);
+	pr_info("dump path change to: %s\n", g_dump_path);
+
+	return len;
+}
+
+static int rga_dump_image_show(struct seq_file *m, void *data)
+{
+	seq_printf(m, "dump image count: %d\n", RGA_DEBUG_DUMP_IMAGE);
+
+	return 0;
+}
+
+static ssize_t rga_dump_image_write(struct file *file, const char __user *ubuf,
+				    size_t len, loff_t *offp)
+{
+	int ret;
+	int dump_count = 0;
+	char buf[14];
+
+	if (len > sizeof(buf) - 1)
+		return -EINVAL;
+	if (copy_from_user(buf, ubuf, len))
+		return -EFAULT;
+	buf[len - 1] = '\0';
+
+	ret = kstrtoint(buf, 10, &dump_count);
+	if (ret) {
+		pr_err("Failed to parse str[%s]\n", buf);
+		return -EFAULT;
+	}
+
+	if (dump_count <= 0) {
+		pr_err("dump_image count is invalid [%d]!\n", dump_count);
+		return -EINVAL;
+	}
+
+	RGA_DEBUG_DUMP_IMAGE = dump_count;
+	pr_info("dump image %d\n", RGA_DEBUG_DUMP_IMAGE);
+
+	return len;
+}
+
+static struct rga_debugger_list rga_debugger_root_list[] = {
 	{"debug", rga_debug_show, rga_debug_write, NULL},
 	{"driver_version", rga_version_show, NULL, NULL},
 	{"load", rga_load_show, NULL, NULL},
 	{"scheduler_status", rga_scheduler_show, NULL, NULL},
 	{"mm_session", rga_mm_session_show, NULL, NULL},
-	{"ctx_manager", rga_ctx_manager_show, NULL, NULL},
+	{"request_manager", rga_request_manager_show, NULL, NULL},
+	{"dump_path", rga_dump_path_show, rga_dump_path_write, NULL},
+	{"dump_image", rga_dump_image_show, rga_dump_image_write, NULL},
 };
 
 static ssize_t rga_debugger_write(struct file *file, const char __user *ubuf,
@@ -604,7 +683,7 @@ CREATE_FAIL:
 }
 #endif /* #ifdef CONFIG_ROCKCHIP_RGA_PROC_FS */
 
-void rga_ctx_cache_cmd_debug_info(struct seq_file *m, struct rga_req *req)
+void rga_request_task_debug_info(struct seq_file *m, struct rga_req *req)
 {
 	seq_printf(m, "\t\t rotate_mode = %d\n", req->rotate_mode);
 	seq_printf(m, "\t\t src: y = %lx uv = %lx v = %lx aw = %d ah = %d vw = %d vh = %d\n",
@@ -694,4 +773,128 @@ void rga_dump_external_buffer(struct rga_external_buffer *buffer)
 		buffer->memory_parm.width, buffer->memory_parm.height,
 		rga_get_format_name(buffer->memory_parm.format),
 		buffer->memory_parm.size);
+}
+
+static int rga_dump_image_to_file(struct rga_internal_buffer *dump_buffer,
+				  const char *channel_name,
+				  int plane_id,
+				  int core)
+{
+	char file_name[100];
+	struct file *file;
+	size_t size = 0;
+	loff_t pos = 0;
+	void *kvaddr = NULL;
+	void *kvaddr_origin = NULL;
+
+	switch (dump_buffer->type) {
+	case RGA_DMA_BUFFER:
+	case RGA_DMA_BUFFER_PTR:
+		if (IS_ERR_OR_NULL(dump_buffer->dma_buffer->dma_buf)) {
+			pr_err("Failed to dump dma_buf 0x%px\n",
+			       dump_buffer->dma_buffer->dma_buf);
+			return -EINVAL;
+		}
+
+		kvaddr = dma_buf_vmap(dump_buffer->dma_buffer->dma_buf);
+		if (!kvaddr) {
+			pr_err("can't vmap the dma buffer!\n");
+			return -EINVAL;
+		}
+
+		kvaddr_origin = kvaddr;
+		kvaddr += dump_buffer->dma_buffer->offset;
+		break;
+	case RGA_VIRTUAL_ADDRESS:
+		kvaddr = vmap(dump_buffer->virt_addr->pages, dump_buffer->virt_addr->page_count,
+			      VM_MAP, pgprot_writecombine(PAGE_KERNEL));
+		if (!kvaddr) {
+			pr_err("dump_vaddr vmap error!, 0x%lx\n",
+			       (unsigned long)dump_buffer->virt_addr->addr);
+			return -EFAULT;
+		}
+
+		kvaddr_origin = kvaddr;
+		kvaddr += dump_buffer->virt_addr->offset;
+		break;
+	case RGA_PHYSICAL_ADDRESS:
+		kvaddr = phys_to_virt(dump_buffer->phys_addr);
+		break;
+	default:
+		pr_err("unsupported memory type[%x]\n", dump_buffer->type);
+		return -EINVAL;
+	}
+
+	size = dump_buffer->size;
+
+	if (kvaddr == NULL) {
+		pr_err("dump addr is NULL!\n");
+		return -EFAULT;
+	}
+
+	if (size <= 0) {
+		pr_err("dump buffer size[%lx] is invalid!\n", (unsigned long)size);
+		return -EFAULT;
+	}
+
+	if (dump_buffer->memory_parm.width == 0 &&
+	    dump_buffer->memory_parm.height == 0)
+		snprintf(file_name, 100, "%s/%d_core%d_%s_plane%d_%s_size%zu_%s.bin",
+			 g_dump_path,
+			 RGA_DEBUG_DUMP_IMAGE, core, channel_name, plane_id,
+			 rga_get_memory_type_str(dump_buffer->type),
+			 size,
+			 rga_get_format_name(dump_buffer->memory_parm.format));
+	else
+		snprintf(file_name, 100, "%s/%d_core%d_%s_plane%d_%s_w%d_h%d_%s.bin",
+			 g_dump_path,
+			 RGA_DEBUG_DUMP_IMAGE, core, channel_name, plane_id,
+			 rga_get_memory_type_str(dump_buffer->type),
+			 dump_buffer->memory_parm.width,
+			 dump_buffer->memory_parm.height,
+			 rga_get_format_name(dump_buffer->memory_parm.format));
+
+	file = filp_open(file_name, O_RDWR | O_CREAT | O_TRUNC, 0600);
+	if (!IS_ERR(file)) {
+		kernel_write(file, kvaddr, size, &pos);
+		pr_info("dump image to: %s\n", file_name);
+		fput(file);
+	} else {
+		pr_info("open %s failed\n", file_name);
+	}
+
+	switch (dump_buffer->type) {
+	case RGA_DMA_BUFFER:
+	case RGA_DMA_BUFFER_PTR:
+		dma_buf_vunmap(dump_buffer->dma_buffer->dma_buf, kvaddr_origin);
+		break;
+	case RGA_VIRTUAL_ADDRESS:
+		vunmap(kvaddr_origin);
+		break;
+	}
+
+	return 0;
+}
+
+static inline void rga_dump_channel_image(struct rga_job_buffer *job_buffer,
+					  const char *channel_name,
+					  int core)
+{
+	if (job_buffer->y_addr)
+		rga_dump_image_to_file(job_buffer->y_addr, channel_name, 0, core);
+	if (job_buffer->uv_addr)
+		rga_dump_image_to_file(job_buffer->uv_addr, channel_name, 1, core);
+	if (job_buffer->v_addr)
+		rga_dump_image_to_file(job_buffer->v_addr, channel_name, 2, core);
+}
+
+void rga_dump_job_image(struct rga_job *dump_job)
+{
+	rga_dump_channel_image(&dump_job->src_buffer, "src", dump_job->core);
+	rga_dump_channel_image(&dump_job->src1_buffer, "src1", dump_job->core);
+	rga_dump_channel_image(&dump_job->dst_buffer, "dst", dump_job->core);
+	rga_dump_channel_image(&dump_job->els_buffer, "els", dump_job->core);
+
+	if (RGA_DEBUG_DUMP_IMAGE > 0)
+		RGA_DEBUG_DUMP_IMAGE--;
 }

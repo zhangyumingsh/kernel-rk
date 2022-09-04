@@ -72,7 +72,7 @@
 
 #define DRIVER_MAJOR_VERSION		1
 #define DRIVER_MINOR_VERSION		0
-#define DRIVER_REVISION_VERSION		2
+#define DRIVER_REVISION_VERSION		4
 
 #define DRIVER_VERSION (STR(DRIVER_MAJOR_VERSION) "." STR(DRIVER_MINOR_VERSION) \
 			"." STR(DRIVER_REVISION_VERSION))
@@ -116,9 +116,16 @@ struct rve_fence_waiter {
 struct rve_scheduler_t;
 struct rve_internal_ctx_t;
 
+struct rve_session {
+	int id;
+
+	pid_t tgid;
+};
+
 struct rve_job {
 	struct list_head head;
 	struct rve_scheduler_t *scheduler;
+	struct rve_session *session;
 
 	struct rve_cmd_reg_array_t *regcmd_data;
 
@@ -220,6 +227,7 @@ struct rve_ctx_debug_info_t {
 
 struct rve_internal_ctx_t {
 	struct rve_scheduler_t *scheduler;
+	struct rve_session *session;
 
 	struct rve_cmd_reg_array_t *regcmd_data;
 	uint32_t cmd_num;
@@ -231,6 +239,9 @@ struct rve_internal_ctx_t {
 	uint32_t running_job_count;
 	uint32_t finished_job_count;
 	bool is_running;
+
+	uint32_t disable_auto_cancel;
+
 	int priority;
 	int32_t out_fence_fd;
 	int32_t in_fence_fd;
@@ -260,9 +271,15 @@ struct rve_pending_ctx_manager {
 	int ctx_count;
 };
 
-struct rve_drvdata_t {
-	struct miscdevice miscdev;
+struct rve_session_manager {
+	struct mutex lock;
 
+	struct idr ctx_id_idr;
+
+	int session_cnt;
+};
+
+struct rve_drvdata_t {
 	struct rve_fence_context *fence_ctx;
 
 	/* used by rve2's mmu lock */
@@ -278,6 +295,8 @@ struct rve_drvdata_t {
 
 	/* rve_job pending manager, import by RVE_IOC_START_CONFIG */
 	struct rve_pending_ctx_manager *pend_ctx_manager;
+
+	struct rve_session_manager *session_manager;
 
 #ifdef CONFIG_ROCKCHIP_RVE_DEBUGGER
 	struct rve_debugger *debugger;

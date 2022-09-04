@@ -10,6 +10,7 @@
 #include <linux/of_address.h>
 #include <linux/mmc/slot-gpio.h>
 #include <linux/pm_runtime.h>
+#include <linux/rockchip/cpu.h>
 #include <linux/slab.h>
 
 #include "dw_mmc.h"
@@ -390,6 +391,19 @@ static int dw_mci_rockchip_init(struct dw_mci *host)
 				    "rockchip,rk3288-dw-mshc"))
 		host->bus_hz /= RK3288_CLKGEN_DIV;
 
+	if (of_device_is_compatible(host->dev->of_node,
+				    "rockchip,rv1106-dw-mshc") &&
+	    rockchip_get_cpu_version() == 0 &&
+	    !strcmp(dev_name(host->dev), "ffaa0000.mmc")) {
+		if (device_property_read_bool(host->dev, "no-sd")) {
+			dev_err(host->dev, "Invalid usage, should be SD card only\n");
+			return -EINVAL;
+		}
+
+		host->is_rv1106_sd = true;
+		dev_info(host->dev, "is rv1106 sd\n");
+	}
+
 	host->need_xfer_timer = true;
 	return 0;
 }
@@ -498,7 +512,19 @@ static struct platform_driver dw_mci_rockchip_pltfm_driver = {
 	},
 };
 
-module_platform_driver(dw_mci_rockchip_pltfm_driver);
+//module_platform_driver(dw_mci_rockchip_pltfm_driver);
+
+static int __init dw_mci_init(void)
+{
+        return platform_driver_register(&dw_mci_rockchip_pltfm_driver);
+}
+late_initcall(dw_mci_init);
+
+static void __exit dw_mci_exit(void)
+{
+        return platform_driver_unregister(&dw_mci_rockchip_pltfm_driver);
+}
+module_exit(dw_mci_exit);
 
 MODULE_AUTHOR("Addy Ke <addy.ke@rock-chips.com>");
 MODULE_DESCRIPTION("Rockchip Specific DW-MSHC Driver Extension");

@@ -60,6 +60,7 @@ int drm_mode_create_dumb(struct drm_device *dev,
 			 struct drm_file *file_priv)
 {
 	u32 cpp, stride, size;
+
 	if (!dev->driver->dumb_create)
 		return -ENOSYS;
 	if (!args->width || !args->height || !args->bpp)

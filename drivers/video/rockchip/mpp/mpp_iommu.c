@@ -67,6 +67,15 @@ static void mpp_dma_release_buffer(struct kref *ref)
 	dma_buf_unmap_attachment(buffer->attach, buffer->sgt, buffer->dir);
 	dma_buf_detach(buffer->dmabuf, buffer->attach);
 	dma_buf_put(buffer->dmabuf);
+	buffer->dma = NULL;
+	buffer->dmabuf = NULL;
+	buffer->attach = NULL;
+	buffer->sgt = NULL;
+	buffer->copy_sgt = NULL;
+	buffer->iova = 0;
+	buffer->size = 0;
+	buffer->vaddr = NULL;
+	buffer->last_used = 0;
 }
 
 /* Remove the oldest buffer when count more than the setting */
@@ -196,7 +205,7 @@ struct mpp_dma_buffer *mpp_dma_import_fd(struct mpp_iommu_info *iommu_info,
 	if (IS_ERR(dmabuf)) {
 		ret = PTR_ERR(dmabuf);
 		mpp_err("dma_buf_get fd %d failed(%d)\n", fd, ret);
-		return NULL;
+		return ERR_PTR(ret);
 	}
 	/* A new DMA buffer */
 	mutex_lock(&dma->list_mutex);
@@ -441,6 +450,8 @@ mpp_iommu_probe(struct device *dev)
 	info->pdev = pdev;
 	info->group = group;
 	info->domain = domain;
+	info->irq = platform_get_irq(pdev, 0);
+	info->got_irq = (info->irq < 0) ? false : true;
 
 	return info;
 

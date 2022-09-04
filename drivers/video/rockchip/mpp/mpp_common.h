@@ -333,6 +333,7 @@ struct mpp_dev {
 	u32 msgs_cap;
 
 	int irq;
+	bool is_irq_startup;
 	u32 irq_status;
 
 	void __iomem *reg_base;
@@ -471,7 +472,7 @@ struct mpp_taskqueue {
 	struct list_head session_attach;
 	/* link to session session_link for detached sessions */
 	struct list_head session_detach;
-	u32 detach_count;
+	atomic_t detach_count;
 
 	atomic_t task_id;
 	/* lock for pending list */
@@ -633,9 +634,12 @@ int mpp_task_dump_mem_region(struct mpp_dev *mpp,
 int mpp_task_dump_reg(struct mpp_dev *mpp,
 		      struct mpp_task *task);
 int mpp_task_dump_hw_reg(struct mpp_dev *mpp);
+void mpp_reg_show(struct mpp_dev *mpp, u32 offset);
 void mpp_free_task(struct kref *ref);
 
-int mpp_session_deinit(struct mpp_session *session);
+void mpp_session_deinit(struct mpp_session *session);
+void mpp_session_cleanup_detach(struct mpp_taskqueue *queue,
+				struct kthread_work *work);
 
 int mpp_dev_probe(struct mpp_dev *mpp,
 		  struct platform_device *pdev);

@@ -538,6 +538,7 @@ enum cif_reg_index {
 #define DVP_SW_HURRY_VALUE(val)		(((val) & 0x7) << 9)
 #define DVP_SW_CAP_EN(ID)		(2 << ID)
 #define DVP_SW_DMA_EN(ID)		(0x100000 << ID)
+#define DVP_START_INTSTAT(ID)		(0x3 << ((ID) * 2))
 
 #define DVP_DMA_END_INTEN(id)	\
 	({ \
@@ -751,6 +752,12 @@ enum cif_reg_index {
 #define SW_SCALE_END(intstat, ch)	((intstat >> ((ch + 1) * 2)) & 0x3)
 #define SCALE_SOFT_RESET(ch)		(0x1 << (ch + 16))
 
+/* CIF TOISP*/
+#define CIF_TOISP0_FS(ch)		(BIT(14) << ch)
+#define CIF_TOISP1_FS(ch)		(BIT(17) << ch)
+#define CIF_TOISP0_FE(ch)		(BIT(20) << ch)
+#define CIF_TOISP1_FE(ch)		(BIT(23) << ch)
+
 /* CIF_CSI_ID_CTRL0 */
 #define CSI_DISABLE_CAPTURE		(0x0 << 0)
 #define CSI_ENABLE_CAPTURE		(0x1 << 0)
@@ -761,6 +768,7 @@ enum cif_reg_index {
 #define CSI_WRDDR_TYPE_YUV422		(0x4 << 1)
 #define CSI_WRDDR_TYPE_YUV420SP		(0x5 << 1)
 #define CSI_WRDDR_TYPE_YUV400		(0x6 << 1)
+#define CSI_WRDDR_TYPE_RGB565		(0x7 << 1)
 #define CSI_DISABLE_COMMAND_MODE	(0x0 << 4)
 #define CSI_ENABLE_COMMAND_MODE		(0x1 << 4)
 #define CSI_DISABLE_CROP		(0x0 << 5)
@@ -1037,6 +1045,10 @@ enum cif_reg_index {
 
 
 /*toisp*/
+#define TOISP_FS_CH0(index)		(0x1 << (14 + index * 3))
+#define TOISP_FS_CH1(index)		(0x1 << (15 + index * 3))
+#define TOISP_FS_CH2(index)		(0x1 << (16 + index * 3))
+
 #define TOISP_END_CH0(index)		(0x1 << (20 + index * 3))
 #define TOISP_END_CH1(index)		(0x1 << (21 + index * 3))
 #define TOISP_END_CH2(index)		(0x1 << (22 + index * 3))
