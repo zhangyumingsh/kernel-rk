@@ -6,7 +6,7 @@
 
 #include "rk3588-firefly-port.dtsi"
 
-#define M2_SATA_OR_PCIE 1 /*1 = SATA , 0 = PCIe */
+//#define M2_SATA_OR_PCIE 1 /*1 = SATA , 0 = PCIe */
 
 / {
 //	chosen: chosen {
@@ -183,19 +183,19 @@
 	status = "okay";
 };
 
-#if M2_SATA_OR_PCIE
-&sata0 {
-    pinctrl-names = "default";
-    pinctrl-0 = <&sata_reset>;
-	status = "okay";
-};
-#else
-&pcie2x1l2 {
-	reset-gpios = <&gpio3 RK_PD1 GPIO_ACTIVE_HIGH>;
-	vpcie3v3-supply = <&vcc3v3_pcie20>;
-	status = "okay";
-};
-#endif
+//#if M2_SATA_OR_PCIE
+//&sata0 {
+//    pinctrl-names = "default";
+//    pinctrl-0 = <&sata_reset>;
+//	status = "okay";
+//};
+//#else
+//&pcie2x1l2 {
+//	reset-gpios = <&gpio3 RK_PD1 GPIO_ACTIVE_HIGH>;
+//	vpcie3v3-supply = <&vcc3v3_pcie20>;
+//	status = "okay";
+//};
+//#endif
 
 /* usb3.0 */
 &combphy2_psu {
@@ -433,11 +433,11 @@
 			rockchip,pins = <1 RK_PB1 RK_FUNC_GPIO &pcfg_pull_none>;
 		};
 	};
-#if M2_SATA_OR_PCIE
-	sata {
-		sata_reset:sata-reset{
-			rockchip,pins = <3 RK_PD1 RK_FUNC_GPIO &pcfg_pull_up>;
-		};
-	};
-#endif
+//#if M2_SATA_OR_PCIE
+//	sata {
+//		sata_reset:sata-reset{
+//			rockchip,pins = <3 RK_PD1 RK_FUNC_GPIO &pcfg_pull_up>;
+//		};
+//	};
+//#endif
 };
