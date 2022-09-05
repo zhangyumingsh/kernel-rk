@@ -12,7 +12,7 @@
 #include <dt-bindings/power/rk3568-power.h>
 #include <dt-bindings/soc/rockchip-system-status.h>
 #include <dt-bindings/thermal/thermal.h>
-#include "rk3568-dram-default-timing.dtsi"
+#include "rk3566-dram-default-timing.dtsi"
 
 / {
 	compatible = "rockchip,rk3566", "rockchip,rk3568";
@@ -3019,4 +3019,4 @@
 	};
 };
 
-#include "rk3568-pinctrl.dtsi"
+#include "rk3566-pinctrl.dtsi"
