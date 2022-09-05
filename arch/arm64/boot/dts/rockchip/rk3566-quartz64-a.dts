@@ -109,7 +109,7 @@
 	};
 
 	adc_keys: adc-keys {
-		status = "disabled";
+		status = "okay";
 		compatible = "adc-keys";
 		io-channels = <&saradc 0>;
 		io-channel-names = "buttons";
@@ -134,7 +134,7 @@
 		simple-audio-card,format = "i2s";
 		simple-audio-card,mclk-fs = <256>;
 		simple-audio-card,name = "rockchip,hdmi";
-		status = "disabled";
+		status = "okay";
 
 		simple-audio-card,cpu {
 				sound-dai = <&i2s0_8ch>;
@@ -168,7 +168,7 @@
 	};
 
 	sdio_pwrseq: sdio-pwrseq {
-		status = "disabled";
+		status = "okay";
 		compatible = "mmc-pwrseq-simple";
 		clocks = <&rk817 1>;
 		clock-names = "ext_clock";
@@ -204,7 +204,7 @@
 		pinctrl-names = "default";
 		pinctrl-0 = <&wifi_host_wake_irq>;
 		WIFI,host_wake_irq = <&gpio2 RK_PB2 GPIO_ACTIVE_HIGH>;
-		status = "disabled";
+		status = "okay";
 	};
 
 	wireless-bluetooth {
@@ -219,7 +219,7 @@
 		BT,reset_gpio    = <&gpio2 RK_PB7 GPIO_ACTIVE_HIGH>;
 		BT,wake_gpio     = <&gpio2 RK_PC1 GPIO_ACTIVE_HIGH>;
 		BT,wake_host_irq = <&gpio2 RK_PC0 GPIO_ACTIVE_HIGH>;
-		status = "disabled";
+		status = "okay";
 	};
 };
 
@@ -290,19 +290,19 @@
 };
 
 &hdmi {
-	status = "disabled";
+	status = "okay";
 };
 
 &hdmi_in_vp0 {
-	status = "disabled";
+	status = "okay";
 };
 
 &hdmi_in_vp1 {
-	status = "disabled";
+	status = "okay";
 };
 
 &hdmi_sound {
-	status = "disabled";
+	status = "okay";
 };
 
 &i2c0 {
@@ -806,7 +806,7 @@
 };
 
 &saradc {
-	status = "disabled";
+	status = "okay";
 	vref-supply = <&vcc_1v8>;
 };
 
@@ -848,7 +848,7 @@
 	pinctrl-names = "default";
 	pinctrl-0 = <&sdmmc1_bus4 &sdmmc1_cmd &sdmmc1_clk>;
 	sd-uhs-sdr104;
-	status = "disabled";
+	status = "okay";
 };
 
 &tsadc {
