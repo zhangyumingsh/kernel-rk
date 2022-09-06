@@ -16,8 +16,10 @@
 	model = "Pine64 RK3566 Quartz64-A Board";
 	compatible = "rockchip,rk3566-quartz64-a", "rockchip,rk3566";
 
-	chosen: chosen {
-//		bootargs = "earlycon=uart8250,mmio32,0xfe660000 console=ttyFIQ0";
+	aliases {
+		ethernet0 = &gmac1;
+		mmc0 = &sdmmc0;
+		mmc1 = &sdhci;
 	};
 
 	fiq-debugger {
@@ -109,7 +111,7 @@
 	};
 
 	adc_keys: adc-keys {
-		status = "okay";
+		status = "disabled";
 		compatible = "adc-keys";
 		io-channels = <&saradc 0>;
 		io-channel-names = "buttons";
@@ -152,8 +154,9 @@
 		regulator-min-microvolt = <3800000>;
 		regulator-max-microvolt = <3800000>;
 	};
-
-	rk817-sound {
+ 
+	rk817_sound: rk817-sound {
+		status = "okay";
 		compatible = "simple-audio-card";
 		simple-audio-card,format = "i2s";
 		simple-audio-card,name = "rockchip,rk817-codec";
@@ -181,7 +184,8 @@
 		 * - SDIO_RESET_L_WL_REG_ON
 		 * - PDN (power down when low)
 		 */
-		reset-gpios = <&gpio2 RK_PB1 GPIO_ACTIVE_LOW>;
+		post-power-on-delay-ms = <200>;
+		reset-gpios = <&gpio2 RK_PC2 GPIO_ACTIVE_LOW>;
 	};
 
 	vcc_sd: vcc-sd {
@@ -203,11 +207,12 @@
 		wifi_chip_type = "ap6255";
 		pinctrl-names = "default";
 		pinctrl-0 = <&wifi_host_wake_irq>;
-		WIFI,host_wake_irq = <&gpio2 RK_PB2 GPIO_ACTIVE_HIGH>;
+		WIFI,host_wake_irq = <&gpio2 RK_PC3 GPIO_ACTIVE_HIGH>;
 		status = "okay";
 	};
 
-	wireless-bluetooth {
+	wireless_bluetooth: wireless-bluetooth {
+    
 		compatible = "bluetooth-platdata";
 		clocks = <&rk817 1>;
 		clock-names = "ext_clock";
@@ -231,10 +236,6 @@
 	assigned-clocks = <&cru CPLL_333M>, <&cru DCLK_EBC>;
 	assigned-clock-rates = <250000000>, <250000000>;
 	status = "okay";
-};
-
-&ebc_dev {
-
 };
 
 &combphy1_usq {
@@ -298,7 +299,7 @@
 };
 
 &hdmi_in_vp1 {
-	status = "okay";
+	status = "disabled";
 };
 
 &hdmi_sound {
@@ -337,6 +338,7 @@
 		pinctrl-1 = <&soc_slppin_slp>, <&rk817_slppin_slp>;
 		pinctrl-2 = <&soc_slppin_gpio>, <&rk817_slppin_pwrdn>;
 		pinctrl-3 = <&soc_slppin_gpio>, <&rk817_slppin_rst>;
+
 		rockchip,system-power-controller;
 		wakeup-source;
 		#clock-cells = <1>;
@@ -592,16 +594,17 @@
 		rk817_codec: codec {
 			#sound-dai-cells = <0>;
 			compatible = "rockchip,rk817-codec";
-			clocks = <&cru I2S1_MCLKOUT_TX>;
+			clocks = <&cru I2S1_MCLKOUT>;
 			clock-names = "mclk";
-			assigned-clocks = <&cru I2S1_MCLKOUT_TX>;
-			assigned-clock-parents = <&cru CLK_I2S1_8CH_TX>;
+			assigned-clocks = <&cru I2S1_MCLKOUT>, <&cru I2S1_MCLK_TX_IOE>;
+			assigned-clock-rates = <12288000>;
+			assigned-clock-parents = <&cru I2S1_MCLKOUT_TX>, <&cru I2S1_MCLKOUT_TX>;
 			pinctrl-names = "default";
 			pinctrl-0 = <&i2s1m0_mclk>;
 			hp-volume = <20>;
 			spk-volume = <3>;
 			out-l2spk-r2hp;
-			spk-ctl-gpios = <&gpio0 RK_PA6 GPIO_ACTIVE_HIGH>;
+			spk-ctl-gpios = <&gpio0 RK_PC4 GPIO_ACTIVE_HIGH>;
 			status = "okay";
 		};
 	};
@@ -633,6 +636,20 @@
 
 &i2c5 {
 //	status = "okay";
+};
+
+&i2s0_8ch {
+	status = "okay";
+};
+
+&i2s1_8ch {
+	status = "okay";
+	rockchip,clk-trcm = <1>;
+	pinctrl-names = "default";
+	pinctrl-0 = <&i2s1m0_sclktx
+		     &i2s1m0_lrcktx
+		     &i2s1m0_sdi0
+		     &i2s1m0_sdo0>;
 };
 
 &jpegd {
@@ -751,7 +768,7 @@
 };
 
 &pwm4 {
-	status = "disabled";
+	status = "okay";
 };
 
 &reserved_memory {
@@ -821,7 +838,7 @@
 };
 
 &sdmmc0 {
-	max-frequency = <50000000>;
+	max-frequency = <150000000>;
 	supports-sd;
 	bus-width = <4>;
 	cap-mmc-highspeed;
@@ -843,6 +860,8 @@
 	cap-sd-highspeed;
 	cap-sdio-irq;
 	keep-power-in-suspend;
+	non-removable;
+	rockchip,default-sample-phase=<90>;
 	mmc-pwrseq = <&sdio_pwrseq>;
 	non-removable;
 	pinctrl-names = "default";
