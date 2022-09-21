@@ -228,8 +228,8 @@
 		pinctrl-names = "default";
 		pinctrl-0 = <&vcc5v0_otg_en>;
 		regulator-name = "vcc5v0_otg";
-		regulator-always-on;
-		regulator-boot-on;
+//		regulator-always-on;
+//		regulator-boot-on;
 	};
 
 	vcc_hub_power: vcc-hub-power-regulator {
@@ -321,8 +321,8 @@
 
 	wireless_wlan: wireless-wlan {
 		compatible = "wlan-platdata";
-		clocks = <&rk809 1>;
-		clock-names = "clk_wifi";
+//		clocks = <&rk809 1>;
+//		clock-names = "clk_wifi";
 		rockchip,grf = <&grf>;
 		wifi_chip_type = "ap6398s";
 		pinctrl-names = "default";
@@ -822,6 +822,18 @@
 	};
 };
 
+&i2c1 {
+    	status = "okay";
+};
+
+&i2c4 {
+	status = "okay";
+};
+
+&i2c5 {
+    	status = "okay";
+};
+
 &i2s0_8ch {
 	status = "okay";
 };
@@ -870,6 +882,30 @@
 	};
 };
 
+&uart3 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&uart3m1_xfer>;
+	status = "okay";
+};
+
+&uart4 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&uart4m1_xfer>;
+        status = "okay";
+};
+
+&uart8 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&uart8m0_xfer &uart8m0_ctsn>;
+	status = "okay";
+};
+
+&sdio_pwrseq {
+	status = "okay";
+	reset-gpios = <&gpio3 RK_PD5 GPIO_ACTIVE_LOW>;
+	post-power-on-delay-ms = <100>;
+};
+
 &pcie30phy {
 	status = "okay";
 };
@@ -877,8 +913,7 @@
 &pcie3x2 {
         reset-gpios = <&gpio2 RK_PD6 GPIO_ACTIVE_HIGH>;
         vpcie3v3-supply = <&pcie30_3v3>;
-
-       status = "okay";
+	status = "okay";
 };
 
 &its {
@@ -985,7 +1020,7 @@
 };
 
 &sdmmc2 {
-	max-frequency = <150000000>;
+	max-frequency = <100000000>;
 	supports-sdio;
 	bus-width = <4>;
 	disable-wp;
@@ -1000,6 +1035,15 @@
 	status = "okay";
 };
 
+&wireless_wlan {
+	wifi_chip_type = "ap6275s";
+	status = "okay";
+};
+
+&wireless_bluetooth {
+	status = "okay";
+};
+
 &tsadc {
 	status = "okay";
 };
@@ -1010,7 +1054,7 @@
 };
 
 &u2phy0_otg {
-	vbus-supply = <&vcc5v0_otg>;
+//	vbus-supply = <&vcc5v0_otg>;
 	status = "okay";
 };
 
@@ -1025,6 +1069,7 @@
 };
 
 &usb2phy0 {
+	extcon = <&fusb0>;
 	status = "okay";
 };
 
@@ -1049,8 +1094,10 @@
 };
 
 &usbdrd_dwc3 {
-	extcon=<&usb2phy0>;
-	status="okay";
+	dr_mode = "otg";
+	extcon = <&usb2phy0>;
+	extcon = <&fusb0>;
+	status = "okay";
 };
 
 &usbdrd30 {
@@ -1066,6 +1113,7 @@
 };
 
 &combphy0_us {
+	extcon = <&fusb0>;
 	status = "okay";
 };
 
@@ -1130,7 +1178,7 @@
 
 		soc_slppin_slp: soc_slppin_slp {
 			rockchip,pins =
-				<0 RK_PA2 1 &pcfg_pull_none>;
+				<0 RK_PA2 1 &pcfg_pull_up>;
 		};
 
 		soc_slppin_rst: soc_slppin_rst {
@@ -1213,6 +1261,10 @@
 	    };
 	};
 };
+
+//&vcc5v0_otg {
+//	status = "disabled";
+//};
 
 &sfc{
     pinctrl-names = "default";

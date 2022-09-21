@@ -972,10 +972,10 @@ status = "okay";
 		#address-cells = <1>;
 		#size-cells = <0>;
 
-		isp0_in: endpoint@0 {
-			reg = <0>;
-			remote-endpoint = <&video_phy0>;
-		};
+//		isp0_in: endpoint@0 {
+//			reg = <0>;
+//			remote-endpoint = <&video_phy0>;
+//		};
 	};
 };
 
