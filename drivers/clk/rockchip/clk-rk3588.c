@@ -13,10 +13,20 @@
 #include <dt-bindings/clock/rk3588-cru.h>
 #include "clk.h"
 
+/*
+ * GATE with additional linked clock. Downstream enables the linked clock
+ * (via runtime PM) whenever the gate is enabled. The downstream implementation
+ * does this via separate clock nodes for each of the linked gate clocks,
+ * which leaks parts of the clock tree into DT. It is unclear why this is
+ * actually needed and things work without it for simple use cases. Thus
+ * the linked clock is ignored for now.
+ */
+#define GATE_LINK(_id, cname, pname, linkname, f, o, b, gf) \
+	GATE(_id, cname, pname, f, o, b, gf)
+
+
 #define RK3588_GRF_SOC_STATUS0		0x600
 #define RK3588_PHYREF_ALT_GATE		0xc38
-#define RK3588_FRAC_MAX_PRATE		1500000000
-#define RK3588_DCLK_MAX_PRATE		594000000
 
 enum rk3588_plls {
 	b0pll, b1pll, lpll, v0pll, aupll, cpll, gpll, npll, ppll,
@@ -75,31 +85,28 @@ static struct rockchip_pll_rate_table rk3588_pll_rates[] = {
 	RK3588_PLL_RATE(1320000000, 2, 220, 1, 0),
 	RK3588_PLL_RATE(1200000000, 2, 200, 1, 0),
 	RK3588_PLL_RATE(1188000000, 2, 198, 1, 0),
-	RK3588_PLL_RATE(1100000000, 3, 550, 2, 0),
 	RK3588_PLL_RATE(1008000000, 2, 336, 2, 0),
 	RK3588_PLL_RATE(1000000000, 3, 500, 2, 0),
 	RK3588_PLL_RATE(983040000, 4, 655, 2, 23592),
-	RK3588_PLL_RATE(955520000, 3, 477, 2, 49806),
 	RK3588_PLL_RATE(903168000, 6, 903, 2, 11009),
 	RK3588_PLL_RATE(900000000, 2, 300, 2, 0),
+	RK3588_PLL_RATE(850000000, 3, 425, 2, 0),
 	RK3588_PLL_RATE(816000000, 2, 272, 2, 0),
 	RK3588_PLL_RATE(786432000, 2, 262, 2, 9437),
 	RK3588_PLL_RATE(786000000, 1, 131, 2, 0),
-	RK3588_PLL_RATE(785560000, 3, 392, 2, 51117),
 	RK3588_PLL_RATE(722534400, 8, 963, 2, 24850),
 	RK3588_PLL_RATE(600000000, 2, 200, 2, 0),
 	RK3588_PLL_RATE(594000000, 2, 198, 2, 0),
 	RK3588_PLL_RATE(408000000, 2, 272, 3, 0),
 	RK3588_PLL_RATE(312000000, 2, 208, 3, 0),
 	RK3588_PLL_RATE(216000000, 2, 288, 4, 0),
+	RK3588_PLL_RATE(100000000, 3, 400, 5, 0),
 	RK3588_PLL_RATE(96000000, 2, 256, 5, 0),
 	{ /* sentinel */ },
 };
 
 #define RK3588_CLK_CORE_B0_SEL_CLEAN_MASK	0x3
 #define RK3588_CLK_CORE_B0_SEL_CLEAN_SHIFT	13
-#define RK3588_CLK_CORE_B1_SEL_CLEAN_MASK	0x3
-#define RK3588_CLK_CORE_B1_SEL_CLEAN_SHIFT	5
 #define RK3588_CLK_CORE_B0_GPLL_DIV_MASK	0x1f
 #define RK3588_CLK_CORE_B0_GPLL_DIV_SHIFT	1
 #define RK3588_CLK_CORE_L_SEL_CLEAN_MASK	0x3
@@ -136,8 +143,8 @@ static struct rockchip_pll_rate_table rk3588_pll_rates[] = {
 #define RK3588_CORE_B1_SEL(_apllcore)						\
 {										\
 	.reg = RK3588_BIGCORE0_CLKSEL_CON(1),					\
-	.val = HIWORD_UPDATE(_apllcore, RK3588_CLK_CORE_B1_SEL_CLEAN_MASK,	\
-			RK3588_CLK_CORE_B1_SEL_CLEAN_SHIFT),			\
+	.val = HIWORD_UPDATE(_apllcore, RK3588_CLK_CORE_B0_SEL_CLEAN_MASK,	\
+			RK3588_CLK_CORE_B0_SEL_CLEAN_SHIFT),			\
 }
 
 #define RK3588_CORE_B2_SEL(_apllcore)						\
@@ -152,8 +159,8 @@ static struct rockchip_pll_rate_table rk3588_pll_rates[] = {
 #define RK3588_CORE_B3_SEL(_apllcore)						\
 {										\
 	.reg = RK3588_BIGCORE1_CLKSEL_CON(1),					\
-	.val = HIWORD_UPDATE(_apllcore, RK3588_CLK_CORE_B1_SEL_CLEAN_MASK,	\
-			RK3588_CLK_CORE_B1_SEL_CLEAN_SHIFT),			\
+	.val = HIWORD_UPDATE(_apllcore, RK3588_CLK_CORE_B0_SEL_CLEAN_MASK,	\
+			RK3588_CLK_CORE_B0_SEL_CLEAN_SHIFT),			\
 }
 
 #define RK3588_CORE_L_SEL0(_offs, _apllcore)					\
@@ -204,11 +211,7 @@ static struct rockchip_pll_rate_table rk3588_pll_rates[] = {
 #define RK3588_CPUB01CLK_RATE(_prate, _apllcore)		\
 {								\
 	.prate = _prate##U,					\
-	.pre_muxs = {						\
-		RK3588_CORE_B0_SEL(0),				\
-		RK3588_CORE_B1_SEL(0),				\
-	},							\
-	.post_muxs = {						\
+	.divs = {						\
 		RK3588_CORE_B0_SEL(_apllcore),			\
 		RK3588_CORE_B1_SEL(_apllcore),			\
 	},							\
@@ -217,26 +220,26 @@ static struct rockchip_pll_rate_table rk3588_pll_rates[] = {
 #define RK3588_CPUB23CLK_RATE(_prate, _apllcore)		\
 {								\
 	.prate = _prate##U,					\
-	.pre_muxs = {						\
-		RK3588_CORE_B2_SEL(0),				\
-		RK3588_CORE_B3_SEL(0),				\
-	},							\
-	.post_muxs = {						\
+	.divs = {						\
 		RK3588_CORE_B2_SEL(_apllcore),			\
 		RK3588_CORE_B3_SEL(_apllcore),			\
 	},							\
 }
 
-#define RK3588_CPULCLK_RATE(_prate, _apllcore, _seldsu, _divdsu) \
+#define RK3588_CPULCLK_RATE(_prate, _apllcore, _seldsu, _divdsu, _atclk, _gicclk, \
+			    _aclkmp, _aclkm, _aclks, _periph) \
 {								\
 	.prate = _prate##U,					\
+	.divs = {						\
+		RK3588_CORE_L_SEL1(_seldsu, _divdsu),		\
+		RK3588_CORE_L_SEL2(_aclkm, _aclkmp, _aclks),	\
+		RK3588_CORE_L_SEL3(_periph),			\
+		RK3588_CORE_L_SEL4(_gicclk, _atclk),		\
+	},							\
 	.pre_muxs = {						\
 		RK3588_CORE_L_SEL0(0, 0),			\
 		RK3588_CORE_L_SEL0(1, 0),			\
-		RK3588_CORE_L_SEL1(3, 2),			\
-		RK3588_CORE_L_SEL2(2, 3, 3),			\
-		RK3588_CORE_L_SEL3(4),				\
-		RK3588_CORE_L_SEL4(4, 4),			\
+		RK3588_CORE_L_SEL1(3, 4),			\
 	},							\
 	.post_muxs = {						\
 		RK3588_CORE_L_SEL0(0, _apllcore),		\
@@ -360,43 +363,43 @@ static const struct rockchip_cpuclk_reg_data rk3588_cpub1clk_data = {
 };
 
 static struct rockchip_cpuclk_rate_table rk3588_cpulclk_rates[] __initdata = {
-	RK3588_CPULCLK_RATE(2208000000, 1, 3, 1),
-	RK3588_CPULCLK_RATE(2184000000, 1, 3, 1),
-	RK3588_CPULCLK_RATE(2088000000, 1, 3, 1),
-	RK3588_CPULCLK_RATE(2040000000, 1, 3, 1),
-	RK3588_CPULCLK_RATE(2016000000, 1, 3, 1),
-	RK3588_CPULCLK_RATE(1992000000, 1, 3, 1),
-	RK3588_CPULCLK_RATE(1896000000, 1, 3, 1),
-	RK3588_CPULCLK_RATE(1800000000, 1, 3, 1),
-	RK3588_CPULCLK_RATE(1704000000, 0, 3, 1),
-	RK3588_CPULCLK_RATE(1608000000, 0, 3, 1),
-	RK3588_CPULCLK_RATE(1584000000, 0, 2, 1),
-	RK3588_CPULCLK_RATE(1560000000, 0, 2, 1),
-	RK3588_CPULCLK_RATE(1536000000, 0, 2, 1),
-	RK3588_CPULCLK_RATE(1512000000, 0, 2, 1),
-	RK3588_CPULCLK_RATE(1488000000, 0, 2, 1),
-	RK3588_CPULCLK_RATE(1464000000, 0, 2, 1),
-	RK3588_CPULCLK_RATE(1440000000, 0, 2, 1),
-	RK3588_CPULCLK_RATE(1416000000, 0, 2, 1),
-	RK3588_CPULCLK_RATE(1392000000, 0, 2, 1),
-	RK3588_CPULCLK_RATE(1368000000, 0, 2, 1),
-	RK3588_CPULCLK_RATE(1344000000, 0, 2, 1),
-	RK3588_CPULCLK_RATE(1320000000, 0, 2, 1),
-	RK3588_CPULCLK_RATE(1296000000, 0, 2, 1),
-	RK3588_CPULCLK_RATE(1272000000, 0, 2, 1),
-	RK3588_CPULCLK_RATE(1248000000, 0, 2, 1),
-	RK3588_CPULCLK_RATE(1224000000, 0, 2, 1),
-	RK3588_CPULCLK_RATE(1200000000, 0, 2, 1),
-	RK3588_CPULCLK_RATE(1104000000, 0, 2, 1),
-	RK3588_CPULCLK_RATE(1008000000, 0, 2, 1),
-	RK3588_CPULCLK_RATE(912000000, 0, 2, 1),
-	RK3588_CPULCLK_RATE(816000000, 0, 2, 1),
-	RK3588_CPULCLK_RATE(696000000, 0, 2, 1),
-	RK3588_CPULCLK_RATE(600000000, 0, 2, 1),
-	RK3588_CPULCLK_RATE(408000000, 0, 2, 1),
-	RK3588_CPULCLK_RATE(312000000, 0, 2, 1),
-	RK3588_CPULCLK_RATE(216000000, 0, 2, 1),
-	RK3588_CPULCLK_RATE(96000000, 0, 2, 1),
+	RK3588_CPULCLK_RATE(2208000000, 1, 3, 1, 4, 4, 4, 4, 4, 6),
+	RK3588_CPULCLK_RATE(2184000000, 1, 3, 1, 4, 4, 4, 4, 4, 6),
+	RK3588_CPULCLK_RATE(2088000000, 1, 3, 1, 4, 4, 4, 4, 4, 6),
+	RK3588_CPULCLK_RATE(2040000000, 1, 3, 1, 4, 4, 4, 4, 4, 6),
+	RK3588_CPULCLK_RATE(2016000000, 1, 3, 1, 4, 4, 4, 4, 4, 5),
+	RK3588_CPULCLK_RATE(1992000000, 1, 3, 1, 4, 4, 4, 4, 4, 5),
+	RK3588_CPULCLK_RATE(1896000000, 1, 3, 1, 4, 4, 4, 4, 4, 5),
+	RK3588_CPULCLK_RATE(1800000000, 1, 3, 1, 4, 4, 4, 4, 4, 5),
+	RK3588_CPULCLK_RATE(1704000000, 0, 3, 1, 4, 4, 4, 3, 4, 5),
+	RK3588_CPULCLK_RATE(1608000000, 0, 3, 1, 4, 4, 4, 3, 4, 5),
+	RK3588_CPULCLK_RATE(1584000000, 0, 3, 1, 4, 4, 4, 3, 4, 5),
+	RK3588_CPULCLK_RATE(1560000000, 0, 2, 2, 4, 4, 4, 3, 4, 5),
+	RK3588_CPULCLK_RATE(1536000000, 0, 2, 2, 4, 4, 4, 3, 4, 5),
+	RK3588_CPULCLK_RATE(1512000000, 0, 2, 2, 4, 4, 4, 2, 4, 5),
+	RK3588_CPULCLK_RATE(1488000000, 0, 2, 2, 4, 4, 4, 2, 4, 5),
+	RK3588_CPULCLK_RATE(1464000000, 0, 2, 2, 4, 4, 4, 2, 4, 5),
+	RK3588_CPULCLK_RATE(1440000000, 0, 2, 2, 3, 3, 3, 2, 3, 4),
+	RK3588_CPULCLK_RATE(1416000000, 0, 2, 2, 3, 3, 3, 2, 3, 4),
+	RK3588_CPULCLK_RATE(1392000000, 0, 2, 2, 3, 3, 3, 2, 3, 4),
+	RK3588_CPULCLK_RATE(1368000000, 0, 2, 2, 3, 3, 3, 2, 3, 4),
+	RK3588_CPULCLK_RATE(1344000000, 0, 2, 2, 3, 3, 3, 2, 3, 4),
+	RK3588_CPULCLK_RATE(1320000000, 0, 2, 2, 3, 3, 3, 2, 3, 4),
+	RK3588_CPULCLK_RATE(1296000000, 0, 2, 2, 3, 3, 3, 2, 3, 4),
+	RK3588_CPULCLK_RATE(1272000000, 0, 2, 2, 3, 3, 3, 2, 3, 3),
+	RK3588_CPULCLK_RATE(1248000000, 0, 2, 2, 3, 3, 3, 2, 3, 3),
+	RK3588_CPULCLK_RATE(1224000000, 0, 2, 2, 3, 3, 3, 2, 3, 3),
+	RK3588_CPULCLK_RATE(1200000000, 0, 2, 2, 3, 3, 3, 2, 3, 3),
+	RK3588_CPULCLK_RATE(1104000000, 0, 2, 2, 2, 2, 2, 2, 2, 3),
+	RK3588_CPULCLK_RATE(1008000000, 0, 2, 2, 2, 2, 2, 2, 2, 3),
+	RK3588_CPULCLK_RATE(912000000, 0, 2, 2, 2, 2, 2, 2, 2, 3),
+	RK3588_CPULCLK_RATE(816000000, 0, 2, 2, 2, 2, 2, 1, 2, 2),
+	RK3588_CPULCLK_RATE(696000000, 0, 2, 2, 2, 2, 2, 1, 2, 2),
+	RK3588_CPULCLK_RATE(600000000, 0, 2, 2, 2, 2, 2, 1, 2, 2),
+	RK3588_CPULCLK_RATE(408000000, 0, 2, 2, 2, 2, 2, 1, 2, 2),
+	RK3588_CPULCLK_RATE(312000000, 0, 2, 2, 2, 2, 2, 1, 2, 2),
+	RK3588_CPULCLK_RATE(216000000, 0, 2, 1, 1, 1, 1, 1, 1, 1),
+	RK3588_CPULCLK_RATE(96000000, 0, 2, 1, 1, 1, 1, 1, 1, 1),
 };
 
 static const struct rockchip_cpuclk_reg_data rk3588_cpulclk_data = {
@@ -454,10 +457,10 @@ PNAME(mux_200m_150m_24m_p)		= { "clk_200m_src", "clk_150m_src", "xin24m" };
 PNAME(mux_150m_100m_50m_24m_p)		= { "clk_150m_src", "clk_100m_src", "clk_50m_src", "xin24m" };
 PNAME(mux_200m_100m_50m_24m_p)		= { "clk_200m_src", "clk_100m_src", "clk_50m_src", "xin24m" };
 PNAME(mux_300m_200m_100m_24m_p)		= { "clk_300m_src", "clk_200m_src", "clk_100m_src", "xin24m" };
-PNAME(mux_700m_400m_200m_24m_p)		= { "clk_700m_src", "clk_400m_src", "clk_200m_src", "xin24m" };
-PNAME(mux_500m_250m_100m_24m_p)		= { "clk_500m_src", "clk_250m_src", "clk_100m_src", "xin24m" };
-PNAME(mux_500m_300m_100m_24m_p)		= { "clk_500m_src", "clk_300m_src", "clk_100m_src", "xin24m" };
-PNAME(mux_400m_200m_100m_24m_p)		= {"clk_400m_src", "clk_200m_src", "clk_100m_src", "xin24m" };
+PNAME(mux_700m_400m_200m_24m_p)		= { "clk_700m_src", "clk_400m_src", "clk_200m_src", "xin_osc0_func" };
+PNAME(mux_500m_250m_100m_24m_p)		= { "clk_500m_src", "clk_250m_src", "clk_100m_src", "xin_osc0_func" };
+PNAME(mux_500m_300m_100m_24m_p)		= { "clk_500m_src", "clk_300m_src", "clk_100m_src", "xin_osc0_func" };
+PNAME(mux_400m_200m_100m_24m_p)		= { "clk_400m_src", "clk_200m_src", "clk_100m_src", "xin_osc0_func" };
 PNAME(clk_i2s2_2ch_p)			= { "clk_i2s2_2ch_src", "clk_i2s2_2ch_frac", "i2s2_mclkin", "xin12m" };
 PNAME(i2s2_2ch_mclkout_p)		= { "mclk_i2s2_2ch", "xin12m" };
 PNAME(clk_i2s3_2ch_p)			= { "clk_i2s3_2ch_src", "clk_i2s3_2ch_frac", "i2s3_mclkin", "xin12m" };
@@ -645,14 +648,14 @@ static struct rockchip_clk_branch rk3588_hdmirx_aud_fracmux __initdata =
 
 static struct rockchip_pll_clock rk3588_pll_clks[] __initdata = {
 	[b0pll] = PLL(pll_rk3588_core, PLL_B0PLL, "b0pll", mux_pll_p,
-		     0, RK3588_B0_PLL_CON(0),
-		     RK3588_B0_PLL_MODE_CON0, 0, 15, 0, rk3588_pll_rates),
+		     CLK_IGNORE_UNUSED, RK3588_B0_PLL_CON(0),
+		     RK3588_BIGCORE0_CLKSEL_CON(0), 6, 15, 0, rk3588_pll_rates),
 	[b1pll] = PLL(pll_rk3588_core, PLL_B1PLL, "b1pll", mux_pll_p,
-		     0, RK3588_B1_PLL_CON(8),
-		     RK3588_B1_PLL_MODE_CON0, 0, 15, 0, rk3588_pll_rates),
+		     CLK_IGNORE_UNUSED, RK3588_B1_PLL_CON(8),
+		     RK3588_BIGCORE1_CLKSEL_CON(0), 6, 15, 0, rk3588_pll_rates),
 	[lpll] = PLL(pll_rk3588_core, PLL_LPLL, "lpll", mux_pll_p,
-		     0, RK3588_LPLL_CON(16),
-		     RK3588_LPLL_MODE_CON0, 0, 15, 0, rk3588_pll_rates),
+		     CLK_IGNORE_UNUSED, RK3588_LPLL_CON(16),
+		     RK3588_DSU_CLKSEL_CON(5), 14, 15, 0, rk3588_pll_rates),
 	[v0pll] = PLL(pll_rk3588, PLL_V0PLL, "v0pll", mux_pll_p,
 		     0, RK3588_PLL_CON(88),
 		     RK3588_MODE_CON0, 4, 15, 0, rk3588_pll_rates),
@@ -792,7 +795,8 @@ static struct rockchip_clk_branch rk3588_clk_branches[] __initdata = {
 			RK3588_CLKGATE_CON(5), 0, GFLAGS),
 
 	/* bigcore0 */
-	COMPOSITE_NODIV(PCLK_BIGCORE0_ROOT, "pclk_bigcore0_root", mux_100m_50m_24m_p, CLK_IS_CRITICAL,
+	COMPOSITE_NODIV(PCLK_BIGCORE0_ROOT, "pclk_bigcore0_root", mux_100m_50m_24m_p,
+			CLK_IS_CRITICAL,
 			RK3588_BIGCORE0_CLKSEL_CON(2), 0, 2, MFLAGS,
 			RK3588_BIGCORE0_CLKGATE_CON(0), 14, GFLAGS),
 	GATE(PCLK_BIGCORE0_PVTM, "pclk_bigcore0_pvtm", "pclk_bigcore0_root", 0,
@@ -803,7 +807,8 @@ static struct rockchip_clk_branch rk3588_clk_branches[] __initdata = {
 			RK3588_BIGCORE0_CLKGATE_CON(0), 13, GFLAGS),
 
 	/* bigcore1 */
-	COMPOSITE_NODIV(PCLK_BIGCORE1_ROOT, "pclk_bigcore1_root", mux_100m_50m_24m_p, CLK_IS_CRITICAL,
+	COMPOSITE_NODIV(PCLK_BIGCORE1_ROOT, "pclk_bigcore1_root", mux_100m_50m_24m_p,
+			CLK_IS_CRITICAL,
 			RK3588_BIGCORE1_CLKSEL_CON(2), 0, 2, MFLAGS,
 			RK3588_BIGCORE1_CLKGATE_CON(0), 14, GFLAGS),
 	GATE(PCLK_BIGCORE1_PVTM, "pclk_bigcore1_pvtm", "pclk_bigcore1_root", 0,
@@ -879,7 +884,8 @@ static struct rockchip_clk_branch rk3588_clk_branches[] __initdata = {
 	COMPOSITE(CLK_I2S2_2CH_SRC, "clk_i2s2_2ch_src", gpll_aupll_p, 0,
 			RK3588_CLKSEL_CON(28), 9, 1, MFLAGS, 4, 5, DFLAGS,
 			RK3588_CLKGATE_CON(7), 14, GFLAGS),
-	COMPOSITE_FRACMUX(CLK_I2S2_2CH_FRAC, "clk_i2s2_2ch_frac", "clk_i2s2_2ch_src", CLK_SET_RATE_PARENT,
+	COMPOSITE_FRACMUX(CLK_I2S2_2CH_FRAC, "clk_i2s2_2ch_frac", "clk_i2s2_2ch_src",
+			CLK_SET_RATE_PARENT,
 			RK3588_CLKSEL_CON(29), 0,
 			RK3588_CLKGATE_CON(7), 15, GFLAGS,
 			&rk3588_i2s2_2ch_fracmux),
@@ -891,7 +897,8 @@ static struct rockchip_clk_branch rk3588_clk_branches[] __initdata = {
 	COMPOSITE(CLK_I2S3_2CH_SRC, "clk_i2s3_2ch_src", gpll_aupll_p, 0,
 			RK3588_CLKSEL_CON(30), 8, 1, MFLAGS, 3, 5, DFLAGS,
 			RK3588_CLKGATE_CON(8), 1, GFLAGS),
-	COMPOSITE_FRACMUX(CLK_I2S3_2CH_FRAC, "clk_i2s3_2ch_frac", "clk_i2s3_2ch_src", CLK_SET_RATE_PARENT,
+	COMPOSITE_FRACMUX(CLK_I2S3_2CH_FRAC, "clk_i2s3_2ch_frac", "clk_i2s3_2ch_src",
+			CLK_SET_RATE_PARENT,
 			RK3588_CLKSEL_CON(31), 0,
 			RK3588_CLKGATE_CON(8), 2, GFLAGS,
 			&rk3588_i2s3_2ch_fracmux),
@@ -909,7 +916,8 @@ static struct rockchip_clk_branch rk3588_clk_branches[] __initdata = {
 	COMPOSITE(CLK_I2S0_8CH_TX_SRC, "clk_i2s0_8ch_tx_src", gpll_aupll_p, 0,
 			RK3588_CLKSEL_CON(24), 9, 1, MFLAGS, 4, 5, DFLAGS,
 			RK3588_CLKGATE_CON(7), 5, GFLAGS),
-	COMPOSITE_FRACMUX(CLK_I2S0_8CH_TX_FRAC, "clk_i2s0_8ch_tx_frac", "clk_i2s0_8ch_tx_src", CLK_SET_RATE_PARENT,
+	COMPOSITE_FRACMUX(CLK_I2S0_8CH_TX_FRAC, "clk_i2s0_8ch_tx_frac", "clk_i2s0_8ch_tx_src",
+			CLK_SET_RATE_PARENT,
 			RK3588_CLKSEL_CON(25), 0,
 			RK3588_CLKGATE_CON(7), 6, GFLAGS,
 			&rk3588_i2s0_8ch_tx_fracmux),
@@ -919,7 +927,8 @@ static struct rockchip_clk_branch rk3588_clk_branches[] __initdata = {
 	COMPOSITE(CLK_I2S0_8CH_RX_SRC, "clk_i2s0_8ch_rx_src", gpll_aupll_p, 0,
 			RK3588_CLKSEL_CON(26), 7, 1, MFLAGS, 2, 5, DFLAGS,
 			RK3588_CLKGATE_CON(7), 8, GFLAGS),
-	COMPOSITE_FRACMUX(CLK_I2S0_8CH_RX_FRAC, "clk_i2s0_8ch_rx_frac", "clk_i2s0_8ch_rx_src", CLK_SET_RATE_PARENT,
+	COMPOSITE_FRACMUX(CLK_I2S0_8CH_RX_FRAC, "clk_i2s0_8ch_rx_frac", "clk_i2s0_8ch_rx_src",
+			CLK_SET_RATE_PARENT,
 			RK3588_CLKSEL_CON(27), 0,
 			RK3588_CLKGATE_CON(7), 9, GFLAGS,
 			&rk3588_i2s0_8ch_rx_fracmux),
@@ -939,7 +948,8 @@ static struct rockchip_clk_branch rk3588_clk_branches[] __initdata = {
 	COMPOSITE(CLK_SPDIF0_SRC, "clk_spdif0_src", gpll_aupll_p, 0,
 			RK3588_CLKSEL_CON(32), 8, 1, MFLAGS, 3, 5, DFLAGS,
 			RK3588_CLKGATE_CON(8), 15, GFLAGS),
-	COMPOSITE_FRACMUX(CLK_SPDIF0_FRAC, "clk_spdif0_frac", "clk_spdif0_src", CLK_SET_RATE_PARENT,
+	COMPOSITE_FRACMUX(CLK_SPDIF0_FRAC, "clk_spdif0_frac", "clk_spdif0_src",
+			CLK_SET_RATE_PARENT,
 			RK3588_CLKSEL_CON(33), 0,
 			RK3588_CLKGATE_CON(9), 0, GFLAGS,
 			&rk3588_spdif0_fracmux),
@@ -951,7 +961,8 @@ static struct rockchip_clk_branch rk3588_clk_branches[] __initdata = {
 	COMPOSITE(CLK_SPDIF1_SRC, "clk_spdif1_src", gpll_aupll_p, 0,
 			RK3588_CLKSEL_CON(34), 7, 1, MFLAGS, 2, 5, DFLAGS,
 			RK3588_CLKGATE_CON(9), 3, GFLAGS),
-	COMPOSITE_FRACMUX(CLK_SPDIF1_FRAC, "clk_spdif1_frac", "clk_spdif1_src", CLK_SET_RATE_PARENT,
+	COMPOSITE_FRACMUX(CLK_SPDIF1_FRAC, "clk_spdif1_frac", "clk_spdif1_src",
+			CLK_SET_RATE_PARENT,
 			RK3588_CLKSEL_CON(35), 0,
 			RK3588_CLKGATE_CON(9), 4, GFLAGS,
 			&rk3588_spdif1_fracmux),
@@ -1210,7 +1221,7 @@ static struct rockchip_clk_branch rk3588_clk_branches[] __initdata = {
 			RK3588_CLKSEL_CON(41), 14, 1, MFLAGS, 9, 5, DFLAGS,
 			RK3588_CLKGATE_CON(12), 11, GFLAGS),
 	COMPOSITE_FRACMUX(CLK_UART1_FRAC, "clk_uart1_frac", "clk_uart1_src", CLK_SET_RATE_PARENT,
-			RK3588_CLKSEL_CON(42), CLK_FRAC_DIVIDER_NO_LIMIT,
+			RK3588_CLKSEL_CON(42), 0,
 			RK3588_CLKGATE_CON(12), 12, GFLAGS,
 			&rk3588_uart1_fracmux),
 	GATE(SCLK_UART1, "sclk_uart1", "clk_uart1", 0,
@@ -1219,7 +1230,7 @@ static struct rockchip_clk_branch rk3588_clk_branches[] __initdata = {
 			RK3588_CLKSEL_CON(43), 7, 1, MFLAGS, 2, 5, DFLAGS,
 			RK3588_CLKGATE_CON(12), 14, GFLAGS),
 	COMPOSITE_FRACMUX(CLK_UART2_FRAC, "clk_uart2_frac", "clk_uart2_src", CLK_SET_RATE_PARENT,
-			RK3588_CLKSEL_CON(44), CLK_FRAC_DIVIDER_NO_LIMIT,
+			RK3588_CLKSEL_CON(44), 0,
 			RK3588_CLKGATE_CON(12), 15, GFLAGS,
 			&rk3588_uart2_fracmux),
 	GATE(SCLK_UART2, "sclk_uart2", "clk_uart2", 0,
@@ -1228,7 +1239,7 @@ static struct rockchip_clk_branch rk3588_clk_branches[] __initdata = {
 			RK3588_CLKSEL_CON(45), 7, 1, MFLAGS, 2, 5, DFLAGS,
 			RK3588_CLKGATE_CON(13), 1, GFLAGS),
 	COMPOSITE_FRACMUX(CLK_UART3_FRAC, "clk_uart3_frac", "clk_uart3_src", CLK_SET_RATE_PARENT,
-			RK3588_CLKSEL_CON(46), CLK_FRAC_DIVIDER_NO_LIMIT,
+			RK3588_CLKSEL_CON(46), 0,
 			RK3588_CLKGATE_CON(13), 2, GFLAGS,
 			&rk3588_uart3_fracmux),
 	GATE(SCLK_UART3, "sclk_uart3", "clk_uart3", 0,
@@ -1237,7 +1248,7 @@ static struct rockchip_clk_branch rk3588_clk_branches[] __initdata = {
 			RK3588_CLKSEL_CON(47), 7, 1, MFLAGS, 2, 5, DFLAGS,
 			RK3588_CLKGATE_CON(13), 4, GFLAGS),
 	COMPOSITE_FRACMUX(CLK_UART4_FRAC, "clk_uart4_frac", "clk_uart4_src", CLK_SET_RATE_PARENT,
-			RK3588_CLKSEL_CON(48), CLK_FRAC_DIVIDER_NO_LIMIT,
+			RK3588_CLKSEL_CON(48), 0,
 			RK3588_CLKGATE_CON(13), 5, GFLAGS,
 			&rk3588_uart4_fracmux),
 	GATE(SCLK_UART4, "sclk_uart4", "clk_uart4", 0,
@@ -1246,7 +1257,7 @@ static struct rockchip_clk_branch rk3588_clk_branches[] __initdata = {
 			RK3588_CLKSEL_CON(49), 7, 1, MFLAGS, 2, 5, DFLAGS,
 			RK3588_CLKGATE_CON(13), 7, GFLAGS),
 	COMPOSITE_FRACMUX(CLK_UART5_FRAC, "clk_uart5_frac", "clk_uart5_src", CLK_SET_RATE_PARENT,
-			RK3588_CLKSEL_CON(50), CLK_FRAC_DIVIDER_NO_LIMIT,
+			RK3588_CLKSEL_CON(50), 0,
 			RK3588_CLKGATE_CON(13), 8, GFLAGS,
 			&rk3588_uart5_fracmux),
 	GATE(SCLK_UART5, "sclk_uart5", "clk_uart5", 0,
@@ -1255,7 +1266,7 @@ static struct rockchip_clk_branch rk3588_clk_branches[] __initdata = {
 			RK3588_CLKSEL_CON(51), 7, 1, MFLAGS, 2, 5, DFLAGS,
 			RK3588_CLKGATE_CON(13), 10, GFLAGS),
 	COMPOSITE_FRACMUX(CLK_UART6_FRAC, "clk_uart6_frac", "clk_uart6_src", CLK_SET_RATE_PARENT,
-			RK3588_CLKSEL_CON(52), CLK_FRAC_DIVIDER_NO_LIMIT,
+			RK3588_CLKSEL_CON(52), 0,
 			RK3588_CLKGATE_CON(13), 11, GFLAGS,
 			&rk3588_uart6_fracmux),
 	GATE(SCLK_UART6, "sclk_uart6", "clk_uart6", 0,
@@ -1264,7 +1275,7 @@ static struct rockchip_clk_branch rk3588_clk_branches[] __initdata = {
 			RK3588_CLKSEL_CON(53), 7, 1, MFLAGS, 2, 5, DFLAGS,
 			RK3588_CLKGATE_CON(13), 13, GFLAGS),
 	COMPOSITE_FRACMUX(CLK_UART7_FRAC, "clk_uart7_frac", "clk_uart7_src", CLK_SET_RATE_PARENT,
-			RK3588_CLKSEL_CON(54), CLK_FRAC_DIVIDER_NO_LIMIT,
+			RK3588_CLKSEL_CON(54), 0,
 			RK3588_CLKGATE_CON(13), 14, GFLAGS,
 			&rk3588_uart7_fracmux),
 	GATE(SCLK_UART7, "sclk_uart7", "clk_uart7", 0,
@@ -1273,7 +1284,7 @@ static struct rockchip_clk_branch rk3588_clk_branches[] __initdata = {
 			RK3588_CLKSEL_CON(55), 7, 1, MFLAGS, 2, 5, DFLAGS,
 			RK3588_CLKGATE_CON(14), 0, GFLAGS),
 	COMPOSITE_FRACMUX(CLK_UART8_FRAC, "clk_uart8_frac", "clk_uart8_src", CLK_SET_RATE_PARENT,
-			RK3588_CLKSEL_CON(56), CLK_FRAC_DIVIDER_NO_LIMIT,
+			RK3588_CLKSEL_CON(56), 0,
 			RK3588_CLKGATE_CON(14), 1, GFLAGS,
 			&rk3588_uart8_fracmux),
 	GATE(SCLK_UART8, "sclk_uart8", "clk_uart8", 0,
@@ -1282,33 +1293,39 @@ static struct rockchip_clk_branch rk3588_clk_branches[] __initdata = {
 			RK3588_CLKSEL_CON(57), 7, 1, MFLAGS, 2, 5, DFLAGS,
 			RK3588_CLKGATE_CON(14), 3, GFLAGS),
 	COMPOSITE_FRACMUX(CLK_UART9_FRAC, "clk_uart9_frac", "clk_uart9_src", CLK_SET_RATE_PARENT,
-			RK3588_CLKSEL_CON(58), CLK_FRAC_DIVIDER_NO_LIMIT,
+			RK3588_CLKSEL_CON(58), 0,
 			RK3588_CLKGATE_CON(14), 4, GFLAGS,
 			&rk3588_uart9_fracmux),
 	GATE(SCLK_UART9, "sclk_uart9", "clk_uart9", 0,
 			RK3588_CLKGATE_CON(14), 5, GFLAGS),
 
 	/* center */
-	COMPOSITE_NODIV(ACLK_CENTER_ROOT, "aclk_center_root", mux_700m_400m_200m_24m_p, CLK_IS_CRITICAL,
+	COMPOSITE_NODIV(ACLK_CENTER_ROOT, "aclk_center_root", mux_700m_400m_200m_24m_p,
+			CLK_IS_CRITICAL,
 			RK3588_CLKSEL_CON(165), 0, 2, MFLAGS,
 			RK3588_CLKGATE_CON(69), 0, GFLAGS),
-	COMPOSITE_NODIV(ACLK_CENTER_LOW_ROOT, "aclk_center_low_root", mux_500m_250m_100m_24m_p, CLK_IS_CRITICAL,
+	COMPOSITE_NODIV(ACLK_CENTER_LOW_ROOT, "aclk_center_low_root", mux_500m_250m_100m_24m_p,
+			CLK_IS_CRITICAL,
 			RK3588_CLKSEL_CON(165), 2, 2, MFLAGS,
 			RK3588_CLKGATE_CON(69), 1, GFLAGS),
-	COMPOSITE_NODIV(HCLK_CENTER_ROOT, "hclk_center_root", mux_400m_200m_100m_24m_p, CLK_IS_CRITICAL,
+	COMPOSITE_NODIV(HCLK_CENTER_ROOT, "hclk_center_root", mux_400m_200m_100m_24m_p,
+			CLK_IS_CRITICAL,
 			RK3588_CLKSEL_CON(165), 4, 2, MFLAGS,
 			RK3588_CLKGATE_CON(69), 2, GFLAGS),
-	COMPOSITE_NODIV(PCLK_CENTER_ROOT, "pclk_center_root", mux_200m_100m_50m_24m_p, CLK_IS_CRITICAL,
+	COMPOSITE_NODIV(PCLK_CENTER_ROOT, "pclk_center_root", mux_200m_100m_50m_24m_p,
+			CLK_IS_CRITICAL,
 			RK3588_CLKSEL_CON(165), 6, 2, MFLAGS | CLK_MUX_READ_ONLY,
 			RK3588_CLKGATE_CON(69), 3, GFLAGS),
 	GATE(ACLK_DMA2DDR, "aclk_dma2ddr", "aclk_center_root", CLK_IS_CRITICAL,
 			RK3588_CLKGATE_CON(69), 5, GFLAGS),
 	GATE(ACLK_DDR_SHAREMEM, "aclk_ddr_sharemem", "aclk_center_low_root", CLK_IS_CRITICAL,
 			RK3588_CLKGATE_CON(69), 6, GFLAGS),
-	COMPOSITE_NODIV(ACLK_CENTER_S200_ROOT, "aclk_center_s200_root", mux_200m_100m_50m_24m_p, CLK_IS_CRITICAL,
+	COMPOSITE_NODIV(ACLK_CENTER_S200_ROOT, "aclk_center_s200_root", mux_200m_100m_50m_24m_p,
+			CLK_IS_CRITICAL,
 			RK3588_CLKSEL_CON(165), 8, 2, MFLAGS,
 			RK3588_CLKGATE_CON(69), 8, GFLAGS),
-	COMPOSITE_NODIV(ACLK_CENTER_S400_ROOT, "aclk_center_s400_root", mux_400m_200m_100m_24m_p, CLK_IS_CRITICAL,
+	COMPOSITE_NODIV(ACLK_CENTER_S400_ROOT, "aclk_center_s400_root", mux_400m_200m_100m_24m_p,
+			CLK_IS_CRITICAL,
 			RK3588_CLKSEL_CON(165), 10, 2, MFLAGS,
 			RK3588_CLKGATE_CON(69), 9, GFLAGS),
 	GATE(FCLK_DDR_CM0_CORE, "fclk_ddr_cm0_core", "hclk_center_root", CLK_IS_CRITICAL,
@@ -1821,7 +1838,8 @@ static struct rockchip_clk_branch rk3588_clk_branches[] __initdata = {
 	COMPOSITE(CLK_I2S4_8CH_TX_SRC, "clk_i2s4_8ch_tx_src", gpll_aupll_p, 0,
 			RK3588_CLKSEL_CON(118), 5, 1, MFLAGS, 0, 5, DFLAGS,
 			RK3588_CLKGATE_CON(56), 11, GFLAGS),
-	COMPOSITE_FRACMUX(CLK_I2S4_8CH_TX_FRAC, "clk_i2s4_8ch_tx_frac", "clk_i2s4_8ch_tx_src", CLK_SET_RATE_PARENT,
+	COMPOSITE_FRACMUX(CLK_I2S4_8CH_TX_FRAC, "clk_i2s4_8ch_tx_frac", "clk_i2s4_8ch_tx_src",
+			CLK_SET_RATE_PARENT,
 			RK3588_CLKSEL_CON(119), 0,
 			RK3588_CLKGATE_CON(56), 12, GFLAGS,
 			&rk3588_i2s4_8ch_tx_fracmux),
@@ -1830,7 +1848,8 @@ static struct rockchip_clk_branch rk3588_clk_branches[] __initdata = {
 	COMPOSITE(CLK_I2S8_8CH_TX_SRC, "clk_i2s8_8ch_tx_src", gpll_aupll_p, 0,
 			RK3588_CLKSEL_CON(120), 8, 1, MFLAGS, 3, 5, DFLAGS,
 			RK3588_CLKGATE_CON(56), 15, GFLAGS),
-	COMPOSITE_FRACMUX(CLK_I2S8_8CH_TX_FRAC, "clk_i2s8_8ch_tx_frac", "clk_i2s8_8ch_tx_src", CLK_SET_RATE_PARENT,
+	COMPOSITE_FRACMUX(CLK_I2S8_8CH_TX_FRAC, "clk_i2s8_8ch_tx_frac", "clk_i2s8_8ch_tx_src",
+			CLK_SET_RATE_PARENT,
 			RK3588_CLKSEL_CON(121), 0,
 			RK3588_CLKGATE_CON(57), 0, GFLAGS,
 			&rk3588_i2s8_8ch_tx_fracmux),
@@ -1839,7 +1858,8 @@ static struct rockchip_clk_branch rk3588_clk_branches[] __initdata = {
 	COMPOSITE(CLK_SPDIF2_DP0_SRC, "clk_spdif2_dp0_src", gpll_aupll_p, 0,
 			RK3588_CLKSEL_CON(122), 8, 1, MFLAGS, 3, 5, DFLAGS,
 			RK3588_CLKGATE_CON(57), 3, GFLAGS),
-	COMPOSITE_FRACMUX(CLK_SPDIF2_DP0_FRAC, "clk_spdif2_dp0_frac", "clk_spdif2_dp0_src", CLK_SET_RATE_PARENT,
+	COMPOSITE_FRACMUX(CLK_SPDIF2_DP0_FRAC, "clk_spdif2_dp0_frac", "clk_spdif2_dp0_src",
+			CLK_SET_RATE_PARENT,
 			RK3588_CLKSEL_CON(123), 0,
 			RK3588_CLKGATE_CON(57), 4, GFLAGS,
 			&rk3588_spdif2_dp0_fracmux),
@@ -1850,7 +1870,8 @@ static struct rockchip_clk_branch rk3588_clk_branches[] __initdata = {
 	COMPOSITE(CLK_SPDIF5_DP1_SRC, "clk_spdif5_dp1_src", gpll_aupll_p, 0,
 			RK3588_CLKSEL_CON(124), 7, 1, MFLAGS, 2, 5, DFLAGS,
 			RK3588_CLKGATE_CON(57), 8, GFLAGS),
-	COMPOSITE_FRACMUX(CLK_SPDIF5_DP1_FRAC, "clk_spdif5_dp1_frac", "clk_spdif5_dp1_src", CLK_SET_RATE_PARENT,
+	COMPOSITE_FRACMUX(CLK_SPDIF5_DP1_FRAC, "clk_spdif5_dp1_frac", "clk_spdif5_dp1_src",
+			CLK_SET_RATE_PARENT,
 			RK3588_CLKSEL_CON(125), 0,
 			RK3588_CLKGATE_CON(57), 9, GFLAGS,
 			&rk3588_spdif5_dp1_fracmux),
@@ -1934,7 +1955,8 @@ static struct rockchip_clk_branch rk3588_clk_branches[] __initdata = {
 	COMPOSITE(CLK_HDMIRX_AUD_SRC, "clk_hdmirx_aud_src", gpll_aupll_p, 0,
 			RK3588_CLKSEL_CON(138), 8, 1, MFLAGS, 0, 8, DFLAGS,
 			RK3588_CLKGATE_CON(61), 12, GFLAGS),
-	COMPOSITE_FRACMUX(CLK_HDMIRX_AUD_FRAC, "clk_hdmirx_aud_frac", "clk_hdmirx_aud_src", CLK_SET_RATE_PARENT,
+	COMPOSITE_FRACMUX(CLK_HDMIRX_AUD_FRAC, "clk_hdmirx_aud_frac", "clk_hdmirx_aud_src",
+			CLK_SET_RATE_PARENT,
 			RK3588_CLKSEL_CON(139), 0,
 			RK3588_CLKGATE_CON(61), 13, GFLAGS,
 			&rk3588_hdmirx_aud_fracmux),
@@ -1969,7 +1991,8 @@ static struct rockchip_clk_branch rk3588_clk_branches[] __initdata = {
 	COMPOSITE(CLK_I2S10_8CH_RX_SRC, "clk_i2s10_8ch_rx_src", gpll_aupll_p, 0,
 			RK3588_CLKSEL_CON(155), 8, 1, MFLAGS, 3, 5, DFLAGS,
 			RK3588_CLKGATE_CON(65), 5, GFLAGS),
-	COMPOSITE_FRACMUX(CLK_I2S10_8CH_RX_FRAC, "clk_i2s10_8ch_rx_frac", "clk_i2s10_8ch_rx_src", CLK_SET_RATE_PARENT,
+	COMPOSITE_FRACMUX(CLK_I2S10_8CH_RX_FRAC, "clk_i2s10_8ch_rx_frac", "clk_i2s10_8ch_rx_src",
+			CLK_SET_RATE_PARENT,
 			RK3588_CLKSEL_CON(156), 0,
 			RK3588_CLKGATE_CON(65), 6, GFLAGS,
 			&rk3588_i2s10_8ch_rx_fracmux),
@@ -1978,7 +2001,8 @@ static struct rockchip_clk_branch rk3588_clk_branches[] __initdata = {
 	COMPOSITE(CLK_I2S7_8CH_RX_SRC, "clk_i2s7_8ch_rx_src", gpll_aupll_p, 0,
 			RK3588_CLKSEL_CON(129), 11, 1, MFLAGS, 6, 5, DFLAGS,
 			RK3588_CLKGATE_CON(60), 1, GFLAGS),
-	COMPOSITE_FRACMUX(CLK_I2S7_8CH_RX_FRAC, "clk_i2s7_8ch_rx_frac", "clk_i2s7_8ch_rx_src", CLK_SET_RATE_PARENT,
+	COMPOSITE_FRACMUX(CLK_I2S7_8CH_RX_FRAC, "clk_i2s7_8ch_rx_frac", "clk_i2s7_8ch_rx_src",
+			CLK_SET_RATE_PARENT,
 			RK3588_CLKSEL_CON(130), 0,
 			RK3588_CLKGATE_CON(60), 2, GFLAGS,
 			&rk3588_i2s7_8ch_rx_fracmux),
@@ -1987,7 +2011,8 @@ static struct rockchip_clk_branch rk3588_clk_branches[] __initdata = {
 	COMPOSITE(CLK_I2S9_8CH_RX_SRC, "clk_i2s9_8ch_rx_src", gpll_aupll_p, 0,
 			RK3588_CLKSEL_CON(153), 12, 1, MFLAGS, 7, 5, DFLAGS,
 			RK3588_CLKGATE_CON(65), 1, GFLAGS),
-	COMPOSITE_FRACMUX(CLK_I2S9_8CH_RX_FRAC, "clk_i2s9_8ch_rx_frac", "clk_i2s9_8ch_rx_src", CLK_SET_RATE_PARENT,
+	COMPOSITE_FRACMUX(CLK_I2S9_8CH_RX_FRAC, "clk_i2s9_8ch_rx_frac", "clk_i2s9_8ch_rx_src",
+			CLK_SET_RATE_PARENT,
 			RK3588_CLKSEL_CON(154), 0,
 			RK3588_CLKGATE_CON(65), 2, GFLAGS,
 			&rk3588_i2s9_8ch_rx_fracmux),
@@ -2005,7 +2030,8 @@ static struct rockchip_clk_branch rk3588_clk_branches[] __initdata = {
 	COMPOSITE(CLK_I2S6_8CH_TX_SRC, "clk_i2s6_8ch_tx_src", gpll_aupll_p, 0,
 			RK3588_CLKSEL_CON(144), 8, 1, MFLAGS, 3, 5, DFLAGS,
 			RK3588_CLKGATE_CON(62), 13, GFLAGS),
-	COMPOSITE_FRACMUX(CLK_I2S6_8CH_TX_FRAC, "clk_i2s6_8ch_tx_frac", "clk_i2s6_8ch_tx_src", CLK_SET_RATE_PARENT,
+	COMPOSITE_FRACMUX(CLK_I2S6_8CH_TX_FRAC, "clk_i2s6_8ch_tx_frac", "clk_i2s6_8ch_tx_src",
+			CLK_SET_RATE_PARENT,
 			RK3588_CLKSEL_CON(145), 0,
 			RK3588_CLKGATE_CON(62), 14, GFLAGS,
 			&rk3588_i2s6_8ch_tx_fracmux),
@@ -2025,7 +2051,8 @@ static struct rockchip_clk_branch rk3588_clk_branches[] __initdata = {
 	COMPOSITE(CLK_SPDIF3_SRC, "clk_spdif3_src", gpll_aupll_p, 0,
 			RK3588_CLKSEL_CON(148), 9, 1, MFLAGS, 4, 5, DFLAGS,
 			RK3588_CLKGATE_CON(63), 5, GFLAGS),
-	COMPOSITE_FRACMUX(CLK_SPDIF3_FRAC, "clk_spdif3_frac", "clk_spdif3_src", CLK_SET_RATE_PARENT,
+	COMPOSITE_FRACMUX(CLK_SPDIF3_FRAC, "clk_spdif3_frac", "clk_spdif3_src",
+			CLK_SET_RATE_PARENT,
 			RK3588_CLKSEL_CON(149), 0,
 			RK3588_CLKGATE_CON(63), 6, GFLAGS,
 			&rk3588_spdif3_fracmux),
@@ -2034,7 +2061,8 @@ static struct rockchip_clk_branch rk3588_clk_branches[] __initdata = {
 	COMPOSITE(CLK_SPDIF4_SRC, "clk_spdif4_src", gpll_aupll_p, 0,
 			RK3588_CLKSEL_CON(150), 7, 1, MFLAGS, 2, 5, DFLAGS,
 			RK3588_CLKGATE_CON(63), 9, GFLAGS),
-	COMPOSITE_FRACMUX(CLK_SPDIF4_FRAC, "clk_spdif4_frac", "clk_spdif4_src", CLK_SET_RATE_PARENT,
+	COMPOSITE_FRACMUX(CLK_SPDIF4_FRAC, "clk_spdif4_frac", "clk_spdif4_src",
+			CLK_SET_RATE_PARENT,
 			RK3588_CLKSEL_CON(151), 0,
 			RK3588_CLKGATE_CON(63), 10, GFLAGS,
 			&rk3588_spdif4_fracmux),
@@ -2074,13 +2102,16 @@ static struct rockchip_clk_branch rk3588_clk_branches[] __initdata = {
 	COMPOSITE(DCLK_VOP2_SRC, "dclk_vop2_src", gpll_cpll_v0pll_aupll_p, CLK_SET_RATE_PARENT | CLK_SET_RATE_NO_REPARENT,
 			RK3588_CLKSEL_CON(112), 5, 2, MFLAGS, 0, 5, DFLAGS,
 			RK3588_CLKGATE_CON(52), 12, GFLAGS),
-	COMPOSITE_NODIV(DCLK_VOP0, "dclk_vop0", dclk_vop0_p, CLK_SET_RATE_PARENT | CLK_SET_RATE_NO_REPARENT,
+	COMPOSITE_NODIV(DCLK_VOP0, "dclk_vop0", dclk_vop0_p,
+			CLK_SET_RATE_PARENT | CLK_SET_RATE_NO_REPARENT,
 			RK3588_CLKSEL_CON(112), 7, 2, MFLAGS,
 			RK3588_CLKGATE_CON(52), 13, GFLAGS),
-	COMPOSITE_NODIV(DCLK_VOP1, "dclk_vop1", dclk_vop1_p, CLK_SET_RATE_PARENT | CLK_SET_RATE_NO_REPARENT,
+	COMPOSITE_NODIV(DCLK_VOP1, "dclk_vop1", dclk_vop1_p,
+			CLK_SET_RATE_PARENT | CLK_SET_RATE_NO_REPARENT,
 			RK3588_CLKSEL_CON(112), 9, 2, MFLAGS,
 			RK3588_CLKGATE_CON(53), 0, GFLAGS),
-	COMPOSITE_NODIV(DCLK_VOP2, "dclk_vop2", dclk_vop2_p, CLK_SET_RATE_PARENT | CLK_SET_RATE_NO_REPARENT,
+	COMPOSITE_NODIV(DCLK_VOP2, "dclk_vop2", dclk_vop2_p,
+			CLK_SET_RATE_PARENT | CLK_SET_RATE_NO_REPARENT,
 			RK3588_CLKSEL_CON(112), 11, 2, MFLAGS,
 			RK3588_CLKGATE_CON(53), 1, GFLAGS),
 	COMPOSITE(DCLK_VOP3, "dclk_vop3", gpll_cpll_v0pll_aupll_p, 0,
@@ -2175,7 +2206,8 @@ static struct rockchip_clk_branch rk3588_clk_branches[] __initdata = {
 	COMPOSITE_NOMUX(CLK_I2S1_8CH_TX_SRC, "clk_i2s1_8ch_tx_src", "cpll", 0,
 			RK3588_PMU_CLKSEL_CON(5), 2, 5, DFLAGS,
 			RK3588_PMU_CLKGATE_CON(2), 8, GFLAGS),
-	COMPOSITE_FRACMUX(CLK_I2S1_8CH_TX_FRAC, "clk_i2s1_8ch_tx_frac", "clk_i2s1_8ch_tx_src", CLK_SET_RATE_PARENT,
+	COMPOSITE_FRACMUX(CLK_I2S1_8CH_TX_FRAC, "clk_i2s1_8ch_tx_frac", "clk_i2s1_8ch_tx_src",
+			CLK_SET_RATE_PARENT,
 			RK3588_PMU_CLKSEL_CON(6), 0,
 			RK3588_PMU_CLKGATE_CON(2), 9, GFLAGS,
 			&rk3588_i2s1_8ch_tx_fracmux),
@@ -2184,7 +2216,8 @@ static struct rockchip_clk_branch rk3588_clk_branches[] __initdata = {
 	COMPOSITE_NOMUX(CLK_I2S1_8CH_RX_SRC, "clk_i2s1_8ch_rx_src", "cpll", 0,
 			RK3588_PMU_CLKSEL_CON(7), 2, 5, DFLAGS,
 			RK3588_PMU_CLKGATE_CON(2), 11, GFLAGS),
-	COMPOSITE_FRACMUX(CLK_I2S1_8CH_RX_FRAC, "clk_i2s1_8ch_rx_frac", "clk_i2s1_8ch_rx_src", CLK_SET_RATE_PARENT,
+	COMPOSITE_FRACMUX(CLK_I2S1_8CH_RX_FRAC, "clk_i2s1_8ch_rx_frac", "clk_i2s1_8ch_rx_src",
+			CLK_SET_RATE_PARENT,
 			RK3588_PMU_CLKSEL_CON(8), 0,
 			RK3588_PMU_CLKGATE_CON(2), 12, GFLAGS,
 			&rk3588_i2s1_8ch_rx_fracmux),
@@ -2232,7 +2265,7 @@ static struct rockchip_clk_branch rk3588_clk_branches[] __initdata = {
 			RK3588_PMU_CLKSEL_CON(3), 7, 5, DFLAGS,
 			RK3588_PMU_CLKGATE_CON(2), 3, GFLAGS),
 	COMPOSITE_FRACMUX(CLK_UART0_FRAC, "clk_uart0_frac", "clk_uart0_src", CLK_SET_RATE_PARENT,
-			RK3588_PMU_CLKSEL_CON(4), CLK_FRAC_DIVIDER_NO_LIMIT,
+			RK3588_PMU_CLKSEL_CON(4), 0,
 			RK3588_PMU_CLKGATE_CON(2), 4, GFLAGS,
 			&rk3588_uart0_fracmux),
 	GATE(SCLK_UART0, "sclk_uart0", "clk_uart0", 0,
@@ -2247,10 +2280,12 @@ static struct rockchip_clk_branch rk3588_clk_branches[] __initdata = {
 	COMPOSITE(CLK_CR_PARA, "clk_cr_para", mux_24m_ppll_spll_p, 0,
 			RK3588_PMU_CLKSEL_CON(15), 5, 2, MFLAGS, 0, 5, DFLAGS,
 			RK3588_PMU_CLKGATE_CON(4), 11, GFLAGS),
-	COMPOSITE(CLK_USB2PHY_HDPTXRXPHY_REF, "clk_usb2phy_hdptxrxphy_ref", mux_24m_ppll_p, CLK_IS_CRITICAL,
+	COMPOSITE(CLK_USB2PHY_HDPTXRXPHY_REF, "clk_usb2phy_hdptxrxphy_ref", mux_24m_ppll_p,
+			CLK_IS_CRITICAL,
 			RK3588_PMU_CLKSEL_CON(14), 14, 1, MFLAGS, 9, 5, DFLAGS,
 			RK3588_PMU_CLKGATE_CON(4), 7, GFLAGS),
-	COMPOSITE(CLK_USBDPPHY_MIPIDCPPHY_REF, "clk_usbdpphy_mipidcpphy_ref", mux_24m_ppll_spll_p, CLK_IS_CRITICAL,
+	COMPOSITE(CLK_USBDPPHY_MIPIDCPPHY_REF, "clk_usbdpphy_mipidcpphy_ref", mux_24m_ppll_spll_p,
+			CLK_IS_CRITICAL,
 			RK3588_PMU_CLKSEL_CON(14), 7, 2, MFLAGS, 0, 7, DFLAGS,
 			RK3588_PMU_CLKGATE_CON(4), 3, GFLAGS),
 
@@ -2379,33 +2414,33 @@ static struct rockchip_clk_branch rk3588_clk_branches[] __initdata = {
 			RK3588_CLKGATE_CON(68), 5, GFLAGS),
 	GATE(ACLK_AV1, "aclk_av1", "aclk_av1_pre", 0,
 			RK3588_CLKGATE_CON(68), 2, GFLAGS),
+
+	GATE_LINK(ACLK_ISP1_PRE, "aclk_isp1_pre", "aclk_isp1_root", "aclk_vi_root", 0, RK3588_CLKGATE_CON(26), 6, GFLAGS),
+	GATE_LINK(HCLK_ISP1_PRE, "hclk_isp1_pre", "hclk_isp1_root", "hclk_vi_root", 0, RK3588_CLKGATE_CON(26), 8, GFLAGS),
+	GATE_LINK(HCLK_NVM, "hclk_nvm", "hclk_nvm_root", "aclk_nvm_root", 0, RK3588_CLKGATE_CON(31), 2, GFLAGS),
+	GATE_LINK(ACLK_USB, "aclk_usb", "aclk_usb_root", "aclk_vo1usb_top_root", 0, RK3588_CLKGATE_CON(42), 2, GFLAGS),
+	GATE_LINK(HCLK_USB, "hclk_usb", "hclk_usb_root", "hclk_vo1usb_top_root", 0, RK3588_CLKGATE_CON(42), 3, GFLAGS),
+	GATE_LINK(ACLK_JPEG_DECODER_PRE, "aclk_jpeg_decoder_pre", "aclk_jpeg_decoder_root", "aclk_vdpu_root", 0, RK3588_CLKGATE_CON(44), 7, GFLAGS),
+	GATE_LINK(ACLK_VDPU_LOW_PRE, "aclk_vdpu_low_pre", "aclk_vdpu_low_root", "aclk_vdpu_root", 0, RK3588_CLKGATE_CON(44), 5, GFLAGS),
+	GATE_LINK(ACLK_RKVENC1_PRE, "aclk_rkvenc1_pre", "aclk_rkvenc1_root", "aclk_rkvenc0", 0, RK3588_CLKGATE_CON(48), 3, GFLAGS),
+	GATE_LINK(HCLK_RKVENC1_PRE, "hclk_rkvenc1_pre", "hclk_rkvenc1_root", "hclk_rkvenc0", 0, RK3588_CLKGATE_CON(48), 2, GFLAGS),
+	GATE_LINK(HCLK_RKVDEC0_PRE, "hclk_rkvdec0_pre", "hclk_rkvdec0_root", "hclk_vdpu_root", 0, RK3588_CLKGATE_CON(40), 5, GFLAGS),
+	GATE_LINK(ACLK_RKVDEC0_PRE, "aclk_rkvdec0_pre", "aclk_rkvdec0_root", "aclk_vdpu_root", 0, RK3588_CLKGATE_CON(40), 6, GFLAGS),
+	GATE_LINK(HCLK_RKVDEC1_PRE, "hclk_rkvdec1_pre", "hclk_rkvdec1_root", "hclk_vdpu_root", 0, RK3588_CLKGATE_CON(41), 4, GFLAGS),
+	GATE_LINK(ACLK_RKVDEC1_PRE, "aclk_rkvdec1_pre", "aclk_rkvdec1_root", "aclk_vdpu_root", 0, RK3588_CLKGATE_CON(41), 5, GFLAGS),
+	GATE_LINK(ACLK_HDCP0_PRE, "aclk_hdcp0_pre", "aclk_vo0_root", "aclk_vop_low_root", 0, RK3588_CLKGATE_CON(55), 9, GFLAGS),
+	GATE_LINK(HCLK_VO0, "hclk_vo0", "hclk_vo0_root", "hclk_vop_root", 0, RK3588_CLKGATE_CON(55), 5, GFLAGS),
+	GATE_LINK(ACLK_HDCP1_PRE, "aclk_hdcp1_pre", "aclk_hdcp1_root", "aclk_vo1usb_top_root", 0, RK3588_CLKGATE_CON(59), 6, GFLAGS),
+	GATE_LINK(HCLK_VO1, "hclk_vo1", "hclk_vo1_root", "hclk_vo1usb_top_root", 0, RK3588_CLKGATE_CON(59), 9, GFLAGS),
+	GATE_LINK(ACLK_AV1_PRE, "aclk_av1_pre", "aclk_av1_root", "aclk_vdpu_root", 0, RK3588_CLKGATE_CON(68), 1, GFLAGS),
+	GATE_LINK(PCLK_AV1_PRE, "pclk_av1_pre", "pclk_av1_root", "hclk_vdpu_root", 0, RK3588_CLKGATE_CON(68), 4, GFLAGS),
+	GATE_LINK(HCLK_SDIO_PRE, "hclk_sdio_pre", "hclk_sdio_root", "hclk_nvm", 0, RK3588_CLKGATE_CON(75), 1, GFLAGS),
 };
-
-static void __iomem *rk3588_cru_base;
-
-static void rk3588_dump_cru(void)
-{
-	if (rk3588_cru_base) {
-		pr_warn("DSU CRU:\n");
-		print_hex_dump(KERN_WARNING, "", DUMP_PREFIX_OFFSET,
-			       32, 4, rk3588_cru_base + RK3588_DSU_CRU_BASE,
-			       0x330, false);
-		pr_warn("BIGCORE0 CRU:\n");
-		print_hex_dump(KERN_WARNING, "", DUMP_PREFIX_OFFSET,
-			       32, 4, rk3588_cru_base + RK3588_BIGCORE0_CRU_BASE,
-			       0x300, false);
-		pr_warn("BIGCORE1 CRU:\n");
-		print_hex_dump(KERN_WARNING, "", DUMP_PREFIX_OFFSET,
-			       32, 4, rk3588_cru_base + RK3588_BIGCORE1_CRU_BASE,
-			       0x300, false);
-	}
-}
 
 static void __init rk3588_clk_init(struct device_node *np)
 {
 	struct rockchip_clk_provider *ctx;
 	void __iomem *reg_base;
-	struct clk **clks;
 
 	reg_base = of_iomap(np, 0);
 	if (!reg_base) {
@@ -2413,30 +2448,27 @@ static void __init rk3588_clk_init(struct device_node *np)
 		return;
 	}
 
-	rk3588_cru_base = reg_base;
-
 	ctx = rockchip_clk_init(np, reg_base, CLK_NR_CLKS);
 	if (IS_ERR(ctx)) {
 		pr_err("%s: rockchip clk init failed\n", __func__);
 		iounmap(reg_base);
 		return;
 	}
-	clks = ctx->clk_data.clks;
 
 	rockchip_clk_register_plls(ctx, rk3588_pll_clks,
 				   ARRAY_SIZE(rk3588_pll_clks),
 				   RK3588_GRF_SOC_STATUS0);
 
 	rockchip_clk_register_armclk(ctx, ARMCLK_L, "armclk_l",
-			3, clks[PLL_LPLL], clks[PLL_GPLL],
+			mux_armclkl_p, ARRAY_SIZE(mux_armclkl_p),
 			&rk3588_cpulclk_data, rk3588_cpulclk_rates,
 			ARRAY_SIZE(rk3588_cpulclk_rates));
 	rockchip_clk_register_armclk(ctx, ARMCLK_B01, "armclk_b01",
-			3, clks[PLL_B0PLL], clks[PLL_GPLL],
+			mux_armclkb01_p, ARRAY_SIZE(mux_armclkb01_p),
 			&rk3588_cpub0clk_data, rk3588_cpub0clk_rates,
 			ARRAY_SIZE(rk3588_cpub0clk_rates));
 	rockchip_clk_register_armclk(ctx, ARMCLK_B23, "armclk_b23",
-			3, clks[PLL_B1PLL], clks[PLL_GPLL],
+			mux_armclkb23_p, ARRAY_SIZE(mux_armclkb23_p),
 			&rk3588_cpub1clk_data, rk3588_cpub1clk_rates,
 			ARRAY_SIZE(rk3588_cpub1clk_rates));
 
@@ -2449,9 +2481,6 @@ static void __init rk3588_clk_init(struct device_node *np)
 	rockchip_register_restart_notifier(ctx, RK3588_GLB_SRST_FST, NULL);
 
 	rockchip_clk_of_add_provider(np, ctx);
-
-	if (!rk_dump_cru)
-		rk_dump_cru = rk3588_dump_cru;
 }
 
 CLK_OF_DECLARE(rk3588_cru, "rockchip,rk3588-cru", rk3588_clk_init);
@@ -2475,17 +2504,15 @@ MODULE_DEVICE_TABLE(of, clk_rk3588_match_table);
 
 static int __init clk_rk3588_probe(struct platform_device *pdev)
 {
-	struct device_node *np = pdev->dev.of_node;
-	const struct of_device_id *match;
 	const struct clk_rk3588_inits *init_data;
+	struct device *dev = &pdev->dev;
 
-	match = of_match_device(clk_rk3588_match_table, &pdev->dev);
-	if (!match || !match->data)
+	init_data = device_get_match_data(dev);
+	if (!init_data)
 		return -EINVAL;
 
-	init_data = match->data;
 	if (init_data->inits)
-		init_data->inits(np);
+		init_data->inits(dev->of_node);
 
 	return 0;
 }

@@ -713,8 +713,28 @@
 #define CLK_PHY0_REF_ALT_M		719
 #define CLK_PHY1_REF_ALT_P		720
 #define CLK_PHY1_REF_ALT_M		721
+#define ACLK_ISP1_PRE			722
+#define HCLK_ISP1_PRE			723
+#define HCLK_NVM			724
+#define ACLK_USB			725
+#define HCLK_USB			726
+#define ACLK_JPEG_DECODER_PRE		727
+#define ACLK_VDPU_LOW_PRE		728
+#define ACLK_RKVENC1_PRE		729
+#define HCLK_RKVENC1_PRE		730
+#define HCLK_RKVDEC0_PRE		731
+#define ACLK_RKVDEC0_PRE		732
+#define HCLK_RKVDEC1_PRE		733
+#define ACLK_RKVDEC1_PRE		734
+#define ACLK_HDCP0_PRE			735
+#define HCLK_VO0			736
+#define ACLK_HDCP1_PRE			737
+#define HCLK_VO1			738
+#define ACLK_AV1_PRE			739
+#define PCLK_AV1_PRE			740
+#define HCLK_SDIO_PRE			741
 
-#define CLK_NR_CLKS			(CLK_PHY1_REF_ALT_M + 1)
+#define CLK_NR_CLKS			(HCLK_SDIO_PRE + 1)
 
 /********Name=SOFTRST_CON01,Offset=0xA04********/
 #define SRST_A_TOP_BIU			19
@@ -1217,7 +1237,6 @@
 #define SRST_M_SPDIF5_DP1		923
 /********Name=SOFTRST_CON59,Offset=0xAEC********/
 #define SRST_A_HDCP1_BIU		950
-#define SRST_A_HDMIRX_BIU		951
 #define SRST_A_VO1_BIU			952
 #define SRST_H_VOP1_BIU			953
 #define SRST_H_VOP1_S_BIU		954

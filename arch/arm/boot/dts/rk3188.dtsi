@@ -54,7 +54,7 @@
 		};
 	};
 
-	cpu0_opp_table: opp_table0 {
+	cpu0_opp_table: opp-table-0 {
 		compatible = "operating-points-v2";
 		opp-shared;
 
@@ -168,10 +168,10 @@
 		interrupts = <GIC_SPI 32 IRQ_TYPE_LEVEL_HIGH>;
 		pinctrl-names = "default";
 		pinctrl-0 = <&i2s0_bus>;
+		clocks = <&cru SCLK_I2S0>, <&cru HCLK_I2S0>;
+		clock-names = "i2s_clk", "i2s_hclk";
 		dmas = <&dmac1_s 6>, <&dmac1_s 7>;
 		dma-names = "tx", "rx";
-		clock-names = "i2s_hclk", "i2s_clk";
-		clocks = <&cru HCLK_I2S0_2CH>, <&cru SCLK_I2S0>;
 		rockchip,playback-channels = <2>;
 		rockchip,capture-channels = <2>;
 		#sound-dai-cells = <0>;
@@ -195,8 +195,9 @@
 	cru: clock-controller@20000000 {
 		compatible = "rockchip,rk3188-cru";
 		reg = <0x20000000 0x1000>;
+		clocks = <&xin24m>;
+		clock-names = "xin24m";
 		rockchip,grf = <&grf>;
-
 		#clock-cells = <1>;
 		#reset-cells = <1>;
 	};
@@ -214,30 +215,6 @@
 		};
 	};
 
-	usbphy: phy {
-		compatible = "rockchip,rk3188-usb-phy", "rockchip,rk3288-usb-phy";
-		rockchip,grf = <&grf>;
-		#address-cells = <1>;
-		#size-cells = <0>;
-		status = "disabled";
-
-		usbphy0: usb-phy@10c {
-			#phy-cells = <0>;
-			reg = <0x10c>;
-			clocks = <&cru SCLK_OTGPHY0>;
-			clock-names = "phyclk";
-			#clock-cells = <0>;
-		};
-
-		usbphy1: usb-phy@11c {
-			#phy-cells = <0>;
-			reg = <0x11c>;
-			clocks = <&cru SCLK_OTGPHY1>;
-			clock-names = "phyclk";
-			#clock-cells = <0>;
-		};
-	};
-
 	pinctrl: pinctrl {
 		compatible = "rockchip,rk3188-pinctrl";
 		rockchip,grf = <&grf>;
@@ -247,7 +224,7 @@
 		#size-cells = <1>;
 		ranges;
 
-		gpio0: gpio0@2000a000 {
+		gpio0: gpio@2000a000 {
 			compatible = "rockchip,rk3188-gpio-bank0";
 			reg = <0x2000a000 0x100>;
 			interrupts = <GIC_SPI 54 IRQ_TYPE_LEVEL_HIGH>;
@@ -260,7 +237,7 @@
 			#interrupt-cells = <2>;
 		};
 
-		gpio1: gpio1@2003c000 {
+		gpio1: gpio@2003c000 {
 			compatible = "rockchip,gpio-bank";
 			reg = <0x2003c000 0x100>;
 			interrupts = <GIC_SPI 55 IRQ_TYPE_LEVEL_HIGH>;
@@ -273,7 +250,7 @@
 			#interrupt-cells = <2>;
 		};
 
-		gpio2: gpio2@2003e000 {
+		gpio2: gpio@2003e000 {
 			compatible = "rockchip,gpio-bank";
 			reg = <0x2003e000 0x100>;
 			interrupts = <GIC_SPI 56 IRQ_TYPE_LEVEL_HIGH>;
@@ -286,7 +263,7 @@
 			#interrupt-cells = <2>;
 		};
 
-		gpio3: gpio3@20080000 {
+		gpio3: gpio@20080000 {
 			compatible = "rockchip,gpio-bank";
 			reg = <0x20080000 0x100>;
 			interrupts = <GIC_SPI 57 IRQ_TYPE_LEVEL_HIGH>;
@@ -299,15 +276,15 @@
 			#interrupt-cells = <2>;
 		};
 
-		pcfg_pull_up: pcfg_pull_up {
+		pcfg_pull_up: pcfg-pull-up {
 			bias-pull-up;
 		};
 
-		pcfg_pull_down: pcfg_pull_down {
+		pcfg_pull_down: pcfg-pull-down {
 			bias-pull-down;
 		};
 
-		pcfg_pull_none: pcfg_pull_none {
+		pcfg_pull_none: pcfg-pull-none {
 			bias-disable;
 		};
 
@@ -493,7 +470,7 @@
 		uart0 {
 			uart0_xfer: uart0-xfer {
 				rockchip,pins = <1 RK_PA0 1 &pcfg_pull_up>,
-						<1 RK_PA1 1 &pcfg_pull_up>;
+						<1 RK_PA1 1 &pcfg_pull_none>;
 			};
 
 			uart0_cts: uart0-cts {
@@ -508,7 +485,7 @@
 		uart1 {
 			uart1_xfer: uart1-xfer {
 				rockchip,pins = <1 RK_PA4 1 &pcfg_pull_up>,
-						<1 RK_PA5 1 &pcfg_pull_up>;
+						<1 RK_PA5 1 &pcfg_pull_none>;
 			};
 
 			uart1_cts: uart1-cts {
@@ -523,7 +500,7 @@
 		uart2 {
 			uart2_xfer: uart2-xfer {
 				rockchip,pins = <1 RK_PB0 1 &pcfg_pull_up>,
-						<1 RK_PB1 1 &pcfg_pull_up>;
+						<1 RK_PB1 1 &pcfg_pull_none>;
 			};
 			/* no rts / cts for uart2 */
 		};
@@ -531,7 +508,7 @@
 		uart3 {
 			uart3_xfer: uart3-xfer {
 				rockchip,pins = <1 RK_PB2 1 &pcfg_pull_up>,
-						<1 RK_PB3 1 &pcfg_pull_up>;
+						<1 RK_PB3 1 &pcfg_pull_none>;
 			};
 
 			uart3_cts: uart3-cts {
@@ -662,6 +639,38 @@
 	power-domains = <&power RK3188_PD_GPU>;
 };
 
+&grf {
+	compatible = "rockchip,rk3188-grf", "syscon", "simple-mfd";
+
+	io_domains: io-domains {
+		compatible = "rockchip,rk3188-io-voltage-domain";
+		status = "disabled";
+	};
+
+	usbphy: usbphy {
+		compatible = "rockchip,rk3188-usb-phy";
+		#address-cells = <1>;
+		#size-cells = <0>;
+		status = "disabled";
+
+		usbphy0: usb-phy@10c {
+			reg = <0x10c>;
+			clocks = <&cru SCLK_OTGPHY0>;
+			clock-names = "phyclk";
+			#clock-cells = <0>;
+			#phy-cells = <0>;
+		};
+
+		usbphy1: usb-phy@11c {
+			reg = <0x11c>;
+			clocks = <&cru SCLK_OTGPHY1>;
+			clock-names = "phyclk";
+			#clock-cells = <0>;
+			#phy-cells = <0>;
+		};
+	};
+};
+
 &i2c0 {
 	compatible = "rockchip,rk3188-i2c";
 	pinctrl-names = "default";
@@ -719,6 +728,7 @@
 				 <&qos_cif0>,
 				 <&qos_ipp>,
 				 <&qos_rga>;
+			#power-domain-cells = <0>;
 		};
 
 		power-domain@RK3188_PD_VIDEO {
@@ -728,33 +738,35 @@
 				 <&cru HCLK_VDPU>,
 				 <&cru HCLK_VEPU>;
 			pm_qos = <&qos_vpu>;
+			#power-domain-cells = <0>;
 		};
 
 		power-domain@RK3188_PD_GPU {
 			reg = <RK3188_PD_GPU>;
 			clocks = <&cru ACLK_GPU>;
 			pm_qos = <&qos_gpu>;
+			#power-domain-cells = <0>;
 		};
 	};
 };
 
 &pwm0 {
-	pinctrl-names = "active";
+	pinctrl-names = "default";
 	pinctrl-0 = <&pwm0_out>;
 };
 
 &pwm1 {
-	pinctrl-names = "active";
+	pinctrl-names = "default";
 	pinctrl-0 = <&pwm1_out>;
 };
 
 &pwm2 {
-	pinctrl-names = "active";
+	pinctrl-names = "default";
 	pinctrl-0 = <&pwm2_out>;
 };
 
 &pwm3 {
-	pinctrl-names = "active";
+	pinctrl-names = "default";
 	pinctrl-0 = <&pwm3_out>;
 };
 
@@ -792,6 +804,11 @@
 	compatible = "rockchip,rk3188-uart", "snps,dw-apb-uart";
 	pinctrl-names = "default";
 	pinctrl-0 = <&uart3_xfer>;
+};
+
+&vpu {
+	compatible = "rockchip,rk3188-vpu", "rockchip,rk3066-vpu";
+	power-domains = <&power RK3188_PD_VIDEO>;
 };
 
 &wdt {

@@ -27,11 +27,6 @@ static inline bool frozen(struct task_struct *p)
 	return p->flags & PF_FROZEN;
 }
 
-static inline bool frozen_or_skipped(struct task_struct *p)
-{
-	return p->flags & (PF_FROZEN | PF_FREEZER_SKIP);
-}
-
 extern bool freezing_slow_path(struct task_struct *p);
 
 /*
@@ -275,7 +270,6 @@ static inline int freezable_schedule_hrtimeout_range(ktime_t *expires,
 
 #else /* !CONFIG_FREEZER */
 static inline bool frozen(struct task_struct *p) { return false; }
-static inline bool frozen_or_skipped(struct task_struct *p) { return false; }
 static inline bool freezing(struct task_struct *p) { return false; }
 static inline void __thaw_task(struct task_struct *t) {}
 
@@ -285,7 +279,6 @@ static inline int freeze_kernel_threads(void) { return -ENOSYS; }
 static inline void thaw_processes(void) {}
 static inline void thaw_kernel_threads(void) {}
 
-static inline bool try_to_freeze_nowarn(void) { return false; }
 static inline bool try_to_freeze(void) { return false; }
 
 static inline void freezer_do_not_count(void) {}

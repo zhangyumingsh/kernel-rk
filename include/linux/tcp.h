@@ -16,7 +16,6 @@
 
 #include <linux/skbuff.h>
 #include <linux/win_minmax.h>
-#include <linux/android_kabi.h>
 #include <net/sock.h>
 #include <net/inet_connection_sock.h>
 #include <net/inet_timewait_sock.h>
@@ -45,6 +44,36 @@ static inline struct tcphdr *inner_tcp_hdr(const struct sk_buff *skb)
 static inline unsigned int inner_tcp_hdrlen(const struct sk_buff *skb)
 {
 	return inner_tcp_hdr(skb)->doff * 4;
+}
+
+/**
+ * skb_tcp_all_headers - Returns size of all headers for a TCP packet
+ * @skb: buffer
+ *
+ * Used in TX path, for a packet known to be a TCP one.
+ *
+ * if (skb_is_gso(skb)) {
+ *         int hlen = skb_tcp_all_headers(skb);
+ *         ...
+ */
+static inline int skb_tcp_all_headers(const struct sk_buff *skb)
+{
+	return skb_transport_offset(skb) + tcp_hdrlen(skb);
+}
+
+/**
+ * skb_inner_tcp_all_headers - Returns size of all headers for an encap TCP packet
+ * @skb: buffer
+ *
+ * Used in TX path, for a packet known to be a TCP one.
+ *
+ * if (skb_is_gso(skb) && skb->encapsulation) {
+ *         int hlen = skb_inner_tcp_all_headers(skb);
+ *         ...
+ */
+static inline int skb_inner_tcp_all_headers(const struct sk_buff *skb)
+{
+	return skb_inner_transport_offset(skb) + inner_tcp_hdrlen(skb);
 }
 
 static inline unsigned int tcp_optlen(const struct sk_buff *skb)
@@ -395,6 +424,7 @@ struct tcp_sock {
 	bool	is_mptcp;
 #endif
 #if IS_ENABLED(CONFIG_SMC)
+	bool	(*smc_hs_congested)(const struct sock *sk);
 	bool	syn_smc;	/* SYN includes SMC */
 #endif
 
@@ -413,8 +443,6 @@ struct tcp_sock {
 	 */
 	struct request_sock __rcu *fastopen_rsk;
 	struct saved_syn *saved_syn;
-
-	ANDROID_KABI_RESERVE(1);
 };
 
 enum tsq_enum {
@@ -499,7 +527,8 @@ static inline u32 tcp_saved_syn_len(const struct saved_syn *saved_syn)
 }
 
 struct sk_buff *tcp_get_timestamping_opt_stats(const struct sock *sk,
-					       const struct sk_buff *orig_skb);
+					       const struct sk_buff *orig_skb,
+					       const struct sk_buff *ack_skb);
 
 static inline u16 tcp_mss_clamp(const struct tcp_sock *tp, u16 mss)
 {
@@ -514,11 +543,13 @@ static inline u16 tcp_mss_clamp(const struct tcp_sock *tp, u16 mss)
 int tcp_skb_shift(struct sk_buff *to, struct sk_buff *from, int pcount,
 		  int shiftlen);
 
+void __tcp_sock_set_cork(struct sock *sk, bool on);
 void tcp_sock_set_cork(struct sock *sk, bool on);
 int tcp_sock_set_keepcnt(struct sock *sk, int val);
 int tcp_sock_set_keepidle_locked(struct sock *sk, int val);
 int tcp_sock_set_keepidle(struct sock *sk, int val);
 int tcp_sock_set_keepintvl(struct sock *sk, int val);
+void __tcp_sock_set_nodelay(struct sock *sk, bool on);
 void tcp_sock_set_nodelay(struct sock *sk);
 void tcp_sock_set_quickack(struct sock *sk, int val);
 int tcp_sock_set_syncnt(struct sock *sk, int val);

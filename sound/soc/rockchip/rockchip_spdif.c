@@ -60,8 +60,6 @@ static const struct of_device_id rk_spdif_match[] __maybe_unused = {
 	  .data = (void *)RK_SPDIF_RK3366 },
 	{ .compatible = "rockchip,rk3568-spdif",
 	  .data = (void *)RK_SPDIF_RK3366 },
-	{ .compatible = "rockchip,rk3588-spdif",
-	  .data = (void *)RK_SPDIF_RK3366 },
 	{},
 };
 MODULE_DEVICE_TABLE(of, rk_spdif_match);
@@ -112,14 +110,11 @@ static int rk_spdif_hw_params(struct snd_pcm_substream *substream,
 {
 	struct rk_spdif_dev *spdif = snd_soc_dai_get_drvdata(dai);
 	unsigned int val = SPDIF_CFGR_HALFWORD_ENABLE;
-	unsigned int mclk_rate = clk_get_rate(spdif->mclk);
-	int bmc, div;
+	int srate, mclk;
 	int ret;
 
-	/* bmc = 128fs */
-	bmc = 128 * params_rate(params);
-	div = DIV_ROUND_CLOSEST(mclk_rate, bmc);
-	val |= SPDIF_CFGR_CLK_DIV(div);
+	srate = params_rate(params);
+	mclk = srate * 128;
 
 	switch (params_format(params)) {
 	case SNDRV_PCM_FORMAT_S16_LE:
@@ -133,6 +128,14 @@ static int rk_spdif_hw_params(struct snd_pcm_substream *substream,
 		break;
 	default:
 		return -EINVAL;
+	}
+
+	/* Set clock and calculate divider */
+	ret = clk_set_rate(spdif->mclk, mclk);
+	if (ret != 0) {
+		dev_err(spdif->dev, "Failed to set module clock rate: %d\n",
+			ret);
+		return ret;
 	}
 
 	ret = regmap_update_bits(spdif->regmap, SPDIF_CFGR,
@@ -197,24 +200,7 @@ static int rk_spdif_dai_probe(struct snd_soc_dai *dai)
 	return 0;
 }
 
-static int rk_spdif_set_sysclk(struct snd_soc_dai *dai,
-			       int clk_id, unsigned int freq, int dir)
-{
-	struct rk_spdif_dev *spdif = snd_soc_dai_get_drvdata(dai);
-	int ret = 0;
-
-	if (!freq)
-		return 0;
-
-	ret = clk_set_rate(spdif->mclk, freq);
-	if (ret)
-		dev_err(spdif->dev, "Failed to set mclk: %d\n", ret);
-
-	return ret;
-}
-
 static const struct snd_soc_dai_ops rk_spdif_dai_ops = {
-	.set_sysclk = rk_spdif_set_sysclk,
 	.hw_params = rk_spdif_hw_params,
 	.trigger = rk_spdif_trigger,
 };
@@ -239,6 +225,7 @@ static struct snd_soc_dai_driver rk_spdif_dai = {
 
 static const struct snd_soc_component_driver rk_spdif_component = {
 	.name = "rockchip-spdif",
+	.legacy_dai_naming = 1,
 };
 
 static bool rk_spdif_wr_reg(struct device *dev, unsigned int reg)

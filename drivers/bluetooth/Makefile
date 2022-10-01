@@ -25,7 +25,9 @@ obj-$(CONFIG_BT_QCOMSMD)	+= btqcomsmd.o
 obj-$(CONFIG_BT_BCM)		+= btbcm.o
 obj-$(CONFIG_BT_RTL)		+= btrtl.o
 obj-$(CONFIG_BT_QCA)		+= btqca.o
-obj-$(CONFIG_BT_RTKBTUSB)	+= rtk_btusb.o
+obj-$(CONFIG_BT_MTK)		+= btmtk.o
+
+obj-$(CONFIG_BT_VIRTIO)		+= virtio_bt.o
 
 obj-$(CONFIG_BT_HCIUART_NOKIA)	+= hci_nokia.o
 

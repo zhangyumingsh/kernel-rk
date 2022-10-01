@@ -12,10 +12,9 @@
  * provides the key and IV to use.
  */
 
-#include <linux/blk-crypto.h>
+#include <linux/blk-crypto-profile.h>
 #include <linux/blkdev.h>
 #include <linux/buffer_head.h>
-#include <linux/keyslot-manager.h>
 #include <linux/sched/mm.h>
 #include <linux/slab.h>
 #include <linux/uio.h>
@@ -65,9 +64,37 @@ static unsigned int fscrypt_get_dun_bytes(const struct fscrypt_info *ci)
 	return DIV_ROUND_UP(lblk_bits, 8);
 }
 
+/*
+ * Log a message when starting to use blk-crypto (native) or blk-crypto-fallback
+ * for an encryption mode for the first time.  This is the blk-crypto
+ * counterpart to the message logged when starting to use the crypto API for the
+ * first time.  A limitation is that these messages don't convey which specific
+ * filesystems or files are using each implementation.  However, *usually*
+ * systems use just one implementation per mode, which makes these messages
+ * helpful for debugging problems where the "wrong" implementation is used.
+ */
+static void fscrypt_log_blk_crypto_impl(struct fscrypt_mode *mode,
+					struct request_queue **devs,
+					int num_devs,
+					const struct blk_crypto_config *cfg)
+{
+	int i;
+
+	for (i = 0; i < num_devs; i++) {
+		if (!IS_ENABLED(CONFIG_BLK_INLINE_ENCRYPTION_FALLBACK) ||
+		    __blk_crypto_cfg_supported(devs[i]->crypto_profile, cfg)) {
+			if (!xchg(&mode->logged_blk_crypto_native, 1))
+				pr_info("fscrypt: %s using blk-crypto (native)\n",
+					mode->friendly_name);
+		} else if (!xchg(&mode->logged_blk_crypto_fallback, 1)) {
+			pr_info("fscrypt: %s using blk-crypto-fallback\n",
+				mode->friendly_name);
+		}
+	}
+}
+
 /* Enable inline encryption for this file if supported. */
-int fscrypt_select_encryption_impl(struct fscrypt_info *ci,
-				   bool is_hw_wrapped_key)
+int fscrypt_select_encryption_impl(struct fscrypt_info *ci)
 {
 	const struct inode *inode = ci->ci_inode;
 	struct super_block *sb = inode->i_sb;
@@ -108,7 +135,6 @@ int fscrypt_select_encryption_impl(struct fscrypt_info *ci,
 	crypto_cfg.crypto_mode = ci->ci_mode->blk_crypto_mode;
 	crypto_cfg.data_unit_size = sb->s_blocksize;
 	crypto_cfg.dun_bytes = fscrypt_get_dun_bytes(ci);
-	crypto_cfg.is_hw_wrapped = is_hw_wrapped_key;
 	num_devs = fscrypt_get_num_devices(sb);
 	devs = kmalloc_array(num_devs, sizeof(*devs), GFP_KERNEL);
 	if (!devs)
@@ -120,6 +146,8 @@ int fscrypt_select_encryption_impl(struct fscrypt_info *ci,
 			goto out_free_devs;
 	}
 
+	fscrypt_log_blk_crypto_impl(ci->ci_mode, devs, num_devs, &crypto_cfg);
+
 	ci->ci_inlinecrypt = true;
 out_free_devs:
 	kfree(devs);
@@ -129,8 +157,6 @@ out_free_devs:
 
 int fscrypt_prepare_inline_crypt_key(struct fscrypt_prepared_key *prep_key,
 				     const u8 *raw_key,
-				     unsigned int raw_key_size,
-				     bool is_hw_wrapped,
 				     const struct fscrypt_info *ci)
 {
 	const struct inode *inode = ci->ci_inode;
@@ -149,11 +175,7 @@ int fscrypt_prepare_inline_crypt_key(struct fscrypt_prepared_key *prep_key,
 	blk_key->num_devs = num_devs;
 	fscrypt_get_devices(sb, num_devs, blk_key->devs);
 
-	BUILD_BUG_ON(FSCRYPT_MAX_HW_WRAPPED_KEY_SIZE >
-		     BLK_CRYPTO_MAX_WRAPPED_KEY_SIZE);
-
-	err = blk_crypto_init_key(&blk_key->base, raw_key, raw_key_size,
-				  is_hw_wrapped, crypto_mode,
+	err = blk_crypto_init_key(&blk_key->base, raw_key, crypto_mode,
 				  fscrypt_get_dun_bytes(ci), sb->s_blocksize);
 	if (err) {
 		fscrypt_err(inode, "error %d initializing blk-crypto key", err);
@@ -213,21 +235,6 @@ void fscrypt_destroy_inline_crypt_key(struct fscrypt_prepared_key *prep_key)
 	}
 }
 
-int fscrypt_derive_raw_secret(struct super_block *sb,
-			      const u8 *wrapped_key,
-			      unsigned int wrapped_key_size,
-			      u8 *raw_secret, unsigned int raw_secret_size)
-{
-	struct request_queue *q;
-
-	q = bdev_get_queue(sb->s_bdev);
-	if (!q->ksm)
-		return -EOPNOTSUPP;
-
-	return blk_ksm_derive_raw_secret(q->ksm, wrapped_key, wrapped_key_size,
-					 raw_secret, raw_secret_size);
-}
-
 bool __fscrypt_inode_uses_inline_crypto(const struct inode *inode)
 {
 	return inode->i_crypt_info->ci_inlinecrypt;
@@ -263,17 +270,12 @@ static void fscrypt_generate_dun(const struct fscrypt_info *ci, u64 lblk_num,
  * otherwise fscrypt_mergeable_bio() won't work as intended.
  *
  * The encryption context will be freed automatically when the bio is freed.
- *
- * This function also handles setting bi_skip_dm_default_key when needed.
  */
 void fscrypt_set_bio_crypt_ctx(struct bio *bio, const struct inode *inode,
 			       u64 first_lblk, gfp_t gfp_mask)
 {
 	const struct fscrypt_info *ci;
 	u64 dun[BLK_CRYPTO_DUN_ARRAY_SIZE];
-
-	if (fscrypt_inode_should_skip_dm_default_key(inode))
-		bio_set_skip_dm_default_key(bio);
 
 	if (!fscrypt_inode_uses_inline_crypto(inode))
 		return;
@@ -345,8 +347,9 @@ EXPORT_SYMBOL_GPL(fscrypt_set_bio_crypt_ctx_bh);
  *
  * fscrypt_set_bio_crypt_ctx() must have already been called on the bio.
  *
- * This function also returns false if the next part of the I/O would need to
- * have a different value for the bi_skip_dm_default_key flag.
+ * This function isn't required in cases where crypto-mergeability is ensured in
+ * another way, such as I/O targeting only a single file (and thus a single key)
+ * combined with fscrypt_limit_io_blocks() to ensure DUN contiguity.
  *
  * Return: true iff the I/O is mergeable
  */
@@ -357,9 +360,6 @@ bool fscrypt_mergeable_bio(struct bio *bio, const struct inode *inode,
 	u64 next_dun[BLK_CRYPTO_DUN_ARRAY_SIZE];
 
 	if (!!bc != fscrypt_inode_uses_inline_crypto(inode))
-		return false;
-	if (bio_should_skip_dm_default_key(bio) !=
-	    fscrypt_inode_should_skip_dm_default_key(inode))
 		return false;
 	if (!bc)
 		return true;
@@ -394,20 +394,22 @@ bool fscrypt_mergeable_bio_bh(struct bio *bio,
 	u64 next_lblk;
 
 	if (!bh_get_inode_and_lblk_num(next_bh, &inode, &next_lblk))
-		return !bio->bi_crypt_context &&
-		       !bio_should_skip_dm_default_key(bio);
+		return !bio->bi_crypt_context;
 
 	return fscrypt_mergeable_bio(bio, inode, next_lblk);
 }
 EXPORT_SYMBOL_GPL(fscrypt_mergeable_bio_bh);
 
 /**
- * fscrypt_dio_supported() - check whether a direct I/O request is unsupported
- *			     due to encryption constraints
+ * fscrypt_dio_supported() - check whether a DIO (direct I/O) request is
+ *			     supported as far as encryption is concerned
  * @iocb: the file and position the I/O is targeting
  * @iter: the I/O data segment(s)
  *
- * Return: true if direct I/O is supported
+ * Return: %true if there are no encryption constraints that prevent DIO from
+ *	   being supported; %false if DIO is unsupported.  (Note that in the
+ *	   %true case, the filesystem might have other, non-encryption-related
+ *	   constraints that prevent DIO from actually being supported.)
  */
 bool fscrypt_dio_supported(struct kiocb *iocb, struct iov_iter *iter)
 {
@@ -418,13 +420,22 @@ bool fscrypt_dio_supported(struct kiocb *iocb, struct iov_iter *iter)
 	if (!fscrypt_needs_contents_encryption(inode))
 		return true;
 
-	/* We only support direct I/O with inline crypto, not fs-layer crypto */
+	/* We only support DIO with inline crypto, not fs-layer crypto. */
 	if (!fscrypt_inode_uses_inline_crypto(inode))
 		return false;
 
 	/*
-	 * Since the granularity of encryption is filesystem blocks, the I/O
-	 * must be block aligned -- not just disk sector aligned.
+	 * Since the granularity of encryption is filesystem blocks, the file
+	 * position and total I/O length must be aligned to the filesystem block
+	 * size -- not just to the block device's logical block size as is
+	 * traditionally the case for DIO on many filesystems.
+	 *
+	 * We require that the user-provided memory buffers be filesystem block
+	 * aligned too.  It is simpler to have a single alignment value required
+	 * for all properties of the I/O, as is normally the case for DIO.
+	 * Also, allowing less aligned buffers would imply that data units could
+	 * cross bvecs, which would greatly complicate the I/O stack, which
+	 * assumes that bios can be split at any bvec boundary.
 	 */
 	if (!IS_ALIGNED(iocb->ki_pos | iov_iter_alignment(iter), blocksize))
 		return false;
@@ -437,24 +448,25 @@ EXPORT_SYMBOL_GPL(fscrypt_dio_supported);
  * fscrypt_limit_io_blocks() - limit I/O blocks to avoid discontiguous DUNs
  * @inode: the file on which I/O is being done
  * @lblk: the block at which the I/O is being started from
- * @nr_blocks: the number of blocks we want to submit starting at @pos
+ * @nr_blocks: the number of blocks we want to submit starting at @lblk
  *
- * Determine the limit to the number of blocks that can be submitted in the bio
- * targeting @pos without causing a data unit number (DUN) discontinuity.
+ * Determine the limit to the number of blocks that can be submitted in a bio
+ * targeting @lblk without causing a data unit number (DUN) discontiguity.
  *
  * This is normally just @nr_blocks, as normally the DUNs just increment along
  * with the logical blocks.  (Or the file is not encrypted.)
  *
  * In rare cases, fscrypt can be using an IV generation method that allows the
- * DUN to wrap around within logically continuous blocks, and that wraparound
+ * DUN to wrap around within logically contiguous blocks, and that wraparound
  * will occur.  If this happens, a value less than @nr_blocks will be returned
- * so that the wraparound doesn't occur in the middle of the bio.
+ * so that the wraparound doesn't occur in the middle of a bio, which would
+ * cause encryption/decryption to produce wrong results.
  *
  * Return: the actual number of blocks that can be submitted
  */
 u64 fscrypt_limit_io_blocks(const struct inode *inode, u64 lblk, u64 nr_blocks)
 {
-	const struct fscrypt_info *ci = inode->i_crypt_info;
+	const struct fscrypt_info *ci;
 	u32 dun;
 
 	if (!fscrypt_inode_uses_inline_crypto(inode))
@@ -463,6 +475,7 @@ u64 fscrypt_limit_io_blocks(const struct inode *inode, u64 lblk, u64 nr_blocks)
 	if (nr_blocks <= 1)
 		return nr_blocks;
 
+	ci = inode->i_crypt_info;
 	if (!(fscrypt_policy_flags(&ci->ci_policy) &
 	      FSCRYPT_POLICY_FLAG_IV_INO_LBLK_32))
 		return nr_blocks;

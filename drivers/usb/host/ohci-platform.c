@@ -28,11 +28,12 @@
 #include <linux/usb/ohci_pdriver.h>
 #include <linux/usb.h>
 #include <linux/usb/hcd.h>
+#include <linux/usb/of.h>
 
 #include "ohci.h"
 
 #define DRIVER_DESC "OHCI generic platform driver"
-#define OHCI_MAX_CLKS 4
+#define OHCI_MAX_CLKS 3
 #define hcd_to_ohci_priv(h) ((struct ohci_platform_priv *)hcd_to_ohci(h)->priv)
 
 struct ohci_platform_priv {
@@ -96,7 +97,7 @@ static int ohci_platform_probe(struct platform_device *dev)
 	struct ohci_hcd *ohci;
 	int err, irq, clk = 0;
 
-	if (usb_disabled() || of_machine_is_compatible("rockchip,rk3288"))
+	if (usb_disabled())
 		return -ENODEV;
 
 	/*
@@ -209,6 +210,8 @@ static int ohci_platform_probe(struct platform_device *dev)
 	}
 	hcd->rsrc_start = res_mem->start;
 	hcd->rsrc_len = resource_size(res_mem);
+
+	hcd->tpl_support = of_usb_host_tpl_support(dev->dev.of_node);
 
 	err = usb_add_hcd(hcd, irq, IRQF_SHARED);
 	if (err)
@@ -334,6 +337,7 @@ static struct platform_driver ohci_platform_driver = {
 		.name	= "ohci-platform",
 		.pm	= &ohci_platform_pm_ops,
 		.of_match_table = ohci_platform_ids,
+		.probe_type = PROBE_PREFER_ASYNCHRONOUS,
 	}
 };
 

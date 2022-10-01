@@ -31,7 +31,6 @@
 #include <linux/slab.h>
 #include <linux/smp.h>
 #include <linux/spinlock.h>
-#include <linux/uaccess.h>
 
 /*
  * The call to use to reach the firmware.
@@ -920,45 +919,6 @@ int sdei_unregister_ghes(struct ghes *ghes)
 	return err;
 }
 
-#ifdef CONFIG_FIQ_DEBUGGER_TRUST_ZONE
-int sdei_event_enable_nolock(u32 event_num)
-{
-	return sdei_api_event_enable(event_num);
-}
-
-int sdei_event_disable_nolock(u32 event_num)
-{
-	return sdei_api_event_disable(event_num);
-}
-
-int sdei_event_routing_set_nolock(u32 event_num, unsigned long flags,
-				  unsigned long affinity)
-{
-	return invoke_sdei_fn(SDEI_1_0_FN_SDEI_EVENT_ROUTING_SET, event_num,
-			      (unsigned long)flags, (unsigned long)affinity,
-			      0, 0, 0);
-}
-
-int sdei_event_routing_set(u32 event_num, unsigned long flags,
-			   unsigned long affinity)
-{
-	int err = -EINVAL;
-	struct sdei_event *event;
-
-	mutex_lock(&sdei_events_lock);
-	event = sdei_event_find(event_num);
-	if (!event) {
-		mutex_unlock(&sdei_events_lock);
-		return -ENOENT;
-	}
-
-	err = sdei_event_routing_set_nolock(event_num, flags, affinity);
-	mutex_unlock(&sdei_events_lock);
-
-	return err;
-}
-#endif
-
 static int sdei_get_conduit(struct platform_device *pdev)
 {
 	const char *method;
@@ -1099,14 +1059,14 @@ static bool __init sdei_present_acpi(void)
 	return true;
 }
 
-static int __init sdei_init(void)
+void __init sdei_init(void)
 {
 	struct platform_device *pdev;
 	int ret;
 
 	ret = platform_driver_register(&sdei_driver);
 	if (ret || !sdei_present_acpi())
-		return ret;
+		return;
 
 	pdev = platform_device_register_simple(sdei_driver.driver.name,
 					       0, NULL, 0);
@@ -1116,40 +1076,18 @@ static int __init sdei_init(void)
 		pr_info("Failed to register ACPI:SDEI platform device %d\n",
 			ret);
 	}
-
-	return ret;
 }
-
-/*
- * On an ACPI system SDEI needs to be ready before HEST:GHES tries to register
- * its events. ACPI is initialised from a subsys_initcall(), GHES is initialised
- * by device_initcall(). We want to be called in the middle.
- */
-subsys_initcall_sync(sdei_init);
 
 int sdei_event_handler(struct pt_regs *regs,
 		       struct sdei_registered_event *arg)
 {
 	int err;
-	mm_segment_t orig_addr_limit;
 	u32 event_num = arg->event_num;
-
-	/*
-	 * Save restore 'fs'.
-	 * The architecture's entry code save/restores 'fs' when taking an
-	 * exception from the kernel. This ensures addr_limit isn't inherited
-	 * if you interrupted something that allowed the uaccess routines to
-	 * access kernel memory.
-	 * Do the same here because this doesn't come via the same entry code.
-	*/
-	orig_addr_limit = force_uaccess_begin();
 
 	err = arg->callback(event_num, regs, arg->callback_arg);
 	if (err)
 		pr_err_ratelimited("event %u on CPU %u failed with error: %d\n",
 				   event_num, smp_processor_id(), err);
-
-	force_uaccess_end(orig_addr_limit);
 
 	return err;
 }

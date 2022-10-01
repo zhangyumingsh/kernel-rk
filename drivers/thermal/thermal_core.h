@@ -65,25 +65,8 @@ static inline bool cdev_is_power_actor(struct thermal_cooling_device *cdev)
 		cdev->ops->power2state;
 }
 
-int power_actor_get_max_power(struct thermal_cooling_device *cdev,
-			      u32 *max_power);
-int power_actor_get_min_power(struct thermal_cooling_device *cdev,
-			      u32 *min_power);
-int power_actor_set_power(struct thermal_cooling_device *cdev,
-			  struct thermal_instance *ti, u32 power);
-/**
- * struct thermal_trip - representation of a point in temperature domain
- * @np: pointer to struct device_node that this trip point was created from
- * @temperature: temperature value in miliCelsius
- * @hysteresis: relative hysteresis in miliCelsius
- * @type: trip point type
- */
-struct thermal_trip {
-	struct device_node *np;
-	int temperature;
-	int hysteresis;
-	enum thermal_trip_type type;
-};
+void thermal_cdev_update(struct thermal_cooling_device *);
+void __thermal_cdev_update(struct thermal_cooling_device *cdev);
 
 int get_tz_trend(struct thermal_zone_device *tz, int trip);
 
@@ -124,10 +107,6 @@ struct thermal_instance {
 
 int thermal_register_governor(struct thermal_governor *);
 void thermal_unregister_governor(struct thermal_governor *);
-void thermal_zone_device_rebind_exception(struct thermal_zone_device *,
-					  const char *, size_t);
-void thermal_zone_device_unbind_exception(struct thermal_zone_device *,
-					  const char *, size_t);
 int thermal_zone_device_set_policy(struct thermal_zone_device *, char *);
 int thermal_build_list_of_policies(char *buf);
 
@@ -178,5 +157,7 @@ of_thermal_get_trip_points(struct thermal_zone_device *tz)
 	return NULL;
 }
 #endif
+
+int thermal_zone_device_is_enabled(struct thermal_zone_device *tz);
 
 #endif /* __THERMAL_CORE_H__ */

@@ -325,12 +325,13 @@ static int arc_emac_poll(struct napi_struct *napi, int budget)
 	struct arc_emac_priv *priv = netdev_priv(ndev);
 	unsigned int work_done;
 
+	arc_emac_tx_clean(ndev);
 	arc_emac_rx_miss_handle(ndev);
 
 	work_done = arc_emac_rx(ndev, budget);
 	if (work_done < budget) {
 		napi_complete_done(napi, work_done);
-		arc_reg_or(priv, R_ENABLE, RXINT_MASK);
+		arc_reg_or(priv, R_ENABLE, RXINT_MASK | TXINT_MASK);
 	}
 
 	arc_emac_rx_stall_check(ndev, budget, work_done);
@@ -361,9 +362,9 @@ static irqreturn_t arc_emac_intr(int irq, void *dev_instance)
 	/* Reset all flags except "MDIO complete" */
 	arc_reg_set(priv, R_STATUS, status);
 
-	if (status & RXINT_MASK) {
+	if (status & (RXINT_MASK | TXINT_MASK)) {
 		if (likely(napi_schedule_prep(&priv->napi))) {
-			arc_reg_clr(priv, R_ENABLE, RXINT_MASK);
+			arc_reg_clr(priv, R_ENABLE, RXINT_MASK | TXINT_MASK);
 			__napi_schedule(&priv->napi);
 		}
 	}
@@ -480,7 +481,7 @@ static int arc_emac_open(struct net_device *ndev)
 	arc_reg_set(priv, R_TX_RING, (unsigned int)priv->txbd_dma);
 
 	/* Enable interrupts */
-	arc_reg_set(priv, R_ENABLE, RXINT_MASK | ERR_MASK);
+	arc_reg_set(priv, R_ENABLE, RXINT_MASK | TXINT_MASK | ERR_MASK);
 
 	/* Set CONTROL */
 	arc_reg_set(priv, R_CTRL,
@@ -618,7 +619,7 @@ static int arc_emac_stop(struct net_device *ndev)
 	phy_stop(ndev->phydev);
 
 	/* Disable interrupts */
-	arc_reg_clr(priv, R_ENABLE, RXINT_MASK | ERR_MASK);
+	arc_reg_clr(priv, R_ENABLE, RXINT_MASK | TXINT_MASK | ERR_MASK);
 
 	/* Disable EMAC */
 	arc_reg_clr(priv, R_CTRL, EN_MASK);
@@ -679,8 +680,6 @@ static netdev_tx_t arc_emac_tx(struct sk_buff *skb, struct net_device *ndev)
 	struct net_device_stats *stats = &ndev->stats;
 	__le32 *info = &priv->txbd[*txbd_curr].info;
 	dma_addr_t addr;
-
-	arc_emac_tx_clean(ndev);
 
 	if (skb_padto(skb, ETH_ZLEN))
 		return NETDEV_TX_OK;
@@ -774,7 +773,7 @@ static int arc_emac_set_address(struct net_device *ndev, void *p)
 	if (!is_valid_ether_addr(addr->sa_data))
 		return -EADDRNOTAVAIL;
 
-	memcpy(ndev->dev_addr, addr->sa_data, ndev->addr_len);
+	eth_hw_addr_set(ndev, addr->sa_data);
 
 	arc_emac_set_address_internal(ndev);
 
@@ -845,7 +844,7 @@ static const struct net_device_ops arc_emac_netdev_ops = {
 	.ndo_set_mac_address	= arc_emac_set_address,
 	.ndo_get_stats		= arc_emac_stats,
 	.ndo_set_rx_mode	= arc_emac_set_rx_mode,
-	.ndo_do_ioctl		= phy_do_ioctl_running,
+	.ndo_eth_ioctl		= phy_do_ioctl_running,
 #ifdef CONFIG_NET_POLL_CONTROLLER
 	.ndo_poll_controller	= arc_emac_poll_controller,
 #endif
@@ -858,7 +857,6 @@ int arc_emac_probe(struct net_device *ndev, int interface)
 	struct device_node *phy_node;
 	struct phy_device *phydev = NULL;
 	struct arc_emac_priv *priv;
-	const char *mac_addr;
 	unsigned int id, clock_frequency, irq;
 	int err;
 
@@ -943,11 +941,8 @@ int arc_emac_probe(struct net_device *ndev, int interface)
 	}
 
 	/* Get MAC address from device tree */
-	mac_addr = of_get_mac_address(dev->of_node);
-
-	if (!IS_ERR(mac_addr))
-		ether_addr_copy(ndev->dev_addr, mac_addr);
-	else
+	err = of_get_ethdev_address(dev->of_node, ndev);
+	if (err)
 		eth_hw_addr_random(ndev);
 
 	arc_emac_set_address_internal(ndev);
@@ -986,7 +981,8 @@ int arc_emac_probe(struct net_device *ndev, int interface)
 	dev_info(dev, "connected to %s phy with id 0x%x\n",
 		 phydev->drv->name, phydev->phy_id);
 
-	netif_napi_add(ndev, &priv->napi, arc_emac_poll, ARC_EMAC_NAPI_WEIGHT);
+	netif_napi_add_weight(ndev, &priv->napi, arc_emac_poll,
+			      ARC_EMAC_NAPI_WEIGHT);
 
 	err = register_netdev(ndev);
 	if (err) {

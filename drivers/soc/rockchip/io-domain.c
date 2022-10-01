@@ -57,20 +57,18 @@
 
 struct rockchip_iodomain;
 
-/**
- * @supplies: voltage settings matching the register bits.
- */
-struct rockchip_iodomain_soc_data {
-	int grf_offset;
-	const char *supply_names[MAX_SUPPLIES];
-	void (*init)(struct rockchip_iodomain *iod);
-};
-
 struct rockchip_iodomain_supply {
 	struct rockchip_iodomain *iod;
 	struct regulator *reg;
 	struct notifier_block nb;
 	int idx;
+};
+
+struct rockchip_iodomain_soc_data {
+	int grf_offset;
+	const char *supply_names[MAX_SUPPLIES];
+	void (*init)(struct rockchip_iodomain *iod);
+	int (*write)(struct rockchip_iodomain_supply *supply, int uV);
 };
 
 struct rockchip_iodomain {
@@ -81,8 +79,7 @@ struct rockchip_iodomain {
 	int (*write)(struct rockchip_iodomain_supply *supply, int uV);
 };
 
-static int rk3568_pmu_iodomain_write(struct rockchip_iodomain_supply *supply,
-				     int uV)
+static int rk3568_iodomain_write(struct rockchip_iodomain_supply *supply, int uV)
 {
 	struct rockchip_iodomain *iod = supply->iod;
 	u32 is_3v3 = uV > MAX_VOLTAGE_1_8;
@@ -118,7 +115,7 @@ static int rk3568_pmu_iodomain_write(struct rockchip_iodomain_supply *supply,
 		break;
 	default:
 		return -EINVAL;
-	};
+	}
 
 	return 0;
 }
@@ -461,6 +458,7 @@ static const struct rockchip_iodomain_soc_data soc_data_rk3568_pmu = {
 		"vccio6",
 		"vccio7",
 	},
+	.write = rk3568_iodomain_write,
 };
 
 static const struct rockchip_iodomain_soc_data soc_data_rv1108 = {
@@ -490,22 +488,6 @@ static const struct rockchip_iodomain_soc_data soc_data_rv1108_pmu = {
 	.grf_offset = 0x104,
 	.supply_names = {
 		"pmu",
-	},
-};
-
-static const struct rockchip_iodomain_soc_data soc_data_rv1126_pmu = {
-	.grf_offset = 0x140,
-	.supply_names = {
-		NULL,
-		"vccio1",
-		"vccio2",
-		"vccio3",
-		"vccio4",
-		"vccio5",
-		"vccio6",
-		"vccio7",
-		"pmuio0",
-		"pmuio1",
 	},
 };
 
@@ -562,10 +544,6 @@ static const struct of_device_id rockchip_iodomain_match[] = {
 		.compatible = "rockchip,rv1108-pmu-io-voltage-domain",
 		.data = &soc_data_rv1108_pmu
 	},
-	{
-		.compatible = "rockchip,rv1126-pmu-io-voltage-domain",
-		.data = &soc_data_rv1126_pmu
-	},
 	{ /* sentinel */ },
 };
 MODULE_DEVICE_TABLE(of, rockchip_iodomain_match);
@@ -591,8 +569,8 @@ static int rockchip_iodomain_probe(struct platform_device *pdev)
 	match = of_match_node(rockchip_iodomain_match, np);
 	iod->soc_data = match->data;
 
-	if (match->data == &soc_data_rk3568_pmu)
-		iod->write = rk3568_pmu_iodomain_write;
+	if (iod->soc_data->write)
+		iod->write = iod->soc_data->write;
 	else
 		iod->write = rockchip_iodomain_write;
 

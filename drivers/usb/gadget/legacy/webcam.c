@@ -90,7 +90,7 @@ static const struct UVC_HEADER_DESCRIPTOR(1) uvc_control_header = {
 	.bLength		= UVC_DT_HEADER_SIZE(1),
 	.bDescriptorType	= USB_DT_CS_INTERFACE,
 	.bDescriptorSubType	= UVC_VC_HEADER,
-	.bcdUVC			= cpu_to_le16(0x0100),
+	.bcdUVC			= cpu_to_le16(0x0110),
 	.wTotalLength		= 0, /* dynamic */
 	.dwClockFrequency	= cpu_to_le32(48000000),
 	.bInCollection		= 0, /* dynamic */
@@ -383,8 +383,6 @@ webcam_bind(struct usb_composite_dev *cdev)
 	uvc_opts->fs_streaming = uvc_fs_streaming_cls;
 	uvc_opts->hs_streaming = uvc_hs_streaming_cls;
 	uvc_opts->ss_streaming = uvc_ss_streaming_cls;
-	uvc_opts->uvc_num_request = UVC_NUM_REQUESTS;
-	uvc_opts->pm_qos_latency = 0;
 
 	/* Allocate string descriptor numbers ... note that string contents
 	 * can be overridden by the composite_dev glue.

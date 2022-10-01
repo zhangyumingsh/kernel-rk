@@ -19,15 +19,16 @@
 #include <linux/mfd/syscon.h>
 #include <linux/pinctrl/consumer.h>
 #include <linux/nvmem-consumer.h>
+#include <linux/panic_notifier.h>
 
 /*
  * If the temperature over a period of time High,
- * the resulting TSHUT gave CRU module,let it reset the entire chip,
+ * the resulting TSHUT gave CRU module, let it reset the entire chip,
  * or via GPIO give PMIC.
  */
 enum tshut_mode {
 	TSHUT_MODE_CRU = 0,
-	TSHUT_MODE_OTP,
+	TSHUT_MODE_GPIO,
 };
 
 /*
@@ -62,7 +63,7 @@ enum adc_sort_mode {
 #include "thermal_hwmon.h"
 
 /**
- * The max sensors is seven in rockchip SoCs.
+ * Rockchip SoCs have a maximum of 7 thermal sensors.
  */
 #define SOC_MAX_SENSORS	7
 
@@ -222,8 +223,6 @@ struct rockchip_thermal_data {
 #define TSADCV2_AUTO_PERIOD_HT			0x6c
 #define TSADCV3_AUTO_PERIOD			0x154
 #define TSADCV3_AUTO_PERIOD_HT			0x158
-#define TSADCV9_Q_MAX				0x210
-#define TSADCV9_FLOW_CON			0x218
 
 #define TSADCV2_AUTO_EN				BIT(0)
 #define TSADCV2_AUTO_EN_MASK			BIT(16)
@@ -262,10 +261,6 @@ struct rockchip_thermal_data {
 #define TSADCV2_USER_INTER_PD_SOC		0x340 /* 13 clocks */
 #define TSADCV5_USER_INTER_PD_SOC		0xfc0 /* 97us, at least 90us */
 
-#define TSADCV9_AUTO_SRC			(0x10001 << 0)
-#define TSADCV9_PD_MODE				(0x10001 << 4)
-#define TSADCV9_Q_MAX_VAL			(0xffff0400 << 0)
-
 #define GRF_SARADC_TESTBIT			0x0e644
 #define GRF_TSADC_TESTBIT_L			0x0e648
 #define GRF_TSADC_TESTBIT_H			0x0e64c
@@ -279,10 +274,6 @@ struct rockchip_thermal_data {
 #define RK3568_GRF_TSADC_ANA_REG1		(0x10001 << 1)
 #define RK3568_GRF_TSADC_ANA_REG2		(0x10001 << 2)
 #define RK3568_GRF_TSADC_TSEN			(0x10001 << 8)
-
-#define RV1106_VOGRF_TSADC_CON			0x6000C
-#define RV1106_VOGRF_TSADC_TSEN			(0x10001 << 8)
-#define RV1106_VOGRF_TSADC_ANA			(0xff0007 << 0)
 
 #define RV1126_GRF0_TSADC_CON			0x0100
 
@@ -318,14 +309,6 @@ struct tsadc_table {
 	int temp;
 };
 
-static const struct tsadc_table rv1106_code_table[] = {
-	{0, -40000},
-	{396, -40000},
-	{504, 25000},
-	{605, 85000},
-	{673, 125000},
-	{TSADCV2_DATA_MASK, 125000},
-};
 
 static const struct tsadc_table rv1108_table[] = {
 	{0, -40000},
@@ -363,45 +346,6 @@ static const struct tsadc_table rv1108_table[] = {
 	{618, 115000},
 	{626, 120000},
 	{634, 125000},
-	{TSADCV2_DATA_MASK, 125000},
-};
-
-static const struct tsadc_table rk1808_code_table[] = {
-	{0, -40000},
-	{3455, -40000},
-	{3463, -35000},
-	{3471, -30000},
-	{3479, -25000},
-	{3487, -20000},
-	{3495, -15000},
-	{3503, -10000},
-	{3511, -5000},
-	{3519, 0},
-	{3527, 5000},
-	{3535, 10000},
-	{3543, 15000},
-	{3551, 20000},
-	{3559, 25000},
-	{3567, 30000},
-	{3576, 35000},
-	{3584, 40000},
-	{3592, 45000},
-	{3600, 50000},
-	{3609, 55000},
-	{3617, 60000},
-	{3625, 65000},
-	{3633, 70000},
-	{3642, 75000},
-	{3650, 80000},
-	{3659, 85000},
-	{3667, 90000},
-	{3675, 95000},
-	{3684, 100000},
-	{3692, 105000},
-	{3701, 110000},
-	{3709, 115000},
-	{3718, 120000},
-	{3726, 125000},
 	{TSADCV2_DATA_MASK, 125000},
 };
 
@@ -884,41 +828,6 @@ static void rk_tsadcv4_initialize(struct regmap *grf, void __iomem *regs,
 	regmap_write(grf, PX30_GRF_SOC_CON2, GRF_CON_TSADC_CH_INV);
 }
 
-static void rk_tsadcv5_initialize(struct regmap *grf, void __iomem *regs,
-				  enum tshut_polarity tshut_polarity)
-{
-	if (tshut_polarity == TSHUT_HIGH_ACTIVE)
-		writel_relaxed(0U | TSADCV2_AUTO_TSHUT_POLARITY_HIGH,
-			       regs + TSADCV2_AUTO_CON);
-	else
-		writel_relaxed(0U & ~TSADCV2_AUTO_TSHUT_POLARITY_HIGH,
-			       regs + TSADCV2_AUTO_CON);
-
-	writel_relaxed(TSADCV5_USER_INTER_PD_SOC, regs + TSADCV2_USER_CON);
-
-	writel_relaxed(TSADCV5_AUTO_PERIOD_TIME, regs + TSADCV2_AUTO_PERIOD);
-	writel_relaxed(TSADCV2_HIGHT_INT_DEBOUNCE_COUNT,
-		       regs + TSADCV2_HIGHT_INT_DEBOUNCE);
-	writel_relaxed(TSADCV5_AUTO_PERIOD_HT_TIME,
-		       regs + TSADCV2_AUTO_PERIOD_HT);
-	writel_relaxed(TSADCV2_HIGHT_TSHUT_DEBOUNCE_COUNT,
-		       regs + TSADCV2_HIGHT_TSHUT_DEBOUNCE);
-
-	if (!IS_ERR(grf))
-		regmap_write(grf, RK1808_BUS_GRF_SOC_CON0,
-			     GRF_TSADC_BANDGAP_CHOPPER_EN);
-}
-
-static void rk_tsadcv6_initialize(struct regmap *grf, void __iomem *regs,
-				  enum tshut_polarity tshut_polarity)
-{
-	rk_tsadcv2_initialize(grf, regs, tshut_polarity);
-
-	if (!IS_ERR(grf))
-		regmap_write(grf, RV1126_GRF0_TSADC_CON,
-			     RV1126_GRF0_TSADC_TRM);
-}
-
 static void rk_tsadcv7_initialize(struct regmap *grf, void __iomem *regs,
 				  enum tshut_polarity tshut_polarity)
 {
@@ -938,12 +847,25 @@ static void rk_tsadcv7_initialize(struct regmap *grf, void __iomem *regs,
 		writel_relaxed(0U & ~TSADCV2_AUTO_TSHUT_POLARITY_HIGH,
 			       regs + TSADCV2_AUTO_CON);
 
+	/*
+	 * The general register file is optional and might not be available.
+	 */
 	if (!IS_ERR(grf)) {
 		regmap_write(grf, RK3568_GRF_TSADC_CON, RK3568_GRF_TSADC_TSEN);
+		/*
+		 * RK3568 TRM, section 18.5. requires a delay no less
+		 * than 10us between the rising edge of tsadc_tsen_en
+		 * and the rising edge of tsadc_ana_reg_0/1/2.
+		 */
 		udelay(15);
 		regmap_write(grf, RK3568_GRF_TSADC_CON, RK3568_GRF_TSADC_ANA_REG0);
 		regmap_write(grf, RK3568_GRF_TSADC_CON, RK3568_GRF_TSADC_ANA_REG1);
 		regmap_write(grf, RK3568_GRF_TSADC_CON, RK3568_GRF_TSADC_ANA_REG2);
+
+		/*
+		 * RK3568 TRM, section 18.5. requires a delay no less
+		 * than 90us after the rising edge of tsadc_ana_reg_0/1/2.
+		 */
 		usleep_range(100, 200);
 	}
 }
@@ -965,35 +887,6 @@ static void rk_tsadcv8_initialize(struct regmap *grf, void __iomem *regs,
 	else
 		writel_relaxed(TSADCV2_AUTO_TSHUT_POLARITY_MASK,
 			       regs + TSADCV2_AUTO_CON);
-}
-
-static void rk_tsadcv9_initialize(struct regmap *grf, void __iomem *regs,
-				  enum tshut_polarity tshut_polarity)
-{
-	regmap_write(grf, RV1106_VOGRF_TSADC_CON, RV1106_VOGRF_TSADC_TSEN);
-	udelay(10);
-	regmap_write(grf, RV1106_VOGRF_TSADC_CON, RV1106_VOGRF_TSADC_ANA);
-	udelay(100);
-
-	writel_relaxed(TSADCV2_AUTO_PERIOD_TIME, regs + TSADCV3_AUTO_PERIOD);
-	writel_relaxed(TSADCV2_AUTO_PERIOD_TIME,
-		       regs + TSADCV3_AUTO_PERIOD_HT);
-	writel_relaxed(TSADCV2_HIGHT_INT_DEBOUNCE_COUNT,
-		       regs + TSADCV3_HIGHT_INT_DEBOUNCE);
-	writel_relaxed(TSADCV2_HIGHT_TSHUT_DEBOUNCE_COUNT,
-		       regs + TSADCV3_HIGHT_TSHUT_DEBOUNCE);
-	writel_relaxed(TSADCV9_AUTO_SRC, regs + TSADCV2_INT_PD);
-	writel_relaxed(TSADCV9_PD_MODE, regs + TSADCV9_FLOW_CON);
-	writel_relaxed(TSADCV9_Q_MAX_VAL, regs + TSADCV9_Q_MAX);
-	if (tshut_polarity == TSHUT_HIGH_ACTIVE)
-		writel_relaxed(TSADCV2_AUTO_TSHUT_POLARITY_HIGH |
-			       TSADCV2_AUTO_TSHUT_POLARITY_MASK,
-			       regs + TSADCV2_AUTO_CON);
-	else
-		writel_relaxed(TSADCV2_AUTO_TSHUT_POLARITY_MASK,
-			       regs + TSADCV2_AUTO_CON);
-	writel_relaxed(TSADCV3_AUTO_Q_SEL_EN | (TSADCV3_AUTO_Q_SEL_EN << 16),
-		       regs + TSADCV2_AUTO_CON);
 }
 
 static void rk_tsadcv2_irq_ack(void __iomem *regs)
@@ -1190,54 +1083,28 @@ static int rk_tsadcv3_tshut_temp(const struct chip_tsadc_table *table,
 }
 
 static void rk_tsadcv2_tshut_mode(struct regmap *grf, int chn,
-				  void __iomem *regs,
-				  enum tshut_mode mode)
+				  void __iomem *regs, enum tshut_mode mode)
 {
 	u32 val;
 
 	val = readl_relaxed(regs + TSADCV2_INT_EN);
-	if (mode == TSHUT_MODE_OTP) {
+	if (mode == TSHUT_MODE_GPIO) {
 		val &= ~TSADCV2_SHUT_2CRU_SRC_EN(chn);
 		val |= TSADCV2_SHUT_2GPIO_SRC_EN(chn);
 	} else {
 		val &= ~TSADCV2_SHUT_2GPIO_SRC_EN(chn);
 		val |= TSADCV2_SHUT_2CRU_SRC_EN(chn);
-	}
-
-	writel_relaxed(val, regs + TSADCV2_INT_EN);
-}
-
-static void rk_tsadcv3_tshut_mode(struct regmap *grf, int chn,
-				  void __iomem *regs,
-				  enum tshut_mode mode)
-{
-	u32 val;
-
-	val = readl_relaxed(regs + TSADCV2_INT_EN);
-	if (mode == TSHUT_MODE_OTP) {
-		val &= ~TSADCV2_SHUT_2CRU_SRC_EN(chn);
-		val |= TSADCV2_SHUT_2GPIO_SRC_EN(chn);
-		if (!IS_ERR(grf))
-			regmap_write(grf, RV1126_GRF0_TSADC_CON,
-				     RV1126_GRF0_TSADC_SHUT_2GPIO);
-	} else {
-		val &= ~TSADCV2_SHUT_2GPIO_SRC_EN(chn);
-		val |= TSADCV2_SHUT_2CRU_SRC_EN(chn);
-		if (!IS_ERR(grf))
-			regmap_write(grf, RV1126_GRF0_TSADC_CON,
-				     RV1126_GRF0_TSADC_SHUT_2CRU);
 	}
 
 	writel_relaxed(val, regs + TSADCV2_INT_EN);
 }
 
 static void rk_tsadcv4_tshut_mode(struct regmap *grf, int chn,
-				  void __iomem *regs,
-				  enum tshut_mode mode)
+				  void __iomem *regs, enum tshut_mode mode)
 {
 	u32 val_gpio, val_cru;
 
-	if (mode == TSHUT_MODE_OTP) {
+	if (mode == TSHUT_MODE_GPIO) {
 		val_gpio = TSADCV2_INT_SRC_EN(chn) | TSADCV2_INT_SRC_EN_MASK(chn);
 		val_cru = TSADCV2_INT_SRC_EN_MASK(chn);
 	} else {
@@ -1246,27 +1113,6 @@ static void rk_tsadcv4_tshut_mode(struct regmap *grf, int chn,
 	}
 	writel_relaxed(val_gpio, regs + TSADCV3_HSHUT_GPIO_INT_EN);
 	writel_relaxed(val_cru, regs + TSADCV3_HSHUT_CRU_INT_EN);
-}
-
-static int rk_tsadcv1_get_trim_code(struct platform_device *pdev,
-				    int code, int trim_base)
-{
-	struct rockchip_thermal_data *thermal = platform_get_drvdata(pdev);
-	const struct chip_tsadc_table *table = &thermal->chip->table;
-	u32 base_code;
-	int trim_code;
-
-	base_code = trim_base * table->kNum / 1000 + table->bNum;
-	trim_code = code - base_code - 10;
-
-	return trim_code;
-}
-
-static int rk_tsadcv1_trim_temp(struct platform_device *pdev)
-{
-	struct rockchip_thermal_data *thermal = platform_get_drvdata(pdev);
-
-	return thermal->trim * 500;
 }
 
 static const struct rockchip_tsadc_chip px30_tsadc_data = {
@@ -1293,33 +1139,11 @@ static const struct rockchip_tsadc_chip px30_tsadc_data = {
 	},
 };
 
-static const struct rockchip_tsadc_chip rv1106_tsadc_data = {
-	/* top, big_core0, big_core1, little_core, center, gpu, npu */
-	.chn_id[SENSOR_CPU] = 0, /* cpu sensor is channel 0 */
-	.chn_num = 1, /* seven channels for tsadc */
-	.tshut_mode = TSHUT_MODE_CRU, /* default TSHUT via CRU */
-	.tshut_polarity = TSHUT_LOW_ACTIVE, /* default TSHUT LOW ACTIVE */
-	.tshut_temp = 95000,
-	.initialize = rk_tsadcv9_initialize,
-	.irq_ack = rk_tsadcv4_irq_ack,
-	.control = rk_tsadcv4_control,
-	.get_temp = rk_tsadcv4_get_temp,
-	.set_alarm_temp = rk_tsadcv3_alarm_temp,
-	.set_tshut_temp = rk_tsadcv3_tshut_temp,
-	.set_tshut_mode = rk_tsadcv4_tshut_mode,
-	.table = {
-		.id = rv1106_code_table,
-		.length = ARRAY_SIZE(rv1106_code_table),
-		.data_mask = TSADCV2_DATA_MASK,
-		.mode = ADC_INCREMENT,
-	},
-};
-
 static const struct rockchip_tsadc_chip rv1108_tsadc_data = {
 	.chn_id[SENSOR_CPU] = 0, /* cpu sensor is channel 0 */
 	.chn_num = 1, /* one channel for tsadc */
 
-	.tshut_mode = TSHUT_MODE_OTP, /* default TSHUT via GPIO give PMIC */
+	.tshut_mode = TSHUT_MODE_GPIO, /* default TSHUT via GPIO give PMIC */
 	.tshut_polarity = TSHUT_LOW_ACTIVE, /* default TSHUT LOW ACTIVE */
 	.tshut_temp = 95000,
 
@@ -1339,61 +1163,11 @@ static const struct rockchip_tsadc_chip rv1108_tsadc_data = {
 	},
 };
 
-static const struct rockchip_tsadc_chip rv1126_tsadc_data = {
-	.chn_id[SENSOR_CPU] = 0, /* cpu sensor is channel 0 */
-	.chn_num = 1, /* one channel for tsadc */
-
-	.tshut_mode = TSHUT_MODE_CRU, /* default TSHUT via CRU */
-	.tshut_polarity = TSHUT_LOW_ACTIVE, /* default TSHUT LOW ACTIVE */
-	.tshut_temp = 95000,
-
-	.initialize = rk_tsadcv6_initialize,
-	.irq_ack = rk_tsadcv3_irq_ack,
-	.control = rk_tsadcv2_control,
-	.get_temp = rk_tsadcv2_get_temp,
-	.set_alarm_temp = rk_tsadcv2_alarm_temp,
-	.set_tshut_temp = rk_tsadcv2_tshut_temp,
-	.set_tshut_mode = rk_tsadcv3_tshut_mode,
-	.get_trim_code = rk_tsadcv1_get_trim_code,
-	.trim_temp = rk_tsadcv1_trim_temp,
-
-	.table = {
-		.kNum = 2263,
-		.bNum = 2704,
-		.data_mask = TSADCV2_DATA_MASK,
-		.mode = ADC_INCREMENT,
-	},
-};
-
-static const struct rockchip_tsadc_chip rk1808_tsadc_data = {
-	.chn_id[SENSOR_CPU] = 0, /* cpu sensor is channel 0 */
-	.chn_num = 1, /* one channel for tsadc */
-
-	.tshut_mode = TSHUT_MODE_OTP, /* default TSHUT via GPIO give PMIC */
-	.tshut_polarity = TSHUT_LOW_ACTIVE, /* default TSHUT LOW ACTIVE */
-	.tshut_temp = 95000,
-
-	.initialize = rk_tsadcv5_initialize,
-	.irq_ack = rk_tsadcv3_irq_ack,
-	.control = rk_tsadcv3_control,
-	.get_temp = rk_tsadcv2_get_temp,
-	.set_alarm_temp = rk_tsadcv2_alarm_temp,
-	.set_tshut_temp = rk_tsadcv2_tshut_temp,
-	.set_tshut_mode = rk_tsadcv2_tshut_mode,
-
-	.table = {
-		.id = rk1808_code_table,
-		.length = ARRAY_SIZE(rk1808_code_table),
-		.data_mask = TSADCV2_DATA_MASK,
-		.mode = ADC_INCREMENT,
-	},
-};
-
 static const struct rockchip_tsadc_chip rk3228_tsadc_data = {
 	.chn_id[SENSOR_CPU] = 0, /* cpu sensor is channel 0 */
 	.chn_num = 1, /* one channel for tsadc */
 
-	.tshut_mode = TSHUT_MODE_OTP, /* default TSHUT via GPIO give PMIC */
+	.tshut_mode = TSHUT_MODE_GPIO, /* default TSHUT via GPIO give PMIC */
 	.tshut_polarity = TSHUT_LOW_ACTIVE, /* default TSHUT LOW ACTIVE */
 	.tshut_temp = 95000,
 
@@ -1418,7 +1192,7 @@ static const struct rockchip_tsadc_chip rk3288_tsadc_data = {
 	.chn_id[SENSOR_GPU] = 2, /* gpu sensor is channel 2 */
 	.chn_num = 2, /* two channels for tsadc */
 
-	.tshut_mode = TSHUT_MODE_OTP, /* default TSHUT via GPIO give PMIC */
+	.tshut_mode = TSHUT_MODE_GPIO, /* default TSHUT via GPIO give PMIC */
 	.tshut_polarity = TSHUT_LOW_ACTIVE, /* default TSHUT LOW ACTIVE */
 	.tshut_temp = 95000,
 
@@ -1466,7 +1240,7 @@ static const struct rockchip_tsadc_chip rk3366_tsadc_data = {
 	.chn_id[SENSOR_GPU] = 1, /* gpu sensor is channel 1 */
 	.chn_num = 2, /* two channels for tsadc */
 
-	.tshut_mode = TSHUT_MODE_OTP, /* default TSHUT via GPIO give PMIC */
+	.tshut_mode = TSHUT_MODE_GPIO, /* default TSHUT via GPIO give PMIC */
 	.tshut_polarity = TSHUT_LOW_ACTIVE, /* default TSHUT LOW ACTIVE */
 	.tshut_temp = 95000,
 
@@ -1491,7 +1265,7 @@ static const struct rockchip_tsadc_chip rk3368_tsadc_data = {
 	.chn_id[SENSOR_GPU] = 1, /* gpu sensor is channel 1 */
 	.chn_num = 2, /* two channels for tsadc */
 
-	.tshut_mode = TSHUT_MODE_OTP, /* default TSHUT via GPIO give PMIC */
+	.tshut_mode = TSHUT_MODE_GPIO, /* default TSHUT via GPIO give PMIC */
 	.tshut_polarity = TSHUT_LOW_ACTIVE, /* default TSHUT LOW ACTIVE */
 	.tshut_temp = 95000,
 
@@ -1516,7 +1290,7 @@ static const struct rockchip_tsadc_chip rk3399_tsadc_data = {
 	.chn_id[SENSOR_GPU] = 1, /* gpu sensor is channel 1 */
 	.chn_num = 2, /* two channels for tsadc */
 
-	.tshut_mode = TSHUT_MODE_OTP, /* default TSHUT via GPIO give PMIC */
+	.tshut_mode = TSHUT_MODE_GPIO, /* default TSHUT via GPIO give PMIC */
 	.tshut_polarity = TSHUT_LOW_ACTIVE, /* default TSHUT LOW ACTIVE */
 	.tshut_temp = 95000,
 
@@ -1541,7 +1315,7 @@ static const struct rockchip_tsadc_chip rk3568_tsadc_data = {
 	.chn_id[SENSOR_GPU] = 1, /* gpu sensor is channel 1 */
 	.chn_num = 2, /* two channels for tsadc */
 
-	.tshut_mode = TSHUT_MODE_OTP, /* default TSHUT via GPIO give PMIC */
+	.tshut_mode = TSHUT_MODE_GPIO, /* default TSHUT via GPIO give PMIC */
 	.tshut_polarity = TSHUT_LOW_ACTIVE, /* default TSHUT LOW ACTIVE */
 	.tshut_temp = 95000,
 
@@ -1565,7 +1339,7 @@ static const struct rockchip_tsadc_chip rk3588_tsadc_data = {
 	/* top, big_core0, big_core1, little_core, center, gpu, npu */
 	.chn_id = {0, 1, 2, 3, 4, 5, 6},
 	.chn_num = 7, /* seven channels for tsadc */
-	.tshut_mode = TSHUT_MODE_OTP, /* default TSHUT via GPIO give PMIC */
+	.tshut_mode = TSHUT_MODE_GPIO, /* default TSHUT via GPIO give PMIC */
 	.tshut_polarity = TSHUT_LOW_ACTIVE, /* default TSHUT LOW ACTIVE */
 	.tshut_temp = 95000,
 	.initialize = rk_tsadcv8_initialize,
@@ -1584,83 +1358,45 @@ static const struct rockchip_tsadc_chip rk3588_tsadc_data = {
 };
 
 static const struct of_device_id of_rockchip_thermal_match[] = {
-#ifdef CONFIG_CPU_PX30
 	{	.compatible = "rockchip,px30-tsadc",
 		.data = (void *)&px30_tsadc_data,
 	},
-#endif
-#ifdef CONFIG_CPU_RV1106
-	{
-		.compatible = "rockchip,rv1106-tsadc",
-		.data = (void *)&rv1106_tsadc_data,
-	},
-#endif
-#ifdef CONFIG_CPU_RV1108
 	{
 		.compatible = "rockchip,rv1108-tsadc",
 		.data = (void *)&rv1108_tsadc_data,
 	},
-#endif
-#ifdef CONFIG_CPU_RV1126
-	{
-		.compatible = "rockchip,rv1126-tsadc",
-		.data = (void *)&rv1126_tsadc_data,
-	},
-#endif
-#ifdef CONFIG_CPU_RK1808
-	{
-		.compatible = "rockchip,rk1808-tsadc",
-		.data = (void *)&rk1808_tsadc_data,
-	},
-#endif
-#ifdef CONFIG_CPU_RK322X
 	{
 		.compatible = "rockchip,rk3228-tsadc",
 		.data = (void *)&rk3228_tsadc_data,
 	},
-#endif
-#ifdef CONFIG_CPU_RK3288
 	{
 		.compatible = "rockchip,rk3288-tsadc",
 		.data = (void *)&rk3288_tsadc_data,
 	},
-#endif
-#ifdef CONFIG_CPU_RK3328
 	{
 		.compatible = "rockchip,rk3328-tsadc",
 		.data = (void *)&rk3328_tsadc_data,
 	},
-#endif
-#ifdef CONFIG_CPU_RK3366
 	{
 		.compatible = "rockchip,rk3366-tsadc",
 		.data = (void *)&rk3366_tsadc_data,
 	},
-#endif
-#ifdef CONFIG_CPU_RK3368
 	{
 		.compatible = "rockchip,rk3368-tsadc",
 		.data = (void *)&rk3368_tsadc_data,
 	},
-#endif
-#ifdef CONFIG_CPU_RK3399
 	{
 		.compatible = "rockchip,rk3399-tsadc",
 		.data = (void *)&rk3399_tsadc_data,
 	},
-#endif
-#ifdef CONFIG_CPU_RK3568
 	{
 		.compatible = "rockchip,rk3568-tsadc",
 		.data = (void *)&rk3568_tsadc_data,
 	},
-#endif
-#ifdef CONFIG_CPU_RK3588
 	{
 		.compatible = "rockchip,rk3588-tsadc",
 		.data = (void *)&rk3588_tsadc_data,
 	},
-#endif
 	{ /* end */ },
 };
 MODULE_DEVICE_TABLE(of, of_rockchip_thermal_match);
@@ -1794,7 +1530,7 @@ static int rockchip_configure_from_dt(struct device *dev,
 	if (of_property_read_u32(np, "rockchip,hw-tshut-mode", &tshut_mode)) {
 		dev_warn(dev,
 			 "Missing tshut mode property, using default (%s)\n",
-			 thermal->chip->tshut_mode == TSHUT_MODE_OTP ?
+			 thermal->chip->tshut_mode == TSHUT_MODE_GPIO ?
 				"gpio" : "cru");
 		thermal->tshut_mode = thermal->chip->tshut_mode;
 	} else {
@@ -1973,9 +1709,10 @@ static int rockchip_thermal_probe(struct platform_device *pdev)
 
 	thermal->reset = devm_reset_control_array_get(&pdev->dev, false, false);
 	if (IS_ERR(thermal->reset)) {
-		if (PTR_ERR(thermal->reset) != -EPROBE_DEFER)
-			dev_err(&pdev->dev, "failed to get tsadc reset lines\n");
-		return PTR_ERR(thermal->reset);
+		error = PTR_ERR(thermal->reset);
+		if (error != -EPROBE_DEFER)
+			dev_err(&pdev->dev, "failed to get tsadc reset: %d\n", error);
+		return error;
 	}
 
 	thermal->num_clks = devm_clk_bulk_get_all(&pdev->dev, &thermal->clks);
@@ -1984,7 +1721,7 @@ static int rockchip_thermal_probe(struct platform_device *pdev)
 
 	error = clk_bulk_prepare_enable(thermal->num_clks, thermal->clks);
 	if (error) {
-		dev_err(&pdev->dev, "failed to prepare enable tsadc bulk clks: %d\n",
+		dev_err(&pdev->dev, "failed to bulk prepare tsadc clocks: %d\n",
 			error);
 		return error;
 	}
@@ -2004,7 +1741,7 @@ static int rockchip_thermal_probe(struct platform_device *pdev)
 	thermal->chip->initialize(thermal->grf, thermal->regs,
 				  thermal->tshut_polarity);
 
-	if (thermal->tshut_mode == TSHUT_MODE_OTP) {
+	if (thermal->tshut_mode == TSHUT_MODE_GPIO) {
 		thermal->pinctrl = devm_pinctrl_get(&pdev->dev);
 		if (IS_ERR(thermal->pinctrl))
 			dev_err(&pdev->dev, "failed to find thermal pinctrl\n");
@@ -2102,7 +1839,7 @@ static void rockchip_thermal_shutdown(struct platform_device *pdev)
 						      thermal->regs,
 						      TSHUT_MODE_CRU);
 	}
-	if (thermal->tshut_mode == TSHUT_MODE_OTP)
+	if (thermal->tshut_mode == TSHUT_MODE_GPIO)
 		thermal_pinctrl_select_gpio(thermal);
 }
 
@@ -2118,7 +1855,7 @@ static int __maybe_unused rockchip_thermal_suspend(struct device *dev)
 
 	clk_bulk_disable(thermal->num_clks, thermal->clks);
 
-	if (thermal->tshut_mode == TSHUT_MODE_OTP)
+	if (thermal->tshut_mode == TSHUT_MODE_GPIO)
 		thermal_pinctrl_select_gpio(thermal);
 
 	return 0;
@@ -2132,8 +1869,7 @@ static int __maybe_unused rockchip_thermal_resume(struct device *dev)
 
 	error = clk_bulk_enable(thermal->num_clks, thermal->clks);
 	if (error) {
-		dev_err(dev, "failed to enable tsadc bulk clks: %d\n",
-			error);
+		dev_err(dev, "failed to enable tsadc bulk clks: %d\n", error);
 		return error;
 	}
 
@@ -2161,7 +1897,7 @@ static int __maybe_unused rockchip_thermal_resume(struct device *dev)
 	for (i = 0; i < thermal->chip->chn_num; i++)
 		rockchip_thermal_toggle_sensor(&thermal->sensors[i], true);
 
-	if (thermal->tshut_mode == TSHUT_MODE_OTP)
+	if (thermal->tshut_mode == TSHUT_MODE_GPIO)
 		thermal_pinctrl_select_otp(thermal);
 
 	return 0;

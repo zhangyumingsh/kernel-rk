@@ -16,7 +16,6 @@
 #include <linux/io.h>
 #include <linux/leds.h>
 #include <linux/interrupt.h>
-#include <linux/android_kabi.h>
 
 #include <linux/mmc/host.h>
 
@@ -202,8 +201,10 @@
 
 #define SDHCI_CAPABILITIES	0x40
 #define  SDHCI_TIMEOUT_CLK_MASK		GENMASK(5, 0)
+#define  SDHCI_TIMEOUT_CLK_SHIFT 0
 #define  SDHCI_TIMEOUT_CLK_UNIT	0x00000080
 #define  SDHCI_CLOCK_BASE_MASK		GENMASK(13, 8)
+#define  SDHCI_CLOCK_BASE_SHIFT	8
 #define  SDHCI_CLOCK_V3_BASE_MASK	GENMASK(15, 8)
 #define  SDHCI_MAX_BLOCK_MASK	0x00030000
 #define  SDHCI_MAX_BLOCK_SHIFT  16
@@ -339,7 +340,8 @@ struct sdhci_adma2_64_desc {
 
 /*
  * Maximum segments assuming a 512KiB maximum requisition size and a minimum
- * 4KiB page size.
+ * 4KiB page size. Note this also allows enough for multiple descriptors in
+ * case of PAGE_SIZE >= 64KiB.
  */
 #define SDHCI_MAX_SEGS		128
 
@@ -353,6 +355,9 @@ struct sdhci_adma2_64_desc {
  * not known, set the command transfer time to 10ms.
  */
 #define MMC_CMD_TRANSFER_TIME	(10 * NSEC_PER_MSEC) /* max 10 ms */
+
+#define sdhci_err_stats_inc(host, err_name) \
+	mmc_debugfs_err_stats_inc((host)->mmc, MMC_ERR_##err_name)
 
 enum sdhci_cookie {
 	COOKIE_UNMAPPED,
@@ -516,6 +521,7 @@ struct sdhci_host {
 
 	unsigned int max_clk;	/* Max possible freq (MHz) */
 	unsigned int timeout_clk;	/* Timeout freq (KHz) */
+	u8 max_timeout_count;	/* Vendor specific max timeout count */
 	unsigned int clk_mul;	/* Clock Muliplier value */
 
 	unsigned int clock;	/* Current clock (MHz) */
@@ -541,6 +547,7 @@ struct sdhci_host {
 	unsigned int blocks;	/* remaining PIO blocks */
 
 	int sg_count;		/* Mapped sg entries */
+	int max_adma;		/* Max. length in ADMA descriptor */
 
 	void *adma_table;	/* ADMA descriptor table */
 	void *align_buffer;	/* Bounce buffer */
@@ -607,8 +614,6 @@ struct sdhci_host {
 
 	u64			data_timeout;
 
-	ANDROID_KABI_RESERVE(1);
-
 	unsigned long private[] ____cacheline_aligned;
 };
 
@@ -656,8 +661,6 @@ struct sdhci_ops {
 	void	(*request_done)(struct sdhci_host *host,
 				struct mmc_request *mrq);
 	void    (*dump_vendor_regs)(struct sdhci_host *host);
-
-	ANDROID_KABI_RESERVE(1);
 };
 
 #ifdef CONFIG_MMC_SDHCI_IO_ACCESSORS
@@ -752,7 +755,6 @@ static inline void *sdhci_priv(struct sdhci_host *host)
 	return host->private;
 }
 
-void sdhci_card_detect(struct sdhci_host *host);
 void __sdhci_read_caps(struct sdhci_host *host, const u16 *ver,
 		       const u32 *caps, const u32 *caps1);
 int sdhci_setup_host(struct sdhci_host *host);
@@ -777,6 +779,7 @@ void sdhci_set_power_and_bus_voltage(struct sdhci_host *host,
 				     unsigned short vdd);
 void sdhci_set_power_noreg(struct sdhci_host *host, unsigned char mode,
 			   unsigned short vdd);
+int sdhci_get_cd_nogpio(struct mmc_host *mmc);
 void sdhci_request(struct mmc_host *mmc, struct mmc_request *mrq);
 int sdhci_request_atomic(struct mmc_host *mmc, struct mmc_request *mrq);
 void sdhci_set_bus_width(struct sdhci_host *host, int width);

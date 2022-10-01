@@ -116,10 +116,7 @@ int nanddev_bbt_set_block_status(struct nand_device *nand, unsigned int entry,
 	if (entry >= nanddev_neraseblocks(nand))
 		return -ERANGE;
 
-	if (bits_per_block + offs > BITS_PER_LONG)
-		pos[0] &= ~GENMASK(BITS_PER_LONG - 1, offs);
-	else
-		pos[0] &= ~GENMASK(offs + bits_per_block - 1, offs);
+	pos[0] &= ~GENMASK(offs + bits_per_block - 1, offs);
 	pos[0] |= val << offs;
 
 	if (bits_per_block + offs > BITS_PER_LONG) {

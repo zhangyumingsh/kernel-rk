@@ -555,7 +555,7 @@ tgafb_setcolreg(unsigned regno, unsigned red, unsigned green, unsigned blue,
 
 /**
  *      tgafb_blank - Optional function.  Blanks the display.
- *      @blank_mode: the blank mode we want.
+ *      @blank: the blank mode we want.
  *      @info: frame buffer structure that represents a single frame buffer
  */
 static int
@@ -837,7 +837,7 @@ tgafb_clut_imageblit(struct fb_info *info, const struct fb_image *image)
 	u32 *palette = ((u32 *)info->pseudo_palette);
 	unsigned long pos, line_length, i, j;
 	const unsigned char *data;
-	void __iomem *regs_base, *fb_base;
+	void __iomem *fb_base;
 
 	dx = image->dx;
 	dy = image->dy;
@@ -855,7 +855,6 @@ tgafb_clut_imageblit(struct fb_info *info, const struct fb_image *image)
 	if (dy + height > vyres)
 		height = vyres - dy;
 
-	regs_base = par->tga_regs_base;
 	fb_base = par->tga_fb_base;
 
 	pos = dy * line_length + (dx * 4);
@@ -1034,7 +1033,7 @@ tgafb_fillrect(struct fb_info *info, const struct fb_fillrect *rect)
 		     regs_base + TGA_MODE_REG);
 }
 
-/**
+/*
  *      tgafb_copyarea - REQUIRED function. Can use generic routines if
  *                       non acclerated hardware and packed pixel based.
  *                       Copies on area of the screen to another area.
@@ -1345,7 +1344,7 @@ tgafb_init_fix(struct fb_info *info)
 		memory_size = 16777216;
 	}
 
-	strlcpy(info->fix.id, tga_type_name, sizeof(info->fix.id));
+	strscpy(info->fix.id, tga_type_name, sizeof(info->fix.id));
 
 	info->fix.type = FB_TYPE_PACKED_PIXELS;
 	info->fix.type_aux = 0;
