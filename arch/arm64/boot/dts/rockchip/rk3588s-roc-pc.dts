@@ -10,7 +10,7 @@
 #include <dt-bindings/gpio/gpio.h>
 #include <dt-bindings/leds/common.h>
 #include "rk3588.dtsi"
-#include "rk3588s-rk806-dual.dtsi"
+#//include "rk3588s-rk806-dual.dtsi"
 
 / {
 	model = "Firefly ROC-RK3588S-PC HDMI(Linux)";
@@ -102,29 +102,29 @@
 };
 
 &cpu_l0 {
-	cpu-supply = <&vdd_cpu_lit_s0>;
-	mem-supply = <&vdd_cpu_lit_mem_s0>;
+//	cpu-supply = <&vdd_cpu_lit_s0>;
+//	mem-supply = <&vdd_cpu_lit_mem_s0>;
 };
 
 &cpu_b0 {
-	cpu-supply = <&vdd_cpu_big0_s0>;
-	mem-supply = <&vdd_cpu_big0_mem_s0>;
+//	cpu-supply = <&vdd_cpu_big0_s0>;
+//	mem-supply = <&vdd_cpu_big0_mem_s0>;
 };
 
 &cpu_b2 {
-	cpu-supply = <&vdd_cpu_big1_s0>;
-	mem-supply = <&vdd_cpu_big1_mem_s0>;
+//	cpu-supply = <&vdd_cpu_big1_s0>;
+//	mem-supply = <&vdd_cpu_big1_mem_s0>;
 };
 
 &tsadc {
 	status = "okay";
 };
 
-&gpu {
-	mali-supply = <&vdd_gpu_s0>;
-	mem-supply = <&vdd_gpu_mem_s0>;
-	status = "disabled";
-};
+//&gpu {
+//	mali-supply = <&vdd_gpu_s0>;
+//	mem-supply = <&vdd_gpu_mem_s0>;
+//	status = "disabled";
+//};
 
 &gmac0 {
 	phy-mode = "rgmii-rxid";
@@ -146,7 +146,7 @@
 	rx_delay = <0x00>;
 
 	phy-handle = <&phy1>;
-	phy-supply = <&vcc_3v3_s0>;
+//	phy-supply = <&vcc_3v3_s0>;
 	status = "okay";
 };
 
@@ -176,8 +176,8 @@
 	bus-width = <4>;
 	cap-sd-highspeed;
 	disable-wp;
-	vmmc-supply = <&vcc_3v3_sd_s0>;
-	vqmmc-supply = <&vccio_sd_s0>;
+//	vmmc-supply = <&vcc_3v3_sd_s0>;
+//	vqmmc-supply = <&vccio_sd_s0>;
 	pinctrl-names = "default";
 	pinctrl-0 = <&sdmmc_bus4 &sdmmc_clk &sdmmc_cmd &sdmmc_det>;
 	status = "okay";
