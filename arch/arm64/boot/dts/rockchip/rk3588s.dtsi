@@ -17,6 +17,7 @@
 	#size-cells = <2>;
 
 	aliases {
+		ethernet0 = &gmac0;
 		ethernet1 = &gmac1;
 		gpio0 = &gpio0;
 		gpio1 = &gpio1;
