@@ -26,7 +26,7 @@ static bool is_rockchip_logo_fb(struct drm_framebuffer *fb)
 	return fb->flags & ROCKCHIP_DRM_MODE_LOGO_FB ? true : false;
 }
 
-static void rockchip_drm_fb_destroy(struct drm_framebuffer *fb)
+static void __rockchip_drm_fb_destroy(struct drm_framebuffer *fb)
 {
 	int i = 0;
 
@@ -46,6 +46,27 @@ static void rockchip_drm_fb_destroy(struct drm_framebuffer *fb)
 		}
 
 		kfree(fb);
+	}
+}
+
+static void rockchip_drm_fb_destroy_work(struct work_struct *work)
+{
+	struct rockchip_drm_logo_fb *fb;
+
+	fb = container_of(to_delayed_work(work), struct rockchip_drm_logo_fb, destroy_work);
+
+	__rockchip_drm_fb_destroy(&fb->fb);
+}
+
+static void rockchip_drm_fb_destroy(struct drm_framebuffer *fb)
+{
+
+	if (is_rockchip_logo_fb(fb)) {
+		struct rockchip_drm_logo_fb *rockchip_logo_fb = to_rockchip_logo_fb(fb);
+
+		schedule_delayed_work(&rockchip_logo_fb->destroy_work, HZ);
+	} else {
+		__rockchip_drm_fb_destroy(fb);
 	}
 }
 
@@ -123,7 +144,7 @@ rockchip_drm_logo_fb_alloc(struct drm_device *dev, const struct drm_mode_fb_cmd2
 	rockchip_logo_fb->rk_obj.dma_addr = logo->dma_addr;
 	rockchip_logo_fb->rk_obj.kvaddr = logo->kvaddr;
 	logo->count++;
-
+	INIT_DELAYED_WORK(&rockchip_logo_fb->destroy_work, rockchip_drm_fb_destroy_work);
 	return &rockchip_logo_fb->fb;
 }
 
@@ -171,9 +192,10 @@ static void rockchip_drm_atomic_helper_commit_tail_rpm(struct drm_atomic_state *
 
 	drm_atomic_helper_commit_modeset_enables(dev, old_state);
 
-	rockchip_drm_bandwidth_atomic_check(dev, old_state, &vop_bw_info);
-
-	rockchip_dmcfreq_vop_bandwidth_update(&vop_bw_info);
+	if (rockchip_dmcfreq_vop_bandwidth_avail()) {
+		rockchip_drm_bandwidth_atomic_check(dev, old_state, &vop_bw_info);
+		rockchip_dmcfreq_vop_bandwidth_update(&vop_bw_info);
+	}
 
 	mutex_lock(&prv->ovl_lock);
 	drm_atomic_helper_commit_planes(dev, old_state, DRM_PLANE_COMMIT_ACTIVE_ONLY);
@@ -198,11 +220,19 @@ rockchip_fb_create(struct drm_device *dev, struct drm_file *file,
 {
 	struct drm_afbc_framebuffer *afbc_fb;
 	const struct drm_format_info *info;
-	int ret;
+	int ret, i;
 
 	info = drm_get_format_info(dev, mode_cmd);
 	if (!info)
 		return ERR_PTR(-ENOMEM);
+
+	for (i = 0; i < info->num_planes; ++i) {
+		if (mode_cmd->pitches[i] % 4) {
+			DRM_DEV_ERROR_RATELIMITED(dev->dev,
+				"fb pitch[%d] must be 4 byte aligned: %d\n", i, mode_cmd->pitches[i]);
+			return ERR_PTR(-EINVAL);
+		}
+	}
 
 	afbc_fb = kzalloc(sizeof(*afbc_fb), GFP_KERNEL);
 	if (!afbc_fb)
@@ -216,8 +246,6 @@ rockchip_fb_create(struct drm_device *dev, struct drm_file *file,
 	}
 
 	if (drm_is_afbc(mode_cmd->modifier[0])) {
-		int i;
-
 		ret = drm_gem_fb_afbc_init(dev, mode_cmd, afbc_fb);
 		if (ret) {
 			struct drm_gem_object **obj = afbc_fb->base.obj;

@@ -55,14 +55,6 @@ config FIXED_PHY
 
 	  Currently tested with mpc866ads and mpc8349e-mitx.
 
-config RTL8367RB_GSW
-	tristate "rtl8367rb-vb Gigabit Switch support for rk3568"
-	depends on NET_VENDOR_STMICRO
-	help
-	  This driver supports rtl8367rb in rk3568
-
-source "drivers/net/phy/mtk/mt753x/Kconfig"
-
 config SFP
 	tristate "SFP cage support"
 	depends on I2C && PHYLINK
@@ -230,12 +222,11 @@ config MICROSEMI_PHY
 	select CRYPTO_LIB_AES if MACSEC
 	help
 	  Currently supports VSC8514, VSC8530, VSC8531, VSC8540 and VSC8541 PHYs
-	  
+
 config MOTORCOMM_PHY
 	tristate "Motorcomm PHYs"
 	help
-	  Enables support for Motorcomm network PHYs.
-	  Currently supports the YT8511 gigabit PHY.
+	  Supports the YT8010, YT8510, YT8511, YT8512 PHYs.
 
 config NATIONAL_PHY
 	tristate "National Semiconductor PHYs"

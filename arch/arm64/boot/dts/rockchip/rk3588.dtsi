@@ -16,6 +16,7 @@
 		dp1 = &dp1;
 		edp0 = &edp0;
 		edp1 = &edp1;
+		ethernet0 = &gmac0;
 		hdptx0 = &hdptxphy0;
 		hdptx1 = &hdptxphy1;
 		hdptxhdmi0 = &hdptxphy_hdmi0;
@@ -276,6 +277,8 @@
 		power-domains = <&power RK3588_PD_VO1>;
 		resets = <&cru SRST_M_I2S6_8CH_TX>;
 		reset-names = "tx-m";
+		rockchip,always-on;
+		rockchip,hdmi-path;
 		rockchip,playback-only;
 		#sound-dai-cells = <0>;
 		status = "disabled";
@@ -414,7 +417,8 @@
 			 <&cru DCLK_VOP1>,
 			 <&cru DCLK_VOP2>,
 			 <&cru DCLK_VOP3>,
-			 <&hclk_vo1>;
+			 <&hclk_vo1>,
+			 <&hdptxphy_hdmi_clk1>;
 		clock-names = "pclk",
 			      "hpd",
 			      "earc",
@@ -424,7 +428,8 @@
 			      "dclk_vp1",
 			      "dclk_vp2",
 			      "dclk_vp3",
-			      "hclk_vo1";
+			      "hclk_vo1",
+			      "link_clk";
 		resets = <&cru SRST_HDMITX1_REF>, <&cru SRST_HDMIHDP1>;
 		reset-names = "ref", "hdp";
 		power-domains = <&power RK3588_PD_VO1>;
@@ -541,7 +546,7 @@
 		resets = <&cru SRST_A_HDMIRX>, <&cru SRST_P_HDMIRX>,
 			 <&cru SRST_HDMIRX_REF>, <&cru SRST_A_HDMIRX_BIU>;
 		reset-names = "rst_a", "rst_p", "rst_ref", "rst_biu";
-		pinctrl-0 = <&hdmim1_rx_cec &hdmim1_rx_hpdin &hdmim1_rx_scl &hdmim1_rx_sda>;
+		pinctrl-0 = <&hdmim1_rx>;
 		pinctrl-names = "default";
 		status = "disabled";
 	};
@@ -709,7 +714,7 @@
 			interrupts = <GIC_SPI 240 IRQ_TYPE_EDGE_RISING>;
 		};
 	};
-/*
+
 	gmac0: ethernet@fe1b0000 {
 		compatible = "rockchip,rk3588-gmac", "snps,dwmac-4.20a";
 		reg = <0x0 0xfe1b0000 0x0 0x10000>;
@@ -760,7 +765,7 @@
 			queue1 {};
 		};
 	};
-*/
+
 	sata1: sata@fe220000 {
 		compatible = "rockchip,rk-ahci", "snps,dwc-ahci";
 		reg = <0 0xfe220000 0 0x1000>;
@@ -802,8 +807,12 @@
 			      "lcpll";
 		rockchip,grf = <&hdptxphy1_grf>;
 		#phy-cells = <0>;
-		#clock-cells = <0>;
 		status = "disabled";
+
+		hdptxphy_hdmi_clk1: clk-port {
+			#clock-cells = <0>;
+			status = "okay";
+		};
 	};
 
 
@@ -902,33 +911,6 @@
 			connect = <&vp1_out_hdmi1>;
 		};
 	};
-};
-
-&vop {
-	clocks = <&cru ACLK_VOP>,
-		 <&cru HCLK_VOP>,
-		 <&cru DCLK_VOP0>,
-		 <&cru DCLK_VOP1>,
-		 <&cru DCLK_VOP2>,
-		 <&cru DCLK_VOP3>,
-		 <&cru PCLK_VOP_ROOT>,
-		 <&cru DCLK_VOP0_SRC>,
-		 <&cru DCLK_VOP1_SRC>,
-		 <&cru DCLK_VOP2_SRC>,
-		 <&hdptxphy_hdmi0>,
-		 <&hdptxphy_hdmi1>;
-	clock-names = "aclk_vop",
-		      "hclk_vop",
-		      "dclk_vp0",
-		      "dclk_vp1",
-		      "dclk_vp2",
-		      "dclk_vp3",
-		      "pclk_vop",
-		      "dclk_src_vp0",
-		      "dclk_src_vp1",
-		      "dclk_src_vp2",
-		      "hdmi0_phy_pll",
-		      "hdmi1_phy_pll";
 };
 
 &vp0 {

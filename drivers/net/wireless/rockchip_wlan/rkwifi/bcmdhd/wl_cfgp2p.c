@@ -1112,7 +1112,7 @@ wl_cfgp2p_escan(struct bcm_cfg80211 *cfg, struct net_device *dev, u16 active_sca
 	}
 	CFGP2P_DBG(("\n"));
 
-	WL_MSG(dev->name, "P2P_SEARCH sync ID: %d, bssidx: %d\n", sync_id, bssidx);
+	CFGP2P_DBG(("P2P_SEARCH sync ID: %d, bssidx: %d\n", sync_id, bssidx));
 	ret = wldev_iovar_setbuf_bsscfg(pri_dev, "p2p_scan",
 		memblk, memsize, cfg->ioctl_buf, WLC_IOCTL_MAXLEN, bssidx, &cfg->ioctl_buf_sync);
 	if (ret == BCME_OK) {
@@ -2403,7 +2403,7 @@ wl_cfgp2p_register_ndev(struct bcm_cfg80211 *cfg)
 #endif
 
 	/* Register with a dummy MAC addr */
-	memcpy(net->dev_addr, temp_addr, ETHER_ADDR_LEN);
+	dev_addr_set(net, temp_addr);
 
 #ifndef	WL_NEWCFG_PRIVCMD_SUPPORT
 	wdev->wiphy = cfg->wdev->wiphy;
@@ -2622,8 +2622,7 @@ wl_cfgp2p_add_p2p_disc_if(struct bcm_cfg80211 *cfg)
 
 #if defined(WL_NEWCFG_PRIVCMD_SUPPORT)
 	if (cfg->p2p_net)
-		memcpy(cfg->p2p_net->dev_addr, wl_to_p2p_bss_macaddr(cfg, P2PAPI_BSSCFG_DEVICE),
-			ETHER_ADDR_LEN);
+		dev_addr_set(cfg->p2p_net, wl_to_p2p_bss_macaddr(cfg, P2PAPI_BSSCFG_DEVICE));
 #endif /* WL_NEWCFG_PRIVCMD_SUPPORT */
 
 	/* store p2p wdev ptr for further reference. */

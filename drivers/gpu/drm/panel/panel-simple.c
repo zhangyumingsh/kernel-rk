@@ -418,24 +418,6 @@ static int panel_simple_regulator_disable(struct panel_simple *p)
 	return 0;
 }
 
-int panel_simple_loader_protect(struct drm_panel *panel)
-{
-	struct panel_simple *p = to_panel_simple(panel);
-	int err;
-
-	err = panel_simple_regulator_enable(p);
-	if (err < 0) {
-		dev_err(panel->dev, "failed to enable supply: %d\n", err);
-		return err;
-	}
-
-	p->prepared = true;
-	p->enabled = true;
-
-	return 0;
-}
-EXPORT_SYMBOL(panel_simple_loader_protect);
-
 static int panel_simple_disable(struct drm_panel *panel)
 {
 	struct panel_simple *p = to_panel_simple(panel);
@@ -843,6 +825,7 @@ static int panel_simple_probe(struct device *dev, const struct panel_desc *desc)
 		err = panel_dpi_probe(dev, panel);
 		if (err)
 			goto free_ddc;
+		desc = panel->desc;
 	} else {
 		if (!of_get_display_timing(dev->of_node, "panel-timing", &dt))
 			panel_simple_parse_panel_timing_node(dev, panel, &dt);
@@ -946,6 +929,30 @@ static void panel_simple_shutdown(struct device *dev)
 	drm_panel_disable(&panel->base);
 	drm_panel_unprepare(&panel->base);
 }
+
+int panel_simple_loader_protect(struct drm_panel *panel)
+{
+	struct panel_simple *p;
+	int err;
+
+	if (panel->funcs != &panel_simple_funcs) {
+		dev_dbg(panel->dev, "not simple-panel\n");
+		return 0;
+	}
+
+	p = to_panel_simple(panel);
+	err = panel_simple_regulator_enable(p);
+	if (err < 0) {
+		dev_err(panel->dev, "failed to enable supply: %d\n", err);
+		return err;
+	}
+
+	p->prepared = true;
+	p->enabled = true;
+
+	return 0;
+}
+EXPORT_SYMBOL(panel_simple_loader_protect);
 
 static const struct drm_display_mode ampire_am_1280800n3tzqw_t00h_mode = {
 	.clock = 71100,
@@ -2419,7 +2426,7 @@ static const struct display_timing innolux_g070y2_l01_timing = {
 static const struct panel_desc innolux_g070y2_l01 = {
 	.timings = &innolux_g070y2_l01_timing,
 	.num_timings = 1,
-	.bpc = 6,
+	.bpc = 8,
 	.size = {
 		.width = 152,
 		.height = 91,
