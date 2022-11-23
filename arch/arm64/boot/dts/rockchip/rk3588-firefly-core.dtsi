@@ -8,7 +8,7 @@
 #ifdef rk3588
 #include "rk3588.dtsi"
 #else
-#include "rk3588s.dtsi"
+#include "rk3588s-f.dtsi"
 #endif
 #include "rk3588-firefly-rk806-single.dtsi"
 #include <dt-bindings/gpio/gpio.h>

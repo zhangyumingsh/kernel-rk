@@ -845,12 +845,6 @@ static int rk_pcie_init_dma_trx(struct rk_pcie *rk_pcie)
 
 	rk_pcie->dma_obj = rk_pcie_dma_obj_probe(rk_pcie->pci->dev);
 	if (IS_ERR(rk_pcie->dma_obj)) {
-		if (rk_pcie->mode == RK_PCIE_RC_TYPE) {
-			/* dma_obj is optional for RC mode */
-			rk_pcie->dma_obj = NULL;
-			return 0;
-		}
-
 		dev_err(rk_pcie->pci->dev, "failed to prepare dma object\n");
 		return -EINVAL;
 	}
@@ -1961,11 +1955,6 @@ static int rk_pcie_really_probe(void *p)
 	if (ret) {
 		dev_err(dev, "resource init failed\n");
 		goto release_driver;
-	}
-
-	/* To ensure the ordering of pci device */
-	if (!device_property_read_u32(dev, "rockchip,init-delay-ms", &val)) {
-		msleep(val);
 	}
 
 	if (!IS_ERR_OR_NULL(rk_pcie->prsnt_gpio)) {

@@ -5,7 +5,7 @@
  */
 
 #include "rk3588-firefly-core.dtsi"
-#include "rk3588-linux.dtsi"
+#include "rk3588-linux-f.dtsi"
 
 / {
 	firefly_leds: leds {

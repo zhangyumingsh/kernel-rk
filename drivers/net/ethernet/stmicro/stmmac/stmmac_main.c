@@ -1129,10 +1129,7 @@ static int stmmac_init_phy(struct net_device *dev)
 		int addr = priv->plat->phy_addr;
 		struct phy_device *phydev;
 
-		if (addr == -1)
-			phydev = phy_find_first(priv->mii);
-		else
-			phydev = mdiobus_get_phy(priv->mii, addr);
+		phydev = mdiobus_get_phy(priv->mii, addr);
 		if (!phydev) {
 			netdev_err(priv->dev, "no phy at addr %d\n", addr);
 			return -ENODEV;
@@ -5046,7 +5043,6 @@ int stmmac_dvr_probe(struct device *device,
 		goto error_hw_init;
 
 	stmmac_check_ether_addr(priv);
-	ndev->priv_flags |= IFF_LIVE_ADDR_CHANGE;
 
 	ndev->netdev_ops = &stmmac_netdev_ops;
 
