@@ -71,8 +71,6 @@
 		gpios = <&gpio1 RK_PA1 GPIO_ACTIVE_HIGH>;
 	};
 
-	/delete-node/ gpio-keys;
-
 	/* not amplifier, used as switcher only */
 	headphones_amp: headphones-amp {
 		compatible = "simple-audio-amplifier";
