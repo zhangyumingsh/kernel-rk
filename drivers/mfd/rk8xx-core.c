@@ -3,13 +3,7 @@
  * MFD core driver for Rockchip RK808/RK818
  *
  * Copyright (c) 2014, Fuzhou Rockchip Electronics Co., Ltd
- *
- * Author: Chris Zhong <zyw@rock-chips.com>
- * Author: Zhang Qing <zhangqing@rock-chips.com>
- *
  * Copyright (C) 2016 PHYTEC Messtechnik GmbH
- *
- * Author: Wadim Egorov <w.egorov@phytec.de>
  */
 
 #include <linux/interrupt.h>
@@ -49,6 +43,11 @@ static const struct resource rk817_pwrkey_resources[] = {
 	DEFINE_RES_IRQ(RK817_IRQ_PWRON_FALL),
 };
 
+static const struct resource rk817_charger_resources[] = {
+	DEFINE_RES_IRQ(RK817_IRQ_PLUG_IN),
+	DEFINE_RES_IRQ(RK817_IRQ_PLUG_OUT),
+};
+
 static const struct mfd_cell rk805s[] = {
 	{ .name = "rk808-clkout", },
 	{ .name = "rk808-regulator", },
@@ -66,12 +65,12 @@ static const struct mfd_cell rk805s[] = {
 
 static const struct mfd_cell rk806s[] = {
 	{ .name = "rk805-pinctrl", },
+	{ .name = "rk808-regulator", },
 	{
 		.name = "rk805-pwrkey",
 		.num_resources = ARRAY_SIZE(rk806_pwrkey_resources),
 		.resources = &rk806_pwrkey_resources[0],
 	},
-	{ .name = "rk808-regulator", },
 };
 
 static const struct mfd_cell rk808s[] = {
@@ -98,6 +97,11 @@ static const struct mfd_cell rk817s[] = {
 		.resources = &rk817_rtc_resources[0],
 	},
 	{ .name = "rk817-codec",},
+	{
+		.name = "rk817-charger",
+		.num_resources = ARRAY_SIZE(rk817_charger_resources),
+		.resources = &rk817_charger_resources[0],
+	},
 };
 
 static const struct mfd_cell rk818s[] = {
@@ -124,9 +128,9 @@ static const struct rk808_reg_data rk805_pre_init_reg[] = {
 };
 
 static const struct rk808_reg_data rk806_pre_init_reg[] = {
-	{RK806_GPIO_INT_CONFIG, RK806_INT_POL_MSK, RK806_INT_POL_L},
-	{RK806_SYS_CFG3, RK806_SLAVE_RESTART_FUN_MSK, RK806_SLAVE_RESTART_FUN_EN},
-	{RK806_SYS_OPTION, RK806_SYS_ENB2_2M_MSK, RK806_SYS_ENB2_2M_EN},
+	{ RK806_GPIO_INT_CONFIG, RK806_INT_POL_MSK, RK806_INT_POL_L },
+	{ RK806_SYS_CFG3, RK806_SLAVE_RESTART_FUN_MSK, RK806_SLAVE_RESTART_FUN_EN },
+	{ RK806_SYS_OPTION, RK806_SYS_ENB2_2M_MSK, RK806_SYS_ENB2_2M_EN },
 };
 
 static const struct rk808_reg_data rk808_pre_init_reg[] = {

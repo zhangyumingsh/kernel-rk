@@ -331,8 +331,8 @@ static int rk806_set_ramp_delay_dcdc(struct regulator_dev *rdev, int ramp_delay)
 	int rid = rdev_get_id(rdev);
 	int regval, ramp_value, ret;
 
-	ret = regmap_find_closest_bigger(ramp_delay, rdev->desc->ramp_delay_table,
-					 rdev->desc->n_ramp_values, &ramp_value);
+	ret = regulator_find_closest_bigger(ramp_delay, rdev->desc->ramp_delay_table,
+					    rdev->desc->n_ramp_values, &ramp_value);
 	if (ret) {
 		dev_warn(rdev_get_dev(rdev),
 			 "Can't set ramp-delay %u, setting %u\n", ramp_delay,
@@ -786,11 +786,10 @@ static const struct regulator_ops rk806_ops_dcdc = {
 
 	.enable			= regulator_enable_regmap,
 	.disable		= regulator_disable_regmap,
-	.is_enabled		= regulator_is_enabled_regmap,
+	.is_enabled		= rk8xx_is_enabled_wmsk_regmap,
 
 	.set_suspend_mode	= rk806_set_mode_dcdc,
 	.set_ramp_delay		= rk806_set_ramp_delay_dcdc,
-	//.set_ramp_delay		= regulator_set_ramp_delay_regmap,
 
 	.set_suspend_voltage	= rk806_set_suspend_voltage_range_dcdc,
 	.set_suspend_enable	= rk806_set_suspend_enable,

@@ -10,7 +10,7 @@
 #include <linux/of_device.h>
 #include <linux/of_address.h>
 #include <linux/syscore_ops.h>
-#include <dt-bindings/clock/rk3588-cru.h>
+#include <dt-bindings/clock/rockchip,rk3588-cru.h>
 #include "clk.h"
 
 /*
@@ -85,15 +85,18 @@ static struct rockchip_pll_rate_table rk3588_pll_rates[] = {
 	RK3588_PLL_RATE(1320000000, 2, 220, 1, 0),
 	RK3588_PLL_RATE(1200000000, 2, 200, 1, 0),
 	RK3588_PLL_RATE(1188000000, 2, 198, 1, 0),
+	RK3588_PLL_RATE(1100000000, 3, 550, 2, 0),
 	RK3588_PLL_RATE(1008000000, 2, 336, 2, 0),
 	RK3588_PLL_RATE(1000000000, 3, 500, 2, 0),
 	RK3588_PLL_RATE(983040000, 4, 655, 2, 23592),
+	RK3588_PLL_RATE(955520000, 3, 477, 2, 49806),
 	RK3588_PLL_RATE(903168000, 6, 903, 2, 11009),
 	RK3588_PLL_RATE(900000000, 2, 300, 2, 0),
 	RK3588_PLL_RATE(850000000, 3, 425, 2, 0),
 	RK3588_PLL_RATE(816000000, 2, 272, 2, 0),
 	RK3588_PLL_RATE(786432000, 2, 262, 2, 9437),
 	RK3588_PLL_RATE(786000000, 1, 131, 2, 0),
+	RK3588_PLL_RATE(785560000, 3, 392, 2, 51117),
 	RK3588_PLL_RATE(722534400, 8, 963, 2, 24850),
 	RK3588_PLL_RATE(600000000, 2, 200, 2, 0),
 	RK3588_PLL_RATE(594000000, 2, 198, 2, 0),
@@ -107,6 +110,8 @@ static struct rockchip_pll_rate_table rk3588_pll_rates[] = {
 
 #define RK3588_CLK_CORE_B0_SEL_CLEAN_MASK	0x3
 #define RK3588_CLK_CORE_B0_SEL_CLEAN_SHIFT	13
+#define RK3588_CLK_CORE_B1_SEL_CLEAN_MASK	0x3
+#define RK3588_CLK_CORE_B1_SEL_CLEAN_SHIFT	5
 #define RK3588_CLK_CORE_B0_GPLL_DIV_MASK	0x1f
 #define RK3588_CLK_CORE_B0_GPLL_DIV_SHIFT	1
 #define RK3588_CLK_CORE_L_SEL_CLEAN_MASK	0x3
@@ -143,8 +148,8 @@ static struct rockchip_pll_rate_table rk3588_pll_rates[] = {
 #define RK3588_CORE_B1_SEL(_apllcore)						\
 {										\
 	.reg = RK3588_BIGCORE0_CLKSEL_CON(1),					\
-	.val = HIWORD_UPDATE(_apllcore, RK3588_CLK_CORE_B0_SEL_CLEAN_MASK,	\
-			RK3588_CLK_CORE_B0_SEL_CLEAN_SHIFT),			\
+	.val = HIWORD_UPDATE(_apllcore, RK3588_CLK_CORE_B1_SEL_CLEAN_MASK,	\
+			RK3588_CLK_CORE_B1_SEL_CLEAN_SHIFT),			\
 }
 
 #define RK3588_CORE_B2_SEL(_apllcore)						\
@@ -159,8 +164,8 @@ static struct rockchip_pll_rate_table rk3588_pll_rates[] = {
 #define RK3588_CORE_B3_SEL(_apllcore)						\
 {										\
 	.reg = RK3588_BIGCORE1_CLKSEL_CON(1),					\
-	.val = HIWORD_UPDATE(_apllcore, RK3588_CLK_CORE_B0_SEL_CLEAN_MASK,	\
-			RK3588_CLK_CORE_B0_SEL_CLEAN_SHIFT),			\
+	.val = HIWORD_UPDATE(_apllcore, RK3588_CLK_CORE_B1_SEL_CLEAN_MASK,	\
+			RK3588_CLK_CORE_B1_SEL_CLEAN_SHIFT),			\
 }
 
 #define RK3588_CORE_L_SEL0(_offs, _apllcore)					\
@@ -211,7 +216,11 @@ static struct rockchip_pll_rate_table rk3588_pll_rates[] = {
 #define RK3588_CPUB01CLK_RATE(_prate, _apllcore)		\
 {								\
 	.prate = _prate##U,					\
-	.divs = {						\
+	.pre_muxs = {						\
+		RK3588_CORE_B0_SEL(0),				\
+		RK3588_CORE_B1_SEL(0),				\
+	},							\
+	.post_muxs = {						\
 		RK3588_CORE_B0_SEL(_apllcore),			\
 		RK3588_CORE_B1_SEL(_apllcore),			\
 	},							\
@@ -220,26 +229,26 @@ static struct rockchip_pll_rate_table rk3588_pll_rates[] = {
 #define RK3588_CPUB23CLK_RATE(_prate, _apllcore)		\
 {								\
 	.prate = _prate##U,					\
-	.divs = {						\
+	.pre_muxs = {						\
+		RK3588_CORE_B2_SEL(0),				\
+		RK3588_CORE_B3_SEL(0),				\
+	},							\
+	.post_muxs = {						\
 		RK3588_CORE_B2_SEL(_apllcore),			\
 		RK3588_CORE_B3_SEL(_apllcore),			\
 	},							\
 }
 
-#define RK3588_CPULCLK_RATE(_prate, _apllcore, _seldsu, _divdsu, _atclk, _gicclk, \
-			    _aclkmp, _aclkm, _aclks, _periph) \
+#define RK3588_CPULCLK_RATE(_prate, _apllcore, _seldsu, _divdsu) \
 {								\
 	.prate = _prate##U,					\
-	.divs = {						\
-		RK3588_CORE_L_SEL1(_seldsu, _divdsu),		\
-		RK3588_CORE_L_SEL2(_aclkm, _aclkmp, _aclks),	\
-		RK3588_CORE_L_SEL3(_periph),			\
-		RK3588_CORE_L_SEL4(_gicclk, _atclk),		\
-	},							\
 	.pre_muxs = {						\
 		RK3588_CORE_L_SEL0(0, 0),			\
 		RK3588_CORE_L_SEL0(1, 0),			\
-		RK3588_CORE_L_SEL1(3, 4),			\
+		RK3588_CORE_L_SEL1(3, 2),			\
+		RK3588_CORE_L_SEL2(2, 3, 3),			\
+		RK3588_CORE_L_SEL3(4),				\
+		RK3588_CORE_L_SEL4(4, 4),			\
 	},							\
 	.post_muxs = {						\
 		RK3588_CORE_L_SEL0(0, _apllcore),		\
@@ -363,43 +372,43 @@ static const struct rockchip_cpuclk_reg_data rk3588_cpub1clk_data = {
 };
 
 static struct rockchip_cpuclk_rate_table rk3588_cpulclk_rates[] __initdata = {
-	RK3588_CPULCLK_RATE(2208000000, 1, 3, 1, 4, 4, 4, 4, 4, 6),
-	RK3588_CPULCLK_RATE(2184000000, 1, 3, 1, 4, 4, 4, 4, 4, 6),
-	RK3588_CPULCLK_RATE(2088000000, 1, 3, 1, 4, 4, 4, 4, 4, 6),
-	RK3588_CPULCLK_RATE(2040000000, 1, 3, 1, 4, 4, 4, 4, 4, 6),
-	RK3588_CPULCLK_RATE(2016000000, 1, 3, 1, 4, 4, 4, 4, 4, 5),
-	RK3588_CPULCLK_RATE(1992000000, 1, 3, 1, 4, 4, 4, 4, 4, 5),
-	RK3588_CPULCLK_RATE(1896000000, 1, 3, 1, 4, 4, 4, 4, 4, 5),
-	RK3588_CPULCLK_RATE(1800000000, 1, 3, 1, 4, 4, 4, 4, 4, 5),
-	RK3588_CPULCLK_RATE(1704000000, 0, 3, 1, 4, 4, 4, 3, 4, 5),
-	RK3588_CPULCLK_RATE(1608000000, 0, 3, 1, 4, 4, 4, 3, 4, 5),
-	RK3588_CPULCLK_RATE(1584000000, 0, 3, 1, 4, 4, 4, 3, 4, 5),
-	RK3588_CPULCLK_RATE(1560000000, 0, 2, 2, 4, 4, 4, 3, 4, 5),
-	RK3588_CPULCLK_RATE(1536000000, 0, 2, 2, 4, 4, 4, 3, 4, 5),
-	RK3588_CPULCLK_RATE(1512000000, 0, 2, 2, 4, 4, 4, 2, 4, 5),
-	RK3588_CPULCLK_RATE(1488000000, 0, 2, 2, 4, 4, 4, 2, 4, 5),
-	RK3588_CPULCLK_RATE(1464000000, 0, 2, 2, 4, 4, 4, 2, 4, 5),
-	RK3588_CPULCLK_RATE(1440000000, 0, 2, 2, 3, 3, 3, 2, 3, 4),
-	RK3588_CPULCLK_RATE(1416000000, 0, 2, 2, 3, 3, 3, 2, 3, 4),
-	RK3588_CPULCLK_RATE(1392000000, 0, 2, 2, 3, 3, 3, 2, 3, 4),
-	RK3588_CPULCLK_RATE(1368000000, 0, 2, 2, 3, 3, 3, 2, 3, 4),
-	RK3588_CPULCLK_RATE(1344000000, 0, 2, 2, 3, 3, 3, 2, 3, 4),
-	RK3588_CPULCLK_RATE(1320000000, 0, 2, 2, 3, 3, 3, 2, 3, 4),
-	RK3588_CPULCLK_RATE(1296000000, 0, 2, 2, 3, 3, 3, 2, 3, 4),
-	RK3588_CPULCLK_RATE(1272000000, 0, 2, 2, 3, 3, 3, 2, 3, 3),
-	RK3588_CPULCLK_RATE(1248000000, 0, 2, 2, 3, 3, 3, 2, 3, 3),
-	RK3588_CPULCLK_RATE(1224000000, 0, 2, 2, 3, 3, 3, 2, 3, 3),
-	RK3588_CPULCLK_RATE(1200000000, 0, 2, 2, 3, 3, 3, 2, 3, 3),
-	RK3588_CPULCLK_RATE(1104000000, 0, 2, 2, 2, 2, 2, 2, 2, 3),
-	RK3588_CPULCLK_RATE(1008000000, 0, 2, 2, 2, 2, 2, 2, 2, 3),
-	RK3588_CPULCLK_RATE(912000000, 0, 2, 2, 2, 2, 2, 2, 2, 3),
-	RK3588_CPULCLK_RATE(816000000, 0, 2, 2, 2, 2, 2, 1, 2, 2),
-	RK3588_CPULCLK_RATE(696000000, 0, 2, 2, 2, 2, 2, 1, 2, 2),
-	RK3588_CPULCLK_RATE(600000000, 0, 2, 2, 2, 2, 2, 1, 2, 2),
-	RK3588_CPULCLK_RATE(408000000, 0, 2, 2, 2, 2, 2, 1, 2, 2),
-	RK3588_CPULCLK_RATE(312000000, 0, 2, 2, 2, 2, 2, 1, 2, 2),
-	RK3588_CPULCLK_RATE(216000000, 0, 2, 1, 1, 1, 1, 1, 1, 1),
-	RK3588_CPULCLK_RATE(96000000, 0, 2, 1, 1, 1, 1, 1, 1, 1),
+	RK3588_CPULCLK_RATE(2208000000, 1, 3, 1),
+	RK3588_CPULCLK_RATE(2184000000, 1, 3, 1),
+	RK3588_CPULCLK_RATE(2088000000, 1, 3, 1),
+	RK3588_CPULCLK_RATE(2040000000, 1, 3, 1),
+	RK3588_CPULCLK_RATE(2016000000, 1, 3, 1),
+	RK3588_CPULCLK_RATE(1992000000, 1, 3, 1),
+	RK3588_CPULCLK_RATE(1896000000, 1, 3, 1),
+	RK3588_CPULCLK_RATE(1800000000, 1, 3, 1),
+	RK3588_CPULCLK_RATE(1704000000, 0, 3, 1),
+	RK3588_CPULCLK_RATE(1608000000, 0, 3, 1),
+	RK3588_CPULCLK_RATE(1584000000, 0, 2, 1),
+	RK3588_CPULCLK_RATE(1560000000, 0, 2, 1),
+	RK3588_CPULCLK_RATE(1536000000, 0, 2, 1),
+	RK3588_CPULCLK_RATE(1512000000, 0, 2, 1),
+	RK3588_CPULCLK_RATE(1488000000, 0, 2, 1),
+	RK3588_CPULCLK_RATE(1464000000, 0, 2, 1),
+	RK3588_CPULCLK_RATE(1440000000, 0, 2, 1),
+	RK3588_CPULCLK_RATE(1416000000, 0, 2, 1),
+	RK3588_CPULCLK_RATE(1392000000, 0, 2, 1),
+	RK3588_CPULCLK_RATE(1368000000, 0, 2, 1),
+	RK3588_CPULCLK_RATE(1344000000, 0, 2, 1),
+	RK3588_CPULCLK_RATE(1320000000, 0, 2, 1),
+	RK3588_CPULCLK_RATE(1296000000, 0, 2, 1),
+	RK3588_CPULCLK_RATE(1272000000, 0, 2, 1),
+	RK3588_CPULCLK_RATE(1248000000, 0, 2, 1),
+	RK3588_CPULCLK_RATE(1224000000, 0, 2, 1),
+	RK3588_CPULCLK_RATE(1200000000, 0, 2, 1),
+	RK3588_CPULCLK_RATE(1104000000, 0, 2, 1),
+	RK3588_CPULCLK_RATE(1008000000, 0, 2, 1),
+	RK3588_CPULCLK_RATE(912000000, 0, 2, 1),
+	RK3588_CPULCLK_RATE(816000000, 0, 2, 1),
+	RK3588_CPULCLK_RATE(696000000, 0, 2, 1),
+	RK3588_CPULCLK_RATE(600000000, 0, 2, 1),
+	RK3588_CPULCLK_RATE(408000000, 0, 2, 1),
+	RK3588_CPULCLK_RATE(312000000, 0, 2, 1),
+	RK3588_CPULCLK_RATE(216000000, 0, 2, 1),
+	RK3588_CPULCLK_RATE(96000000, 0, 2, 1),
 };
 
 static const struct rockchip_cpuclk_reg_data rk3588_cpulclk_data = {
@@ -457,10 +466,10 @@ PNAME(mux_200m_150m_24m_p)		= { "clk_200m_src", "clk_150m_src", "xin24m" };
 PNAME(mux_150m_100m_50m_24m_p)		= { "clk_150m_src", "clk_100m_src", "clk_50m_src", "xin24m" };
 PNAME(mux_200m_100m_50m_24m_p)		= { "clk_200m_src", "clk_100m_src", "clk_50m_src", "xin24m" };
 PNAME(mux_300m_200m_100m_24m_p)		= { "clk_300m_src", "clk_200m_src", "clk_100m_src", "xin24m" };
-PNAME(mux_700m_400m_200m_24m_p)		= { "clk_700m_src", "clk_400m_src", "clk_200m_src", "xin_osc0_func" };
-PNAME(mux_500m_250m_100m_24m_p)		= { "clk_500m_src", "clk_250m_src", "clk_100m_src", "xin_osc0_func" };
-PNAME(mux_500m_300m_100m_24m_p)		= { "clk_500m_src", "clk_300m_src", "clk_100m_src", "xin_osc0_func" };
-PNAME(mux_400m_200m_100m_24m_p)		= { "clk_400m_src", "clk_200m_src", "clk_100m_src", "xin_osc0_func" };
+PNAME(mux_700m_400m_200m_24m_p)		= { "clk_700m_src", "clk_400m_src", "clk_200m_src", "xin24m" };
+PNAME(mux_500m_250m_100m_24m_p)		= { "clk_500m_src", "clk_250m_src", "clk_100m_src", "xin24m" };
+PNAME(mux_500m_300m_100m_24m_p)		= { "clk_500m_src", "clk_300m_src", "clk_100m_src", "xin24m" };
+PNAME(mux_400m_200m_100m_24m_p)		= { "clk_400m_src", "clk_200m_src", "clk_100m_src", "xin24m" };
 PNAME(clk_i2s2_2ch_p)			= { "clk_i2s2_2ch_src", "clk_i2s2_2ch_frac", "i2s2_mclkin", "xin12m" };
 PNAME(i2s2_2ch_mclkout_p)		= { "mclk_i2s2_2ch", "xin12m" };
 PNAME(clk_i2s3_2ch_p)			= { "clk_i2s3_2ch_src", "clk_i2s3_2ch_frac", "i2s3_mclkin", "xin12m" };
@@ -649,13 +658,13 @@ static struct rockchip_clk_branch rk3588_hdmirx_aud_fracmux __initdata =
 static struct rockchip_pll_clock rk3588_pll_clks[] __initdata = {
 	[b0pll] = PLL(pll_rk3588_core, PLL_B0PLL, "b0pll", mux_pll_p,
 		     CLK_IGNORE_UNUSED, RK3588_B0_PLL_CON(0),
-		     RK3588_BIGCORE0_CLKSEL_CON(0), 6, 15, 0, rk3588_pll_rates),
+		     RK3588_B0_PLL_MODE_CON0, 0, 15, 0, rk3588_pll_rates),
 	[b1pll] = PLL(pll_rk3588_core, PLL_B1PLL, "b1pll", mux_pll_p,
 		     CLK_IGNORE_UNUSED, RK3588_B1_PLL_CON(8),
-		     RK3588_BIGCORE1_CLKSEL_CON(0), 6, 15, 0, rk3588_pll_rates),
+		     RK3588_B1_PLL_MODE_CON0, 0, 15, 0, rk3588_pll_rates),
 	[lpll] = PLL(pll_rk3588_core, PLL_LPLL, "lpll", mux_pll_p,
 		     CLK_IGNORE_UNUSED, RK3588_LPLL_CON(16),
-		     RK3588_DSU_CLKSEL_CON(5), 14, 15, 0, rk3588_pll_rates),
+		     RK3588_LPLL_MODE_CON0, 0, 15, 0, rk3588_pll_rates),
 	[v0pll] = PLL(pll_rk3588, PLL_V0PLL, "v0pll", mux_pll_p,
 		     0, RK3588_PLL_CON(88),
 		     RK3588_MODE_CON0, 4, 15, 0, rk3588_pll_rates),
@@ -717,7 +726,7 @@ static struct rockchip_clk_branch rk3588_clk_branches[] __initdata = {
 	COMPOSITE(CLK_600M_SRC, "clk_600m_src", gpll_cpll_p, CLK_IS_CRITICAL,
 			RK3588_CLKSEL_CON(5), 5, 1, MFLAGS, 0, 5, DFLAGS,
 			RK3588_CLKGATE_CON(0), 10, GFLAGS),
-	COMPOSITE(CLK_650M_SRC, "clk_650m_src", gpll_lpll_p, CLK_IS_CRITICAL,
+	COMPOSITE(CLK_650M_SRC, "clk_650m_src", gpll_lpll_p, 0,
 			RK3588_CLKSEL_CON(5), 11, 1, MFLAGS, 6, 5, DFLAGS,
 			RK3588_CLKGATE_CON(0), 11, GFLAGS),
 	COMPOSITE(CLK_700M_SRC, "clk_700m_src", gpll_spll_p, CLK_IS_CRITICAL,
@@ -2475,8 +2484,7 @@ static void __init rk3588_clk_init(struct device_node *np)
 	rockchip_clk_register_branches(ctx, rk3588_clk_branches,
 				       ARRAY_SIZE(rk3588_clk_branches));
 
-	rockchip_register_softrst(np, 49158, reg_base + RK3588_SOFTRST_CON(0),
-				  ROCKCHIP_SOFTRST_HIWORD_MASK);
+	rk3588_rst_init(np, reg_base);
 
 	rockchip_register_restart_notifier(ctx, RK3588_GLB_SRST_FST, NULL);
 

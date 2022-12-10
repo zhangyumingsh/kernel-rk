@@ -42,6 +42,7 @@ properties:
       - rockchip,rk3399-power-controller
       - rockchip,rk3568-power-controller
       - rockchip,rk3588-power-controller
+      - rockchip,rv1126-power-controller
 
   "#power-domain-cells":
     const: 1
@@ -121,6 +122,7 @@ $defs:
           "include/dt-bindings/power/rk3399-power.h"
           "include/dt-bindings/power/rk3568-power.h"
           "include/dt-bindings/power/rk3588-power.h"
+          "include/dt-bindings/power/rockchip,rv1126-power.h"
 
       clocks:
         minItems: 1
@@ -132,7 +134,7 @@ $defs:
       pm_qos:
         $ref: /schemas/types.yaml#/definitions/phandle-array
         items:
-          maxItems: 1
+          maxItems: 8
         description: |
           A number of phandles to qos blocks which need to be saved and restored
           while power domain switches state.

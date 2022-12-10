@@ -903,7 +903,7 @@ bool regulator_is_equal(struct regulator *reg1, struct regulator *reg2)
 EXPORT_SYMBOL_GPL(regulator_is_equal);
 
 /**
- * regmap_find_closest_bigger - helper to find offset in ramp delay table
+ * regulator_find_closest_bigger - helper to find offset in ramp delay table
  *
  * @target: targeted ramp_delay
  * @table: table with supported ramp delays
@@ -915,8 +915,8 @@ EXPORT_SYMBOL_GPL(regulator_is_equal);
  * regulator_set_ramp_delay_regmap cannot handle a specific device setup
  * (e.g. because the value is split over multiple registers).
  */
-int regmap_find_closest_bigger(unsigned int target, const unsigned int *table,
-			       unsigned int num_sel, unsigned int *sel)
+int regulator_find_closest_bigger(unsigned int target, const unsigned int *table,
+				  unsigned int num_sel, unsigned int *sel)
 {
 	unsigned int s, tmp, max, maxsel = 0;
 	bool found = false;
@@ -946,7 +946,7 @@ int regmap_find_closest_bigger(unsigned int target, const unsigned int *table,
 
 	return 0;
 }
-EXPORT_SYMBOL_GPL(regmap_find_closest_bigger);
+EXPORT_SYMBOL_GPL(regulator_find_closest_bigger);
 
 /**
  * regulator_set_ramp_delay_regmap - set_ramp_delay() helper
@@ -965,8 +965,8 @@ int regulator_set_ramp_delay_regmap(struct regulator_dev *rdev, int ramp_delay)
 	if (WARN_ON(!rdev->desc->n_ramp_values || !rdev->desc->ramp_delay_table))
 		return -EINVAL;
 
-	ret = regmap_find_closest_bigger(ramp_delay, rdev->desc->ramp_delay_table,
-					 rdev->desc->n_ramp_values, &sel);
+	ret = regulator_find_closest_bigger(ramp_delay, rdev->desc->ramp_delay_table,
+					    rdev->desc->n_ramp_values, &sel);
 
 	if (ret) {
 		dev_warn(rdev_get_dev(rdev),
