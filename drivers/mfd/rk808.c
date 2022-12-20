@@ -793,13 +793,6 @@ static void rk8xx_syscore_shutdown(void)
 		return;
 	}
 
-	/* close rtc int when power off */
-	regmap_update_bits(rk808->regmap,
-			   RK808_INT_STS_MSK_REG1,
-			   (0x3 << 5), (0x3 << 5));
-	regmap_update_bits(rk808->regmap,
-			   RK808_RTC_INT_REG,
-			   (0x3 << 2), (0x0 << 2));
 	/*
 	 * For PMIC that power off supplies by write register via i2c bus,
 	 * it's better to do power off at syscore shutdown here.
@@ -1302,7 +1295,7 @@ static int rk808_probe(struct i2c_client *client,
 	}
 
 	ret = regmap_add_irq_chip(rk808->regmap, client->irq,
-				  IRQF_ONESHOT | IRQF_SHARED, -1,
+				  IRQF_ONESHOT, -1,
 				  rk808->regmap_irq_chip, &rk808->irq_data);
 	if (ret) {
 		dev_err(&client->dev, "Failed to add irq_chip %d\n", ret);

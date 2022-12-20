@@ -14,9 +14,7 @@
 #include <asm/div64.h>
 
 #ifndef FPGA_PLATFORM
-#ifdef CONFIG_PM_DEVFREQ
 #include <../drivers/devfreq/governor.h>
-#endif
 #endif
 
 #include "rknpu_drv.h"
@@ -193,7 +191,6 @@ static int rknpu_freq_show(struct seq_file *m, void *data)
 	return 0;
 }
 
-#ifdef CONFIG_PM_DEVFREQ
 static ssize_t rknpu_freq_set(struct file *file, const char __user *ubuf,
 			      size_t len, loff_t *offp)
 {
@@ -236,13 +233,6 @@ static ssize_t rknpu_freq_set(struct file *file, const char __user *ubuf,
 
 	return len;
 }
-#else
-static ssize_t rknpu_freq_set(struct file *file, const char __user *ubuf,
-			      size_t len, loff_t *offp)
-{
-	return -EFAULT;
-}
-#endif
 
 static int rknpu_volt_show(struct seq_file *m, void *data)
 {

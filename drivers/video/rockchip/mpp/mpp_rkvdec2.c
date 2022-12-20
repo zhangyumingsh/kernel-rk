@@ -404,15 +404,13 @@ static int rkvdec2_isr(struct mpp_dev *mpp)
 	u32 err_mask;
 	struct rkvdec2_task *task = NULL;
 	struct mpp_task *mpp_task = mpp->cur_task;
-	struct rkvdec2_dev *dec = to_rkvdec2_dev(mpp);
 
 	/* FIXME use a spin lock here */
 	if (!mpp_task) {
 		dev_err(mpp->dev, "no current task\n");
 		return IRQ_HANDLED;
 	}
-	mpp_task->hw_cycles = mpp_read(mpp, RKVDEC_PERF_WORKING_CNT);
-	mpp_time_diff(mpp_task, dec->core_clk_info.real_rate_hz);
+	mpp_time_diff(mpp_task);
 	mpp->cur_task = NULL;
 	task = to_rkvdec2_task(mpp_task);
 	task->irq_status = mpp->irq_status;
@@ -1513,6 +1511,10 @@ static int rkvdec2_probe_default(struct platform_device *pdev)
 		dev_err(dev, "register interrupter runtime failed\n");
 		return -EINVAL;
 	}
+
+	/* power domain autosuspend delay 2s */
+	pm_runtime_set_autosuspend_delay(dev, 2000);
+	pm_runtime_use_autosuspend(dev);
 
 	mpp->session_max_buffers = RKVDEC_SESSION_MAX_BUFFERS;
 	rkvdec2_procfs_init(mpp);

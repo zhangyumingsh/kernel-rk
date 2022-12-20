@@ -1552,9 +1552,6 @@ static void rkisp_stream_fast(struct work_struct *work)
 	if (ispdev->isp_ver != ISP_V32)
 		return;
 
-	rkisp_chk_tb_over(ispdev);
-	if (ispdev->tb_head.complete != RKISP_TB_OK)
-		return;
 	ret = v4l2_pipeline_pm_get(&stream->vnode.vdev.entity);
 	if (ret < 0) {
 		dev_err(ispdev->dev, "%s PM get fail:%d\n", __func__, ret);
@@ -1562,8 +1559,11 @@ static void rkisp_stream_fast(struct work_struct *work)
 		return;
 	}
 
-	if (ispdev->hw_dev->dev_num > 1)
-		ispdev->hw_dev->is_single = false;
+	rkisp_chk_tb_over(ispdev);
+	if (ispdev->tb_head.complete != RKISP_TB_OK) {
+		v4l2_pipeline_pm_put(&stream->vnode.vdev.entity);
+		return;
+	}
 	ispdev->is_pre_on = true;
 	ispdev->is_rdbk_auto = true;
 	ispdev->pipe.open(&ispdev->pipe, &stream->vnode.vdev.entity, true);

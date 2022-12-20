@@ -104,5 +104,4 @@ struct rkisp_hw_dev {
 
 int rkisp_register_irq(struct rkisp_hw_dev *dev);
 void rkisp_soft_reset(struct rkisp_hw_dev *dev, bool is_secure);
-void rkisp_hw_enum_isp_size(struct rkisp_hw_dev *hw_dev);
 #endif

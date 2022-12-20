@@ -272,7 +272,11 @@ static int rkisp_params_fh_open(struct file *filp)
 static int rkisp_params_fop_release(struct file *file)
 {
 	struct rkisp_isp_params_vdev *params = video_drvdata(file);
+	struct video_device *vdev = video_devdata(file);
 	int ret;
+
+	if (file->private_data == vdev->queue->owner && params->ops->fop_release)
+		params->ops->fop_release(params);
 
 	ret = vb2_fop_release(file);
 	if (!ret)
@@ -404,19 +408,14 @@ void rkisp_params_set_meshbuf_size(struct rkisp_isp_params_vdev *params_vdev,
 
 void rkisp_params_meshbuf_free(struct rkisp_isp_params_vdev *params_vdev, u64 id)
 {
-	/* isp working no to free buf */
-	if (params_vdev->ops->free_meshbuf &&
-	    !(params_vdev->dev->isp_state & ISP_START))
+	if (params_vdev->ops->free_meshbuf)
 		params_vdev->ops->free_meshbuf(params_vdev, id);
 }
 
 void rkisp_params_stream_stop(struct rkisp_isp_params_vdev *params_vdev)
 {
-	/* isp stop to free buf */
 	if (params_vdev->ops->stream_stop)
 		params_vdev->ops->stream_stop(params_vdev);
-	if (params_vdev->ops->fop_release)
-		params_vdev->ops->fop_release(params_vdev);
 }
 
 bool rkisp_params_check_bigmode(struct rkisp_isp_params_vdev *params_vdev)

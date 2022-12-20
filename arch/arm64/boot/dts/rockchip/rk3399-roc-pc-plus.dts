@@ -154,13 +154,13 @@
 		vin-supply = <&vcc3v3_sys>;
 	};
 
-	sys_12v: sys-12v {
-		compatible = "regulator-fixed";
-		regulator-name = "sys_12v";
-		regulator-always-on;
-		regulator-boot-on;
-		vin-supply = <&dc_12v>;
-	};
+//	sys_12v: sys-12v {
+//		compatible = "regulator-fixed";
+//		regulator-name = "sys_12v";
+//		regulator-always-on;
+//		regulator-boot-on;
+//		vin-supply = <&dc_12v>;
+//	};
 
 	vcc_vbus_typec0: vcc-vbus-typec0 {
 		compatible = "regulator-fixed";
@@ -313,44 +313,6 @@
 		 */
 		reset-gpios = <&gpio0 RK_PB2 GPIO_ACTIVE_LOW>;
 	};
-
-
-
-//	rk_wlan: wireless-wlan {
-//		compatible = "wlan-platdata";
-//		rockchip,grf = <&grf>;
-//		wifi_chip_type = "ap6354";
-//		sdio_vref = <1800>;
-//		WIFI,host_wake_irq = <&gpio0 3 GPIO_ACTIVE_HIGH>; /* GPIO0_a3 */
-//		status = "okay";
-//	};
-
-//	rk_bluetooth: wireless-bluetooth {
-//		compatible = "bluetooth-platdata";
-//		clocks = <&rk808 1>;
-//		clock-names = "ext_clock";
-//		//wifi-bt-power-toggle;
-//		uart_rts_gpios = <&gpio2 19 GPIO_ACTIVE_LOW>; /* GPIO2_C3 */
-//		pinctrl-names = "default", "rts_gpio";
-//		pinctrl-0 = <&uart0_rts>;
-//		pinctrl-1 = <&uart0_gpios>;
-//		//BT,power_gpio  = <&gpio3 19 GPIO_ACTIVE_HIGH>; /* GPIOx_xx */
-//		BT,reset_gpio    = <&gpio0 9 GPIO_ACTIVE_HIGH>; /* GPIO0_B1 */
-//		BT,wake_gpio     = <&gpio2 26 GPIO_ACTIVE_HIGH>; /* GPIO2_D2 */
-//		BT,wake_host_irq = <&gpio0 4 GPIO_ACTIVE_HIGH>; /* GPIO0_A4 */
-//		status = "okay";
-//	};
-
-//	test-power {
-//		status = "okay";
-//	};
-
-//	xin32k: xin32k {
-//		compatible = "fixed-clock";
-//		clock-frequency = <32768>;
-//		clock-output-names = "xin32k";
-//		#clock-cells = <0>;
-//	};
 
 };
 
@@ -775,35 +737,44 @@
 };
 
 &i2c7 {
-	i2c-scl-rising-time-ns = <600>;
-	i2c-scl-falling-time-ns = <20>;
 	status = "okay";
+	i2c-scl-rising-time-ns = <345>;
+	i2c-scl-falling-time-ns = <11>;
+	clock-frequency = <400000>;
 
-	fusb0: usb-typec@22 {
-		compatible = "fcs,fusb302";
+	fusb0: fusb30x@22 {
+		compatible = "fairchild,fusb302";
 		reg = <0x22>;
-		interrupt-parent = <&gpio1>;
-		interrupts = <2 IRQ_TYPE_LEVEL_LOW>;
+		//charge-dev = <&mp8859>;
+		power-dev = <&mp8859>;
 		pinctrl-names = "default";
+		//pinctrl-0 = <&fusb0_int &vcc_chargen_h>;
 		pinctrl-0 = <&fusb0_int>;
-		vbus-supply = <&vcc_vbus_typec0>;
+		int-n-gpios = <&gpio1 2 GPIO_ACTIVE_HIGH>;
+		//charge-en-gpios = <&gpio0 1 GPIO_ACTIVE_HIGH>;
 		status = "okay";
 	};
 
-	mp8859: regulator@66 {
+	mp8859: mp8859@66 {
 		compatible = "mps,mp8859";
 		reg = <0x66>;
-		dc_12v: mp8859_dcdc {
-			regulator-name = "dc_12v";
-			regulator-min-microvolt = <12000000>;
-			regulator-max-microvolt = <12000000>;
-			regulator-always-on;
-			regulator-boot-on;
-			vin-supply = <&vcc_vbus_typec0>;
+		status = "okay";
+        extcon = <&fusb0>;
+		max-input-voltage = <15000000>;
+		max-input-current = <3000000>;
+		//charge-en-gpios =<&gpio0 1 GPIO_ACTIVE_HIGH>;
+		//pinctrl-names = "default";
+		//pinctrl-0 = <&vcc_chargen_h>;
+		//mp,register-power-supply;
 
-			regulator-state-mem {
-				regulator-on-in-suspend;
-				regulator-suspend-microvolt = <12000000>;
+		regulators {
+			sys_12v: mp8859_dcdc1 {
+				regulator-name = "sys_12v";
+				regulator-min-microvolt = <12300000>;
+				regulator-max-microvolt = <12300000>;
+				regulator-ramp-delay = <8000>;
+				//regulator-always-on;
+				//regulator-boot-on;
 			};
 		};
 	};
@@ -816,12 +787,19 @@
 };
 
 &i2s1 {
+	status = "okay";
+	rockchip,i2s-broken-burst-len;
 	rockchip,playback-channels = <2>;
 	rockchip,capture-channels = <2>;
-	status = "okay";
+	#sound-dai-cells = <0>;
+	assigned-clocks = <&cru SCLK_I2S1_DIV>;
+	assigned-clock-parents = <&cru PLL_GPLL>;
 };
 
 &i2s2 {
+	#sound-dai-cells = <0>;
+	dmas = <&dmac_bus 4>;
+	dma-names = "tx";
 	status = "okay";
 };
 
