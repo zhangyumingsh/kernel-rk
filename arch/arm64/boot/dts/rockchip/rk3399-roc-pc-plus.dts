@@ -13,6 +13,9 @@
 //#include "rk3399-android.dtsi"
 #include "rk3399-nanopi4-rkisp1.dtsi"
 #include "rk3399-linux.dtsi"
+#include <dt-bindings/input/input.h>
+#include <dt-bindings/display/media-bus-format.h>
+//#include "include/uapi/drm/drm_mode.h"
 
 / {
 	model = "Firefly ROC-RK3399-PC-PLUS Board";
@@ -49,6 +52,21 @@
 		clock-frequency = <125000000>;
 		clock-output-names = "clkin_gmac";
 		#clock-cells = <0>;
+	};
+
+	hdmi_sound: hdmi-sound {
+		status = "disabled";
+		compatible = "simple-audio-card";
+		simple-audio-card,format = "i2s";
+		simple-audio-card,mclk-fs = <256>;
+		simple-audio-card,name = "rockchip,hdmi";
+
+		simple-audio-card,cpu {
+			sound-dai = <&i2s2>;
+		};
+		simple-audio-card,codec {
+			sound-dai = <&hdmi>;
+		};
 	};
 
 	clkin_cam27m: external-camera-clock {
@@ -198,34 +216,21 @@
 		rockchip,codec = <&cdn_dp 1>;
 	};
 
-//	es8388-sound {
-//		compatible = "simple-audio-card";
-//		pinctrl-names = "default";
-//		pinctrl-0 = <&hp_det_pin>;
-//		simple-audio-card,name = "rockchip,es8388-codec";
-//		simple-audio-card,format = "i2s";
-//		simple-audio-card,mclk-fs = <256>;
-//		simple-audio-card,widgets =
-//			"Microphone", "Mic Jack",
-//			"Headphone", "Headphones";
-//		simple-audio-card,routing =
-//			"LINPUT1", "Mic Jack",
-//			"Headphone Amp INL", "LOUT2",
-//			"Headphone Amp INR", "ROUT2",
-//			"Headphones", "Headphone Amp OUTL",
-//			"Headphones", "Headphone Amp OUTR";
-//		simple-audio-card,hp-det-gpio = <&gpio2 RK_PA6 GPIO_ACTIVE_HIGH>;
-//		simple-audio-card,aux-devs = <&headphones_amp>;
-//		simple-audio-card,pin-switches = "Headphones";
-//
-//		simple-audio-card,codec {
-//			sound-dai = <&es8388>;
-//		};
-
-//		simple-audio-card,cpu {
-//			sound-dai = <&i2s1>;
-//		};
-//	};
+	es8388-sound {
+		status = "okay";
+		compatible = "simple-audio-card";
+		simple-audio-card,format = "i2s";
+		simple-audio-card,name = "rockchip,es8388-codec";
+		simple-audio-card,mclk-fs = <256>;
+		simple-audio-card,cpu {
+			sound-dai = <&i2s1>;
+			system-clock-frequency = <11289600>;
+		};
+		simple-audio-card,codec {
+			sound-dai = <&es8388>;
+			system-clock-frequency = <11289600>;
+		};
+	};
 
 	/* not amplifier, used as switcher only */
 //	headphones_amp: headphones-amp {
@@ -236,21 +241,6 @@
 //		sound-name-prefix = "Headphone Amp";
 //		VCC-supply = <&vcca3v0_codec>;
 //	};
-
-	hdmi_sound: hdmi-sound {
-		status = "okay";
-		compatible = "simple-audio-card";
-		simple-audio-card,format = "i2s";
-		simple-audio-card,mclk-fs = <256>;
-		simple-audio-card,name = "rockchip,hdmi";
-
-		simple-audio-card,cpu {
-			sound-dai = <&i2s2>;
-		};
-		simple-audio-card,codec {
-			sound-dai = <&hdmi>;
-		};
-	};
 
 	adc-keys {
 		compatible = "adc-keys";
@@ -441,14 +431,28 @@
 	status = "okay";
 };
 
+&display_subsystem {
+	status = "okay";
+};
+
 &vopb {
+	status = "okay";
 	assigned-clocks = <&cru DCLK_VOP0_DIV>;
-	assigned-clock-parents = <&cru PLL_VPLL>;
+	assigned-clock-parents = <&cru PLL_CPLL>;
+};
+
+&vopb_mmu {
+	status = "okay";
 };
 
 &vopl {
+	status = "okay";
 	assigned-clocks = <&cru DCLK_VOP1_DIV>;
-	assigned-clock-parents = <&cru PLL_CPLL>;
+	assigned-clock-parents = <&cru PLL_VPLL>;
+};
+
+&vopl_mmu {
+	status = "okay";
 };
 
 &hdmi {
@@ -456,7 +460,12 @@
 //	ddc-i2c-bus = <&i2c7>;
 	/delete-property/ pinctrl-names;
 	/delete-property/ pinctrl-0;
-//	rockchip,defaultmode = <1>; /* CEA 1920x1080@60Hz */
+	rockchip,defaultmode = <1>; /* CEA 1920x1080@60Hz */
+
+	#address-cells = <1>;
+	#size-cells = <0>;
+	#sound-dai-cells = <0>;
+
 };
 
 //&hdmi {
@@ -475,7 +484,7 @@
 &route_hdmi {
 	connect = <&vopb_out_hdmi>;
 	status = "okay";
-//	logo,mode = "center";
+	logo,mode = "center";
 };
 
 &hdmi_sound {
@@ -725,11 +734,18 @@
 };
 
 &i2c1 {
+	status = "okay";
 	es8388: es8388@11 {
-		compatible = "everest,es8388";
+		compatible = "everest,es8323";
+		status = "okay";
 		reg = <0x11>;
+		hp-det-gpio = <&gpio2 6 GPIO_ACTIVE_HIGH>;
+		hp-ctl-gpio = <&gpio0 2 GPIO_ACTIVE_HIGH>;
 		clock-names = "mclk";
 		clocks = <&cru SCLK_I2S_8CH_OUT>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&i2s_8ch_mclk>;
+		pinctrl-1 = <&ear_ctl_h>;
 		#sound-dai-cells = <0>;
 	};
 };
@@ -750,100 +766,13 @@
 		compatible = "fcs,fusb302";
 		reg = <0x22>;
 		interrupt-parent = <&gpio1>;
-//		interrupts = <RK_PA2 IRQ_TYPE_LEVEL_LOW>;
 		interrupts = <1 IRQ_TYPE_LEVEL_LOW>;
 		pinctrl-names = "default";
 		pinctrl-0 = <&fusb1_int>;
-//		vbus-supply = <&vbus_typec>;
 		vbus-supply = <&vcc_vbus_typec1>;
-	};
-};
-
-/*
-		connector {
-			compatible = "usb-c-connector";
-			data-role = "dual";
-			displayport = <&cdn_dp 0>;
-			label = "USB-C";
-			op-sink-microwatt = <1000000>;
-			power-role = "dual";
-			sink-pdos =
-				<PDO_FIXED(5000, 1000, PDO_FIXED_USB_COMM)>;
-			source-pdos =
-				<PDO_FIXED(5000, 1500, PDO_FIXED_USB_COMM)>;
-			try-power-role = "sink";
-
-			altmodes {
-				#address-cells = <1>;
-				#size-cells = <0>;
-
-				altmode@0 {
-					reg = <0>;
-					svid = <0xff01>;
-					vdo = <0xffffffff>;
-				};
-			};
-
-			ports {
-				#address-cells = <1>;
-				#size-cells = <0>;
-
-				port@0 {
-					reg = <0>;
-					usbc_mux: endpoint {
-						remote-endpoint = <&tcphy0_mode_mux>;
-					};
-				};
-
-				port@1 {
-					reg = <1>;
-					usbc_orien_sw: endpoint {
-						remote-endpoint = <&tcphy0_orient_switch>;
-					};
-				};
-			};
-		};
-
-		ports {
-			#address-cells = <1>;
-			#size-cells = <0>;
-
-			port@0 {
-				reg = <0>;
-				usbc0_role_sw: endpoint {
-					remote-endpoint = <&dwc3_0_role_switch>;
-				};
-			};
-		};
-	};
-
-	gt9xx: goodix_ts@5d {
-		compatible = "goodix,gt9xx";
-		reg = <0x5d>;
-		interrupt-parent = <&gpio1>;
-		interrupts = <20 IRQ_TYPE_EDGE_FALLING>;
-		goodix,irq-gpio = <&gpio1 20 GPIO_ACTIVE_HIGH>;
-		goodix,rst-gpio = <&gpio1 13 GPIO_ACTIVE_LOW>;
 		status = "okay";
 	};
-
-	ft5x06_ts@38 {
-		compatible = "edt,edt-ft5x06", "ft5x06";
-		reg = <0x38>;
-		interrupt-parent = <&gpio1>;
-		interrupts = <20 IRQ_TYPE_EDGE_FALLING>;
-		status = "okay";
-	};
-
-	onewire_ts@2f {
-		status = "disabled";
-		compatible = "onewire";
-		reg = <0x2f>;
-		interrupt-parent = <&gpio1>;
-		interrupts = <20 IRQ_TYPE_EDGE_FALLING>;
-	};
 };
-*/
 
 &i2c7 {
 	i2c-scl-rising-time-ns = <600>;
@@ -880,58 +809,24 @@
 	};
 };
 
-/* <4 RK_PA0 1 &pcfg_pull_none> is used as i2s_8ch_mclk_pin */
-//&i2s0_8ch_bus {
-//	rockchip,pins =
-//		<3 RK_PD0 1 &pcfg_pull_none>,
-//		<3 RK_PD1 1 &pcfg_pull_none>,
-//		<3 RK_PD2 1 &pcfg_pull_none>,
-//		<3 RK_PD3 1 &pcfg_pull_none>,
-//		<3 RK_PD4 1 &pcfg_pull_none>,
-//		<3 RK_PD5 1 &pcfg_pull_none>,
-//		<3 RK_PD6 1 &pcfg_pull_none>,
-//		<3 RK_PD7 1 &pcfg_pull_none>;
-//};
-
-//&i2s1 {
-//	pinctrl-names = "default";
-//	pinctrl-0 = <&i2s_8ch_mclk_pin>, <&i2s1_2ch_bus>;
-//	rockchip,playback-channels = <2>;
-//	rockchip,capture-channels = <2>;
-//	status = "okay";
-//};
-
-/*
-&i2s0_2ch_bus {
-	rockchip,pins =
-		<3 RK_PD0 1 &pcfg_pull_none>,
-		<3 RK_PD1 1 &pcfg_pull_none>,
-		<3 RK_PD2 1 &pcfg_pull_none>,
-		<3 RK_PD3 1 &pcfg_pull_none>,
-		<3 RK_PD7 1 &pcfg_pull_none>;
-};
-
 &i2s0 {
-	status = "okay";
 	rockchip,playback-channels = <8>;
 	rockchip,capture-channels = <8>;
-	#sound-dai-cells = <0>;
+	status = "okay";
 };
 
 &i2s1 {
-	assigned-clocks = <&cru SCLK_I2SOUT_SRC>;
-	assigned-clock-parents = <&cru SCLK_I2S1_8CH>;
+	rockchip,playback-channels = <2>;
+	rockchip,capture-channels = <2>;
+	status = "okay";
 };
-*/
 
 &i2s2 {
-	#sound-dai-cells = <0>;
 	status = "okay";
 };
 
 &io_domains {
 	status = "okay";
-
 	bt656-supply = <&vcc_3v0>;		/* bt656_gpio2ab_ms */
 	audio-supply = <&vcca1v8_codec>;	/* audio_gpio3d4a_ms */
 	sdmmc-supply = <&vccio_sd>;		/* sdmmc_gpio4b_ms */
@@ -1164,14 +1059,10 @@
 		};
 	};
 
-	es8388 {
-		ear_ctl_pin: ear-ctl-pin {
-			rockchip,pins = <0 RK_PA2 RK_FUNC_GPIO &pcfg_output_high>;
-		};
-
-		hp_det_pin: hp-det-pin {
-			rockchip,pins = <2 RK_PA6 RK_FUNC_GPIO &pcfg_pull_down>;
-		};
+	 es8388-pins {
+		ear_ctl_h: ear-ctl-h {
+                        rockchip,pins = <0 2 RK_FUNC_GPIO &pcfg_pull_down>;
+                };
 	};
 
 	headphone {
@@ -1238,32 +1129,26 @@
 
 };
 
+&pwm0 {
+	status = "okay";
+};
+
+&pwm1 {
+	status = "okay";
+};
+
+&pwm2 {
+	status = "okay";
+	pinctrl-names = "active";
+	pinctrl-0 = <&pwm2_pin_pull_down>;
+};
+
 &uart0 {
 	pinctrl-names = "default";
 	pinctrl-0 = <&uart0_xfer &uart0_cts &uart0_rts>;
 	status = "okay";
 };
 
-&display_subsystem {
-	status = "okay";
-};
-
-&vopb {
-	status = "okay";
-	assigned-clocks = <&cru DCLK_VOP0_DIV>;
-	assigned-clock-parents = <&cru PLL_CPLL>;
-};
-
-&vopb_mmu {
-	status = "okay";
-};
-
-&vopl {
-	status = "okay";
-	assigned-clocks = <&cru DCLK_VOP1_DIV>;
-	assigned-clock-parents = <&cru PLL_VPLL>;
-};
-
-&vopl_mmu {
+&rkvdec {
 	status = "okay";
 };
