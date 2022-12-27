@@ -1,137 +1,346 @@
-// SPDX-License-Identifier: GPL-2.0+
 /*
+ * drivers/net/phy/motorcomm.c
+ *
  * Driver for Motorcomm PHYs
  *
- * Author: Peter Geis <pgwipeout@gmail.com>
+ * Author: Leilei Zhao <leilei.zhao@motorcomm.com>
+ *
+ * Copyright (c) 2019 Motorcomm, Inc.
+ *
+ * This program is free software; you can redistribute  it and/or modify it
+ * under  the terms of  the GNU General  Public License as published by the
+ * Free Software Foundation;  either version 2 of the  License, or (at your
+ * option) any later version.
+ *
+ * Support : Motorcomm Phys:
+ *		Giga phys: yt8511, yt8521
+ *		100/10 Phys : yt8512, yt8512b, yt8510
+ *		Automotive 100Mb Phys : yt8010
+ *		Automotive 100/10 hyper range Phys: yt8510
  */
 
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/phy.h>
+#include <linux/motorcomm_phy.h>
+#include <linux/of.h>
+#include <linux/clk.h>
 
-#define PHY_ID_YT8511		0x0000010a
-
-#define YT8511_PAGE_SELECT	0x1e
-#define YT8511_PAGE		0x1f
-#define YT8511_EXT_CLK_GATE	0x0c
-#define YT8511_EXT_DELAY_DRIVE	0x0d
-#define YT8511_EXT_SLEEP_CTRL	0x27
-
-/* 2b00 25m from pll
- * 2b01 25m from xtl *default*
- * 2b10 62.m from pll
- * 2b11 125m from pll
- */
-#define YT8511_CLK_125M		(BIT(2) | BIT(1))
-#define YT8511_PLLON_SLP	BIT(14)
-
-/* RX Delay enabled = 1.8ns 1000T, 8ns 10/100T */
-#define YT8511_DELAY_RX		BIT(0)
-
-/* TX Gig-E Delay is bits 7:4, default 0x5
- * TX Fast-E Delay is bits 15:12, default 0xf
- * Delay = 150ps * N - 250ps
- * On = 2000ps, off = 50ps
- */
-#define YT8511_DELAY_GE_TX_EN	(0xf << 4)
-#define YT8511_DELAY_GE_TX_DIS	(0x2 << 4)
-#define YT8511_DELAY_FE_TX_EN	(0xf << 12)
-#define YT8511_DELAY_FE_TX_DIS	(0x2 << 12)
-
-static int yt8511_read_page(struct phy_device *phydev)
+static int ytphy_read_ext(struct phy_device *phydev, u32 regnum)
 {
-	return __phy_read(phydev, YT8511_PAGE_SELECT);
-};
+	int ret;
+	int val;
 
-static int yt8511_write_page(struct phy_device *phydev, int page)
-{
-	return __phy_write(phydev, YT8511_PAGE_SELECT, page);
-};
-
-static int yt8511_config_init(struct phy_device *phydev)
-{
-	int oldpage, ret = 0;
-	unsigned int ge, fe;
-
-	oldpage = phy_select_page(phydev, YT8511_EXT_CLK_GATE);
-	if (oldpage < 0)
-		goto err_restore_page;
-
-	/* set rgmii delay mode */
-	switch (phydev->interface) {
-	case PHY_INTERFACE_MODE_RGMII:
-		ge = YT8511_DELAY_GE_TX_DIS;
-		fe = YT8511_DELAY_FE_TX_DIS;
-		break;
-	case PHY_INTERFACE_MODE_RGMII_RXID:
-		ge = YT8511_DELAY_RX | YT8511_DELAY_GE_TX_DIS;
-		fe = YT8511_DELAY_FE_TX_DIS;
-		break;
-	case PHY_INTERFACE_MODE_RGMII_TXID:
-		ge = YT8511_DELAY_GE_TX_EN;
-		fe = YT8511_DELAY_FE_TX_EN;
-		break;
-	case PHY_INTERFACE_MODE_RGMII_ID:
-		ge = YT8511_DELAY_RX | YT8511_DELAY_GE_TX_EN;
-		fe = YT8511_DELAY_FE_TX_EN;
-		break;
-	default: /* do not support other modes */
-		ret = -EOPNOTSUPP;
-		goto err_restore_page;
-	}
-
-	ret = __phy_modify(phydev, YT8511_PAGE, (YT8511_DELAY_RX | YT8511_DELAY_GE_TX_EN), ge);
+	ret = phy_write(phydev, REG_DEBUG_ADDR_OFFSET, regnum);
 	if (ret < 0)
-		goto err_restore_page;
+		return ret;
 
-	/* set clock mode to 125mhz */
-	ret = __phy_modify(phydev, YT8511_PAGE, 0, YT8511_CLK_125M);
-	if (ret < 0)
-		goto err_restore_page;
+	val = phy_read(phydev, REG_DEBUG_DATA);
 
-	/* fast ethernet delay is in a separate page */
-	ret = __phy_write(phydev, YT8511_PAGE_SELECT, YT8511_EXT_DELAY_DRIVE);
-	if (ret < 0)
-		goto err_restore_page;
-
-	ret = __phy_modify(phydev, YT8511_PAGE, YT8511_DELAY_FE_TX_EN, fe);
-	if (ret < 0)
-		goto err_restore_page;
-
-	/* leave pll enabled in sleep */
-	ret = __phy_write(phydev, YT8511_PAGE_SELECT, YT8511_EXT_SLEEP_CTRL);
-	if (ret < 0)
-		goto err_restore_page;
-
-	ret = __phy_modify(phydev, YT8511_PAGE, 0, YT8511_PLLON_SLP);
-	if (ret < 0)
-		goto err_restore_page;
-
-err_restore_page:
-	return phy_restore_page(phydev, oldpage, ret);
+	return val;
 }
 
-static struct phy_driver motorcomm_phy_drvs[] = {
+static int ytphy_write_ext(struct phy_device *phydev, u32 regnum, u16 val)
+{
+	int ret;
+
+	ret = phy_write(phydev, REG_DEBUG_ADDR_OFFSET, regnum);
+	if (ret < 0)
+		return ret;
+
+	ret = phy_write(phydev, REG_DEBUG_DATA, val);
+
+	return ret;
+}
+
+static int yt8010_config_aneg(struct phy_device *phydev)
+{
+	phydev->speed = SPEED_100;
+	return 0;
+}
+
+static int yt8512_clk_init(struct phy_device *phydev)
+{
+	int ret;
+	int val;
+
+	val = ytphy_read_ext(phydev, YT8512_EXTREG_AFE_PLL);
+	if (val < 0)
+		return val;
+
+	val |= YT8512_CONFIG_PLL_REFCLK_SEL_EN;
+
+	ret = ytphy_write_ext(phydev, YT8512_EXTREG_AFE_PLL, val);
+	if (ret < 0)
+		return ret;
+
+	val = ytphy_read_ext(phydev, YT8512_EXTREG_EXTEND_COMBO);
+	if (val < 0)
+		return val;
+
+	val |= YT8512_CONTROL1_RMII_EN;
+
+	ret = ytphy_write_ext(phydev, YT8512_EXTREG_EXTEND_COMBO, val);
+	if (ret < 0)
+		return ret;
+
+	val = phy_read(phydev, MII_BMCR);
+	if (val < 0)
+		return val;
+
+	val |= YT_SOFTWARE_RESET;
+	ret = phy_write(phydev, MII_BMCR, val);
+
+	return ret;
+}
+
+static int yt8512_led_init(struct phy_device *phydev)
+{
+	int ret;
+	int val;
+	int mask;
+
+	val = ytphy_read_ext(phydev, YT8512_EXTREG_LED0);
+	if (val < 0)
+		return val;
+
+	val |= YT8512_LED0_ACT_BLK_IND;
+
+	mask = YT8512_LED0_DIS_LED_AN_TRY | YT8512_LED0_BT_BLK_EN |
+		YT8512_LED0_HT_BLK_EN | YT8512_LED0_COL_BLK_EN |
+		YT8512_LED0_BT_ON_EN;
+	val &= ~mask;
+
+	ret = ytphy_write_ext(phydev, YT8512_EXTREG_LED0, val);
+	if (ret < 0)
+		return ret;
+
+	val = ytphy_read_ext(phydev, YT8512_EXTREG_LED1);
+	if (val < 0)
+		return val;
+
+	val |= YT8512_LED1_BT_ON_EN;
+
+	mask = YT8512_LED1_TXACT_BLK_EN | YT8512_LED1_RXACT_BLK_EN;
+	val &= ~mask;
+
+	ret = ytphy_write_ext(phydev, YT8512_LED1_BT_ON_EN, val);
+
+	return ret;
+}
+
+static int yt8512_config_init(struct phy_device *phydev)
+{
+	int ret;
+	int val;
+
+	ret = yt8512_clk_init(phydev);
+	if (ret < 0)
+		return ret;
+
+	ret = yt8512_led_init(phydev);
+
+	/* disable auto sleep */
+	val = ytphy_read_ext(phydev, YT8512_EXTREG_SLEEP_CONTROL1);
+	if (val < 0)
+		return val;
+
+	val &= (~BIT(YT8512_EN_SLEEP_SW_BIT));
+
+	ret = ytphy_write_ext(phydev, YT8512_EXTREG_SLEEP_CONTROL1, val);
+	if (ret < 0)
+		return ret;
+
+	return ret;
+}
+
+static int yt8512_read_status(struct phy_device *phydev)
+{
+	int ret;
+	int val;
+	int speed, speed_mode, duplex;
+
+	ret = genphy_update_link(phydev);
+	if (ret)
+		return ret;
+
+	val = phy_read(phydev, REG_PHY_SPEC_STATUS);
+	if (val < 0)
+		return val;
+
+	duplex = (val & YT8512_DUPLEX) >> YT8512_DUPLEX_BIT;
+	speed_mode = (val & YT8512_SPEED_MODE) >> YT8512_SPEED_MODE_BIT;
+	switch (speed_mode) {
+	case 0:
+		speed = SPEED_10;
+		break;
+	case 1:
+		speed = SPEED_100;
+		break;
+	case 2:
+	case 3:
+	default:
+		speed = SPEED_UNKNOWN;
+		break;
+	}
+
+	phydev->speed = speed;
+	phydev->duplex = duplex;
+
+	return 0;
+}
+
+static int yt8521_config_init(struct phy_device *phydev)
+{
+	int ret;
+	int val;
+
+	/* disable auto sleep */
+	val = ytphy_read_ext(phydev, YT8521_EXTREG_SLEEP_CONTROL1);
+	if (val < 0)
+		return val;
+
+	val &= (~BIT(YT8521_EN_SLEEP_SW_BIT));
+	ret = ytphy_write_ext(phydev, YT8521_EXTREG_SLEEP_CONTROL1, val);
+	if (ret < 0)
+		return ret;
+
+	/* switch to access UTP */
+	ret = ytphy_write_ext(phydev, 0xa000, 0);
+	if (ret < 0)
+		return ret;
+
+	/* enable RXC clock when no wire plug */
+	val = ytphy_read_ext(phydev, 0xc);
+	if (val < 0)
+		return val;
+
+	val &= ~(1 << 12);
+	ret = ytphy_write_ext(phydev, 0xc, val);
+	if (ret < 0)
+		return ret;
+
+	/* output SyncE clock (125mhz) even link is down */
+	ret = ytphy_write_ext(phydev, 0xa012, 0x38);
+	if (ret < 0)
+		return ret;
+
+	/* disable rgmii clk 2ns delay */
+	val = ytphy_read_ext(phydev, 0xa001);
+	if (val < 0)
+		return val;
+
+	val &= ~(1 << 8);
+	ret = ytphy_write_ext(phydev, 0xa001, val);
+	if (ret < 0)
+		return ret;
+
+	/* setup delay */
+	val = (1 << 10) | (0xf << 4) | 5;
+	ret = ytphy_write_ext(phydev, 0xa003, val);
+	if (ret < 0)
+		return ret;
+
+	/* LED0: Unused/Off, LED1: Link, LED2: Activity, 8Hz */
+	ytphy_write_ext(phydev, 0xa00b, 0xe004);
+	ytphy_write_ext(phydev, 0xa00c, 0);
+	ytphy_write_ext(phydev, 0xa00d, 0x2600);
+	ytphy_write_ext(phydev, 0xa00e, 0x0070);
+	ytphy_write_ext(phydev, 0xa00f, 0x000a);
+
+	return 0;
+}
+
+static int yt8521_config_intr(struct phy_device *phydev)
+{
+	int val;
+
+	if (phydev->interrupts == PHY_INTERRUPT_ENABLED)
+		val = BIT(14) | BIT(13) | BIT(11) | BIT(10);
+	else
+		val = 0;
+
+	return phy_write(phydev, REG_INT_MASK, val);
+}
+
+static int yt8521_ack_interrupt(struct phy_device *phydev)
+{
+	int val;
+
+	val = phy_read(phydev, REG_INT_STATUS);
+	phydev_dbg(phydev, "intr status 0x04%x\n", val);
+
+	return (val < 0) ? val : 0;
+}
+
+static struct phy_driver ytphy_drvs[] = {
 	{
-		PHY_ID_MATCH_EXACT(PHY_ID_YT8511),
+		.phy_id		= PHY_ID_YT8010,
+		.name		= "YT8010 Automotive Ethernet",
+		.phy_id_mask	= MOTORCOMM_PHY_ID_MASK,
+		.features	= PHY_BASIC_FEATURES,
+		.config_aneg	= yt8010_config_aneg,
+		.read_status	= genphy_read_status,
+	}, {
+		.phy_id		= PHY_ID_YT8510,
+		.name		= "YT8510 100/10Mb Ethernet",
+		.phy_id_mask	= MOTORCOMM_PHY_ID_MASK,
+		.features	= PHY_BASIC_FEATURES,
+		.read_status	= genphy_read_status,
+	}, {
+		.phy_id		= PHY_ID_YT8511,
 		.name		= "YT8511 Gigabit Ethernet",
-		.config_init	= yt8511_config_init,
+		.phy_id_mask	= MOTORCOMM_PHY_ID_MASK,
+		.features	= PHY_GBIT_FEATURES,
+		.read_status	= genphy_read_status,
 		.suspend	= genphy_suspend,
 		.resume		= genphy_resume,
-		.read_page	= yt8511_read_page,
-		.write_page	= yt8511_write_page,
+	}, {
+		.phy_id		= PHY_ID_YT8512,
+		.name		= "YT8512 Ethernet",
+		.phy_id_mask	= MOTORCOMM_PHY_ID_MASK,
+		.features	= PHY_BASIC_FEATURES,
+		.config_init	= yt8512_config_init,
+		.read_status	= yt8512_read_status,
+		.suspend	= genphy_suspend,
+		.resume		= genphy_resume,
+	}, {
+		.phy_id		= PHY_ID_YT8512B,
+		.name		= "YT8512B Ethernet",
+		.phy_id_mask	= MOTORCOMM_PHY_ID_MASK,
+		.features	= PHY_BASIC_FEATURES,
+		.config_init	= yt8512_config_init,
+		.read_status	= yt8512_read_status,
+		.suspend	= genphy_suspend,
+		.resume		= genphy_resume,
+	}, {
+		.phy_id		= PHY_ID_YT8521,
+		.name		= "YT8521 Ethernet",
+		.phy_id_mask	= MOTORCOMM_PHY_ID_MASK,
+		/* PHY_GBIT_FEATURES */
+		.config_init	= yt8521_config_init,
+		.ack_interrupt	= yt8521_ack_interrupt,
+		.config_intr	= yt8521_config_intr,
+		.suspend	= genphy_suspend,
+		.resume		= genphy_resume,
 	},
 };
 
-module_phy_driver(motorcomm_phy_drvs);
+module_phy_driver(ytphy_drvs);
 
 MODULE_DESCRIPTION("Motorcomm PHY driver");
-MODULE_AUTHOR("Peter Geis");
+MODULE_AUTHOR("Leilei Zhao");
 MODULE_LICENSE("GPL");
 
-static const struct mdio_device_id __maybe_unused motorcomm_tbl[] = {
-	{ PHY_ID_MATCH_EXACT(PHY_ID_YT8511) },
-	{ /* sentinal */ }
+static struct mdio_device_id __maybe_unused motorcomm_tbl[] = {
+	{ PHY_ID_YT8010, MOTORCOMM_PHY_ID_MASK },
+	{ PHY_ID_YT8510, MOTORCOMM_PHY_ID_MASK },
+	{ PHY_ID_YT8511, MOTORCOMM_PHY_ID_MASK },
+	{ PHY_ID_YT8512, MOTORCOMM_PHY_ID_MASK },
+	{ PHY_ID_YT8512B, MOTORCOMM_PHY_ID_MASK },
+	{ PHY_ID_YT8521, MOTORCOMM_PHY_ID_MASK },
+	{ }
 };
 
 MODULE_DEVICE_TABLE(mdio, motorcomm_tbl);
+
