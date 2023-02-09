@@ -2877,17 +2877,17 @@ static void gup_sys_clk_init(void)
     buf = 1;
     i2c_write_bytes(i2c_connect_client, _bRW_MISCTL__OSC_CK_SEL, &buf, 1);
 }
-
+#if 0
 s32 gup_clk_calibration(void)
 {
     u8 buf;
     //u8 trigger;
     s32 i;
-    //struct timeval start, end;
+    struct timeval start, end;
     s32 count;
-    //s32 count_ref;
-    //s32 sec;
-    //s32 usec;
+    s32 count_ref;
+    s32 sec;
+    s32 usec;
     //unsigned long flags;
     struct goodix_ts_data *ts;
 
@@ -2941,7 +2941,7 @@ s32 gup_clk_calibration(void)
 		GTP_GPIO_OUTPUT(ts->irq_pin, 0);
         
         //local_irq_save(flags);
-        //do_gettimeofday(&start);
+        do_gettimeofday64(&start);
 		GTP_GPIO_OUTPUT(ts->irq_pin, 1);
         //local_irq_restore(flags);
         
@@ -2950,7 +2950,7 @@ s32 gup_clk_calibration(void)
         msleep(1);
         
         //local_irq_save(flags);
-        //do_gettimeofday(&end);
+        do_gettimeofday64(&end);
 		GTP_GPIO_OUTPUT(ts->irq_pin, 1);
         //local_irq_restore(flags);
         
@@ -2958,17 +2958,18 @@ s32 gup_clk_calibration(void)
         msleep(20);
 		GTP_GPIO_OUTPUT(ts->irq_pin, 0);
         
-        //usec = end.tv_usec - start.tv_usec;
-        //sec = end.tv_sec - start.tv_sec;
-        //count_ref = 60 * (usec+ sec * MILLION);//60= 60Mhz * 1us
+        usec = end.tv_usec - start.tv_usec;
+        sec = end.tv_sec - start.tv_sec;
+        count_ref = 60 * (usec+ sec * MILLION);//60= 60Mhz * 1us
         
-        //GTP_DEBUG("== time %d, %d, %d", sec, usec, count_ref);
+        GTP_DEBUG("== time %d, %d, %d", sec, usec, count_ref);
+        
+        if (count > count_ref)
+        {
+            GTP_DEBUG("== count_diff %d", count - count_ref);
+            break;
+        }
 
-        //if (count > count_ref)
-        //{
-        //    GTP_DEBUG("== count_diff %d", count - count_ref);
-        //    break;
-        //}
     #endif
     }
 
@@ -2999,7 +3000,7 @@ s32 gup_clk_calibration(void)
     return i;
 }
 
-
+#endif
 
 s32 gup_hold_ss51_dsp(struct i2c_client *client)
 {

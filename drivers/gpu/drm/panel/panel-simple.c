@@ -114,7 +114,7 @@ struct panel_desc {
 		unsigned int enable;
 		unsigned int disable;
 		unsigned int unprepare;
-		unsigned int reset;
+		//unsigned int reset;
 		unsigned int init;
 	} delay;
 
@@ -140,7 +140,7 @@ struct panel_simple {
 	struct i2c_adapter *ddc;
 
 	struct gpio_desc *enable_gpio;
-	struct gpio_desc *reset_gpio;
+	//struct gpio_desc *reset_gpio;
 	struct gpio_desc *hpd_gpio;
 
 	struct drm_display_mode override_mode;
@@ -418,6 +418,24 @@ static int panel_simple_regulator_disable(struct panel_simple *p)
 	return 0;
 }
 
+int panel_simple_loader_protect(struct drm_panel *panel)
+{
+	struct panel_simple *p = to_panel_simple(panel);
+	int err;
+
+	err = panel_simple_regulator_enable(p);
+	if (err < 0) {
+		dev_err(panel->dev, "failed to enable supply: %d\n", err);
+		return err;
+	}
+
+	p->prepared = true;
+	p->enabled = true;
+
+	return 0;
+}
+EXPORT_SYMBOL(panel_simple_loader_protect);
+
 static int panel_simple_disable(struct drm_panel *panel)
 {
 	struct panel_simple *p = to_panel_simple(panel);
@@ -444,7 +462,7 @@ static int panel_simple_unprepare(struct drm_panel *panel)
 		if (p->dsi)
 			panel_simple_xfer_dsi_cmd_seq(p, p->desc->exit_seq);
 
-	gpiod_direction_output(p->reset_gpio, 1);
+	//gpiod_direction_output(p->reset_gpio, 0);
 	gpiod_direction_output(p->enable_gpio, 0);
 
 	panel_simple_regulator_disable(p);
@@ -526,12 +544,12 @@ static int panel_simple_prepare(struct drm_panel *panel)
 		}
 	}
 
-	gpiod_direction_output(p->reset_gpio, 1);
+//	gpiod_direction_output(p->reset_gpio, 1);
 
-	if (p->desc->delay.reset)
-		msleep(p->desc->delay.reset);
+//	if (p->desc->delay.reset)
+//		msleep(p->desc->delay.reset);
 
-	gpiod_direction_output(p->reset_gpio, 0);
+//	gpiod_direction_output(p->reset_gpio, 0);
 
 	if (p->desc->delay.init)
 		msleep(p->desc->delay.init);
@@ -792,13 +810,13 @@ static int panel_simple_probe(struct device *dev, const struct panel_desc *desc)
 		return err;
 	}
 
-	panel->reset_gpio = devm_gpiod_get_optional(dev, "reset", GPIOD_ASIS);
-	if (IS_ERR(panel->reset_gpio)) {
-		err = PTR_ERR(panel->reset_gpio);
-		if (err != -EPROBE_DEFER)
-			dev_err(dev, "failed to get reset GPIO: %d\n", err);
-		return err;
-	}
+	//panel->reset_gpio = devm_gpiod_get_optional(dev, "reset", GPIOD_ASIS);
+	//if (IS_ERR(panel->reset_gpio)) {
+	//	err = PTR_ERR(panel->reset_gpio);
+	//	if (err != -EPROBE_DEFER)
+	//		dev_err(dev, "failed to get reset GPIO: %d\n", err);
+	//	return err;
+	//}
 
 	err = of_drm_get_panel_orientation(dev->of_node, &panel->orientation);
 	if (err) {
@@ -929,30 +947,6 @@ static void panel_simple_shutdown(struct device *dev)
 	drm_panel_disable(&panel->base);
 	drm_panel_unprepare(&panel->base);
 }
-
-int panel_simple_loader_protect(struct drm_panel *panel)
-{
-	struct panel_simple *p;
-	int err;
-
-	if (panel->funcs != &panel_simple_funcs) {
-		dev_dbg(panel->dev, "not simple-panel\n");
-		return 0;
-	}
-
-	p = to_panel_simple(panel);
-	err = panel_simple_regulator_enable(p);
-	if (err < 0) {
-		dev_err(panel->dev, "failed to enable supply: %d\n", err);
-		return err;
-	}
-
-	p->prepared = true;
-	p->enabled = true;
-
-	return 0;
-}
-EXPORT_SYMBOL(panel_simple_loader_protect);
 
 static const struct drm_display_mode ampire_am_1280800n3tzqw_t00h_mode = {
 	.clock = 71100,
@@ -4619,6 +4613,7 @@ static bool of_child_node_is_present(const struct device_node *node,
 	return !!child;
 }
 
+int khadas_mipi_id = 0;
 static int panel_simple_of_get_desc_data(struct device *dev,
 					 struct panel_desc *desc)
 {
@@ -4627,7 +4622,41 @@ static int panel_simple_of_get_desc_data(struct device *dev,
 	const void *data;
 	int len;
 	int err;
+//printk("hlm khadas_mipi_id=%d\n",khadas_mipi_id);
+if(khadas_mipi_id == 2){
+	if (of_child_node_is_present(np, "display-timings1")) {
+		struct drm_display_mode *mode;
 
+		mode = devm_kzalloc(dev, sizeof(*mode), GFP_KERNEL);
+		if (!mode)
+			return -ENOMEM;
+
+		if (!of_get_drm_display_mode(np, mode, &bus_flags,
+					     OF_USE_NATIVE_MODE)) {
+			desc->modes = mode;
+			desc->num_modes = 1;
+			desc->bus_flags = bus_flags;
+		}
+	} else if (of_child_node_is_present(np, "panel-timing")) {
+		struct display_timing *timing;
+		struct videomode vm;
+
+		timing = devm_kzalloc(dev, sizeof(*timing), GFP_KERNEL);
+		if (!timing)
+			return -ENOMEM;
+
+		if (!of_get_display_timing(np, "panel-timing", timing)) {
+			desc->timings = timing;
+			desc->num_timings = 1;
+
+			bus_flags = 0;
+			vm.flags = timing->flags;
+			drm_bus_flags_from_videomode(&vm, &bus_flags);
+			desc->bus_flags = bus_flags;
+		}
+	}
+}
+else{
 	if (of_child_node_is_present(np, "display-timings")) {
 		struct drm_display_mode *mode;
 
@@ -4659,6 +4688,7 @@ static int panel_simple_of_get_desc_data(struct device *dev,
 			desc->bus_flags = bus_flags;
 		}
 	}
+}
 
 	if (desc->num_modes || desc->num_timings) {
 		of_property_read_u32(np, "bpc", &desc->bpc);
@@ -4671,7 +4701,7 @@ static int panel_simple_of_get_desc_data(struct device *dev,
 	of_property_read_u32(np, "enable-delay-ms", &desc->delay.enable);
 	of_property_read_u32(np, "disable-delay-ms", &desc->delay.disable);
 	of_property_read_u32(np, "unprepare-delay-ms", &desc->delay.unprepare);
-	of_property_read_u32(np, "reset-delay-ms", &desc->delay.reset);
+	//of_property_read_u32(np, "reset-delay-ms", &desc->delay.reset);
 	of_property_read_u32(np, "init-delay-ms", &desc->delay.init);
 
 	data = of_get_property(np, "panel-init-sequence", &len);
@@ -5128,6 +5158,23 @@ static int __init panel_simple_init(void)
 
 	return 0;
 }
+
+static char lcd_propname[1] = "0";
+static int __init khadas_mipi_id_para_setup(char *str)
+{
+        if (str != NULL)
+                sprintf(lcd_propname, "%s", str);
+		if(!strcmp(lcd_propname, "2"))
+			khadas_mipi_id = 2;
+		else if(!strcmp(lcd_propname, "1"))
+			khadas_mipi_id = 1;
+		else
+			khadas_mipi_id = 0;
+        //printk("hlm xx lcd_propname: %s  khadas_mipi_id: %d\n", lcd_propname, khadas_mipi_id);
+        return 0;
+}
+__setup("khadas_mipi_id=", khadas_mipi_id_para_setup);
+
 module_init(panel_simple_init);
 
 static void __exit panel_simple_exit(void)

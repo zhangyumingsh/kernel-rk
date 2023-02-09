@@ -253,6 +253,10 @@ struct dw_hdmi_qp {
 	bool frl_switch;
 	bool cec_enable;
 	bool allm_enable;
+	bool support_hdmi;
+	int force_output;
+	int vp_id;
+	int old_vp_id;
 
 	struct mutex mutex;		/* for state below and previous_mode */
 	struct drm_connector *curr_conn;/* current connector (only valid when !disabled) */
@@ -1938,6 +1942,7 @@ dw_hdmi_connector_detect(struct drm_connector *connector, bool force)
 		secondary = hdmi->plat_data->right;
 
 	result = hdmi->phy.ops->read_hpd(hdmi, hdmi->phy.data);
+	//printk("Enter into %s  %d  result=%d \n", __func__, __LINE__, result);
 
 	if (secondary) {
 		result_secondary = secondary->phy.ops->read_hpd(secondary, secondary->phy.data);
@@ -1947,7 +1952,12 @@ dw_hdmi_connector_detect(struct drm_connector *connector, bool force)
 		else
 			result = connector_status_disconnected;
 	}
-
+    if (result == connector_status_connected){
+            extcon_set_state_sync(hdmi->extcon, EXTCON_DISP_HDMI, true); //change for uboot-logo
+    }
+    else {
+            extcon_set_state_sync(hdmi->extcon, EXTCON_DISP_HDMI, false);
+    }
 	return result;
 }
 
@@ -1980,6 +1990,25 @@ dw_hdmi_update_hdr_property(struct drm_connector *connector)
 	return ret;
 }
 
+static bool dw_hdmi_qp_check_output_type_changed(struct dw_hdmi_qp *hdmi)
+{
+	bool sink_hdmi;
+
+	sink_hdmi = hdmi->sink_is_hdmi;
+
+	if (hdmi->force_output == 1)
+		hdmi->sink_is_hdmi = true;
+	else if (hdmi->force_output == 2)
+		hdmi->sink_is_hdmi = false;
+	else
+		hdmi->sink_is_hdmi = hdmi->support_hdmi;
+
+	if (sink_hdmi != hdmi->sink_is_hdmi)
+		return true;
+
+	return false;
+}
+
 static int dw_hdmi_connector_get_modes(struct drm_connector *connector)
 {
 	struct dw_hdmi_qp *hdmi =
@@ -2001,7 +2030,7 @@ static int dw_hdmi_connector_get_modes(struct drm_connector *connector)
 		dev_dbg(hdmi->dev, "got edid: width[%d] x height[%d]\n",
 			edid->width_cm, edid->height_cm);
 
-		hdmi->sink_is_hdmi = drm_detect_hdmi_monitor(edid);
+		hdmi->support_hdmi = drm_detect_hdmi_monitor(edid);
 		hdmi->sink_has_audio = drm_detect_monitor_audio(edid);
 		drm_connector_update_edid_property(connector, edid);
 		if (hdmi->cec_notifier)
@@ -2036,7 +2065,7 @@ static int dw_hdmi_connector_get_modes(struct drm_connector *connector)
 		}
 		kfree(edid);
 	} else {
-		hdmi->sink_is_hdmi = true;
+		hdmi->support_hdmi = true;
 		hdmi->sink_has_audio = true;
 
 		if (hdmi->plat_data->split_mode) {
@@ -2073,6 +2102,7 @@ static int dw_hdmi_connector_get_modes(struct drm_connector *connector)
 
 		dev_info(hdmi->dev, "failed to get edid\n");
 	}
+	dw_hdmi_qp_check_output_type_changed(hdmi);
 
 	return ret;
 }
@@ -2240,12 +2270,22 @@ static int dw_hdmi_connector_atomic_check(struct drm_connector *connector,
 	struct drm_connector_state *new_state =
 		drm_atomic_get_new_connector_state(state, connector);
 	struct drm_crtc *crtc = new_state->crtc;
-	struct drm_crtc_state *crtc_state;
+	struct drm_crtc *old_crtc = old_state->crtc;
+	struct drm_crtc_state *crtc_state, *old_crtc_state;
 	struct dw_hdmi_qp *hdmi =
 		container_of(connector, struct dw_hdmi_qp, connector);
 	struct drm_display_mode *mode = NULL;
 	void *data = hdmi->plat_data->phy_data;
 	struct hdmi_vmode_qp *vmode = &hdmi->hdmi_data.video_mode;
+
+	if (old_crtc) {
+		old_crtc_state = drm_atomic_get_crtc_state(state, old_crtc);
+		if (IS_ERR(old_crtc_state))
+			return PTR_ERR(old_crtc_state);
+
+		if (hdmi->plat_data->get_vp_id)
+			hdmi->old_vp_id = hdmi->plat_data->get_vp_id(old_crtc_state);
+	}
 
 	if (!crtc)
 		return 0;
@@ -2253,6 +2293,9 @@ static int dw_hdmi_connector_atomic_check(struct drm_connector *connector,
 	crtc_state = drm_atomic_get_crtc_state(state, crtc);
 	if (IS_ERR(crtc_state))
 		return PTR_ERR(crtc_state);
+
+	if (hdmi->plat_data->get_vp_id)
+		hdmi->vp_id = hdmi->plat_data->get_vp_id(crtc_state);
 
 	mode = &crtc_state->mode;
 	/*
@@ -2297,7 +2340,7 @@ static int dw_hdmi_connector_atomic_check(struct drm_connector *connector,
 		if (hdmi->initialized && !hdmi->dclk_en) {
 			mutex_lock(&hdmi->audio_mutex);
 			if (hdmi->plat_data->dclk_set)
-				hdmi->plat_data->dclk_set(data, true);
+				hdmi->plat_data->dclk_set(data, true, hdmi->vp_id);
 			hdmi->dclk_en = true;
 			mutex_unlock(&hdmi->audio_mutex);
 			hdmi->curr_conn = connector;
@@ -2317,6 +2360,35 @@ static int dw_hdmi_connector_atomic_check(struct drm_connector *connector,
 
 	return 0;
 }
+
+void dw_hdmi_qp_set_output_type(struct dw_hdmi_qp *hdmi, u64 val)
+{
+	hdmi->force_output = val;
+
+	if (!dw_hdmi_qp_check_output_type_changed(hdmi))
+		return;
+
+	if (hdmi->disabled)
+		return;
+
+	if (!hdmi->sink_is_hdmi)
+		hdmi_modb(hdmi, OPMODE_DVI, OPMODE_DVI, LINK_CONFIG0);
+	else
+		hdmi_modb(hdmi, 0, OPMODE_DVI, LINK_CONFIG0);
+}
+EXPORT_SYMBOL_GPL(dw_hdmi_qp_set_output_type);
+
+bool dw_hdmi_qp_get_output_whether_hdmi(struct dw_hdmi_qp *hdmi)
+{
+	return hdmi->sink_is_hdmi;
+}
+EXPORT_SYMBOL_GPL(dw_hdmi_qp_get_output_whether_hdmi);
+
+int dw_hdmi_qp_get_output_type_cap(struct dw_hdmi_qp *hdmi)
+{
+	return hdmi->support_hdmi;
+}
+EXPORT_SYMBOL_GPL(dw_hdmi_qp_get_output_type_cap);
 
 static void dw_hdmi_connector_force(struct drm_connector *connector)
 {
@@ -2449,7 +2521,7 @@ static void dw_hdmi_qp_bridge_atomic_disable(struct drm_bridge *bridge,
 	if (hdmi->dclk_en) {
 		mutex_lock(&hdmi->audio_mutex);
 		if (hdmi->plat_data->dclk_set)
-			hdmi->plat_data->dclk_set(data, false);
+			hdmi->plat_data->dclk_set(data, false, hdmi->old_vp_id);
 		hdmi->dclk_en = false;
 		mutex_unlock(&hdmi->audio_mutex);
 	};
@@ -2477,7 +2549,7 @@ static void dw_hdmi_qp_bridge_atomic_enable(struct drm_bridge *bridge,
 	struct drm_atomic_state *state = old_state->base.state;
 	struct drm_connector *connector;
 	void *data = hdmi->plat_data->phy_data;
-
+	//printk("Enter into %s  %d\n", __func__, __LINE__);
 	connector = drm_atomic_get_new_connector_for_encoder(state,
 							     bridge->encoder);
 
@@ -2491,7 +2563,7 @@ static void dw_hdmi_qp_bridge_atomic_enable(struct drm_bridge *bridge,
 	if (!hdmi->dclk_en) {
 		mutex_lock(&hdmi->audio_mutex);
 		if (hdmi->plat_data->dclk_set)
-			hdmi->plat_data->dclk_set(data, true);
+			hdmi->plat_data->dclk_set(data, true, hdmi->vp_id);
 		hdmi->dclk_en = true;
 		mutex_unlock(&hdmi->audio_mutex);
 	}
