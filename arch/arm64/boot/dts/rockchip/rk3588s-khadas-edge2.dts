@@ -10,7 +10,7 @@
 #include "rk3588s-khadas-edge2.dtsi"
 #include "rk3588-firefly-rk806-single.dtsi"
 #include "rk3588-android.dtsi"
-#include "kedge2-camera.dtsi"
+//#include "kedge2-camera.dtsi"
 
 / {
 	model = "Khadas Edge2";
@@ -178,17 +178,17 @@
 	status = "okay";
 };
 
-&backlight_mipi1 {
-	pwms = <&pwm12 0 25000 0>;
-	power-supply = <&vcc3v3_lcd1_en>;
-	status = "okay";
-};
+//&backlight_mipi1 {
+//	pwms = <&pwm12 0 25000 0>;
+//	power-supply = <&vcc3v3_lcd1_en>;
+//	status = "okay";
+//};
 
-&backlight_mipi2 {
-	pwms = <&pwm13 0 25000 0>;
-	power-supply = <&vcc3v3_lcd2_en>;
-	status = "okay";
-};
+//&backlight_mipi2 {
+//	pwms = <&pwm13 0 25000 0>;
+//	power-supply = <&vcc3v3_lcd2_en>;
+//	status = "okay";
+//};
 
 &combphy0_ps {
 	status = "okay";
@@ -261,65 +261,65 @@
 	status = "okay";
 };
 
-&dsi0 {
-	status = "okay";
-	reset-delay-ms = <20>;
-	reset-gpios = <&gpio4 RK_PA3 GPIO_ACTIVE_HIGH>;
-	pinctrl-names = "default";
-	pinctrl-0 = <&lcd_rst1_gpio>;
-};
+//&dsi0 {
+//	status = "okay";
+//	reset-delay-ms = <20>;
+//	reset-gpios = <&gpio4 RK_PA3 GPIO_ACTIVE_HIGH>;
+//	pinctrl-names = "default";
+//	pinctrl-0 = <&lcd_rst1_gpio>;
+//};
 
-&dsi0_in_vp2 {
-    status = "okay";
-};
+//&dsi0_in_vp2 {
+//    status = "okay";
+//};
 
-&dsi0_in_vp3 {
-    status = "disabled";
-};
+//&dsi0_in_vp3 {
+//    status = "disabled";
+//};
 
-&route_dsi0 {
-	status = "okay";
-	connect = <&vp2_out_dsi0>;
-};
+//&route_dsi0 {
+//	status = "okay";
+//	connect = <&vp2_out_dsi0>;
+//};
 
-&mipi_dcphy0 {
-       status = "okay";
-};
+//&mipi_dcphy0 {
+//       status = "okay";
+//};
 
-&dsi0_panel {
-	status = "okay";
-	power-supply = <&vcc3v3_lcd1_en>;
-};
+//&dsi0_panel {
+//	status = "okay";
+//	power-supply = <&vcc3v3_lcd1_en>;
+//};
 
-&dsi1 {
-	status = "okay";
-	reset-delay-ms = <20>;
-	reset-gpios = <&gpio4 RK_PA7 GPIO_ACTIVE_HIGH>;
-	pinctrl-names = "default";
-	pinctrl-0 = <&lcd_rst2_gpio>;
-};
+//&dsi1 {
+//	status = "okay";
+//	reset-delay-ms = <20>;
+//	reset-gpios = <&gpio4 RK_PA7 GPIO_ACTIVE_HIGH>;
+//	pinctrl-names = "default";
+//	pinctrl-0 = <&lcd_rst2_gpio>;
+//};
 
-&dsi1_in_vp2 {
-       status = "disabled";
-};
+//&dsi1_in_vp2 {
+//       status = "disabled";
+//};
 
-&dsi1_in_vp3 {
-       status = "okay";
-};
+//&dsi1_in_vp3 {
+//       status = "okay";
+//};
 
-&route_dsi1 {
-	status = "okay";
-	connect = <&vp3_out_dsi1>;
-};
+//&route_dsi1 {
+//	status = "okay";
+//	connect = <&vp3_out_dsi1>;
+//};
 
-&mipi_dcphy1 {
-       status = "okay";
-};
+//&mipi_dcphy1 {
+//       status = "okay";
+//};
 
-&dsi1_panel {
-	status = "okay";
-	power-supply = <&vcc3v3_lcd2_en>;
-};
+//&dsi1_panel {
+//	status = "okay";
+//	power-supply = <&vcc3v3_lcd2_en>;
+//};
 
 &i2c2 {
 	pinctrl-names = "default";
