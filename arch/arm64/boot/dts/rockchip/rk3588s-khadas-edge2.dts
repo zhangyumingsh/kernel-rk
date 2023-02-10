@@ -6,9 +6,9 @@
 /dts-v1/;
 
 #include "dt-bindings/usb/pd.h"
-#include "rk3588s-f.dtsi"
+#include "rk3588s.dtsi"
 #include "rk3588s-khadas-edge2.dtsi"
-#include "rk3588-firefly-rk806-single.dtsi"
+#include "rk3588-rk806-single.dtsi"
 #include "rk3588-android.dtsi"
 #include "kedge2-camera.dtsi"
 
