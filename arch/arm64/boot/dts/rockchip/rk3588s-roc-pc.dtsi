@@ -167,7 +167,7 @@
 };
 
 &hdmi0_sound {
-		status = "okay";
+	status = "okay";
 };
 
 &hdptxphy_hdmi0 {
