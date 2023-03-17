@@ -258,6 +258,17 @@ config PINCTRL_FALCON
 	depends on SOC_FALCON
 	depends on PINCTRL_LANTIQ
 
+config PINCTRL_LOONGSON2
+	tristate "Pinctrl driver for the Loongson-2 SoC"
+	depends on OF && (LOONGARCH || COMPILE_TEST)
+	select PINMUX
+	select GENERIC_PINCONF
+	help
+	 This selects pin control driver for the Loongson-2 SoC. It
+	 provides pin config functions multiplexing.  GPIO pin pull-up,
+	 pull-down functions are not supported. Say yes to enable
+	 pinctrl for Loongson-2 SoC.
+
 config PINCTRL_XWAY
 	bool
 	depends on SOC_TYPE_XWAY
@@ -403,6 +414,15 @@ config PINCTRL_RK805
 	help
 	  This selects the pinctrl driver for RK805.
 
+config PINCTRL_RK806
+	tristate "Pinctrl and GPIO driver for RK806 PMIC"
+	depends on MFD_RK806
+	select GPIOLIB
+	select PINMUX
+	select GENERIC_PINCONF
+	help
+	  This selects the pinctrl driver for RK806
+
 config PINCTRL_ROCKCHIP
 	tristate "Rockchip gpio and pinctrl driver"
 	depends on ARCH_ROCKCHIP || COMPILE_TEST
@@ -415,7 +435,7 @@ config PINCTRL_ROCKCHIP
 	select OF_GPIO
 	default ARCH_ROCKCHIP
 	help
-          This support pinctrl and GPIO driver for Rockchip SoCs.
+	  This support pinctrl and GPIO driver for Rockchip SoCs.
 
 config PINCTRL_SINGLE
 	tristate "One-register-per-pin type device tree based pinctrl driver"

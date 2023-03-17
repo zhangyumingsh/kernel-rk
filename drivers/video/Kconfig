@@ -11,6 +11,10 @@ config APERTURE_HELPERS
 	  Support tracking and hand-over of aperture ownership. Required
 	  by graphics drivers for firmware-provided framebuffers.
 
+config VIDEO_NOMODESET
+	bool
+	default n
+
 if HAS_IOMEM
 
 config HAVE_FB_ATMEL
@@ -24,6 +28,7 @@ source "drivers/gpu/host1x/Kconfig"
 source "drivers/gpu/ipu-v3/Kconfig"
 
 source "drivers/gpu/drm/Kconfig"
+source "drivers/gpu/arm/Kconfig"
 
 menu "Frame buffer Devices"
 source "drivers/video/fbdev/Kconfig"
