@@ -353,7 +353,7 @@
 	status = "okay";
 };
 
-&route_hdmi0{
+&route_hdmi0 {
 	status = "okay";
 };
 

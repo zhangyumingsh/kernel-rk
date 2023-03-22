@@ -23,6 +23,29 @@
 		stdout-path = "serial2:1500000n8";
 	};
 
+	reserved-memory {
+		#address-cells = <2>;
+		#size-cells = <2>;
+		ranges;
+
+		cma {
+			compatible = "shared-dma-pool";
+			reusable;
+			size = <0x0 (16 * 0x100000)>;
+			alloc-ranges = <0x0 0x0 0x1 0x0>;
+			linux,cma-default;
+		};
+
+		ramoops: ramoops@110000 {
+			compatible = "ramoops";
+			reg = <0x0 0x110000 0x0 0xf0000>;
+			record-size = <0x20000>;
+			console-size = <0x80000>;
+			ftrace-size = <0x00000>;
+			pmsg-size = <0x50000>;
+		};
+	};
+
 	combophy_avdd0v85: combophy-avdd0v85 {
 		compatible = "regulator-fixed";
 		regulator-name = "combophy_avdd0v85";
@@ -264,6 +287,22 @@
 	status = "disabled";
 };
 
+&display_subsystem {
+	clocks = <&hdptxphy_hdmi_clk0>;
+	clock-names = "hdmi0_phy_pll", "hdmi1_phy_pll";
+
+	route {
+		route_hdmi0: route-hdmi0 {
+			status = "okay";
+			logo,uboot = "logo.bmp";
+			logo,kernel = "logo_kernel.bmp";
+			logo,mode = "center";
+			charge_logo,mode = "center";
+			connect = <&vp0_out_hdmi0>;
+		};
+	};
+};
+
 &hdmi0 {
 	enable-gpios = <&gpio4 RK_PB1 GPIO_ACTIVE_HIGH>;
 	cec-enable;
@@ -282,11 +321,11 @@
 	status = "okay";
 };
 
-&hdptxphy_hdmi_clk0 {
+&route_hdmi0 {
 	status = "okay";
 };
 
-&route_hdmi0 {
+&hdptxphy_hdmi_clk0 {
 	status = "okay";
 };
 
@@ -654,5 +693,10 @@
 
 &usbhost_dwc3_0 {
 	dr_mode = "host";
+	status = "okay";
+};
+
+&uart2 {
+	pinctrl-0 = <&uart2m0_xfer>;
 	status = "okay";
 };
