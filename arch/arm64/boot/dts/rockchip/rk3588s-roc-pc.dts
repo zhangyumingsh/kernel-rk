@@ -12,7 +12,7 @@
 
 / {
 	model = "Firefly ROC-RK3588S-PC HDMI(Linux)";
-	compatible = "rockchip,roc-rk3588s-pc", "rockchip,rk3588s";
+	compatible = "rockchip,roc-rk3588s-pc", "rockchip,rk3588s", "rockchip,rk3588";
 
 	aliases {
 		serial2 = &uart2;
