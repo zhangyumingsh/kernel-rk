@@ -2,18 +2,11 @@
 
 /dts-v1/;
 
-#include <dt-bindings/usb/pd.h>
-#include <dt-bindings/gpio/gpio.h>
-#include <dt-bindings/pinctrl/rockchip.h>
-#include <dt-bindings/leds/common.h>
-#include <dt-bindings/display/rockchip_vop.h>
-#include "rk3588s.dtsi"
-#include "rk3588-rk806-single.dtsi"
 #include "rk3588s-khadas-edge2.dtsi"
 
 / {
 	model = "Khadas Edge2";
-	compatible = "khadas,edge2", "rockchip,rk3588";
+	compatible = "khadas,edge2", "rockchip,rk3588s", "rockchip,rk3588";
 
 	aliases {
 		serial2 = &uart2;

@@ -7,11 +7,10 @@
 /dts-v1/;
 
 #include "rk3588s-roc-pc.dtsi"
-#include "rk3588-roc-pc-cam-8ms1m.dtsi"
 
 / {
-	model = "Firefly ROC-RK3588S-PC HDMI(Linux)";
-	compatible = "rockchip,roc-rk3588s-pc", "rockchip,rk3588";
+	model = "Firefly ROC-RK3588S-PC NVMe";
+	compatible = "rockchip,roc-rk3588s-pc", "rockchip,rk3588s", "rockchip,rk3588";
 };
 
 &pcie2x1l2 {

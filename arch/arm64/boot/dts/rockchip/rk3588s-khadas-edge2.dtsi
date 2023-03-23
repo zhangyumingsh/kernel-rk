@@ -4,10 +4,14 @@
  *
  */
 
-#include <dt-bindings/gpio/gpio.h>
 #include <dt-bindings/pwm/pwm.h>
+#include <dt-bindings/usb/pd.h>
+#include <dt-bindings/gpio/gpio.h>
 #include <dt-bindings/pinctrl/rockchip.h>
+#include <dt-bindings/leds/common.h>
 #include <dt-bindings/display/rockchip_vop.h>
+#include "rk3588s.dtsi"
+#include "rk3588-rk806-single.dtsi"
 
 / {
 
