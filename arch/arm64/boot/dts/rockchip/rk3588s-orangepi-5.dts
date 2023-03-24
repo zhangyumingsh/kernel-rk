@@ -291,6 +291,11 @@
 	pinctrl-0 = <&uart0m2_xfer>;
 };
 
+&uart2 {
+	pinctrl-0 = <&uart2m0_xfer>;
+	status = "okay";
+};
+
 /*
    pin16: GPIO1_D3
    pin18: GPIO1_D2
