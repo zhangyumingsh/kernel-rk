@@ -466,7 +466,7 @@
 	max-frequency = <200000000>;
 	mmc-hs400-1_8v;
 	mmc-hs400-enhanced-strobe;
-	status = "disabled";
+	status = "okay";
 };
 
 &sdmmc {
@@ -544,7 +544,7 @@
 };
 
 &usbdrd_dwc3_0 {
-	dr_mode = "otg";
+//	dr_mode = "otg";
 	status = "okay";
 };
 
