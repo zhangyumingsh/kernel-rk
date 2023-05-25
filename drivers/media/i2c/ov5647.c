@@ -19,19 +19,35 @@
  * GNU General Public License for more details.
  */
 
+
 #include <linux/clk.h>
+#include <linux/device.h>
 #include <linux/delay.h>
+#include <linux/gpio/consumer.h>
 #include <linux/i2c.h>
+#include <linux/module.h>
+#include <linux/pm_runtime.h>
+#include <linux/regulator/consumer.h>
+#include <linux/sysfs.h>
+#include <linux/slab.h>
+#include <linux/version.h>
 #include <linux/init.h>
 #include <linux/io.h>
-#include <linux/module.h>
 #include <linux/of_graph.h>
-#include <linux/slab.h>
+#include <linux/pinctrl/consumer.h>
+#include <linux/of_gpio.h>
+#include <linux/rk-camera-module.h>
 #include <linux/videodev2.h>
 #include <media/v4l2-device.h>
 #include <media/v4l2-fwnode.h>
 #include <media/v4l2-image-sizes.h>
 #include <media/v4l2-mediabus.h>
+#include <media/media-entity.h>
+#include <media/v4l2-async.h>
+#include <media/v4l2-ctrls.h>
+#include <media/v4l2-subdev.h>
+
+
 
 #define SENSOR_NAME "ov5647"
 
@@ -85,6 +101,7 @@ struct ov5647 {
 	unsigned int			width;
 	unsigned int			height;
 	int				power_count;
+	struct gpio_desc    *power_gpio;
 	struct clk			*xclk;
 };
 
@@ -482,11 +499,11 @@ static int ov5647_detect(struct v4l2_subdev *sd)
 	ret = ov5647_write(sd, OV5647_SW_RESET, 0x01);
 	if (ret < 0)
 		return ret;
-
+	printk(KERN_ERR"ov5647 sensor reset successed ----------------------->>>>>>>>>>>>>>>>>>>>");
 	ret = ov5647_read(sd, OV5647_REG_CHIPID_H, &read);
 	if (ret < 0)
 		return ret;
-
+	printk(KERN_ERR"ov5647 read high addr successed ----------------------->>>>>>>>>>>>>>>>>>>>");
 	if (read != 0x56) {
 		dev_err(&client->dev, "ID High expected 0x56 got %x", read);
 		return -ENODEV;
@@ -500,7 +517,7 @@ static int ov5647_detect(struct v4l2_subdev *sd)
 		dev_err(&client->dev, "ID Low expected 0x47 got %x", read);
 		return -ENODEV;
 	}
-
+	printk(KERN_ERR"ov5647 read low addr successed ----------------------->>>>>>>>>>>>>>>>>>>>");
 	return ov5647_write(sd, OV5647_SW_RESET, 0x00);
 }
 
@@ -556,11 +573,10 @@ static int ov5647_probe(struct i2c_client *client,
 	struct v4l2_subdev *sd;
 	struct device_node *np = client->dev.of_node;
 	u32 xclk_freq;
-
 	sensor = devm_kzalloc(dev, sizeof(*sensor), GFP_KERNEL);
 	if (!sensor)
 		return -ENOMEM;
-
+	printk(KERN_ERR"ov5647_probe exec----------------------->>>>>>>>>>>>>>>>>>>>");
 	if (IS_ENABLED(CONFIG_OF) && np) {
 		ret = ov5647_parse_dt(np);
 		if (ret) {
@@ -568,7 +584,14 @@ static int ov5647_probe(struct i2c_client *client,
 			return ret;
 		}
 	}
-
+	sensor->power_gpio = devm_gpiod_get(dev, "power", GPIOD_OUT_LOW);
+	if (IS_ERR(sensor->power_gpio))
+		dev_warn(dev, "Failed to get power-gpios\n");
+	if (!IS_ERR(sensor->power_gpio)) {
+		gpiod_set_value_cansleep(sensor->power_gpio, 1);
+		usleep_range(100, 200);
+	}
+	dev_err(dev, "read power gpio and set gpio level high ----------------------->>>>>>>>>>>>>>>>>>>>");
 	/* get system clock (xclk) */
 	sensor->xclk = devm_clk_get(dev, NULL);
 	if (IS_ERR(sensor->xclk)) {
@@ -577,7 +600,7 @@ static int ov5647_probe(struct i2c_client *client,
 	}
 
 	xclk_freq = clk_get_rate(sensor->xclk);
-	if (xclk_freq != 25000000) {
+	if (xclk_freq != 25000000) { 
 		dev_err(dev, "Unsupported clock frequency: %u\n", xclk_freq);
 		return -EINVAL;
 	}
@@ -588,21 +611,22 @@ static int ov5647_probe(struct i2c_client *client,
 	v4l2_i2c_subdev_init(sd, client, &ov5647_subdev_ops);
 	sensor->sd.internal_ops = &ov5647_subdev_internal_ops;
 	sensor->sd.flags |= V4L2_SUBDEV_FL_HAS_DEVNODE;
-
-	sensor->pad.flags = MEDIA_PAD_FL_SOURCE;
+	dev_err(dev, "v4l2_i2c_subdev_init --------------------->>>>>>>>>>>>>>>>>>>>");
+	sensor->pad.flags = MEDIA_PAD_FL_SOURCE;//MEDIA_PAD_FL_SOURCE
 	sd->entity.function = MEDIA_ENT_F_CAM_SENSOR;
-	ret = media_entity_pads_init(&sd->entity, 1, &sensor->pad);
+	ret = media_entity_pads_init(&sd->entity, 1, &sensor->pad);//加入meidia链表
+	dev_err(dev, "media_entity_pads_init --------------------->>>>>>>>>>>>>>>>>>>>");
 	if (ret < 0)
 		goto mutex_remove;
 
 	ret = ov5647_detect(sd);
 	if (ret < 0)
 		goto error;
-
+	dev_err(dev, "sensor detect --------------------->>>>>>>>>>>>>>>>>>>>");
 	ret = v4l2_async_register_subdev(sd);
 	if (ret < 0)
 		goto error;
-
+	dev_err(dev, "v4l2_async_register_subdev --------------------->>>>>>>>>>>>>>>>>>>>");
 	dev_dbg(dev, "OmniVision OV5647 camera driver probed\n");
 	return 0;
 error:
@@ -616,7 +640,7 @@ static int ov5647_remove(struct i2c_client *client)
 {
 	struct v4l2_subdev *sd = i2c_get_clientdata(client);
 	struct ov5647 *ov5647 = to_state(sd);
-
+	gpiod_set_value_cansleep(ov5647->power_gpio, 0);
 	v4l2_async_unregister_subdev(&ov5647->sd);
 	media_entity_cleanup(&ov5647->sd.entity);
 	v4l2_device_unregister_subdev(sd);
