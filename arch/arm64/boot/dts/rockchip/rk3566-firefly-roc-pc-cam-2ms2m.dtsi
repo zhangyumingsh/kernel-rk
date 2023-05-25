@@ -68,7 +68,7 @@
 
 			dphy1_in: endpoint@1 {
 				reg = <1>;
-				remote-endpoint = <&gc2053_out>;
+				remote-endpoint = <&ov5647_out>;
 				data-lanes = <1 2>;
 			};
 		};
@@ -104,7 +104,7 @@
 
 			dphy2_in: endpoint@1 {
 				reg = <1>;
-				remote-endpoint = <&gc2093_out>;
+				//remote-endpoint = <&gc2093_out>;
 				data-lanes = <1 2>;
 			};
 		};
@@ -183,66 +183,57 @@
     status = "okay";
 };
 
-&i2c4 {
+&i2c2 {
 	status = "okay";
-	gc2053: gc2053@37 { //IR
+	pinctrl-names = "default";
+	clock-frequency = <100000>;
+	pinctrl-0 = <&i2c2m1_xfer>;
+	avdd-1v8-supply = <&vcca1v8_image>;
+	avdd-0v9-supply = <&vdda0v9_image>;
+	power-domains = <&power RK3568_PD_VI>;
+	#address-cells = <1>;
+	#size-cells = <0>;
+	backlight_dsi1:backlight@45{ /*背光地址0x45*/
+		compatible = "raspberrypi,7inch-touchscreen-panel-regulator";
+		reg = <0x45>;
 		status = "okay";
-		compatible = "galaxycore,gc2053";
-		reg = <0x37>;
-
-		avdd-supply = <&vcc_camera>;
+    };
+	ft5x06_ts@38 { /*触屏地址0x38*/
+		compatible = "edt,edt-ft5x06", "ft5x06";
+		reg = <0x38>;
+		interrupt-parent = <&gpio0>;
+		interrupts = <13 IRQ_TYPE_LEVEL_LOW>;
 		power-domains = <&power RK3568_PD_VI>;
-		//clocks = <&pmucru CLK_WIFI>;
-		clocks = <&cru CLK_CAM0_OUT>;
-		clock-names = "xvclk";
-		pinctrl-names = "default";
-		pinctrl-0 = <&cam_clkout0>;
-
-		//power-gpios = <&pca9555 PCA_IO0_3 GPIO_ACTIVE_HIGH>; //IR_PWR_EN
-		power-gpios = <&gpio4 RK_PB0 GPIO_ACTIVE_HIGH>; //IR_PWR_EN
-		pwdn-gpios = <&gpio4 RK_PB6 GPIO_ACTIVE_LOW>;
-
-		firefly,clkout-enabled-index = <1>;
-		rockchip,camera-module-index = <0>;
-		rockchip,camera-module-facing = "back";
-		rockchip,camera-module-name = "YT-RV1109-2-V1";
-		rockchip,camera-module-lens-name = "40IR-2MP-F20";
-		port {
-			gc2053_out: endpoint {
-				remote-endpoint = <&dphy1_in>;
-				data-lanes = <1 2>;
-			};
-		};
+		reset-gpios = <&gpio0 RK_PB6 GPIO_ACTIVE_LOW>;
+		touchscreen-size-x = < 800 >;
+		touchscreen-size-y = < 480 >;
+		status = "okay";
 	};
-
-	gc2093: gc2093b@7e { //RGB
+/*ov5647地址0x36*/
+	ov5647@36 {
 		status = "okay";
-		compatible = "galaxycore,gc2093";
-		reg = <0x7e>;
-
-		avdd-supply = <&vcc_camera>;
-		power-domains = <&power RK3568_PD_VI>;
-		//clocks = <&pmucru CLK_WIFI>;
+		compatible = "ovti,ov5647";
+		reg = <0x36>;
+		clocks = <&cru CPLL_25M>;
+		//pinctrl-0 = <&cam_clkout0>;//double clk
 		clock-names = "xvclk";
 		pinctrl-names = "default";
-		//pinctrl-0 = <&refclk_pins>;
-		flash-leds = <&flash_led>;
-
-		pwdn-gpios = <&gpio4 RK_PB7 GPIO_ACTIVE_HIGH>;
-
-		firefly,clkout-enabled-index = <0>;
-		rockchip,camera-module-index = <1>;
-		rockchip,camera-module-facing = "front";
-		rockchip,camera-module-name = "YT-RV1109-2-V1";
-		rockchip,camera-module-lens-name = "40IR-2MP-F20";
+		pinctrl-0 = <&refclk_pins>; //怎么选？
+		power-domains = <&power RK3568_PD_VI>;
+		avdd-0v9-supply = <&vdda0v9_image>;
+		avdd-1v8-supply = <&vcca1v8_image>; /* reset-gpio gpio4 b1 pwdn-gpios gpio4 c5 */
+		power-gpios = <&gpio3 RK_PC3 GPIO_ACTIVE_HIGH>;
+		/*power-domains = <&power RK3568_PD_VI>;*/
+		/*pwdn-gpios = <&gpio3 RK_PC3 GPIO_ACTIVE_HIGH>; reset-gpios  gpios? pwdn-gpios? power-gpios = <&gpio3 RK_PC3 GPIO_ACTIVE_HIGH>; 驱动没有操作IO需要修改*/
 		port {
-			gc2093_out: endpoint {
-				remote-endpoint = <&dphy2_in>;
-				data-lanes = <1 2>;
-			};
-		};
+			ov5647_out: endpoint {
+				remote-endpoint = <&dphy1_in>;//double use dphy1_in single use mipi_in_ucam3
+                data-lanes = <1 2>;
+            };
+        };
 	};
 };
+
 
 &flash_led {
 	status = "okay";

@@ -15,7 +15,10 @@
 * using dual camera gc2053/gc2093   --->  rk3566-firefly-roc-pc-cam-2ms2m.dtsi
 *
 */
-#include "rk3566-firefly-roc-pc-cam-8ms1m.dtsi"
+//#include "rk3566-firefly-roc-pc-cam-8ms1m.dtsi"
+//#include "rk3566-firefly-roc-pc-mipi101_M101014_BE45_A1-cam_2ms2mf.dtsi"
+#include "rk3566-firefly-roc-pc-cam-2ms2m.dtsi"
+
 
 / {
     model = "Firefly RK3566-ROC-PC HDMI(Linux)";
@@ -23,6 +26,98 @@
 };
 
 &route_hdmi {
-	status = "okay";
+	status = "disabled";//"okay";
 	connect = <&vp0_out_hdmi>;
 };
+
+&route_dsi0 {
+    status = "okay";
+    connect = <&vp0_out_dsi0>;
+};
+
+&video_phy0 {
+    status = "okay";
+};
+
+&dsi0_in_vp0 {
+    status = "okay";
+};
+
+&dsi0_in_vp1 {
+    status = "disabled";
+};
+
+&route_dsi1 {
+    status = "disabled";
+    connect = <&vp1_out_dsi1>;
+};
+
+&video_phy1 {
+    status = "disabled";
+};
+
+&dsi1_in_vp0 {
+    status = "disabled";
+};
+
+&dsi1_in_vp1 {
+    status = "disabled";
+};
+
+&hdmi {
+	status = "disabled";
+};
+
+&hdmi_in_vp0 {
+	status = "disabled";
+};
+
+&hdmi_in_vp1 {
+	status = "disabled";
+};
+
+&hdmi_sound {
+	status = "disabled";
+};
+
+/*
+ * mipi_dphy0 needs to be enabled
+ * when dsi0 is enabled
+ */
+&dsi0 {
+    status = "okay";
+    //rockchip,lane-rate = <1000>;
+    dsi0_panel: panel@0 {
+        status = "okay";
+        compatible = "raspberrypi,7inch-dsi";
+        reg = <0>;
+       // backlight = <&backlight_dsi1>;       
+        ports {
+            #address-cells = <1>;
+            #size-cells = <0>;
+
+            port@0 {
+                reg = <0>;
+                panel_in_dsi0: endpoint {
+                    remote-endpoint = <&dsi0_out_panel>;
+                };
+            };
+        };
+	};
+
+    ports {
+        #address-cells = <1>;
+        #size-cells = <0>;
+
+        port@1 {
+            reg = <1>;
+            dsi0_out_panel: endpoint {
+                remote-endpoint = <&panel_in_dsi0>;
+            };
+        };
+	};
+};
+
+
+
+
