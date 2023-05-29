@@ -203,7 +203,7 @@
 
 &dmc {
 	center-supply = <&vdd_logic>;
-	status = "okay";
+	status = "disabled";//"okay";//删除ddr自动变频
 };
 
 &gpu {
