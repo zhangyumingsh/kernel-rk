@@ -222,7 +222,7 @@
 
 			csidphy_out: endpoint@0 {
 				reg = <0>;
-				remote-endpoint = <&isp0_in>;
+			//	remote-endpoint = <&isp0_in>;
 			};
 		};
 	};
