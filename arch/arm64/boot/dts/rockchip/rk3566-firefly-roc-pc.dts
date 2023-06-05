@@ -93,20 +93,20 @@
 &dsi1 {
     status = "okay";
     //rockchip,lane-rate = <1000>;
-    dsi0_panel: panel@0 {
+    dsi1_panel: panel@0 {
         status = "okay";
         compatible = "raspberrypi,7inch-dsi";
         reg = <0>;
        // backlight = <&backlight_dsi1>;  
 
-		//enable-delay-ms = <35>;
-		//prepare-delay-ms = <6>;
-		//reset-delay-ms = <25>;
-		//init-delay-ms = <55>;
-		//unprepare-delay-ms = <0>;
-		//disable-delay-ms = <20>;
-		///mipi-data-delay-ms = <200>;			  
-		//dsi,lanes  = <2>;
+		enable-delay-ms = <35>;
+		prepare-delay-ms = <6>;
+		reset-delay-ms = <25>;
+		init-delay-ms = <55>;
+		unprepare-delay-ms = <0>;
+		disable-delay-ms = <20>;
+		mipi-data-delay-ms = <200>;			  
+		dsi,lanes  = <2>;
 	   
         ports {
             #address-cells = <1>;
@@ -114,21 +114,46 @@
 
             port@0 {
                 reg = <0>;
-                panel_in_dsi1: endpoint {
-                    remote-endpoint = <&dsi1_out_panel>;
+                panel_in: endpoint {
+                    remote-endpoint = <&bridge_out>;
                 };
             };
         };
 	};
 
+	bridge:bridge@0{
+		reg = <0>;
+		compatible = "toshiba,tc358762";
+		//vddc-supply = <&reg_bridge>;
+		ports {
+					#address-cells = <1>;
+					#size-cells = <0>;
+
+					port@0 {
+						reg = <0>;
+						bridge_in: endpoint {
+							remote-endpoint = <&dsi1_out_bridge>;
+						};
+					};
+
+					port@1 {
+						reg = <1>;
+						bridge_out: endpoint {
+							remote-endpoint = <&panel_in>;
+						};
+					};
+		};
+
+	};
+	
     ports {
         #address-cells = <1>;
         #size-cells = <0>;
 
         port@1 {
             reg = <1>;
-            dsi1_out_panel: endpoint {
-                remote-endpoint = <&panel_in_dsi1>;
+            dsi1_out_bridge: endpoint {
+                remote-endpoint = <&bridge_in>;
             };
         };
 	};
@@ -165,11 +190,11 @@
 		status = "okay";
 		compatible = "ovti,ov5647";
 		reg = <0x36>;
-		clocks = <&cru CPLL_25M>;
+		clocks = <&cru CLK_CAM0_OUT>;
 		//pinctrl-0 = <&cam_clkout0>;//double clk
 		clock-names = "xvclk";
 		pinctrl-names = "default";
-		pinctrl-0 = <&refclk_pins>; //怎么选？
+		pinctrl-0 = <&cam_clkout0>; //怎么选？
 		power-domains = <&power RK3568_PD_VI>;
 		avdd-0v9-supply = <&vdda0v9_image>;
 		avdd-1v8-supply = <&vcca1v8_image>; /* reset-gpio gpio4 b1 pwdn-gpios gpio4 c5 */
