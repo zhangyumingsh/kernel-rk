@@ -24,14 +24,14 @@
 
 	model = "biqu RK3566-ROC-PC HDMI(Linux)";//(8)
 	compatible = "rockchip,rk3566-biqu-cb2-pc", "rockchip,rk3566";//(8)
-	
+
 	aliases {
 		ethernet0 = &gmac1;
 		mmc0 = &sdmmc0;
 		mmc1 = &sdhci;
 		mmc2 = &sdmmc1;
 	};
-	
+
 	dc_12v: dc-12v {
 		compatible = "regulator-fixed";
 		regulator-name = "dc_12v";
@@ -133,8 +133,8 @@
         compatible = "biqu,rk356x-gpio";
         biqu-gpio = <&gpio0 12 GPIO_ACTIVE_HIGH>;          /* GPIO0_B4 */
         biqu-irq-gpio = <&gpio4 29 IRQ_TYPE_EDGE_RISING>;  /* GPIO4_D5 */
-    }; 
-	
+    };
+
 	fiq-debugger {
 		compatible = "rockchip,fiq-debugger";
 		rockchip,serial-id = <2>;
@@ -266,20 +266,20 @@
 		status = "disabled";
 	};
 
-	wireless_bluetooth: wireless-bluetooth {
-		compatible = "bluetooth-platdata";
-		clocks = <&rk809 1>;
-		clock-names = "ext_clock";
-		//wifi-bt-power-toggle;
-		uart_rts_gpios = <&gpio2 RK_PB1 GPIO_ACTIVE_LOW>;
-		pinctrl-names = "default", "rts_gpio";
-		pinctrl-0 = <&uart8m0_rtsn>;
-		pinctrl-1 = <&uart8_gpios>;
-		BT,reset_gpio    = <&gpio3 RK_PA0 GPIO_ACTIVE_HIGH>;
-		BT,wake_gpio     = <&gpio3 RK_PA1 GPIO_ACTIVE_HIGH>;
-		BT,wake_host_irq = <&gpio3 RK_PA2 GPIO_ACTIVE_HIGH>;
-		status = "disabled";
-	};
+	// wireless_bluetooth: wireless-bluetooth {
+	// 	compatible = "bluetooth-platdata";
+	// 	clocks = <&rk809 1>;
+	// 	clock-names = "ext_clock";
+	// 	//wifi-bt-power-toggle;
+	// 	uart_rts_gpios = <&gpio2 RK_PB1 GPIO_ACTIVE_LOW>;
+	// 	pinctrl-names = "default", "rts_gpio";
+	// 	pinctrl-0 = <&uart8m0_rtsn>;
+	// 	pinctrl-1 = <&uart8_gpios>;
+	// 	BT,reset_gpio    = <&gpio3 RK_PA0 GPIO_ACTIVE_HIGH>;
+	// 	BT,wake_gpio     = <&gpio3 RK_PA1 GPIO_ACTIVE_HIGH>;
+	// 	BT,wake_host_irq = <&gpio3 RK_PA2 GPIO_ACTIVE_HIGH>;
+	// 	status = "disabled";
+	// };
 
 	aliases {
 		/delete-property/ ethernet0;
@@ -301,19 +301,24 @@ sd_vcc3v3_power: sd-vcc3v3-power {
             regulator-off-in-suspend;
         };
    };
-   
+
    	gmac1_clkin: external-gmac1-clock {
 		compatible = "fixed-clock";
 		clock-frequency = <125000000>;
 		clock-output-names = "gmac1_clkin";
 		#clock-cells = <0>;
 	};
-	
+
 	ext_cam_clk: ext-cam-clk {
 		status = "okay";
 		compatible = "fixed-clock";
 		clock-frequency = <25000000>;
 		clock-output-names = "ext_cam_clk";
+		#clock-cells = <0>;
+	};
+	can_mcp2515_osc: can-mcp2515-osc {
+		compatible = "fixed-clock";
+		clock-frequency = <8000000>;
 		#clock-cells = <0>;
 	};
 
@@ -339,7 +344,7 @@ sd_vcc3v3_power: sd-vcc3v3-power {
 
 &i2c0 {
 	status = "okay";
-	
+
 	vdd_cpu: tcs4525@1c {
 		compatible = "tcs,tcs452x";
 		reg = <0x1c>;
@@ -356,7 +361,7 @@ sd_vcc3v3_power: sd-vcc3v3-power {
 			regulator-off-in-suspend;
 		};
 	};
-	
+
 	rk809: pmic@20 {
 		compatible = "rockchip,rk809";
 		reg = <0x20>;
@@ -850,7 +855,7 @@ sd_vcc3v3_power: sd-vcc3v3-power {
 	assigned-clocks = <&cru DCLK_VOP0>, <&cru DCLK_VOP1>;
 	assigned-clock-parents = <&pmucru PLL_HPLL>, <&cru PLL_VPLL>;
 	disable-win-move;
-	
+
 };
 
 &vop_mmu {
@@ -886,16 +891,16 @@ sd_vcc3v3_power: sd-vcc3v3-power {
 	};
 
 	usb {
-	
+
 		vcc5v0_otg_en: vcc5v0-otg-en {
 			rockchip,pins = <0 RK_PA5 RK_FUNC_GPIO &pcfg_pull_none>;
 		};
-		
+
 		vcc5v0_host_vbus_en: vcc5v0-host-en {
 			rockchip,pins = <0 RK_PA6 RK_FUNC_GPIO &pcfg_pull_none>;
 		};
 	};
-		
+
 	headphone {
 		hp_det: hp-det {
 			rockchip,pins = <3 RK_PC2 RK_FUNC_GPIO &pcfg_pull_down>;
@@ -933,54 +938,47 @@ sd_vcc3v3_power: sd-vcc3v3-power {
 			rockchip,pins = <RK_GPIO3 RK_PC1 RK_FUNC_GPIO &pcfg_pull_none>;
 		};
 	};
-		
+
 	sd {
 		sd_vcc3v3_power_en: sd-vcc3v3-power-en {
 			rockchip,pins = <0 RK_PA5 RK_FUNC_GPIO &pcfg_pull_none>;
 		};
 	};
 
-    wireless-wlan {
-        wifi_host_wake_irq: wifi-host-wake-irq {
-            rockchip,pins = <2 RK_PB2 RK_FUNC_GPIO &pcfg_pull_down>;
-        };
-    };
-
-    wireless-bluetooth {
-        uart1_rts_gpio: uart1-rts-gpio {
-            rockchip,pins = <2  RK_PB5 RK_FUNC_GPIO &pcfg_pull_none>;
-        };
-
-        bt_host_wake_irq: bt-host-wake-irq {
-            rockchip,pins = <2 RK_PC1 RK_FUNC_GPIO &pcfg_pull_down>;
-        };
-        bt_host_wake_gpio: bt-host-wake-gpio {
-            rockchip,pins = <2 RK_PC0 RK_FUNC_GPIO &pcfg_pull_down>;
-        };
-        bt_poweren: bt-poweren {
-            rockchip,pins = <2 RK_PB7 RK_FUNC_GPIO &pcfg_pull_down>;
-        };
-    };
-
-    pcie {
-        pcie_reset_gpio: pcie-reset-gpio {
-			rockchip,pins = <1 RK_PB2 RK_FUNC_GPIO &pcfg_pull_none>;
+	wireless-wlan {
+		wifi_host_wake_irq: wifi-host-wake-irq {
+			rockchip,pins = <2 RK_PB2 RK_FUNC_GPIO &pcfg_pull_down>;
 		};
-    };
-			
-};
+	};
 
-&spi1 {
-    spi_demo: spi-demo@00{
-        status = "disabled";
-        compatible = "biqu,rk356x-spi";
-        reg = <0x00>;
-        spi-max-frequency = <48000000>;
-        /* rk3399 driver support SPI_CPOL | SPI_CPHA | SPI_CS_HIGH */
-        //spi-cpha;             /* SPI mode: CPHA=1 */
-        //spi-cpol;     /* SPI mode: CPOL=1 */
-        //spi-cs-high;
-    };
+    	// wireless-bluetooth {
+	// 	uart1_rts_gpio: uart1-rts-gpio {
+	// 		rockchip,pins = <2  RK_PB5 RK_FUNC_GPIO &pcfg_pull_none>;
+	// 	};
+
+	// 	bt_host_wake_irq: bt-host-wake-irq {
+	// 		rockchip,pins = <2 RK_PC1 RK_FUNC_GPIO &pcfg_pull_down>;
+	// 	};
+	// 	bt_host_wake_gpio: bt-host-wake-gpio {
+	// 		rockchip,pins = <2 RK_PC0 RK_FUNC_GPIO &pcfg_pull_down>;
+	// 	};
+	// 	bt_poweren: bt-poweren {
+	// 		rockchip,pins = <2 RK_PB7 RK_FUNC_GPIO &pcfg_pull_down>;
+	// 	};
+    	// };
+
+	pcie {
+		pcie_reset_gpio: pcie-reset-gpio {
+				rockchip,pins = <1 RK_PB2 RK_FUNC_GPIO &pcfg_pull_none>;
+			};
+	};
+
+	mcp2515_int_pin {
+		mcp2515_int_pin: mcp2515_int_pin {
+			rockchip,pins = <2 RK_PC5 RK_FUNC_GPIO &pcfg_pull_up>;
+		};
+	};
+
 };
 
 &reserved_memory {
@@ -1012,7 +1010,7 @@ sd_vcc3v3_power: sd-vcc3v3-power {
 	spk-volume = <3>;
 	status = "okay";
 };
-	
+
 &rng {
 	status = "okay";
 };
@@ -1074,11 +1072,26 @@ sd_vcc3v3_power: sd-vcc3v3-power {
 };
 
 &spi1 {
-	status = "disabled";
-	max-freq = <48000000>;
-	dev-port = <0>;
-	pinctrl-0 = <&spi1m1_pins>;
-	pinctrl-1 = <&spi1m1_pins_hs>;
+	status = "okay";
+	max-freq = <10000000>;
+	#address-cells = <1>;
+	#size-cells = <0>;
+	cs-gpios = <&gpio2 RK_PC4 GPIO_ACTIVE_LOW>,
+			<&gpio2 RK_PC0 GPIO_ACTIVE_LOW>,
+			<&gpio2 RK_PC6 GPIO_ACTIVE_LOW>;
+	can_mcp2515: can-mcp2515@0 {
+		status = "okay";
+		compatible = "microchip,mcp2515";
+		reg = <0>;
+		interrupt-parent = <&gpio2>;
+		interrupts = <RK_PC5 IRQ_TYPE_LEVEL_LOW>;
+		spi-max-frequency = <10000000>;
+		clocks = <&can_mcp2515_osc>;
+		vdd-supply = <&vcc3v3_sys>;
+		xceiver-supply = <&vcc3v3_sys>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&mcp2515_int_pin>;
+	};
 };
 
 &sfc{
@@ -1214,23 +1227,23 @@ sd_vcc3v3_power: sd-vcc3v3-power {
 /* BT config */
 &uart1 {
     pinctrl-names = "default";
-    pinctrl-0 = <&uart1m0_xfer &uart1m0_ctsn>;
+    pinctrl-0 = <&uart1m1_xfer &uart1m1_ctsn>;
     status = "okay";
 };
 
-&wireless_bluetooth {
-    uart_rts_gpios = <&gpio2 RK_PB5 GPIO_ACTIVE_LOW>;
-    pinctrl-names = "default", "rts_gpio";
-    pinctrl-0 = <&uart1m0_rtsn
-        &bt_host_wake_gpio
-        &bt_poweren
-        &bt_host_wake_irq>;
-    pinctrl-1 = <&uart1_rts_gpio>;
-    BT,reset_gpio    = <&gpio2 RK_PB7 GPIO_ACTIVE_HIGH>;
-    BT,wake_gpio     = <&gpio2 RK_PC0 GPIO_ACTIVE_HIGH>;
-    BT,wake_host_irq = <&gpio2 RK_PC1 GPIO_ACTIVE_HIGH>;
-    status = "okay";
-};
+// &wireless_bluetooth {
+//     uart_rts_gpios = <&gpio2 RK_PB5 GPIO_ACTIVE_LOW>;
+//     pinctrl-names = "default", "rts_gpio";
+//     pinctrl-0 = <&uart1m1_rtsn
+//         &bt_host_wake_gpio
+//         &bt_poweren
+//         &bt_host_wake_irq>;
+//     pinctrl-1 = <&uart1_rts_gpio>;
+//     BT,reset_gpio    = <&gpio2 RK_PB7 GPIO_ACTIVE_HIGH>;
+//     BT,wake_gpio     = <&gpio2 RK_PC0 GPIO_ACTIVE_HIGH>;
+//     BT,wake_host_irq = <&gpio2 RK_PC1 GPIO_ACTIVE_HIGH>;
+//     status = "okay";
+// };
 
 &spk_ctl_gpio{
 	rockchip,pins = <0 RK_PA6 RK_FUNC_GPIO &pcfg_pull_up>;
