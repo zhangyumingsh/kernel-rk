@@ -253,17 +253,17 @@
 			* - SDIO_RESET_L_WL_REG_ON
 			* - PDN (power down when low)
 		*/
-		reset-gpios = <&gpio3 RK_PD5 GPIO_ACTIVE_LOW>;
+		reset-gpios = <&gpio0 RK_PA5 GPIO_ACTIVE_LOW>;
 	};
 
 	wireless_wlan: wireless-wlan {
 		compatible = "wlan-platdata";
 		rockchip,grf = <&grf>;
-		wifi_chip_type = "ap6398s";
+		wifi_chip_type = "rtl8723ds";
 		pinctrl-names = "default";
 		pinctrl-0 = <&wifi_host_wake_irq>;
-		WIFI,host_wake_irq = <&gpio3 RK_PD4 GPIO_ACTIVE_HIGH>;
-		status = "disabled";
+		WIFI,host_wake_irq = <&gpio0 RK_PC5 GPIO_ACTIVE_HIGH>;//WIFI模块唤醒CPU的
+		status = "okay";
 	};
 
 	// wireless_bluetooth: wireless-bluetooth {
@@ -716,7 +716,7 @@ sd_vcc3v3_power: sd-vcc3v3-power {
 
 &rknpu {
 	rknpu-supply = <&vdd_npu>;
-	status ="disabled";// "okay";
+	status = "disabled";
 };
 
 &rknpu_mmu {
@@ -864,6 +864,13 @@ sd_vcc3v3_power: sd-vcc3v3-power {
 
 &pinctrl {
 
+	spi1 {
+		spi1m0_cs2: spi1m0-cs2 {
+			rockchip,pins =
+				/* spi1_cs1m0 */
+				<2 RK_PC4 3 &pcfg_pull_up_drv_level_1>;
+		};
+	};
 	pmic {
 		pmic_int: pmic_int {
 			rockchip,pins =
@@ -909,21 +916,21 @@ sd_vcc3v3_power: sd-vcc3v3-power {
 
 	sdio-pwrseq {
 		wifi_enable_h: wifi-enable-h {
-			rockchip,pins = <3 RK_PD5 RK_FUNC_GPIO &pcfg_pull_none>;
+			rockchip,pins = <0 RK_PA5 RK_FUNC_GPIO &pcfg_pull_none>;
 		};
 	};
 
 	wireless-wlan {
 		wifi_host_wake_irq: wifi-host-wake-irq {
-			rockchip,pins = <3 RK_PD4 RK_FUNC_GPIO &pcfg_pull_down>;
+			rockchip,pins = <0 RK_PC5 RK_FUNC_GPIO &pcfg_pull_down>;
 		};
 	};
 
-	wireless-bluetooth {
-		uart8_gpios: uart8-gpios {
-			rockchip,pins = <2 RK_PB1 RK_FUNC_GPIO &pcfg_pull_none>;
-		};
-	};
+	// wireless-bluetooth {
+	// 	uart8_gpios: uart8-gpios {
+	// 		rockchip,pins = <2 RK_PB1 RK_FUNC_GPIO &pcfg_pull_none>;
+	// 	};
+	// };
 
 	touch {
 		touch_gpio: touch-gpio {
@@ -942,12 +949,6 @@ sd_vcc3v3_power: sd-vcc3v3-power {
 	sd {
 		sd_vcc3v3_power_en: sd-vcc3v3-power-en {
 			rockchip,pins = <0 RK_PA5 RK_FUNC_GPIO &pcfg_pull_none>;
-		};
-	};
-
-	wireless-wlan {
-		wifi_host_wake_irq: wifi-host-wake-irq {
-			rockchip,pins = <2 RK_PB2 RK_FUNC_GPIO &pcfg_pull_down>;
 		};
 	};
 
@@ -1049,21 +1050,6 @@ sd_vcc3v3_power: sd-vcc3v3-power {
 	status = "disabled";
 };
 
-&sdmmc2 {
-	max-frequency = <150000000>;
-	supports-sdio;
-	bus-width = <4>;
-	disable-wp;
-	cap-sd-highspeed;
-	cap-sdio-irq;
-	keep-power-in-suspend;
-	pinctrl-names = "default";
-	pinctrl-0 = <&sdmmc2m0_bus4 &sdmmc2m0_cmd &sdmmc2m0_clk>;
-	sd-uhs-sdr104;
-	mmc-pwrseq = <&sdio_pwrseq>;
-	non-removable;
-	status = "disabled";
-};
 
 &spdif_8ch {
 	status = "disabled";
@@ -1091,6 +1077,43 @@ sd_vcc3v3_power: sd-vcc3v3-power {
 		xceiver-supply = <&vcc3v3_sys>;
 		pinctrl-names = "default";
 		pinctrl-0 = <&mcp2515_int_pin>;
+	};
+
+	tft_35: st7789v@1 {
+		status = "okay";
+		compatible = "sitronix,st7796s";
+		reg = <1>;
+		spi-max-frequency =<12500000>;
+		fps =<60>;
+		buswidth = <8>;
+		rotate =<0>;
+		width = <480>;
+		height = <320>;
+		bpp = <24>;
+		bgr;
+		regwidth = <8>;
+		debug = <0x00>;	 //0x20 show fps
+		txbuflen = <8192>;
+		spi-cpol;
+		spi-cpha;
+		// dc-gpios  = <&pio 2 14 GPIO_ACTIVE_HIGH>; /* PC14 */
+		dc-gpios  = <&gpio0 RK_PC7 GPIO_ACTIVE_HIGH>;
+	};
+};
+
+&i2c3{
+	status = "okay";
+	pinctrl-names = "default";
+  	pinctrl-0 = <&i2c3m0_xfer>;
+	tft_tp: ns2009@48 {
+		compatible = "ti,tsc2007";
+		reg = <0x48>;
+		status = "okay";
+		ti,x-plate-ohms = <660>;
+		ti,rt-thr = <3000>;
+		ti,fuzzx = <32>;
+		ti,fuzzy = <16>;
+		i2c,ignore-nak = <1>;
 	};
 };
 
@@ -1201,28 +1224,12 @@ sd_vcc3v3_power: sd-vcc3v3-power {
     status = "okay";
 };
 
-&sdio_pwrseq {
-    reset-gpios = <&gpio2 RK_PB1 GPIO_ACTIVE_LOW>;
-    status = "okay";
-};
-
-&wifi_enable_h {
-    rockchip,pins = <2 RK_PB1 RK_FUNC_GPIO &pcfg_pull_none>;
-};
 
 // iomux with GPIO2_B2(WIFI,host_wake_irq)
 &uart8 {
     status = "disabled";
 };
 
-&wireless_wlan {
-    wifi_chip_type = "ap6356s";
-    pinctrl-names = "default";
-    pinctrl-0 = <&wifi_host_wake_irq>;
-    //WIFI,poweren_gpio = <&gpio3 29 0>;
-    WIFI,host_wake_irq = <&gpio2 RK_PB2 0>;
-    status = "okay";
-};
 
 /* BT config */
 &uart1 {
