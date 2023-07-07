@@ -44,7 +44,7 @@
 };
 
 &hdmi {
-	status = "okay";//"disabled";
+	status = "disabled";//;"okay"
 };
 
 &hdmi_in_vp0 {
@@ -52,7 +52,7 @@
 };
 
 &hdmi_in_vp1 {
-	status = "okay";//"disabled";
+	status = "disabled";//"okay";//"disabled";
 };
 
 &dsi1 {
