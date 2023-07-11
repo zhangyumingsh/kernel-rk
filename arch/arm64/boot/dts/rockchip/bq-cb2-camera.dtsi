@@ -73,6 +73,15 @@
 
 &i2c2 {
 	status = "okay";
+	status = "okay";
+	pinctrl-names = "default";
+	clock-frequency = <100000>;
+	pinctrl-0 = <&i2c2m1_xfer>;
+	avdd-1v8-supply = <&vcca1v8_image>;
+	avdd-0v9-supply = <&vdda0v9_image>;
+	power-domains = <&power RK3568_PD_VI>;
+	#address-cells = <1>;
+	#size-cells = <0>;
 	ov5647@36 {
 		status = "okay";
 		compatible = "ovti,ov5647";
