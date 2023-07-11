@@ -73,7 +73,6 @@
 
 &i2c2 {
 	status = "okay";
-	status = "okay";
 	pinctrl-names = "default";
 	clock-frequency = <100000>;
 	pinctrl-0 = <&i2c2m1_xfer>;
