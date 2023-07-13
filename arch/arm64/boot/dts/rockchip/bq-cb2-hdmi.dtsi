@@ -4,54 +4,23 @@
  *
  */
 
-&route_hdmi {
-	status = "okay";
-	connect = <&vp1_out_hdmi>;
-};
-
-&route_dsi0 {
-    status = "disabled";
-    connect = <&vp0_out_dsi0>;
-};
-
-&video_phy0 {
-    status = "disabled";
-};
-
-&dsi0_in_vp0 {
-    status = "disabled";
-};
-
-&dsi0_in_vp1 {
-    status = "disabled";
-};
-
-&route_dsi1 {
-    status = "disabled";
-    connect = <&vp0_out_dsi1>;
-};
-
-&video_phy1 {
-    status = "disabled";
-};
-
-&dsi1_in_vp0 {
-    status ="disabled";
-};
-
-&dsi1_in_vp1 {
-    status = "disabled";
-};
 
 &hdmi {
 	status = "okay";
 };
 
-&hdmi_in_vp0 {
+&hdmi_in_vp1 {
 	status = "disabled";
 };
 
-&hdmi_in_vp1 {
+&hdmi_in_vp0 {
 	status = "okay";
 };
 
+// &hdmi_sound {
+// 	status = "okay";
+// };
+&route_hdmi {
+	status = "okay";
+	connect = <&vp0_out_hdmi>;
+};
