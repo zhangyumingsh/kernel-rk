@@ -1,0 +1,55 @@
+/dts-v1/;
+/plugin/;
+
+/ {
+	
+	fragment@0 {
+		target = <&spi1>;
+
+		__overlay__ {
+			status = "okay";
+			max-freq = <10000000>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+			cs-gpios = <&gpio2 RK_PC4 GPIO_ACTIVE_LOW>,
+					<&gpio2 RK_PC0 GPIO_ACTIVE_LOW>,
+					<&gpio2 RK_PC6 GPIO_ACTIVE_LOW>;
+			can_mcp2515: can-mcp2515@0 {
+				status = "okay";
+				compatible = "microchip,mcp2515";
+				reg = <0>;
+				interrupt-parent = <&gpio2>;
+				interrupts = <RK_PC5 IRQ_TYPE_LEVEL_LOW>;
+				spi-max-frequency = <10000000>;
+				clocks = <&can_mcp2515_osc>;
+				vdd-supply = <&vcc3v3_sys>;
+				xceiver-supply = <&vcc3v3_sys>;
+				pinctrl-names = "default";
+				pinctrl-0 = <&mcp2515_int_pin>;
+			};
+		
+			tft_35: st7789v@1 {
+				status = "okay";
+				compatible = "sitronix,st7796s";
+				reg = <1>;
+				spi-max-frequency =<12500000>;
+				fps =<60>;
+				buswidth = <8>;
+				rotate =<0>;
+				width = <480>;
+				height = <320>;
+				bpp = <24>;
+				bgr;
+				regwidth = <8>;
+				debug = <0x00>;	 //0x20 show fps
+				txbuflen = <8192>;
+				spi-cpol;
+				spi-cpha;
+				// dc-gpios  = <&pio 2 14 GPIO_ACTIVE_HIGH>; /* PC14 */
+				dc-gpios  = <&gpio0 RK_PC7 GPIO_ACTIVE_HIGH>;
+			};
+									
+		};
+	};
+	
+};
