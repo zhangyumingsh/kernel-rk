@@ -60,6 +60,7 @@ real-obj-m := $(foreach m, $(obj-m), $(if $(strip $($(m:.o=-objs)) $($(m:.o=-y))
 # If CONFIG_OF_ALL_DTBS is enabled, all DT blobs are built
 extra-y				+= $(dtb-y)
 extra-$(CONFIG_OF_ALL_DTBS)	+= $(dtb-)
+extra-y				+= $(dtbo-y) $(scr-y) $(dtbotxt-y)
 
 # Add subdir path
 
