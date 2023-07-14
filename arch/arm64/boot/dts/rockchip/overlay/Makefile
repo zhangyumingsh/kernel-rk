@@ -1,10 +1,11 @@
 # SPDX-License-Identifier: GPL-2.0
 dtbo-$(CONFIG_ARCH_ROCKCHIP) += \
 	bigtree-cb2-hdmi.dtbo \
-	#bigtree-cb2-camera.dtbo \
-	#bigtree-cb2-spi-display.dtbo \
+	bigtree-cb2-camera.dtbo \
+	bigtree-cb2-display.dtbo \
+	bigtree-cb2-spi-display.dtbo 
 	
-	#bigtree-cb2-display.dtbo \
+	# \
 	#bigtree-cb2-hdmi.dtbo \
 	#bigtree-cb2-spi-display.dtbo
 

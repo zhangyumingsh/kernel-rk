@@ -1,6 +1,11 @@
 /dts-v1/;
 /plugin/;
 
+
+#include <dt-bindings/gpio/gpio.h>
+#include <dt-bindings/pinctrl/rockchip.h>
+#include <dt-bindings/power/rk3568-power.h>
+
 / {	
 	compatible = "rockchip,rk3568";
 	fragment@0 {
@@ -108,7 +113,7 @@
 			pinctrl-0 = <&i2c2m1_xfer>;
 			avdd-1v8-supply = <&vcca1v8_image>;
 			avdd-0v9-supply = <&vdda0v9_image>;
-			power-domains = <&power RK3568_PD_VI>;
+			//power-domains = <&power RK3568_PD_VI>;
 			#address-cells = <1>;
 			#size-cells = <0>;
 			ov5647@36 {
@@ -117,7 +122,7 @@
 				reg = <0x36>;
 				clocks = <&ext_cam_clk>;
 				clock-names = "ext_cam_ov5647_clk";
-				power-domains = <&power RK3568_PD_VI>;
+				//power-domains = <&power RK3568_PD_VI>;
 				pwdn-gpios = <&gpio3 RK_PC3 GPIO_ACTIVE_LOW>;
 				port {
 					ov5647_out: endpoint {
