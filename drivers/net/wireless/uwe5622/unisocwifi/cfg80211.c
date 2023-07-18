@@ -1619,7 +1619,7 @@ static int sprdwl_cfg80211_sched_scan_start(struct wiphy *wiphy,
 	sscan_buf = kzalloc(sizeof(*sscan_buf), GFP_KERNEL);
 	if (!sscan_buf)
 		return -ENOMEM;
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 4, 83)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 4, 0)
 	scan_plans = request->scan_plans;
 	sscan_buf->interval = scan_plans->interval;
 #else
@@ -1721,6 +1721,20 @@ static int sprdwl_cfg80211_sched_scan_stop(struct wiphy *wiphy,
 #ifdef SYNC_DISCONNECT
 void sprdwl_disconnect_handle(struct sprdwl_vif *vif)
 {
+	u16 reason_code = 0;
+	if ((vif->sm_state == SPRDWL_CONNECTED) ||
+			(vif->sm_state == SPRDWL_DISCONNECTING)) {
+		cfg80211_disconnected(vif->ndev, reason_code,
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 4, 83)
+			NULL, 0, true, GFP_KERNEL);
+#else
+			NULL, 0, GFP_KERNEL);
+#endif
+		wl_ndev_log(L_DBG, vif->ndev,
+			"%s %s, reason_code %d\n", __func__,
+			vif->ssid, reason_code);
+	}
+
 	vif->sm_state = SPRDWL_DISCONNECTED;
 
 	/* Clear bssid & ssid */
@@ -1748,10 +1762,8 @@ static int sprdwl_cfg80211_disconnect(struct wiphy *wiphy,
 	enum sm_state old_state = vif->sm_state;
 	int ret;
 #ifdef SYNC_DISCONNECT
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 9, 60)
 	u32 msec;
 	ktime_t kt;
-#endif
 #endif
 #ifdef STA_SOFTAP_SCC_MODE
 	struct sprdwl_intf *intf = (struct sprdwl_intf *)vif->priv->hw_priv;
@@ -1772,17 +1784,19 @@ static int sprdwl_cfg80211_disconnect(struct wiphy *wiphy,
 		goto out;
 	}
 #ifdef SYNC_DISCONNECT
-#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 9, 60)
 	if (!sprdwl_sync_disconnect_event(vif, msecs_to_jiffies(1000))) {
 		kt = ktime_get();
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 10, 0)
+		msec = (u32)(div_u64(kt, NSEC_PER_MSEC));
+#else
 		msec = (u32)(div_u64(kt.tv64, NSEC_PER_MSEC));
+#endif
 		wl_err("Wait disconnect event timeout. [mstime = %d]\n",
 		       cpu_to_le32(msec));
 	} else {
 		sprdwl_disconnect_handle(vif);
 	}
 	atomic_set(&vif->sync_disconnect_event, 0);
-#endif
 #endif
 	trace_deauth_reason(vif->mode, reason_code, LOCAL_EVENT);
 out:
@@ -2162,7 +2176,11 @@ void sprdwl_report_scan_result(struct sprdwl_vif *vif, u16 chan, s16 rssi,
 	struct ieee80211_mgmt *mgmt = (struct ieee80211_mgmt *)frame;
 	struct ieee80211_channel *channel;
 	struct cfg80211_bss *bss;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 20, 0)
 	struct timespec ts;
+#else
+	struct timespec64 ts;
+#endif
 	u16 capability, beacon_interval;
 	u32 freq;
 	s32 signal;
@@ -2210,7 +2228,11 @@ void sprdwl_report_scan_result(struct sprdwl_vif *vif, u16 chan, s16 rssi,
 	ie = mgmt->u.probe_resp.variable;
 	ielen = len - offsetof(struct ieee80211_mgmt, u.probe_resp.variable);
 	/* framework use system bootup time */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 20, 0)
 	get_monotonic_boottime(&ts);
+#else
+	ktime_get_boottime_ts64(&ts);
+#endif
 	tsf = (u64)ts.tv_sec * 1000000 + div_u64(ts.tv_nsec, 1000);
 	beacon_interval = le16_to_cpu(mgmt->u.probe_resp.beacon_int);
 	capability = le16_to_cpu(mgmt->u.probe_resp.capab_info);
@@ -2259,7 +2281,11 @@ void sprdwl_report_connection(struct sprdwl_vif *vif,
 	struct ieee80211_channel *channel;
 	struct ieee80211_mgmt *mgmt;
 	struct cfg80211_bss *bss = NULL;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 20, 0)
 	struct timespec ts;
+#else
+	struct timespec64 ts;
+#endif
 #ifdef WMMAC_WFA_CERTIFICATION
 	struct wmm_params_element *wmm_params;
 	int i;
@@ -2335,7 +2361,11 @@ void sprdwl_report_connection(struct sprdwl_vif *vif,
 		ielen = conn_info->bea_ie_len - offsetof(struct ieee80211_mgmt,
 						 u.probe_resp.variable);
 		/* framework use system bootup time */
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4, 20, 0)
 		get_monotonic_boottime(&ts);
+#else
+		ktime_get_boottime_ts64(&ts);
+#endif
 		tsf = (u64)ts.tv_sec * 1000000 + div_u64(ts.tv_nsec, 1000);
 		beacon_interval = le16_to_cpu(mgmt->u.probe_resp.beacon_int);
 		capability = le16_to_cpu(mgmt->u.probe_resp.capab_info);
@@ -2684,12 +2714,17 @@ static int sprdwl_cfg80211_mgmt_tx(struct wiphy *wiphy,
 
 static void sprdwl_cfg80211_mgmt_frame_register(struct wiphy *wiphy,
 						struct wireless_dev *wdev,
-						u16 frame_type, bool reg)
+						struct mgmt_frame_regs *upd)
 {
 	struct sprdwl_vif *vif = container_of(wdev, struct sprdwl_vif, wdev);
 	struct sprdwl_work *misc_work;
 	struct sprdwl_reg_mgmt *reg_mgmt;
 	u16 mgmt_type;
+
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 8, 0))
+	u16 frame_type = BIT(upd->global_stypes << 4);
+	bool reg = false;
+#endif
 
 	if (vif->mode == SPRDWL_MODE_NONE)
 		return;
@@ -3245,7 +3280,7 @@ static struct cfg80211_ops sprdwl_cfg80211_ops = {
 	.remain_on_channel = sprdwl_cfg80211_remain_on_channel,
 	.cancel_remain_on_channel = sprdwl_cfg80211_cancel_remain_on_channel,
 	.mgmt_tx = sprdwl_cfg80211_mgmt_tx,
-	.mgmt_frame_register = sprdwl_cfg80211_mgmt_frame_register,
+	.update_mgmt_frame_registrations = sprdwl_cfg80211_mgmt_frame_register,
 	.set_power_mgmt = sprdwl_cfg80211_set_power_mgmt,
 	.set_cqm_rssi_config = sprdwl_cfg80211_set_cqm_rssi_config,
 	.sched_scan_start = sprdwl_cfg80211_sched_scan_start,
@@ -3466,7 +3501,7 @@ void sprdwl_reg_notify(struct wiphy *wiphy,
 	}
 
 #ifdef CP2_RESET_SUPPORT
-	if (NL80211_REGDOM_SET_BY_COUNTRY_IE == request->initiator)
+	if(NL80211_REGDOM_SET_BY_COUNTRY_IE == request->initiator)
 		memcpy(&priv->sync.request, request, sizeof(struct regulatory_request));
 #endif
 
@@ -3782,9 +3817,9 @@ void sprdwl_setup_wiphy(struct wiphy *wiphy, struct sprdwl_priv *priv)
 
 #if !defined (CONFIG_CFG80211_INTERNAL_REGDB) || defined(CUSTOM_REGDOMAIN)
 #if (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 14, 0))
-		wiphy->regulatory_flags |= REGULATORY_CUSTOM_REG;
+	wiphy->regulatory_flags |= REGULATORY_CUSTOM_REG;
 #else
-		wiphy->flags |= WIPHY_FLAG_CUSTOM_REGULATORY;
+	wiphy->flags |= WIPHY_FLAG_CUSTOM_REGULATORY;
 #endif
 		alpha2[0] = '0';
 		alpha2[1] = '0';
