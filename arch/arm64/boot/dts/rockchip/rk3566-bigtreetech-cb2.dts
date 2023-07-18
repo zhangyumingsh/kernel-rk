@@ -18,8 +18,8 @@
 #include <dt-bindings/sensor-dev.h>
 #include "rk3568.dtsi"
 //#include "bq-cb2-display.dtsi"
-#include "bq-cb2-camera.dtsi"
-#include "bq-cb2-hdmi.dtsi"
+//#include "bq-cb2-camera.dtsi"
+//#include "bq-cb2-hdmi.dtsi"
 
 / {
 
