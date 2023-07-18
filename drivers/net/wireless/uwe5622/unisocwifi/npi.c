@@ -33,7 +33,9 @@ static struct genl_family sprdwl_nl_genl_family;
 static int sprdwl_get_flag(void)
 {
 	struct file *fp = NULL;
+#ifdef setfs
 	mm_segment_t fs;
+#endif
 	loff_t *pos;
 	int flag = 0;
 	char file_data[2];
@@ -44,14 +46,18 @@ static int sprdwl_get_flag(void)
 		wl_err("open file:%s failed\n", SPRDWL_PSM_PATH);
 		return PTR_ERR(fp);
 	}
+#ifdef setfs
 	fs = get_fs();
 	set_fs(KERNEL_DS);
+#endif
 
 	pos = &fp->f_pos;
-	vfs_read(fp, file_data, 1, pos);
+	kernel_read(fp, file_data, 1, pos);
 
 	filp_close(fp, NULL);
+#ifdef setfs
 	set_fs(fs);
+#endif
 
 	file_data[1] = 0;
 	if (kstrtoull(file_data, 10, &tmp)) {
@@ -99,7 +105,7 @@ static int sprdwl_cmd_set_psm_cap(struct sprdwl_vif *vif)
 }
 
 static int sprdwl_npi_pre_doit(const struct genl_ops *ops,
-			       struct sk_buff *skb, struct genl_info *info)
+				   struct sk_buff *skb, struct genl_info *info)
 {
 	struct net_device *ndev;
 	struct sprdwl_vif *vif;
@@ -142,7 +148,7 @@ static bool sprdwl_npi_cmd_is_start(void *buf)
 
 	msg = (struct sprdwl_npi_cmd_hdr *)buf;
 	if ((msg->type == SPRDWL_HT2CP_CMD) &&
-	    (msg->subtype == SPRDWL_NPI_CMD_START))
+		(msg->subtype == SPRDWL_NPI_CMD_START))
 		return true;
 	else
 		return false;
@@ -195,7 +201,7 @@ static int sprdwl_nl_npi_handler(struct sk_buff *skb_2, struct genl_info *info)
 		memcpy(r_buf, hdr, sizeof(*hdr));
 		memcpy(r_buf + sizeof(*hdr), &err, hdr->len);
 		ret = sprdwl_nl_send_generic(info, SPRDWL_NL_ATTR_CP2AP,
-					     SPRDWL_NL_CMD_NPI, r_len, r_buf);
+						 SPRDWL_NL_CMD_NPI, r_len, r_buf);
 		kfree(hdr);
 		kfree(r_buf);
 		return ret;
@@ -228,7 +234,7 @@ static int sprdwl_nl_npi_handler(struct sk_buff *skb_2, struct genl_info *info)
 #endif
 
 	ret = sprdwl_nl_send_generic(info, SPRDWL_NL_ATTR_CP2AP,
-				     SPRDWL_NL_CMD_NPI, r_len, r_buf);
+					 SPRDWL_NL_CMD_NPI, r_len, r_buf);
 
 	if (sprdwl_npi_cmd_is_start(s_buf)) {
 		msleep(100);
@@ -239,7 +245,7 @@ static int sprdwl_nl_npi_handler(struct sk_buff *skb_2, struct genl_info *info)
 }
 
 static int sprdwl_nl_get_info_handler(struct sk_buff *skb_2,
-				      struct genl_info *info)
+					  struct genl_info *info)
 {
 	struct net_device *ndev = info->user_ptr[0];
 	struct sprdwl_vif *vif = netdev_priv(ndev);
@@ -252,8 +258,8 @@ static int sprdwl_nl_get_info_handler(struct sk_buff *skb_2,
 		sprdwl_put_vif(vif);
 		r_len = 6;
 		ret = sprdwl_nl_send_generic(info, SPRDWL_NL_ATTR_CP2AP,
-					     SPRDWL_NL_CMD_GET_INFO, r_len,
-					     r_buf);
+						 SPRDWL_NL_CMD_GET_INFO, r_len,
+						 r_buf);
 	} else {
 		wl_err("%s NULL vif!\n", __func__);
 		ret = -1;
@@ -269,12 +275,16 @@ static struct nla_policy sprdwl_genl_policy[SPRDWL_NL_ATTR_MAX + 1] = {
 static struct genl_ops sprdwl_nl_ops[] = {
 	{
 		.cmd = SPRDWL_NL_CMD_NPI,
+#if KERNEL_VERSION(5, 2, 0) > LINUX_VERSION_CODE
 		.policy = sprdwl_genl_policy,
+#endif
 		.doit = sprdwl_nl_npi_handler,
 	},
 	{
 		.cmd = SPRDWL_NL_CMD_GET_INFO,
+#if KERNEL_VERSION(5, 2, 0) > LINUX_VERSION_CODE
 		.policy = sprdwl_genl_policy,
+#endif
 		.doit = sprdwl_nl_get_info_handler,
 	}
 };

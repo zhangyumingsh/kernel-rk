@@ -19,6 +19,7 @@
 #include "wcn_gnss.h"
 #include "wcn_procfs.h"
 
+
 static struct mutex marlin_lock;
 static struct wifi_calibration wifi_data;
 

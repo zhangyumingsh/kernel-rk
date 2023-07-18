@@ -24,9 +24,11 @@
 #include "intf_ops.h"
 #include "vendor.h"
 #include "work.h"
+#if defined(UWE5621_FTR)
 #include "tx_msg.h"
 #include "rx_msg.h"
 #include "wl_core.h"
+#endif
 #include "tcp_ack.h"
 #include "rnd_mac_addr.h"
 #ifdef DFS_MASTER
@@ -69,7 +71,7 @@ void sprdwl_netif_rx(struct sk_buff *skb, struct net_device *ndev)
 	rx_if = (struct sprdwl_rx_if *)intf->sprdwl_rx;
 
 	wl_hex_dump(L_DBG, "RX packet: ", DUMP_PREFIX_OFFSET,
-			     16, 1, skb->data, skb->len, 0);
+				 16, 1, skb->data, skb->len, 0);
 
 	skb->dev = ndev;
 	skb->protocol = eth_type_trans(skb, ndev);
@@ -109,7 +111,7 @@ void sprdwl_stop_net(struct sprdwl_vif *vif)
 }
 
 static void sprdwl_netflowcontrl_mode(struct sprdwl_priv *priv,
-				      enum sprdwl_mode mode, bool state)
+					  enum sprdwl_mode mode, bool state)
 {
 	struct sprdwl_vif *vif;
 
@@ -242,8 +244,8 @@ static int sprdwl_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 	if (skb->protocol == cpu_to_be16(ETH_P_PAE) ||
 		skb->protocol == cpu_to_be16(WAPI_TYPE)) {
 		wl_info("send %s frame by WIFI_CMD_TX_DATA\n",
-		       skb->protocol == cpu_to_be16(ETH_P_PAE) ?
-		       "802.1X" : "WAI");
+			   skb->protocol == cpu_to_be16(ETH_P_PAE) ?
+			   "802.1X" : "WAI");
 		if (sprdwl_xmit_data2cmd_wq(skb, ndev) == -EAGAIN)
 			return NETDEV_TX_BUSY;
 		return NETDEV_TX_OK;
@@ -256,14 +258,15 @@ static int sprdwl_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 	/*mode not open, so we will not send data*/
 	if (vif->priv->fw_stat[vif->mode] != SPRDWL_INTF_OPEN) {
 		wl_err_ratelimited("%s, %d, should not send this data\n",
-		       __func__, __LINE__);
-		return NETDEV_TX_BUSY;
+			   __func__, __LINE__);
+		dev_kfree_skb(skb);
+		return NETDEV_TX_OK;
 	}
 
 	msg = sprdwl_intf_get_msg_buf(vif->priv,
-				      SPRDWL_TYPE_DATA,
-				      vif->mode,
-				      vif->ctx_id);
+					  SPRDWL_TYPE_DATA,
+					  vif->mode,
+					  vif->ctx_id);
 	if (!msg) {
 		wl_err("%s, %d, get msg bug failed\n", __func__, __LINE__);
 		ndev->stats.tx_fifo_errors++;
@@ -290,7 +293,12 @@ static int sprdwl_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 		return NETDEV_TX_OK;
 	}
 #endif
+#if !defined(UWE5621_FTR)
+	/* sprdwl_send_data: offset use 2 for cp bytes align */
+	ret = sprdwl_send_data(vif, msg, skb, 2);
+#else
 	ret = sprdwl_send_data(vif, msg, skb, 0);
+#endif /* UWE5621_FTR */
 	if (ret) {
 		wl_ndev_log(L_ERR, ndev, "%s drop msg due to TX Err\n", __func__);
 		/* FIXME as debug sdiom later, here just drop the msg
@@ -309,7 +317,7 @@ static int sprdwl_start_xmit(struct sk_buff *skb, struct net_device *ndev)
 	netif_trans_update(vif->ndev);
 #endif
 	wl_hex_dump(L_DBG, "TX packet: ", DUMP_PREFIX_OFFSET,
-			     16, 1, skb->data, skb->len, 0);
+				 16, 1, skb->data, skb->len, 0);
 
 out:
 	return NETDEV_TX_OK;
@@ -361,8 +369,11 @@ static struct net_device_stats *sprdwl_get_stats(struct net_device *ndev)
 {
 	return &ndev->stats;
 }
-
+#if KERNEL_VERSION(5, 6, 0) <= LINUX_VERSION_CODE
+static void sprdwl_tx_timeout(struct net_device *ndev, unsigned int txqueue)
+#else
 static void sprdwl_tx_timeout(struct net_device *ndev)
+#endif
 {
 	wl_ndev_log(L_DBG, ndev, "%s\n", __func__);
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 7, 0)
@@ -501,7 +512,7 @@ static int sprdwl_priv_cmd(struct net_device *ndev, struct ifreq *ifr)
 		skip = strlen(CMD_ENABLE_WHITELIST) + 1;
 		counter = command[skip];
 		wl_ndev_log(L_INFO, ndev, "%s: enable whitelist counter : %d\n",
-			    __func__, counter);
+				__func__, counter);
 		if (!counter) {
 			ret = sprdwl_set_whitelist(priv, vif->ctx_id,
 						   SPRDWL_SUBCMD_ENABLE,
@@ -521,7 +532,7 @@ static int sprdwl_priv_cmd(struct net_device *ndev, struct ifreq *ifr)
 			if (!is_valid_ether_addr(mac_addr))
 				goto out;
 			wl_ndev_log(L_INFO, ndev, "%s: enable whitelist %pM\n",
-				    __func__, mac_addr);
+					__func__, mac_addr);
 			mac_addr += ETH_ALEN;
 			tmp += 18;
 		}
@@ -534,7 +545,7 @@ static int sprdwl_priv_cmd(struct net_device *ndev, struct ifreq *ifr)
 		skip = strlen(CMD_DISABLE_WHITELIST) + 1;
 		counter = command[skip];
 		wl_ndev_log(L_INFO, ndev, "%s: disable whitelist counter : %d\n",
-			    __func__, counter);
+				__func__, counter);
 		if (!counter) {
 			ret = sprdwl_set_whitelist(priv, vif->ctx_id,
 						   SPRDWL_SUBCMD_DISABLE,
@@ -554,7 +565,7 @@ static int sprdwl_priv_cmd(struct net_device *ndev, struct ifreq *ifr)
 			if (!is_valid_ether_addr(mac_addr))
 				goto out;
 			wl_ndev_log(L_INFO, ndev, "%s: disable whitelist %pM\n",
-				    __func__, mac_addr);
+					__func__, mac_addr);
 			mac_addr += ETH_ALEN;
 			tmp += 18;
 		}
@@ -596,7 +607,7 @@ static int sprdwl_priv_cmd(struct net_device *ndev, struct ifreq *ifr)
 			interval = command[skip + 1];
 
 		wl_ndev_log(L_INFO, ndev, "%s: 11v sleep, status %d, interval %d\n",
-			    __func__, status, interval);
+				__func__, status, interval);
 		sprdwl_set_11v_sleep_mode(priv, vif->ctx_id, status, interval);
 	} else if (!strncasecmp(command, CMD_SET_COUNTRY,
 				strlen(CMD_SET_COUNTRY))) {
@@ -610,7 +621,7 @@ static int sprdwl_priv_cmd(struct net_device *ndev, struct ifreq *ifr)
 			goto out;
 		}
 		wl_ndev_log(L_INFO, ndev, "%s country code:%c%c\n", __func__,
-			    toupper(country[0]), toupper(country[1]));
+				toupper(country[0]), toupper(country[1]));
 		ret = regulatory_hint(priv->wiphy, country);
 	} else if (!strncasecmp(command, CMD_SET_MAX_CLIENTS,
 		   strlen(CMD_SET_MAX_CLIENTS))) {
@@ -621,7 +632,7 @@ static int sprdwl_priv_cmd(struct net_device *ndev, struct ifreq *ifr)
 			goto out;
 		}
 		ret = sprdwl_set_max_clients_allowed(priv, vif->ctx_id,
-						     n_clients);
+							 n_clients);
 	} else if (!strncasecmp(command, CMD_SETSUSPENDMODE,
 			 strlen(CMD_SETSUSPENDMODE))) {
 		skip = strlen(CMD_SETSUSPENDMODE) + 1;
@@ -629,7 +640,7 @@ static int sprdwl_priv_cmd(struct net_device *ndev, struct ifreq *ifr)
 		if (ret)
 			goto out;
 		wl_ndev_log(L_INFO, ndev, "%s: set suspend mode,value : %d\n",
-			    __func__, value);
+				__func__, value);
 		ret = sprdwl_power_save(priv, vif->ctx_id,
 					SPRDWL_SCREEN_ON_OFF, value);
 	} else {
@@ -709,7 +720,7 @@ static int sprdwl_set_power_save(struct net_device *ndev, struct ifreq *ifr)
 		if (ret)
 			goto out;
 		wl_ndev_log(L_INFO, ndev, "%s: set suspend mode,value : %d\n",
-			    __func__, value);
+				__func__, value);
 		ret = sprdwl_power_save(priv, vif->ctx_id,
 					SPRDWL_SCREEN_ON_OFF, value);
 	} else if (!strncasecmp(command, CMD_SET_FCC_CHANNEL,
@@ -719,7 +730,7 @@ static int sprdwl_set_power_save(struct net_device *ndev, struct ifreq *ifr)
 		if (ret)
 			goto out;
 		wl_ndev_log(L_INFO, ndev, "%s: set fcc channel,value : %d\n",
-			    __func__, value);
+				__func__, value);
 		ret = sprdwl_power_save(priv, vif->ctx_id,
 					SPRDWL_SET_FCC_CHANNEL, value);
 	} else {
@@ -885,12 +896,12 @@ static void sprdwl_set_multicast(struct net_device *ndev)
 		mac_addr = vif->mc_filter->mac_addr;
 		netdev_for_each_mc_addr(ha, ndev) {
 			wl_ndev_log(L_DBG, ndev, "%s set mac: %pM\n", __func__,
-				    ha->addr);
+					ha->addr);
 			if ((ha->addr[0] != 0x33 || ha->addr[1] != 0x33) &&
-			    (ha->addr[0] != 0x01 || ha->addr[1] != 0x00 ||
-			     ha->addr[2] != 0x5e || ha->addr[3] > 0x7f)) {
+				(ha->addr[0] != 0x01 || ha->addr[1] != 0x00 ||
+				 ha->addr[2] != 0x5e || ha->addr[3] > 0x7f)) {
 				wl_ndev_log(L_INFO, ndev, "%s invalid addr\n",
-					    __func__);
+						__func__);
 				return;
 			}
 			ether_addr_copy(mac_addr, ha->addr);
@@ -983,10 +994,11 @@ static int sprdwl_inetaddr_event(struct notifier_block *this,
 				if (entry->ctx_id == vif->ctx_id)
 					entry->ip_acquired = 1;
 				else
-					wl_err("ctx_id(%d) mismatch\n",
-					       entry->ctx_id);
+					;
+					//wl_err("ctx_id(%d) mismatch\n",
+					//	   entry->ctx_id);
 			} else {
-			    wl_err("failed to find entry\n");
+				wl_err("failed to find entry\n");
 			}
 
 			sprdwl_notify_ip(vif->priv, vif->ctx_id, SPRDWL_IPV4,
@@ -1038,7 +1050,7 @@ static int sprdwl_inetaddr6_event(struct notifier_block *this,
 			work->id = SPRDWL_WORK_NOTIFY_IP;
 			ipv6_addr = (u8 *)work->data;
 			memcpy(ipv6_addr, (u8 *)&inet6_ifa->addr,
-			       SPRDWL_IPV6_ADDR_LEN);
+				   SPRDWL_IPV6_ADDR_LEN);
 			sprdwl_queue_work(vif->priv, work);
 		}
 		break;
@@ -1052,100 +1064,8 @@ static struct notifier_block sprdwl_inet6addr_cb = {
 	.notifier_call = sprdwl_inetaddr6_event
 };
 
-static int write_mac_addr(char *mac_file, u8 *addr)
-{
-	struct file *fp = 0;
-	mm_segment_t old_fs;
-	char buf[18];
-	loff_t pos = 0;
-	/*open file*/
-	fp = filp_open(mac_file, O_CREAT|O_RDWR, 777);
-	if (IS_ERR(fp)) {
-		 wl_err("can't create WIFI MAC file!\n");
-		 return -ENOENT;
-	 }
-	 /*format MAC address*/
-	 sprintf(buf, "%02x:%02x:%02x:%02x:%02x:%02x", addr[0], addr[1],
-		     addr[2], addr[3], addr[4], addr[5]);
-	 /*save old fs: should be USER_DS*/
-	 old_fs = get_fs();
-	 /*change it to KERNEL_DS*/
-	 set_fs(KERNEL_DS);
-	 /*write file*/
-	 vfs_write(fp, buf, sizeof(buf), &pos);
-	 /*close file*/
-	 filp_close(fp, NULL);
-	 /*restore to old fs*/
-	 set_fs(old_fs);
-
-	 return 0;
-}
-
-#ifdef CUSTOMIZE_WIFI_MAC_FILE
-#define WIFI_MAC_ADDR_PATH  CUSTOMIZE_WIFI_MAC_FILE
-#else
-#define WIFI_MAC_ADDR_PATH "/data/misc/wifi/wifimac.txt"
-#endif
-static int sprdwl_get_mac_from_file(struct sprdwl_vif *vif, u8 *addr)
-{
-	struct file *fp = 0;
-	u8 buf[64] = { 0 };
-	mm_segment_t fs;
-	loff_t *pos;
-	char tmp_mac_file[256] = {0};
-
-	snprintf(tmp_mac_file, 255, "%s.%s", WIFI_MAC_ADDR_PATH, "tmp");
-	fp = filp_open(WIFI_MAC_ADDR_PATH, O_RDONLY, 0);
-	if (IS_ERR(fp)) {
-		wl_err("WIFI MAC can't be found wifimac.txt!\n");
-		fp = filp_open(tmp_mac_file, O_RDONLY, 0);
-		if (IS_ERR(fp)) {
-			wl_err("WIFI MAC can't found in temp file!\n");
-			goto random_mac;
-		}
-	}
-
-	fs = get_fs();
-	set_fs(KERNEL_DS);
-
-	pos = &fp->f_pos;
-	vfs_read(fp, buf, sizeof(buf), pos);
-
-	filp_close(fp, NULL);
-	set_fs(fs);
-
-	str2mac(buf, addr);
-	if (!is_valid_ether_addr(addr)) {
-		wl_ndev_log(L_ERR, vif->ndev, "%s invalid MAC address (%pM)\n",
-				 __func__, addr);
-		return -EINVAL;
-	}
-	if (is_local_ether_addr(addr)) {
-		netdev_warn(vif->ndev, "%s Warning: Assigning a locally valid "
-				 "MAC address (%pM) to a device\n",
-				 __func__, addr);
-		netdev_warn(vif->ndev, "%s You should not set the 2nd rightmost "
-				"bit in the first byte of the MAC\n", __func__);
-		vif->local_mac_flag = 1;
-	} else
-		vif->local_mac_flag = 0;
-
-	return 0;
-random_mac:
-	random_ether_addr(addr);
-	wl_warn("%s use random MAC address\n",
-			__func__);
-	/* initialize MAC addr with specific OUI */
-	addr[0] = 0x40;
-	addr[1] = 0x45;
-	addr[2] = 0xda;
-	/*write random mac to WIFI FILE*/
-	write_mac_addr(tmp_mac_file, addr);
-	return 0;
-}
-
-#ifdef CONFIG_SUNXI_ADDR_MGT
-extern int get_wifi_custom_mac_address(char *addr_str);
+#if IS_ENABLED(CONFIG_SUNXI_ADDR_MGT)
+extern int get_custom_mac_address(int fmt, char *name, char *addr);
 #endif
 static void sprdwl_set_mac_addr(struct sprdwl_vif *vif, u8 *pending_addr,
 				u8 *addr)
@@ -1162,13 +1082,8 @@ static void sprdwl_set_mac_addr(struct sprdwl_vif *vif, u8 *pending_addr,
 	if (!addr) {
 		return;
 	}
-#ifdef CONFIG_SUNXI_ADDR_MGT
-	ret = get_wifi_custom_mac_address(addr_str);
-	if (ret != -1) {
-		sscanf(addr_str, "%02hhx:%02hhx:%02hhx:%02hhx:%02hhx:%02hhx",
-				&custom_mac[0], &custom_mac[1], &custom_mac[2],
-				&custom_mac[3], &custom_mac[4], &custom_mac[5]);
-	}
+#if IS_ENABLED(CONFIG_SUNXI_ADDR_MGT)
+	get_custom_mac_address(1, "wifi", custom_mac);
 #endif
 
 	if (is_valid_ether_addr(custom_mac)) {
@@ -1181,7 +1096,7 @@ static void sprdwl_set_mac_addr(struct sprdwl_vif *vif, u8 *pending_addr,
 		ether_addr_copy(addr, priv->default_mac);
 		default_mac_valid = 1;
 	} else {
-		sprdwl_get_mac_from_file(vif, addr);
+		printk("no valid mac address!\n");
 	}
 
 	switch (type) {
@@ -1254,7 +1169,7 @@ void clean_survey_info_list(struct sprdwl_vif *vif)
 }
 
 static unsigned short cal_total_beacon(struct sprdwl_vif *vif,
-				       struct sprdwl_survey_info *info)
+					   struct sprdwl_survey_info *info)
 {
 	unsigned short total_beacon = 0;
 	short pos_chan, chan;
@@ -1267,14 +1182,14 @@ static unsigned short cal_total_beacon(struct sprdwl_vif *vif,
 		list_for_each_entry(info, &vif->survey_info_list, survey_list) {
 			pos_chan = (short)info->chan;
 			if (pos_chan > (chan - 4) && pos_chan < (chan + 4) &&
-			    pos_chan != chan) {
+				pos_chan != chan) {
 				total_beacon += info->beacon_num;
 			}
 		}
 	}
 
 	wl_ndev_log(L_DBG, vif->ndev, "survey chan: %d, total beacon: %d!\n",
-		    chan, total_beacon);
+			chan, total_beacon);
 	return total_beacon;
 }
 
@@ -1348,7 +1263,7 @@ static struct sprdwl_survey_info *find_survey_info(struct sprdwl_vif *vif,
 }
 
 void acs_scan_result(struct sprdwl_vif *vif, u16 chan,
-		     struct ieee80211_mgmt *mgmt)
+			 struct ieee80211_mgmt *mgmt)
 {
 	struct sprdwl_survey_info *info = NULL;
 	struct sprdwl_bssid *bssid = NULL;
@@ -1371,7 +1286,7 @@ void acs_scan_result(struct sprdwl_vif *vif, u16 chan,
 #endif /* ACS_SUPPORT */
 
 static void sprdwl_init_vif(struct sprdwl_priv *priv, struct sprdwl_vif *vif,
-			    const char *name)
+				const char *name)
 {
 	WARN_ON(strlen(name) >= sizeof(vif->name));
 
@@ -1394,8 +1309,8 @@ static void sprdwl_deinit_vif(struct sprdwl_vif *vif)
 	 */
 #ifdef SYNC_DISCONNECT
 	if (vif->sm_state == SPRDWL_CONNECTING ||
-	    vif->sm_state == SPRDWL_CONNECTED  ||
-	    vif->sm_state == SPRDWL_DISCONNECTING)
+		vif->sm_state == SPRDWL_CONNECTED  ||
+		vif->sm_state == SPRDWL_DISCONNECTING)
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 2, 0)
 		cfg80211_disconnected(vif->ndev, 3,
 		NULL, 0, false, GFP_KERNEL);
@@ -1425,9 +1340,9 @@ static void sprdwl_deinit_vif(struct sprdwl_vif *vif)
 
 #ifndef CONFIG_P2P_INTF
 static struct sprdwl_vif *sprdwl_register_wdev(struct sprdwl_priv *priv,
-					       const char *name,
-					       enum nl80211_iftype type,
-					       u8 *addr)
+						   const char *name,
+						   enum nl80211_iftype type,
+						   u8 *addr)
 {
 	struct sprdwl_vif *vif;
 	struct wireless_dev *wdev;
@@ -1501,8 +1416,8 @@ static struct sprdwl_vif *sprdwl_register_netdev(struct sprdwl_priv *priv,
 	if (priv->fw_capa & SPRDWL_CAPA_MC_FILTER) {
 		wl_info("\tMulticast Filter supported\n");
 		vif->mc_filter =
-		    kzalloc(sizeof(struct sprdwl_mc_filter) +
-			    priv->max_mc_mac_addrs * ETH_ALEN, GFP_KERNEL);
+			kzalloc(sizeof(struct sprdwl_mc_filter) +
+				priv->max_mc_mac_addrs * ETH_ALEN, GFP_KERNEL);
 		if (!vif->mc_filter) {
 			ret = -ENOMEM;
 			goto err;
@@ -1563,8 +1478,8 @@ static void sprdwl_unregister_netdev(struct sprdwl_vif *vif)
 }
 
 struct wireless_dev *sprdwl_add_iface(struct sprdwl_priv *priv,
-				      const char *name,
-				      enum nl80211_iftype type, u8 *addr)
+					  const char *name,
+					  enum nl80211_iftype type, u8 *addr)
 {
 	struct sprdwl_vif *vif;
 
@@ -1641,7 +1556,6 @@ static void sprdwl_init_debugfs(struct sprdwl_priv *priv)
 
 int sprdwl_core_init(struct device *dev, struct sprdwl_priv *priv)
 {
-	u8 *efuse_mac_addr = NULL;
 	struct wiphy *wiphy = priv->wiphy;
 	struct wireless_dev *wdev;
 	int ret;
@@ -1666,8 +1580,6 @@ int sprdwl_core_init(struct device *dev, struct sprdwl_priv *priv)
 	}
 	sprdwl_init_debugfs(priv);
 
-	if (is_valid_ether_addr(priv->mac_addr))
-		efuse_mac_addr = priv->mac_addr;
 	rtnl_lock();
 	wdev = sprdwl_add_iface(priv, "wlan%d", NL80211_IFTYPE_STATION, NULL);
 	rtnl_unlock();
@@ -1690,21 +1602,23 @@ int sprdwl_core_init(struct device *dev, struct sprdwl_priv *priv)
 
 #ifdef RX_NAPI
 	sprdwl_rx_napi_init(wdev->netdev,
-			    ((struct sprdwl_intf *)priv->hw_priv));
+				((struct sprdwl_intf *)priv->hw_priv));
 #endif
 
+#if defined(UWE5621_FTR)
 	qos_enable(1);
+#endif
 	sprdwl_init_npi();
 	ret = register_inetaddr_notifier(&sprdwl_inetaddr_cb);
 	if (ret)
 		wl_err("%s failed to register inetaddr notifier(%d)!\n",
-		       __func__, ret);
+			   __func__, ret);
 	if (priv->fw_capa & SPRDWL_CAPA_NS_OFFLOAD) {
 		wl_info("\tIPV6 NS Offload supported\n");
 		ret = register_inet6addr_notifier(&sprdwl_inet6addr_cb);
 		if (ret)
 			wl_err("%s failed to register inet6addr notifier(%d)!\n",
-			       __func__, ret);
+				   __func__, ret);
 	}
 
 	trace_info_init();
@@ -1712,7 +1626,7 @@ int sprdwl_core_init(struct device *dev, struct sprdwl_priv *priv)
 	ret = marlin_reset_register_notify(priv->if_ops->force_exit, priv->hw_priv);
 	if (ret) {
 		wl_err("%s failed to register wcn cp rest notify(%d)!\n",
-		       __func__, ret);
+			   __func__, ret);
 	}
 
 out:
@@ -1726,7 +1640,9 @@ int sprdwl_core_deinit(struct sprdwl_priv *priv)
 	if (priv->fw_capa & SPRDWL_CAPA_NS_OFFLOAD)
 		unregister_inet6addr_notifier(&sprdwl_inet6addr_cb);
 	sprdwl_deinit_npi();
+#if defined(UWE5621_FTR)
 	qos_enable(0);
+#endif
 	sprdwl_del_all_ifaces(priv);
 	sprdwl_vendor_deinit(priv->wiphy);
 	wiphy_unregister(priv->wiphy);
