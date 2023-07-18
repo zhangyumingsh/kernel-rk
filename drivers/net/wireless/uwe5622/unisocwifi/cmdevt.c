@@ -258,7 +258,7 @@ int sprdwl_cmd_init(void)
 						"Wi-Fi_cmd_wakelock");
 #else
 #if LINUX_VERSION_CODE < KERNEL_VERSION(5, 4, 0)
-	cmd->wake_lock = wakeup_source_register("Wi-Fi_cmd_wakelock");
+	cmd->wake_lock = wakeup_source_register(sprdwl_dev, "Wi-Fi_cmd_wakelock");
 #else
 	cmd->wake_lock = wakeup_source_register(sprdwl_dev, "Wi-Fi_cmd_wakelock");
 #endif
