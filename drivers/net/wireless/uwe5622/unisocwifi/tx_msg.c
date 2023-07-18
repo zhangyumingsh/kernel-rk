@@ -863,7 +863,7 @@ static int sprdwl_handle_to_send_list(struct sprdwl_intf *intf,
 	u8 coex_bt_on = intf->coex_bt_on;
 
 #ifdef CP2_RESET_SUPPORT
-	if(intf->cp_asserted == 1)
+	if (intf->cp_asserted == 1)
 		return 0;
 #endif
 
@@ -1080,10 +1080,6 @@ int sprdwl_sdio_process_credit(void *pdev, void *data)
 
 	if (common->type == SPRDWL_TYPE_DATA_SPECIAL) {
 		int offset = (size_t)&((struct rx_msdu_desc *)0)->rsvd5;
-
-		if (intf->priv->hw_type == SPRDWL_HW_USB) {
-			return -2;
-		}
 
 		flow = data + offset;
 		goto out;
@@ -1552,7 +1548,7 @@ static inline unsigned short from32to16(unsigned int x)
 	return x;
 }
 
-unsigned int do_csum(const unsigned char *buff, int len)
+static unsigned int do_csum(const unsigned char *buff, int len)
 {
 	int odd;
 	unsigned int result = 0;
