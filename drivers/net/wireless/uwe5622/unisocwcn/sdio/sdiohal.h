@@ -5,21 +5,13 @@
 #include <linux/device.h>
 #include <linux/scatterlist.h>
 #include <linux/slab.h>
-#ifndef timespec
-#define timespec timespec64
-#define timespec_to_ns timespec64_to_ns
-#define getnstimeofday ktime_get_real_ts64
-#define timeval __kernel_old_timeval
-#define rtc_time_to_tm rtc_time64_to_tm
-#define timeval_to_ns ktime_to_ns
-#endif
-
 #include <linux/version.h>
 #if KERNEL_VERSION(4, 11, 0) <= LINUX_VERSION_CODE
 #include <uapi/linux/sched/types.h>
 #else
 #include <linux/sched.h>
 #endif
+#include "wcn_wrapper.h"
 #include <wcn_bus.h>
 #ifdef CONFIG_WCN_SLP
 #include "../sleep/sdio_int.h"

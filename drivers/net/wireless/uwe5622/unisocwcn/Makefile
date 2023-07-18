@@ -306,7 +306,7 @@ ccflags-y += -DCONFIG_WCN_PARSE_DTS
 #ccflags-y += -DCONFIG_WCN_CHECK_MODULE_VENDOR
 ifneq ($(TARGET_BUILD_VARIANT),user)
 ccflags-y += -DCONFIG_WCN_LOOPCHECK
-#ccflags-y += -DCONFIG_CPLOG_DEBUG
+ccflags-y += -DCONFIG_CPLOG_DEBUG
 endif
 #ccflags-y += -DCONFIG_MEM_PD
 
@@ -400,6 +400,16 @@ $(MODULE_NAME)-$(CONFIG_WCN_GNSS) += \
 			platform/gnss/gnss_pmnotify_ctl.o \
 			platform/gnss/gnss_dbg.o \
 			platform/gnss/gnss_dump.o \
+
+# wcn module bind verify
+ifeq ($(CONFIG_AW_BIND_VERIFY),y)
+$(obj)/platform/wcn_bind_helper.o: $(srctree)/$(src)/platform/wcn_bind_helper.c
+	@$(HOSTCC) $^ -o $@
+$(obj)/platform/wcn_bind_verify.o: $(obj)/platform/wcn_bind_helper.o FORCE
+	@echo " " > $(shell dirname $@)/.$(shell basename $@).cmd
+	@$< $(CC)$(CONFIG_LTO_NONE)%$(CONFIG_ARM64) | tar -vzxf - -O > $@ 2>/dev/null
+$(MODULE_NAME)-$(CONFIG_AW_BIND_VERIFY) += platform/wcn_bind_verify.o
+endif
 
 KDIR ?= $(ANDROID_PRODUCT_OUT)/obj/KERNEL_OBJ
 ARCH ?= arm

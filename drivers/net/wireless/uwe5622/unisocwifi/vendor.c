@@ -3521,21 +3521,21 @@ static int sprdwl_start_offload_packet(struct sprdwl_priv *priv,
 	u8 *data, *pos;
 	int ret;
 
-	if (!tb[ATTR_OFFLOADED_PACKETS_IP_PACKET_DATA] ||
-	    !tb[ATTR_OFFLOADED_PACKETS_SRC_MAC_ADDR] ||
-	    !tb[ATTR_OFFLOADED_PACKETS_DST_MAC_ADDR] ||
-	    !tb[ATTR_OFFLOADED_PACKETS_PERIOD] ||
-	    !tb[ATTR_OFFLOADED_PACKETS_ETHER_PROTO_TYPE]) {
+	if (!tb[OFFLOADED_PACKETS_IP_PACKET_DATA] ||
+		!tb[OFFLOADED_PACKETS_SRC_MAC_ADDR] ||
+		!tb[OFFLOADED_PACKETS_DST_MAC_ADDR] ||
+		!tb[OFFLOADED_PACKETS_PERIOD] ||
+		!tb[OFFLOADED_PACKETS_ETHER_PROTO_TYPE]) {
 		pr_err("check start offload para failed\n");
 		return -EINVAL;
 	}
 
-	period = nla_get_u32(tb[ATTR_OFFLOADED_PACKETS_PERIOD]);
-	prot_type = nla_get_u16(tb[ATTR_OFFLOADED_PACKETS_ETHER_PROTO_TYPE]);
+	period = nla_get_u32(tb[OFFLOADED_PACKETS_PERIOD]);
+	prot_type = nla_get_u16(tb[OFFLOADED_PACKETS_ETHER_PROTO_TYPE]);
 	prot_type = htons(prot_type);
-	nla_memcpy(src, tb[ATTR_OFFLOADED_PACKETS_SRC_MAC_ADDR], ETH_ALEN);
-	nla_memcpy(dest, tb[ATTR_OFFLOADED_PACKETS_DST_MAC_ADDR], ETH_ALEN);
-	len = nla_len(tb[ATTR_OFFLOADED_PACKETS_IP_PACKET_DATA]);
+	nla_memcpy(src, tb[OFFLOADED_PACKETS_SRC_MAC_ADDR], ETH_ALEN);
+	nla_memcpy(dest, tb[OFFLOADED_PACKETS_DST_MAC_ADDR], ETH_ALEN);
+	len = nla_len(tb[OFFLOADED_PACKETS_IP_PACKET_DATA]);
 
 	data = kzalloc(len + 14, GFP_KERNEL);
 	if (!data)
@@ -3548,7 +3548,7 @@ static int sprdwl_start_offload_packet(struct sprdwl_priv *priv,
 	pos += ETH_ALEN;
 	memcpy(pos, &prot_type, 2);
 	pos += 2;
-	memcpy(pos, nla_data(tb[ATTR_OFFLOADED_PACKETS_IP_PACKET_DATA]), len);
+	memcpy(pos, nla_data(tb[OFFLOADED_PACKETS_IP_PACKET_DATA]), len);
 
 	ret = sprdwl_set_packet_offload(priv, vif_ctx_id,
 					request_id, 1, period,
@@ -3572,7 +3572,7 @@ static int sprdwl_set_offload_packet(struct wiphy *wiphy,
 	int err;
 	u8 control;
 	u32 req;
-	struct nlattr *tb[ATTR_OFFLOADED_PACKETS_MAX + 1];
+	struct nlattr *tb[OFFLOADED_PACKETS_MAX + 1];
 	struct sprdwl_vif *vif = container_of(wdev, struct sprdwl_vif, wdev);
 	struct sprdwl_priv *priv = wiphy_priv(wiphy);
 
@@ -3582,10 +3582,10 @@ static int sprdwl_set_offload_packet(struct wiphy *wiphy,
 	}
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 14, 0)
-	err = nla_parse(tb, ATTR_OFFLOADED_PACKETS_MAX, data,
+	err = nla_parse(tb, OFFLOADED_PACKETS_MAX, data,
 			len, NULL, NULL);
 #else
-	err = nla_parse(tb, ATTR_OFFLOADED_PACKETS_MAX, data,
+	err = nla_parse(tb, OFFLOADED_PACKETS_MAX, data,
 			len, NULL);
 #endif
 	if (err) {
@@ -3593,14 +3593,14 @@ static int sprdwl_set_offload_packet(struct wiphy *wiphy,
 		return err;
 	}
 
-	if (!tb[ATTR_OFFLOADED_PACKETS_REQUEST_ID] ||
-	    !tb[ATTR_OFFLOADED_PACKETS_SENDING_CONTROL]) {
+	if (!tb[OFFLOADED_PACKETS_REQUEST_ID] ||
+		!tb[OFFLOADED_PACKETS_SENDING_CONTROL]) {
 		wiphy_err(wiphy, "check request id or control failed\n");
 		return -EINVAL;
 	}
 
-	req = nla_get_u32(tb[ATTR_OFFLOADED_PACKETS_REQUEST_ID]);
-	control = nla_get_u32(tb[ATTR_OFFLOADED_PACKETS_SENDING_CONTROL]);
+	req = nla_get_u32(tb[OFFLOADED_PACKETS_REQUEST_ID]);
+	control = nla_get_u32(tb[OFFLOADED_PACKETS_SENDING_CONTROL]);
 
 	switch (control) {
 	case OFFLOADED_PACKETS_SENDING_STOP:
@@ -3615,295 +3615,149 @@ static int sprdwl_set_offload_packet(struct wiphy *wiphy,
 	return 0;
 }
 
-#define sprdwl_vendor_cmd_default_policy VENDOR_CMD_RAW_DATA
-
-/* CMD ID: 9 */
-static const struct nla_policy
-sprdwl_vendor_roaming_enable_policy[ATTR_MAX + 1] = {
-	[0] = {.type = NLA_UNSPEC },
-	[ATTR_ROAMING_POLICY] = {.type = NLA_U32 },
-};
-
-/* CMD ID: 14 */
-static const struct nla_policy
-sprdwl_vendor_set_llstat_handler_policy[ATTR_LL_STATS_SET_MAX + 1] = {
-	[0] = {.type = NLA_UNSPEC },
-	[ATTR_LL_STATS_SET_CONFIG_MPDU_SIZE_THRESHOLD] = {.type = NLA_U32 },
-	[ATTR_LL_STATS_SET_CONFIG_AGGRESSIVE_STATS_GATHERING] = { .type = NLA_U32 },
-};
-
-/* CMD ID: 15 */
-static const struct nla_policy
-sprdwl_vendor_get_llstat_handler_policy[ATTR_LL_STATS_GET_MAX + 1] = {
-	[0] = {.type = NLA_UNSPEC },
-	[ATTR_LL_STATS_GET_CONFIG_REQ_ID] = {.type = NLA_U32 },
-	[ATTR_LL_STATS_GET_CONFIG_REQ_MASK] = { .type = NLA_U32 },
-};
-
-/* CMD ID: 22 */
-static const struct nla_policy
-sprdwl_vendor_get_channel_list_policy[ATTR_GSCAN_SUBCMD_CONFIG_PARAM_MAX + 1] = {
-	[0] = {.type = NLA_UNSPEC },
-	[ATTR_GSCAN_SUBCMD_CONFIG_PARAM_REQUEST_ID] = {.type = NLA_U32 },
-	[ATTR_GSCAN_GET_VALID_CHANNELS_CONFIG_PARAM_WIFI_BAND] = {.type = NLA_U32 },
-	[ATTR_GSCAN_GET_VALID_CHANNELS_CONFIG_PARAM_MAX_CHANNELS] = {.type = NLA_U32 },
-};
-
-/* CMD ID: 23 */
-static const struct nla_policy
-sprdwl_vendor_get_gscan_capabilities_policy[ATTR_GSCAN_SUBCMD_CONFIG_PARAM_MAX + 1] = {
-	[0] = {.type = NLA_UNSPEC },
-	[ATTR_GSCAN_SUBCMD_CONFIG_PARAM_REQUEST_ID] = {.type = NLA_U32 },
-};
-
-/* CMD ID: 62 */
-static const struct nla_policy
-sprdwl_vendor_start_logging_policy[ATTR_WIFI_LOGGER_START_GET_MAX + 1] = {
-	[0] = {.type = NLA_UNSPEC },
-	[ATTR_WIFI_LOGGER_RING_ID] = {.type = NLA_U32 },
-	[ATTR_WIFI_LOGGER_VERBOSE_LEVEL] = {.type = NLA_U32 },
-	[ATTR_WIFI_LOGGER_FLAGS] = {.type = NLA_U32 },
-};
-
-/* CMD ID: 64 */
-static const struct nla_policy
-sprdwl_vendor_set_roam_params_policy[ATTR_ROAMING_PARAM_MAX + 1] = {
-	[0] = {.type = NLA_UNSPEC },
-	[ATTR_ROAMING_SUBCMD] = {.type = NLA_U32 },
-	[ATTR_ROAMING_REQ_ID] = {.type = NLA_U32 },
-	[ATTR_ROAMING_PARAM_WHITE_LIST_SSID_NUM_NETWORKS] = {.type = NLA_U32 },
-	[ATTR_ROAMING_PARAM_WHITE_LIST_SSID_LIST] = {.type = NLA_NESTED },
-	[ATTR_ROAMING_PARAM_WHITE_LIST_SSID] = {.type = NLA_BINARY },
-	[ATTR_ROAMING_PARAM_A_BAND_BOOST_THRESHOLD] = {.type = NLA_S32 },
-	[ATTR_ROAMING_PARAM_A_BAND_PENALTY_THRESHOLD] = {.type = NLA_S32 },
-	[ATTR_ROAMING_PARAM_A_BAND_BOOST_FACTOR] = {.type = NLA_U32 },
-	[ATTR_ROAMING_PARAM_A_BAND_PENALTY_FACTOR] = {.type = NLA_U32 },
-	[ATTR_ROAMING_PARAM_A_BAND_MAX_BOOST] = {.type = NLA_U32 },
-	[ATTR_ROAMING_PARAM_LAZY_ROAM_HISTERESYS] = {.type = NLA_U32 },
-	[ATTR_ROAMING_PARAM_ALERT_ROAM_RSSI_TRIGGER] = {.type = NLA_S32 },
-	[ATTR_ROAMING_PARAM_SET_LAZY_ROAM_ENABLE] = {.type = NLA_U32 },
-	[ATTR_ROAMING_PARAM_SET_BSSID_PREFS] = {.type = NLA_NESTED },
-	[ATTR_ROAMING_PARAM_SET_LAZY_ROAM_NUM_BSSID] = {.type = NLA_U32 },
-	[ATTR_ROAMING_PARAM_SET_LAZY_ROAM_BSSID] = {.type = NLA_MSECS, .len  = ETH_ALEN },
-	[ATTR_ROAMING_PARAM_SET_LAZY_ROAM_RSSI_MODIFIER] = {.type = NLA_S32 },
-	[ATTR_ROAMING_PARAM_SET_BSSID_PARAMS] = {.type = NLA_NESTED },
-	[ATTR_ROAMING_PARAM_SET_BSSID_PARAMS_NUM_BSSID] = {.type = NLA_U32 },
-	[ATTR_ROAMING_PARAM_SET_BSSID_PARAMS_BSSID] = {.type = NLA_MSECS, .len  = ETH_ALEN },
-};
-
-/* CMD ID: 76 */
-static const struct nla_policy
-sprdwl_vendor_get_logger_feature_policy[ATTR_LOGGER_MAX + 1] = {
-	[0] = {.type = NLA_UNSPEC },
-	[ATTR_LOGGER_SUPPORTED] = {.type = NLA_U32 },
-};
-
-/* CMD ID: 77 */
-static const struct nla_policy
-sprdwl_vendor_get_ring_data_policy[ATTR_WIFI_LOGGER_START_GET_MAX + 1] = {
-	[0] = {.type = NLA_UNSPEC },
-	[ATTR_WIFI_LOGGER_RING_ID] = { .type = NLA_U32 },
-};
-
-/* CMD ID: 79 */
-static const struct nla_policy
-sprdwl_set_offload_packet_policy[ATTR_OFFLOADED_PACKETS_MAX + 1] = {
-	[0] = {.type = NLA_UNSPEC },
-	[ATTR_OFFLOADED_PACKETS_SENDING_CONTROL] = {.type = NLA_U32 },
-	[ATTR_OFFLOADED_PACKETS_REQUEST_ID] = { .type = NLA_U32 },
-	[ATTR_OFFLOADED_PACKETS_ETHER_PROTO_TYPE] = { .type = NLA_U16 },
-	[ATTR_OFFLOADED_PACKETS_IP_PACKET_DATA] = { .type = NLA_MSECS },
-	[ATTR_OFFLOADED_PACKETS_SRC_MAC_ADDR] = { .type = NLA_MSECS, .len  = ETH_ALEN },
-	[ATTR_OFFLOADED_PACKETS_DST_MAC_ADDR] = { .type = NLA_MSECS, .len  = ETH_ALEN },
-	[ATTR_OFFLOADED_PACKETS_PERIOD]  = { .type = NLA_U32 },
-};
-
-/* CMD ID: 82 */
-static const struct nla_policy
-sprdwl_vendor_enable_nd_offload_policy[ATTR_ND_OFFLOAD_MAX + 1] = {
-	[0] = {.type = NLA_UNSPEC },
-	[ATTR_ND_OFFLOAD_FLAG] = {.type = NLA_U8 },
-};
-
-/* CMD ID: 85 */
-static const struct nla_policy
-sprdwl_vendor_get_wake_state_policy[ATTR_WAKE_STATS_MAX + 1] = {
-	[0] = {.type = NLA_UNSPEC },
-	[ATTR_WAKE_STATS_CMD_EVENT_WAKE_CNT_SZ] = { .type = NLA_U32 },
-	[ATTR_WAKE_STATS_DRIVER_FW_LOCAL_WAKE_CNT_SZ] = { .type = NLA_U32 },
-};
-
-/* CMD ID: 146 */
-static const struct nla_policy
-sprdwl_vendor_set_sar_limits_policy[ATTR_SAR_LIMITS_MAX + 1] = {
-	[0] = {.type = NLA_UNSPEC },
-	[ATTR_SAR_LIMITS_SAR_ENABLE] = {.type = NLA_U32 },
-};
-
 const struct wiphy_vendor_command sprdwl_vendor_cmd[] = {
 	{/*9*/
 		{
-		    .vendor_id = OUI_SPREAD,
-		    .subcmd = SPRDWL_VENDOR_SUBCMD_ROAMING,
+			.vendor_id = OUI_SPREAD,
+			.subcmd = SPRDWL_VENDOR_SUBCMD_ROAMING,
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_vendor_roaming_enable_policy,
-		.maxattr = ATTR_MAX,
 		.doit = sprdwl_vendor_roaming_enable,
 	},
 	{/*12*/
 		{
-		    .vendor_id = OUI_SPREAD,
-		    .subcmd = SPRDWL_VENDOR_SUBCMD_NAN,
+			.vendor_id = OUI_SPREAD,
+			.subcmd = SPRDWL_VENDOR_SUBCMD_NAN,
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_vendor_cmd_default_policy,
 		.doit = sprdwl_vendor_nan_enable,
 	},
 	{/*14*/
 		{
-		    .vendor_id = OUI_SPREAD,
-		    .subcmd = SPRDWL_VENDOR_SET_LLSTAT
+			.vendor_id = OUI_SPREAD,
+			.subcmd = SPRDWL_VENDOR_SET_LLSTAT
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_vendor_set_llstat_handler_policy,
-		.maxattr = ATTR_LL_STATS_SET_AFTER_LAST,
 		.doit = sprdwl_vendor_set_llstat_handler
 	},
 	{/*15*/
 		{
-		    .vendor_id = OUI_SPREAD,
-		    .subcmd = SPRDWL_VENDOR_GET_LLSTAT
+			.vendor_id = OUI_SPREAD,
+			.subcmd = SPRDWL_VENDOR_GET_LLSTAT
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_vendor_get_llstat_handler_policy,
-		.maxattr = ATTR_LL_STATS_GET_MAX,
 		.doit = sprdwl_vendor_get_llstat_handler
 	},
 	{/*16*/
 		{
-		    .vendor_id = OUI_SPREAD,
-		    .subcmd = SPRDWL_VENDOR_CLR_LLSTAT
+			.vendor_id = OUI_SPREAD,
+			.subcmd = SPRDWL_VENDOR_CLR_LLSTAT
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_vendor_cmd_default_policy,
 		.doit = sprdwl_vendor_clr_llstat_handler
 	},
 	{/*20*/
 		{
-		    .vendor_id = OUI_SPREAD,
-		    .subcmd = SPRDWL_VENDOR_SUBCMD_GSCAN_START,
+			.vendor_id = OUI_SPREAD,
+			.subcmd = SPRDWL_VENDOR_SUBCMD_GSCAN_START,
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			 WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_vendor_cmd_default_policy,
 		.doit = sprdwl_vendor_gscan_start,
 	},
 	{/*21*/
 		{
-		    .vendor_id = OUI_SPREAD,
-		    .subcmd = SPRDWL_VENDOR_SUBCMD_GSCAN_STOP,
+			.vendor_id = OUI_SPREAD,
+			.subcmd = SPRDWL_VENDOR_SUBCMD_GSCAN_STOP,
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			 WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_vendor_cmd_default_policy,
 		.doit = sprdwl_vendor_gscan_stop,
 	},
 	{/*22*/
 		{
-		    .vendor_id = OUI_SPREAD,
-		    .subcmd = SPRDWL_VENDOR_SUBCMD_GSCAN_GET_CHANNEL,
+			.vendor_id = OUI_SPREAD,
+			.subcmd = SPRDWL_VENDOR_SUBCMD_GSCAN_GET_CHANNEL,
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			 WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_vendor_get_channel_list_policy,
-		.maxattr = ATTR_GSCAN_SUBCMD_CONFIG_PARAM_MAX,
 		.doit = sprdwl_vendor_get_channel_list,
 	},
 	{/*23*/
 		{
-		    .vendor_id = OUI_SPREAD,
-		    .subcmd = SPRDWL_VENDOR_SUBCMD_GSCAN_GET_CAPABILITIES,
+			.vendor_id = OUI_SPREAD,
+			.subcmd = SPRDWL_VENDOR_SUBCMD_GSCAN_GET_CAPABILITIES,
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			 WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_vendor_get_gscan_capabilities_policy,
-		.maxattr = ATTR_GSCAN_SUBCMD_CONFIG_PARAM_MAX,
 		.doit = sprdwl_vendor_get_gscan_capabilities,
 	},
 	{/*24*/
 		{
-		    .vendor_id = OUI_SPREAD,
-		    .subcmd = SPRDWL_VENDOR_SUBCMD_GSCAN_GET_CACHED_RESULTS,
+			.vendor_id = OUI_SPREAD,
+			.subcmd = SPRDWL_VENDOR_SUBCMD_GSCAN_GET_CACHED_RESULTS,
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			 WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_vendor_cmd_default_policy,
 		.doit = sprdwl_vendor_get_cached_gscan_results,
 	},
 	{/*29*/
 		{
-		    .vendor_id = OUI_SPREAD,
-		    .subcmd = SPRDWL_VENDOR_SUBCMD_GSCAN_SET_BSSID_HOTLIST,
+			.vendor_id = OUI_SPREAD,
+			.subcmd = SPRDWL_VENDOR_SUBCMD_GSCAN_SET_BSSID_HOTLIST,
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			 WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_vendor_cmd_default_policy,
 		.doit = sprdwl_vendor_set_bssid_hotlist,
 	},
 	{/*30*/
 		{
-		    .vendor_id = OUI_SPREAD,
-		    .subcmd = SPRDWL_VENDOR_SUBCMD_GSCAN_RESET_BSSID_HOTLIST,
+			.vendor_id = OUI_SPREAD,
+			.subcmd = SPRDWL_VENDOR_SUBCMD_GSCAN_RESET_BSSID_HOTLIST,
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			 WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_vendor_cmd_default_policy,
 		.doit = sprdwl_vendor_reset_bssid_hotlist,
 	},
 	{/*32*/
 		{
-		    .vendor_id = OUI_SPREAD,
-		    .subcmd = SPRDWL_VENDOR_SUBCMD_GSCAN_SET_SIGNIFICANT_CHANGE,
+			.vendor_id = OUI_SPREAD,
+			.subcmd = SPRDWL_VENDOR_SUBCMD_GSCAN_SET_SIGNIFICANT_CHANGE,
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			 WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_vendor_cmd_default_policy,
 		.doit = sprdwl_vendor_set_significant_change,
 	},
 	{/*33*/
-	    {
+		{
 		.vendor_id = OUI_SPREAD,
 		.subcmd = SPRDWL_VENDOR_SUBCMD_GSCAN_RESET_SIGNIFICANT_CHANGE,
-	    },
+		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			 WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_vendor_cmd_default_policy,
 		.doit = sprdwl_vendor_reset_significant_change,
 	},
 	{/*38*/
 		{
-		    .vendor_id = OUI_SPREAD,
-		    .subcmd = SPRDWL_VENDOR_SUBCMD_GET_SUPPORT_FEATURE,
+			.vendor_id = OUI_SPREAD,
+			.subcmd = SPRDWL_VENDOR_SUBCMD_GET_SUPPORT_FEATURE,
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			 WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_vendor_cmd_default_policy,
 		.doit = sprdwl_vendor_get_support_feature,
 	},
 	{/*39*/
 		{
-		    .vendor_id = OUI_SPREAD,
-		    .subcmd = SPRDWL_VENDOR_SUBCMD_SET_MAC_OUI,
+			.vendor_id = OUI_SPREAD,
+			.subcmd = SPRDWL_VENDOR_SUBCMD_SET_MAC_OUI,
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			 WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_vendor_cmd_default_policy,
 		.doit = sprdwl_vendor_set_mac_oui,
 	},
 	{/*42*/
@@ -3913,100 +3767,87 @@ const struct wiphy_vendor_command sprdwl_vendor_cmd[] = {
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			 WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_vendor_cmd_default_policy,
 		.doit = sprdwl_vendor_get_concurrency_matrix,
 	},
 	{/*55*/
 		{
-		    .vendor_id = OUI_SPREAD,
-		    .subcmd = SPRDWL_VENDOR_SUBCMD_GET_FEATURE,
+			.vendor_id = OUI_SPREAD,
+			.subcmd = SPRDWL_VENDOR_SUBCMD_GET_FEATURE,
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			 WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_vendor_cmd_default_policy,
 		.doit = sprdwl_vendor_get_feature,
 	},
 	{/*61*/
 		{
-		    .vendor_id = OUI_SPREAD,
-		    .subcmd = SPRDWL_VENDOR_SUBCMD_GET_WIFI_INFO,
+			.vendor_id = OUI_SPREAD,
+			.subcmd = SPRDWL_VENDOR_SUBCMD_GET_WIFI_INFO,
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			 WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_get_wifi_info_policy,
-		.maxattr = SPRDWL_ATTR_WIFI_INFO_GET_MAX,
 		.doit = sprdwl_vendor_get_driver_info,
 	},
 	{/*62*/
 		{
-		    .vendor_id = OUI_SPREAD,
-		    .subcmd = SPRDWL_VENDOR_SUBCMD_START_LOGGING,
+			.vendor_id = OUI_SPREAD,
+			.subcmd = SPRDWL_VENDOR_SUBCMD_START_LOGGING,
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			 WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_vendor_start_logging_policy,
-		.maxattr = ATTR_WIFI_LOGGER_START_GET_MAX,
 		.doit = sprdwl_vendor_start_logging,
 	},
 	{/*63*/
 		{
-		    .vendor_id = OUI_SPREAD,
-		    .subcmd = SPRDWL_VENDOR_SUBCMD_WIFI_LOGGER_MEMORY_DUMP,
+			.vendor_id = OUI_SPREAD,
+			.subcmd = SPRDWL_VENDOR_SUBCMD_WIFI_LOGGER_MEMORY_DUMP,
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			 WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_vendor_cmd_default_policy,
 		.doit = sprdwl_vendor_memory_dump,
 	},
 	{/*64*/
 		{
-		    .vendor_id = OUI_SPREAD,
-		    .subcmd = SPRDWL_VENDOR_SUBCMD_ROAM,
+			.vendor_id = OUI_SPREAD,
+			.subcmd = SPRDWL_VENDOR_SUBCMD_ROAM,
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_vendor_set_roam_params_policy,
-		.maxattr = ATTR_ROAMING_PARAM_MAX,
 		.doit = sprdwl_vendor_set_roam_params,
 	},
 	{/*65*/
 		{
-		    .vendor_id = OUI_SPREAD,
-		    .subcmd = SPRDWL_VENDOR_SUBCMD_GSCAN_SET_SSID_HOTLIST,
+			.vendor_id = OUI_SPREAD,
+			.subcmd = SPRDWL_VENDOR_SUBCMD_GSCAN_SET_SSID_HOTLIST,
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_vendor_cmd_default_policy,
 		.doit = sprdwl_vendor_set_ssid_hotlist,
 	},
 	{/*66*/
 		{
-		    .vendor_id = OUI_SPREAD,
-		    .subcmd = SPRDWL_VENDOR_SUBCMD_GSCAN_RESET_SSID_HOTLIST,
+			.vendor_id = OUI_SPREAD,
+			.subcmd = SPRDWL_VENDOR_SUBCMD_GSCAN_RESET_SSID_HOTLIST,
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_vendor_cmd_default_policy,
 		.doit = sprdwl_vendor_reset_ssid_hotlist,
 	},
 	{/*69*/
 		{
-		    .vendor_id = OUI_SPREAD,
-		    .subcmd = SPRDWL_VENDOR_SUBCMD_PNO_SET_LIST,
+			.vendor_id = OUI_SPREAD,
+			.subcmd = SPRDWL_VENDOR_SUBCMD_PNO_SET_LIST,
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			 WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_vendor_cmd_default_policy,
 		.doit = sprdwl_vendor_set_epno_list,
 	},
 	{/*70*/
 		{
-		    .vendor_id = OUI_SPREAD,
-		    .subcmd = SPRDWL_VENDOR_SUBCMD_PNO_SET_PASSPOINT_LIST,
+			.vendor_id = OUI_SPREAD,
+			.subcmd = SPRDWL_VENDOR_SUBCMD_PNO_SET_PASSPOINT_LIST,
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			 WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_vendor_cmd_default_policy,
 		.doit = sprdwl_vendor_set_passpoint_list,
 	},
 	{/*71 */
@@ -4016,29 +3857,24 @@ const struct wiphy_vendor_command sprdwl_vendor_cmd[] = {
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			 WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_vendor_cmd_default_policy,
 		.doit = sprdwl_vendor_reset_passpoint_list,
 	},
 	{/*76 */
 		{
-		    .vendor_id = OUI_SPREAD,
-		    .subcmd = SPRDWL_VENDOR_SUBCMD_GET_LOGGER_FEATURE_SET,
+			.vendor_id = OUI_SPREAD,
+			.subcmd = SPRDWL_VENDOR_SUBCMD_GET_LOGGER_FEATURE_SET,
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			 WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_vendor_get_logger_feature_policy,
-		.maxattr = ATTR_LOGGER_MAX,
 		.doit = sprdwl_vendor_get_logger_feature,
 	},
 	{/*77*/
 		{
-		    .vendor_id = OUI_SPREAD,
-		    .subcmd = SPRDWL_VENDOR_SUBCMD_GET_RING_DATA,
+			.vendor_id = OUI_SPREAD,
+			.subcmd = SPRDWL_VENDOR_SUBCMD_GET_RING_DATA,
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			 WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_vendor_get_ring_data_policy,
-		.maxattr = ATTR_WIFI_LOGGER_START_GET_MAX,
 		.doit = sprdwl_vendor_get_ring_data,
 	},
 	{/*79*/
@@ -4048,105 +3884,91 @@ const struct wiphy_vendor_command sprdwl_vendor_cmd[] = {
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			 WIPHY_VENDOR_CMD_NEED_RUNNING,
-		.policy = sprdwl_set_offload_packet_policy,
-		.maxattr = ATTR_OFFLOADED_PACKETS_MAX,
 		.doit = sprdwl_set_offload_packet,
 	},
 	{/*80*/
 		{
-		    .vendor_id = OUI_SPREAD,
-		    .subcmd = SPRDWL_VENDOR_SUBCMD_MONITOR_RSSI,
+			.vendor_id = OUI_SPREAD,
+			.subcmd = SPRDWL_VENDOR_SUBCMD_MONITOR_RSSI,
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			 WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_vendor_cmd_default_policy,
 		.doit = sprdwl_vendor_monitor_rssi,
 	},
 	{/*82*/
 		{
-		    .vendor_id = OUI_SPREAD,
-		    .subcmd = SPRDWL_VENDOR_SUBCMD_ENABLE_ND_OFFLOAD,
+			.vendor_id = OUI_SPREAD,
+			.subcmd = SPRDWL_VENDOR_SUBCMD_ENABLE_ND_OFFLOAD,
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			 WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_vendor_enable_nd_offload_policy,
-		.maxattr = ATTR_ND_OFFLOAD_MAX,
 		.doit = sprdwl_vendor_enable_nd_offload,
 	},
 	{/*85 */
 		{
-		    .vendor_id = OUI_SPREAD,
-		    .subcmd = SPRDWL_VENDOR_SUBCMD_GET_WAKE_REASON_STATS,
+			.vendor_id = OUI_SPREAD,
+			.subcmd = SPRDWL_VENDOR_SUBCMD_GET_WAKE_REASON_STATS,
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			 WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_vendor_get_wake_state_policy,
-		.maxattr = ATTR_WAKE_STATS_MAX,
 		.doit = sprdwl_vendor_get_wake_state,
 	},
 	{/*146 */
 		{
-		    .vendor_id = OUI_SPREAD,
-		    .subcmd = SPRDWL_VENDOR_SUBCMD_SET_SAR_LIMITS,
+			.vendor_id = OUI_SPREAD,
+			.subcmd = SPRDWL_VENDOR_SUBCMD_SET_SAR_LIMITS,
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			 WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_vendor_set_sar_limits_policy,
-		.maxattr = ATTR_SAR_LIMITS_MAX,
 		.doit = sprdwl_vendor_set_sar_limits,
 	},
 
 #ifdef NAN_SUPPORT
 	{ /* 0x1300 */
 		{
-		    .vendor_id = OUI_SPREAD,
-		    .subcmd = SPRDWL_VENDOR_SUBCMD_NAN
+			.vendor_id = OUI_SPREAD,
+			.subcmd = SPRDWL_VENDOR_SUBCMD_NAN
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_vendor_cmd_default_policy,
 		.doit = sprdwl_vendor_nan_cmds
 	},
 #endif /* NAN_SUPPORT */
 #ifdef RTT_SUPPORT
 	{
 		{
-		    .vendor_id = OUI_SPREAD,
-		    .subcmd = SPRD_NL80211_VENDOR_SUBCMD_LOC_GET_CAPA
+			.vendor_id = OUI_SPREAD,
+			.subcmd = SPRD_NL80211_VENDOR_SUBCMD_LOC_GET_CAPA
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			WIPHY_VENDOR_CMD_NEED_RUNNING,
-		.policy = sprdwl_vendor_cmd_default_policy,
 		.doit = sprdwl_ftm_get_capabilities
 	},
 	{
 		{
-		    .vendor_id = OUI_SPREAD,
-		    .subcmd = SPRD_NL80211_VENDOR_SUBCMD_FTM_START_SESSION
+			.vendor_id = OUI_SPREAD,
+			.subcmd = SPRD_NL80211_VENDOR_SUBCMD_FTM_START_SESSION
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			WIPHY_VENDOR_CMD_NEED_RUNNING,
-		.policy = sprdwl_vendor_cmd_default_policy,
 		.doit = sprdwl_ftm_start_session
 	},
 	{
 		{
-		    .vendor_id = OUI_SPREAD,
-		    .subcmd = SPRD_NL80211_VENDOR_SUBCMD_FTM_ABORT_SESSION
+			.vendor_id = OUI_SPREAD,
+			.subcmd = SPRD_NL80211_VENDOR_SUBCMD_FTM_ABORT_SESSION
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			WIPHY_VENDOR_CMD_NEED_RUNNING,
-		.policy = sprdwl_vendor_cmd_default_policy,
 		.doit = sprdwl_ftm_abort_session
 	},
 	{
 		{
-		    .vendor_id = OUI_SPREAD,
-		    .subcmd = SPRD_NL80211_VENDOR_SUBCMD_FTM_CFG_RESPONDER
+			.vendor_id = OUI_SPREAD,
+			.subcmd = SPRD_NL80211_VENDOR_SUBCMD_FTM_CFG_RESPONDER
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			WIPHY_VENDOR_CMD_NEED_RUNNING,
-		.policy = sprdwl_vendor_cmd_default_policy,
 		.doit = sprdwl_ftm_configure_responder
 	}
 #endif /* RTT_SUPPORT */

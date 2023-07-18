@@ -18,7 +18,8 @@
 #include <linux/mutex.h>
 #include <linux/version.h>
 #include <linux/time.h>
-#if KERNEL_VERSION(4, 14, 0) <= LINUX_VERSION_CODE
+#include <wcn_wrapper.h>
+#if KERNEL_VERSION(4, 11, 0) <= LINUX_VERSION_CODE
 #include <linux/sched/clock.h>
 #endif
 
@@ -100,7 +101,7 @@ long int mdbg_send_atcmd(char *buf, long int len, enum atcmd_owner owner)
 }
 
 /* copy from function: kdb_gmtime */
-static void wcn_gmtime(struct timespec64 *tv, struct wcn_tm *tm)
+static void wcn_gmtime(struct timespec *tv, struct wcn_tm *tm)
 {
 	/* This will work from 1970-2099, 2100 is not a leap year */
 	static int mon_day[] = { 31, 29, 31, 30, 31, 30, 31,
@@ -130,13 +131,21 @@ static void wcn_gmtime(struct timespec64 *tv, struct wcn_tm *tm)
 /* AP notify BTWF time by at+aptime=... cmd */
 long int wcn_ap_notify_btwf_time(void)
 {
+#if KERNEL_VERSION(4, 20, 0) <= LINUX_VERSION_CODE
 	struct timespec64 now;
+#else
+	struct timespec now;
+#endif
 	struct wcn_tm tm;
 	char aptime[64];
 	long int send_cnt = 0;
 
 	/* get ap kernel time and transfer to China-BeiJing Time */
-	ktime_get_coarse_real_ts64(&now);
+#if KERNEL_VERSION(4, 20, 0) <= LINUX_VERSION_CODE
+	ktime_get_real_ts64(&now);
+#else
+	now = current_kernel_time();
+#endif
 	wcn_gmtime(&now, &tm);
 	tm.tm_hour = (tm.tm_hour + WCN_BTWF_TIME_OFFSET) % 24;
 

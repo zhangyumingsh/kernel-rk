@@ -15,14 +15,6 @@
 #define __DUMP_H
 #include <linux/time.h>
 #include <linux/rtc.h>
-#ifndef timespec
-#define timespec timespec64
-#define timespec_to_ns timespec64_to_ns
-#define getnstimeofday ktime_get_real_ts64
-#define timeval __kernel_old_timeval
-#define rtc_time_to_tm rtc_time64_to_tm
-#define timeval_to_ns ktime_to_ns
-#endif
 
 #define BT_MAX_DUMP_FRAME_LEN 2
 #define BT_MAX_DUMP_DATA_LEN 20
@@ -44,8 +36,6 @@ typedef struct bt_host_data_dump {
 	unsigned char rx[BT_MAX_DUMP_FRAME_LEN][BT_MAX_DUMP_DATA_LEN];
 	bt_host_time rxtime_t[BT_MAX_DUMP_FRAME_LEN];
 } bt_host_data_dump;
-
-bt_host_data_dump *data_dump;
 
 void bt_host_data_save(const unsigned char *buf, int count, unsigned char data_inout);
 void bt_host_data_printf(void);

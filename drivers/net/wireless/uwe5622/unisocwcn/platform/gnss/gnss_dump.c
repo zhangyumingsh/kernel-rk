@@ -109,9 +109,9 @@ static char gnss_dump_level; /* 0: default, all, 1: only data, pmu, aon */
 static int wcn_chmod(char *path, char *mode)
 {
 	int result = 0;
-	char cmd_path[] = "/usr/bin/chmod";
+	char cmd_path[] = "/system/bin/chmod";
 	char *cmd_argv[] = {cmd_path, mode, path, NULL};
-	char *cmd_envp[] = {"HOME=/", "PATH=/sbin:/bin:/usr/bin", NULL};
+	char *cmd_envp[] = {"HOME=/", "PATH=/sbin:/bin:/system/bin", NULL};
 
 	result = call_usermodehelper(cmd_path, cmd_argv, cmd_envp,
 		UMH_WAIT_PROC);
@@ -137,7 +137,7 @@ static int gnss_creat_gnss_dump_file(void)
 
 #ifdef CONFIG_SC2342_INTEG
 static void gnss_write_data_to_phy_addr(phys_addr_t phy_addr,
-					      void *src_data, u32 size)
+						  void *src_data, u32 size)
 {
 	void *virt_addr;
 
@@ -215,6 +215,7 @@ static int gnss_dump_cp_register_data(u32 addr, u32 len)
 	u8 *ptr = NULL;
 	long int ret;
 	void  *iram_buffer = NULL;
+	mm_segment_t fs;
 
 	GNSSDUMP_INFO(" start dump cp register!addr:%x,len:%d\n", addr, len);
 	buf = kzalloc(len, GFP_KERNEL);
@@ -254,11 +255,14 @@ static int gnss_dump_cp_register_data(u32 addr, u32 len)
 		}
 		memcpy(iram_buffer, buf, len);
 	}
+	fs = get_fs();
+	set_fs(KERNEL_DS);
 	pos = gnss_dump_file->f_pos;
-	ret = kernel_write(gnss_dump_file, iram_buffer, len, &pos);
+	ret = vfs_write(gnss_dump_file, iram_buffer, len, &pos);
 	gnss_dump_file->f_pos = pos;
 	kfree(buf);
 	vfree(iram_buffer);
+	set_fs(fs);
 	if (ret != len) {
 		GNSSDUMP_ERR("gnss_dump_cp_register_data failed  size is %ld\n",
 			ret);
@@ -276,6 +280,7 @@ static int gnss_dump_ap_register(void)
 	struct regmap *regmap;
 	u32 value[GNSS_DUMP_REG_NUMBER + 1] = {0}; /* [0]board+ [..]reg */
 	u32 i = 0;
+	mm_segment_t fs;
 	u32 len = 0;
 	u8 *ptr = NULL;
 	int ret;
@@ -328,10 +333,13 @@ static int gnss_dump_ap_register(void)
 	}
 	memset(apreg_buffer, 0, len);
 	memcpy(apreg_buffer, ptr, len);
+	fs = get_fs();
+	set_fs(KERNEL_DS);
 	pos = gnss_dump_file->f_pos;
-	ret = kernel_write(gnss_dump_file, apreg_buffer, len, &pos);
+	ret = vfs_write(gnss_dump_file, apreg_buffer, len, &pos);
 	gnss_dump_file->f_pos = pos;
 	vfree(apreg_buffer);
+	set_fs(fs);
 	if (ret != len)
 		GNSSDUMP_ERR("%s not write completely,ret is 0x%x\n", __func__,
 			ret);
@@ -381,11 +389,14 @@ static int gnss_dump_share_memory(u32 len)
 	void *virt_addr;
 	phys_addr_t base_addr;
 	long int ret;
+	mm_segment_t fs;
 	void  *ddr_buffer = NULL;
 
 	if (len == 0)
 		return -1;
 	GNSSDUMP_INFO("gnss_dump_share_memory\n");
+	fs = get_fs();
+	set_fs(KERNEL_DS);
 	base_addr = wcn_get_gnss_base_addr();
 	virt_addr = shmem_ram_vmap_nocache(base_addr, len);
 	if (!virt_addr) {
@@ -410,9 +421,10 @@ static int gnss_dump_share_memory(u32 len)
 	memset(ddr_buffer, 0, len);
 	memcpy(ddr_buffer, virt_addr, len);
 	pos = gnss_dump_file->f_pos;
-	ret = kernel_write(gnss_dump_file, ddr_buffer, len, &pos);
+	ret = vfs_write(gnss_dump_file, ddr_buffer, len, &pos);
 	gnss_dump_file->f_pos = pos;
 	shmem_ram_unmap(virt_addr);
+	set_fs(fs);
 	vfree(ddr_buffer);
 	if (ret != len) {
 		GNSSDUMP_ERR("%s dump ddr error,data len is %ld\n", __func__,
@@ -472,6 +484,7 @@ static int gnss_ext_dump_data(unsigned int start_addr, int len)
 {
 	u8 *buf = NULL;
 	int ret = 0, count = 0, trans = 0;
+	mm_segment_t fs;
 
 	GNSSDUMP_INFO("%s, addr:%x,len:%d\n", __func__, start_addr, len);
 	buf = kzalloc(DUMP_PACKET_SIZE, GFP_KERNEL);
@@ -489,6 +502,8 @@ static int gnss_ext_dump_data(unsigned int start_addr, int len)
 			return PTR_ERR(gnss_dump_file);
 		}
 	}
+	fs = get_fs();
+	set_fs(KERNEL_DS);
 	while (count < len) {
 		trans = (len - count) > DUMP_PACKET_SIZE ?
 				 DUMP_PACKET_SIZE : (len - count);
@@ -499,11 +514,11 @@ static int gnss_ext_dump_data(unsigned int start_addr, int len)
 		}
 		count += trans;
 		pos = gnss_dump_file->f_pos;
-		ret = kernel_write(gnss_dump_file, buf, trans, &pos);
+		ret = vfs_write(gnss_dump_file, buf, trans, &pos);
 		gnss_dump_file->f_pos = pos;
 		if (ret != trans) {
 			GNSSDUMP_ERR("%s failed size is %d, ret %d\n", __func__,
-				      len, ret);
+					  len, ret);
 			goto dump_data_done;
 		}
 	}
@@ -512,6 +527,7 @@ static int gnss_ext_dump_data(unsigned int start_addr, int len)
 
 dump_data_done:
 	kfree(buf);
+	set_fs(fs);
 	return ret;
 }
 

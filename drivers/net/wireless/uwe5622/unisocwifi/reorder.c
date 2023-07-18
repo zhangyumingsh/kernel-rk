@@ -440,8 +440,8 @@ static void reorder_msdu_process(struct sprdwl_rx_ba_entry *ba_entry,
 			ba_node->timeout_cnt = 0;
 		}
 	} else {
-		//wl_err("%s: BA SESSION IS NO ACTIVE sta_lut_index: %d, tid: %d\n",
-		//	   __func__, msdu_desc->sta_lut_index, msdu_desc->tid);
+		wl_err("%s: BA SESSION IS NO ACTIVE sta_lut_index: %d, tid: %d\n",
+			   __func__, msdu_desc->sta_lut_index, msdu_desc->tid);
 		reorder_set_skb_list(ba_entry, skb, skb);
 	}
 

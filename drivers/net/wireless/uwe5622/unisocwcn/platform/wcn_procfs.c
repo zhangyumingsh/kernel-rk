@@ -137,8 +137,8 @@ static unsigned int mdbg_mbuf_get_datalength(struct mbuf_t *mbuf)
 }
 #endif
 
-int mdbg_assert_read(int channel, struct mbuf_t *head,
-		     struct mbuf_t *tail, int num)
+static int mdbg_assert_read(int channel, struct mbuf_t *head,
+			 struct mbuf_t *tail, int num)
 {
 	unsigned int data_length;
 #if (CONFIG_CP2_ASSERT)
@@ -179,7 +179,7 @@ int mdbg_assert_read(int channel, struct mbuf_t *head,
 }
 EXPORT_SYMBOL_GPL(mdbg_assert_read);
 
-int mdbg_loopcheck_read(int channel, struct mbuf_t *head,
+static int mdbg_loopcheck_read(int channel, struct mbuf_t *head,
 			struct mbuf_t *tail, int num)
 {
 	unsigned int data_length;
@@ -209,8 +209,8 @@ int mdbg_loopcheck_read(int channel, struct mbuf_t *head,
 }
 EXPORT_SYMBOL_GPL(mdbg_loopcheck_read);
 
-int mdbg_at_cmd_read(int channel, struct mbuf_t *head,
-		     struct mbuf_t *tail, int num)
+static int mdbg_at_cmd_read(int channel, struct mbuf_t *head,
+			 struct mbuf_t *tail, int num)
 {
 	unsigned int data_length;
 

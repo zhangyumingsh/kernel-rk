@@ -37,14 +37,6 @@ static void data_left_shift(unsigned char data_inout)
 	}
 }
 
-void do_gettimeofday(struct timeval *tv)
-{
-	struct timespec64 ts;
-	ktime_get_real_ts64(&ts);
-	tv->tv_sec = ts.tv_sec;
-	tv->tv_usec = ts.tv_nsec/1000;
-}
-
 static void get_time(unsigned char data_inout)
 {
 	switch (data_inout) {
@@ -82,14 +74,14 @@ void bt_host_data_save(const unsigned char *buf, int count, unsigned char data_i
 		case BT_DATA_OUT:
 			memset(data_dump->tx[BT_MAX_DUMP_FRAME_LEN - 1], 0, BT_MAX_DUMP_DATA_LEN);
 			memcpy(data_dump->tx[BT_MAX_DUMP_FRAME_LEN - 1], buf, count);
-		break;
+			break;
 		case BT_DATA_IN:
 			memset(data_dump->rx[BT_MAX_DUMP_FRAME_LEN - 1], 0, BT_MAX_DUMP_DATA_LEN);
 			memcpy(data_dump->rx[BT_MAX_DUMP_FRAME_LEN - 1], buf, count);
 			break;
 		default:
 			break;
-	}
+		}
 	} else {
 		switch (data_inout) {
 		case BT_DATA_OUT:
@@ -119,7 +111,6 @@ void bt_host_data_printf(void)
 		printk("\n");
 		loop_count_i = 0;
 	}
-
 	loop_count_j = 0;
 	for (; loop_count_j < BT_MAX_DUMP_FRAME_LEN; loop_count_j++) {
 		printk("bt_host_data_printf rxdata[%d]: ", loop_count_j + 1);

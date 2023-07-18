@@ -730,18 +730,18 @@ static int sprdwl_cfg80211_del_key(struct wiphy *wiphy, struct net_device *ndev,
 {
 	struct sprdwl_vif *vif = netdev_priv(ndev);
 
-	//wl_ndev_log(L_DBG, ndev, "%s key_index=%d, pairwise=%d\n",
-	//		__func__, key_index, pairwise);
+	wl_ndev_log(L_DBG, ndev, "%s key_index=%d, pairwise=%d\n",
+			__func__, key_index, pairwise);
 
 	if (key_index > SPRDWL_MAX_KEY_INDEX) {
-		//wl_ndev_log(L_ERR, ndev, "%s key index %d out of bounds!\n", __func__,
-		//	   key_index);
+		wl_ndev_log(L_ERR, ndev, "%s key index %d out of bounds!\n", __func__,
+			   key_index);
 		return -ENOENT;
 	}
 
 	if (!vif->key_len[pairwise][key_index]) {
-		//wl_ndev_log(L_ERR, ndev, "%s key index %d is empty!\n", __func__,
-		//	   key_index);
+		wl_ndev_log(L_ERR, ndev, "%s key index %d is empty!\n", __func__,
+			   key_index);
 		return 0;
 	}
 
@@ -2249,9 +2249,8 @@ void sprdwl_report_scan_result(struct sprdwl_vif *vif, u16 chan, s16 rssi,
 				  ie, ielen, signal, GFP_KERNEL);
 
 	if (unlikely(!bss))
-		;
-		//wl_ndev_log(L_ERR, vif->ndev,
-		//	   "%s failed to inform bss frame!\n", __func__);
+		wl_ndev_log(L_ERR, vif->ndev,
+			   "%s failed to inform bss frame!\n", __func__);
 	cfg80211_put_bss(wiphy, bss);
 
 	/*check log mac flag and call report fake probe*/
@@ -2354,10 +2353,10 @@ void sprdwl_report_connection(struct sprdwl_vif *vif,
 			wl_ndev_log(L_ERR, vif->ndev, "%s NULL frame!\n", __func__);
 			goto err;
 		}
-		//if (!ether_addr_equal(conn_info->bssid, mgmt->bssid))
-		//	wl_ndev_log(L_ERR, vif->ndev,
-		//			"%s Invalid Beacon!,vif->bssid = %pM, con->bssid = %pM, mgmt->bssid = %pM\n",
-		//			__func__, vif->bssid, conn_info->bssid, mgmt->bssid);
+		if (!ether_addr_equal(conn_info->bssid, mgmt->bssid))
+			wl_ndev_log(L_ERR, vif->ndev,
+					"%s Invalid Beacon!,vif->bssid = %pM, con->bssid = %pM, mgmt->bssid = %pM\n",
+					__func__, vif->bssid, conn_info->bssid, mgmt->bssid);
 		ie = mgmt->u.probe_resp.variable;
 		ielen = conn_info->bea_ie_len - offsetof(struct ieee80211_mgmt,
 						 u.probe_resp.variable);
@@ -2383,10 +2382,9 @@ void sprdwl_report_connection(struct sprdwl_vif *vif,
 					  capability, beacon_interval,
 					  ie, ielen, conn_info->signal, GFP_KERNEL);
 		if (unlikely(!bss))
-			;
-			//wl_ndev_log(L_ERR, vif->ndev,
-			//	   "%s failed to inform bss frame!\n",
-			//	   __func__);
+			wl_ndev_log(L_ERR, vif->ndev,
+				   "%s failed to inform bss frame!\n",
+				   __func__);
 	} else {
 		wl_ndev_log(L_ERR, vif->ndev, "%s No Beason IE!\n", __func__);
 	}
@@ -2716,17 +2714,12 @@ static int sprdwl_cfg80211_mgmt_tx(struct wiphy *wiphy,
 
 static void sprdwl_cfg80211_mgmt_frame_register(struct wiphy *wiphy,
 						struct wireless_dev *wdev,
-						struct mgmt_frame_regs *upd)
+						u16 frame_type, bool reg)
 {
 	struct sprdwl_vif *vif = container_of(wdev, struct sprdwl_vif, wdev);
 	struct sprdwl_work *misc_work;
 	struct sprdwl_reg_mgmt *reg_mgmt;
 	u16 mgmt_type;
-
-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(5, 8, 0))
-       u16 frame_type = BIT(upd->global_stypes << 4);
-       bool reg = false;
-#endif
 
 	if (vif->mode == SPRDWL_MODE_NONE)
 		return;
@@ -3110,7 +3103,7 @@ static int sprdwl_cfg80211_set_mac_acl(struct wiphy *wiphy,
 	unsigned char *mac_addr = NULL;
 
 	if (!acl || !acl->n_acl_entries) {
-		//wl_ndev_log(L_ERR, ndev, "%s no ACL data\n", __func__);
+		wl_ndev_log(L_ERR, ndev, "%s no ACL data\n", __func__);
 		return 0;
 	}
 
@@ -3282,8 +3275,7 @@ static struct cfg80211_ops sprdwl_cfg80211_ops = {
 	.remain_on_channel = sprdwl_cfg80211_remain_on_channel,
 	.cancel_remain_on_channel = sprdwl_cfg80211_cancel_remain_on_channel,
 	.mgmt_tx = sprdwl_cfg80211_mgmt_tx,
-	//.mgmt_frame_register = sprdwl_cfg80211_mgmt_frame_register,
-	.update_mgmt_frame_registrations = sprdwl_cfg80211_mgmt_frame_register,
+	.mgmt_frame_register = sprdwl_cfg80211_mgmt_frame_register,
 	.set_power_mgmt = sprdwl_cfg80211_set_power_mgmt,
 	.set_cqm_rssi_config = sprdwl_cfg80211_set_cqm_rssi_config,
 	.sched_scan_start = sprdwl_cfg80211_sched_scan_start,

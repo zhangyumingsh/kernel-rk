@@ -34,9 +34,9 @@ ccflags-y += -DATCMD_ASSERT
 ccflags-y += -DTCPACK_DELAY_SUPPORT
 #ccflags-y += -DDFS_MASTER
 #ccflags-y += -DRX_NAPI
-ifneq ($(TARGET_BUILD_VARIANT),user)
-ccflags-y += -DWL_CONFIG_DEBUG
-endif
+#ifneq ($(TARGET_BUILD_VARIANT),user)
+#ccflags-y += -DWL_CONFIG_DEBUG
+#endif
 ccflags-y += -DSPLIT_STACK
 ccflags-y += -DOTT_UWE
 #ccflags-y += -DCP2_RESET_SUPPORT

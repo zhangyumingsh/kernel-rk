@@ -424,9 +424,8 @@ struct sprdwl_msg_buf *__sprdwl_cmd_getbuf(struct sprdwl_priv *priv,
 	if (cmd_id >= WIFI_CMD_OPEN) {
 		vif = ctx_id_to_vif(priv, ctx_id);
 		if (!vif)
-			;
-			//wl_err("%s cant't get vif, ctx_id: %d\n",
-			//	   __func__, ctx_id);
+			wl_err("%s cant't get vif, ctx_id: %d\n",
+				   __func__, ctx_id);
 		else
 			mode =  vif->mode;
 		sprdwl_put_vif(vif);
@@ -2052,8 +2051,8 @@ int sprdwl_tdls_mgmt(struct sprdwl_vif *vif, struct sk_buff *skb)
 	ret = sprdwl_send_data(vif, msg, skb, 2, false);
 #endif
 	if (ret) {
-		//wl_err("%s drop msg due to TX Err\n",
-		//	   __func__);
+		wl_err("%s drop msg due to TX Err\n",
+			   __func__);
 		goto out;
 	}
 
@@ -2735,12 +2734,12 @@ unsigned short sprdwl_rx_rsp_process(struct sprdwl_priv *priv, u8 *msg)
 		complete(&cmd->completed);
 	} else {
 		kfree(data);
-		//wl_err("%s ctx_id %d recv mismatched rsp[%s] status[%s]\n",
-		//	   __func__, hdr->common.ctx_id,
-		//	   cmd2str(hdr->cmd_id),
-		//	   err2str(hdr->status));
-		//wl_err("%s mstime:[%u %u]\n", __func__,
-		//	   SPRDWL_GET_LE32(hdr->mstime), cmd->mstime);
+		wl_err("%s ctx_id %d recv mismatched rsp[%s] status[%s]\n",
+			   __func__, hdr->common.ctx_id,
+			   cmd2str(hdr->cmd_id),
+			   err2str(hdr->status));
+		wl_err("%s mstime:[%u %u]\n", __func__,
+			   SPRDWL_GET_LE32(hdr->mstime), cmd->mstime);
 	}
 	spin_unlock_bh(&cmd->lock);
 	atomic_dec(&cmd->refcnt);
@@ -2789,11 +2788,11 @@ void sprdwl_event_scan_done(struct sprdwl_vif *vif, u8 *data, u16 len)
 	default:
 		sprdwl_scan_done(vif, true);
 		sprdwl_sched_scan_done(vif, false);
-		//if (p->type == SPRDWL_SCAN_ERROR)
-		//	wl_ndev_log(L_ERR, vif->ndev, "%s error!\n", __func__);
-		//else
-		//	wl_ndev_log(L_ERR, vif->ndev, "%s invalid scan done type: %d\n",
-		//		   __func__, p->type);
+		if (p->type == SPRDWL_SCAN_ERROR)
+			wl_ndev_log(L_ERR, vif->ndev, "%s error!\n", __func__);
+		else
+			wl_ndev_log(L_ERR, vif->ndev, "%s invalid scan done type: %d\n",
+				   __func__, p->type);
 		break;
 	}
 	bss_count = 0;

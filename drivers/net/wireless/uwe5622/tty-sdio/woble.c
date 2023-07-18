@@ -146,7 +146,7 @@ int mtty_bt_read_conf(void)
 	}
 
 	do {
-		read_len = kernel_read(bt_conf_fp, p_buf, file_size, &file_offset);
+		read_len = kernel_read(bt_conf_fp, file_offset, p_buf, file_size);
 		if (read_len > 0) {
 			buffer_len += read_len;
 			file_size -= read_len;

@@ -1,5 +1,4 @@
 #include "sdiohal.h"
-#include <linux/sched.h>
 
 static unsigned int sdiohal_rx_adapt_get(void)
 {

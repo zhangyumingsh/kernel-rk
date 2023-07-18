@@ -708,8 +708,8 @@ out:
 		break;
 	}
 
-	//wl_err("ctx_id = %d, sm_state = %d, bssid =%pM\n",
-	//		vif->ctx_id, vif->sm_state, intf->skb_da);
+	wl_err("ctx_id = %d, sm_state = %d, bssid =%pM\n",
+			vif->ctx_id, vif->sm_state, intf->skb_da);
 
 	return ret;
 }
@@ -762,7 +762,7 @@ int sprdwl_intf_fill_msdu_dscr(struct sprdwl_vif *vif,
 
 	lut_index = sprdwl_find_lut_index(dev, vif);
 	if ((lut_index < 6) && (!sprdwl_is_group(dev->skb_da))) {
-		//wl_err("%s, %d, sta disconn, no data tx!", __func__, __LINE__);
+		wl_err("%s, %d, sta disconn, no data tx!", __func__, __LINE__);
 		return -EPERM;
 	}
 	skb_push(skb, sizeof(struct tx_msdu_dscr) + offset + dscr_rsvd);
@@ -1645,12 +1645,12 @@ void sprdwl_tx_ba_mgmt(struct sprdwl_priv *priv, void *data, int len,
 		tid = addba->addba_param.tid;
 		if (!test_and_clear_bit(tid, &peer_entry->ba_tx_done_map))
 			goto out;
-		//wl_err("%s, %d, tx_addba failed, reason=%d, lut_index=%d, tid=%d, map=%lu\n",
-		//	   __func__, __LINE__,
-		//	   rbuf[0],
-		//	   addba->lut_index,
-		//	   tid,
-		//	   peer_entry->ba_tx_done_map);
+		wl_err("%s, %d, tx_addba failed, reason=%d, lut_index=%d, tid=%d, map=%lu\n",
+			   __func__, __LINE__,
+			   rbuf[0],
+			   addba->lut_index,
+			   tid,
+			   peer_entry->ba_tx_done_map);
 	}
 out:
 	kfree(rbuf);
@@ -1936,8 +1936,8 @@ int sprdwl_dis_flush_txlist(struct sprdwl_intf *intf, u8 lut_index)
 	int i, j;
 
 	if (lut_index <= 5) {
-		//wl_err("err lut_index:%d, %s, %d\n",
-		//		lut_index, __func__, __LINE__);
+		wl_err("err lut_index:%d, %s, %d\n",
+				lut_index, __func__, __LINE__);
 		return -1;
 	}
 	wl_debug("disconnect, flush qoslist, %s, %d\n", __func__, __LINE__);
