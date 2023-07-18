@@ -18,9 +18,9 @@
 #include <linux/platform_device.h>
 #include <linux/utsname.h>
 #include <linux/debugfs.h>
-#include <linux/kthread.h>
 #include <linux/version.h>
 #include <marlin_platform.h>
+#include <linux/kthread.h>
 #include <linux/of.h>
 #include "sprdwl.h"
 #include "wl_intf.h"

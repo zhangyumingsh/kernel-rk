@@ -41,16 +41,14 @@ static unsigned int wcn_cp2_file_max_num = UNISOC_DBG_FILENUM_DEFAULT;
  */
 static unsigned int wcn_cp2_log_cover_old = 1;
 /* path of config file unisoc_cp2log_config.txt */
-#define WCN_DEBUG_CFG_MAX_PATH_NUM	3
+#define WCN_DEBUG_CFG_MAX_PATH_NUM	2
 static char *wcn_cp2_config_path[WCN_DEBUG_CFG_MAX_PATH_NUM] = {
-	"/etc/unisoc_cp2log_config.txt",
 	"/data/unisoc_cp2log_config.txt",
 	"/vendor/etc/wifi/unisoc_cp2log_config.txt"
 };
 /* path of cp2 log and mem files. */
-#define WCN_UNISOC_DBG_MAX_PATH_NUM	4
+#define WCN_UNISOC_DBG_MAX_PATH_NUM	3
 static char *wcn_unisoc_dbg_path[WCN_UNISOC_DBG_MAX_PATH_NUM] = {
-	"/etc",
 	UNISOC_DBG_PATH_DEFAULT,/* most of projects */
 	"/data",		/* amlogic s905w... */
 	"/mnt/UDISK"		/* allwinner r328... */
@@ -96,10 +94,9 @@ static int wcn_mkdir(char *path)
 static int wcn_find_cp2_file_num(char *path, loff_t *pos)
 {
 	int i;
-#ifdef setfs
+	struct kstat config_stat;
 	mm_segment_t fs_old;
-#endif
-	struct file *fp_size;
+	int ret = 0;
 	/*first file whose size less than wcn_cp2_log_limit_size*/
 	int first_small_file = 0;
 	char first_file_set = 0;
@@ -109,22 +106,17 @@ static int wcn_find_cp2_file_num(char *path, loff_t *pos)
 	int num = 0;
 	int exist_file_num = 0;
 
-#ifdef setfs
 	fs_old = get_fs();
 	set_fs(KERNEL_DS);
-#endif
 
 	if (wcn_cp2_log_cover_old) {
 		for (i = 0; i < wcn_cp2_file_max_num; i++) {
 			sprintf(wcn_cp2_file_path, path, i);
-			fp_size = filp_open(wcn_cp2_file_path, O_RDONLY, 0);
-			if (IS_ERR(fp_size)) {
-				WCN_INFO("%s: Error, config file not found. want config file:%s \n",
-					__func__, wcn_cp2_file_path);
+			ret = vfs_stat(wcn_cp2_file_path, &config_stat);
+			if (ret)
 				break;
-			}
 			exist_file_num++;
-			config_size = (int)fp_size->f_inode->i_size;
+			config_size = (int)config_stat.size;
 			if ((config_size < wcn_cp2_log_limit_size) &&
 				(first_file_set == 0)) {
 				first_small_file = i;
@@ -180,9 +172,7 @@ static int wcn_find_cp2_file_num(char *path, loff_t *pos)
 		} else
 			filp_close(fp, NULL);
 	}
-#ifdef setfs
 	set_fs(fs_old);
-#endif
 	return num;
 }
 
@@ -448,12 +438,11 @@ static void wcn_config_log_file(void)
 {
 	struct file *filp;
 	loff_t offset = 0;
-	struct file *fp_size;
+	struct kstat config_stat;
 	int config_size = 0;
 	int read_len = 0;
-#ifdef setfs
 	mm_segment_t fs_old;
-#endif
+	int ret;
 	char *buf;
 	char *buf_end;
 	char *limit_size = "wcn_cp2_log_limit_size=";
@@ -465,27 +454,19 @@ static void wcn_config_log_file(void)
 	int config_max_num = 0;
 	int index = 0;
 
-#ifdef setfs
 	fs_old = get_fs();
 	set_fs(KERNEL_DS);
-#endif
 	for (index = 0; index < WCN_DEBUG_CFG_MAX_PATH_NUM; index++) {
-		fp_size = filp_open(wcn_cp2_config_path[index], O_RDONLY, 0);
-		if (IS_ERR(fp_size)) {
-			WCN_INFO("%s: Error, config file not found. want config file:%s \n",
-				__func__, wcn_cp2_config_path[index]);
-		}
-		else {
-			config_size = (int)fp_size->f_inode->i_size;
+		ret = vfs_stat(wcn_cp2_config_path[index], &config_stat);
+		if (!ret) {
+			config_size = (int)config_stat.size;
 			WCN_INFO("%s: find config file:%s size:%d\n",
 				 __func__, wcn_cp2_config_path[index],
 				 config_size);
 			break;
 		}
 	}
-#ifdef setfs
 	set_fs(fs_old);
-#endif
 	if (index == WCN_DEBUG_CFG_MAX_PATH_NUM) {
 		WCN_INFO("%s: there is no unisoc_cp2log_config.txt\n",
 			 __func__);

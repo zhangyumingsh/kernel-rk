@@ -362,7 +362,7 @@ static struct net_device_stats *sprdwl_get_stats(struct net_device *ndev)
 	return &ndev->stats;
 }
 
-static void sprdwl_tx_timeout(struct net_device *ndev, unsigned int txqueue)
+static void sprdwl_tx_timeout(struct net_device *ndev)
 {
 	wl_ndev_log(L_DBG, ndev, "%s\n", __func__);
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4, 7, 0)
@@ -1055,9 +1055,7 @@ static struct notifier_block sprdwl_inet6addr_cb = {
 static int write_mac_addr(char *mac_file, u8 *addr)
 {
 	struct file *fp = 0;
-#ifdef setfs
 	mm_segment_t old_fs;
-#endif
 	char buf[18];
 	loff_t pos = 0;
 	/*open file*/
@@ -1069,20 +1067,16 @@ static int write_mac_addr(char *mac_file, u8 *addr)
 	 /*format MAC address*/
 	 sprintf(buf, "%02x:%02x:%02x:%02x:%02x:%02x", addr[0], addr[1],
 		     addr[2], addr[3], addr[4], addr[5]);
-#ifdef setfs
 	 /*save old fs: should be USER_DS*/
 	 old_fs = get_fs();
 	 /*change it to KERNEL_DS*/
 	 set_fs(KERNEL_DS);
-#endif
 	 /*write file*/
-	 kernel_write(fp, buf, sizeof(buf), &pos);
+	 vfs_write(fp, buf, sizeof(buf), &pos);
 	 /*close file*/
 	 filp_close(fp, NULL);
-#ifdef setfs
 	 /*restore to old fs*/
 	 set_fs(old_fs);
-#endif
 
 	 return 0;
 }
@@ -1096,10 +1090,7 @@ static int sprdwl_get_mac_from_file(struct sprdwl_vif *vif, u8 *addr)
 {
 	struct file *fp = 0;
 	u8 buf[64] = { 0 };
-
-#ifdef setfs
 	mm_segment_t fs;
-#endif
 	loff_t *pos;
 	char tmp_mac_file[256] = {0};
 
@@ -1114,18 +1105,14 @@ static int sprdwl_get_mac_from_file(struct sprdwl_vif *vif, u8 *addr)
 		}
 	}
 
-#ifdef setfs
 	fs = get_fs();
 	set_fs(KERNEL_DS);
-#endif
 
 	pos = &fp->f_pos;
-	kernel_read(fp, buf, sizeof(buf), pos);
+	vfs_read(fp, buf, sizeof(buf), pos);
 
 	filp_close(fp, NULL);
-#ifdef setfs
 	set_fs(fs);
-#endif
 
 	str2mac(buf, addr);
 	if (!is_valid_ether_addr(addr)) {

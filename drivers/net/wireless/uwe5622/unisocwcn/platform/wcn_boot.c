@@ -79,7 +79,7 @@ enum hi_GPIO_DIR_E {
 
 #ifdef CONFIG_AW_BOARD
 #include <linux/pm_wakeirq.h>
-//extern void sunxi_wlan_set_power(int on);
+extern void sunxi_wlan_set_power(int on);
 extern int sunxi_wlan_get_oob_irq(void);
 extern int sunxi_wlan_get_oob_irq_flags(void);
 
@@ -572,9 +572,7 @@ static int marlin_find_sdio_device_id(unsigned char *path)
 {
 	int i, open_cnt = 6;
 	struct file *filp;
-#ifdef setfs
 	mm_segment_t fs;
-#endif
 	loff_t pos;
 	unsigned char read_buf[64], sdio_id_path[64];
 	char *sdio_id_pos;
@@ -595,27 +593,21 @@ static int marlin_find_sdio_device_id(unsigned char *path)
 	}
 	WCN_INFO("%s open %s success cnt=%d\n", __func__,
 		 sdio_id_path, i);
-#ifdef setfs
 	fs = get_fs();
 	set_fs(KERNEL_DS);
-#endif
 	pos = 0;
-	kernel_read(filp, read_buf, sizeof(read_buf), &pos);
+	vfs_read(filp, read_buf, sizeof(read_buf), &pos);
 	WCN_INFO("%s read_buf: %s\n", __func__, read_buf);
 	sdio_id_pos = strstr(read_buf, "SDIO_ID=0000:0000");
 	if (!sdio_id_pos) {
 		WCN_ERR("%s sdio id not match (0000:0000)\n", __func__);
 		filp_close(filp, NULL);
-#ifdef setfs
 		set_fs(fs);
-#endif
 		/* other module */
 		return -1;
 	}
 	filp_close(filp, NULL);
-#ifdef setfs
 	set_fs(fs);
-#endif
 	WCN_INFO("%s: This is unisoc module\n", __func__);
 
 	/* unisoc module */
@@ -2625,17 +2617,17 @@ void marlin_chip_en(bool enable, bool reset)
 #ifdef CONFIG_AW_BOARD
 	if (enable) {
 		if (chip_en_count == 0) {
-//			sunxi_wlan_set_power(0);
+			sunxi_wlan_set_power(0);
 			msleep(100);
-//			sunxi_wlan_set_power(1);
-			WCN_INFO("marlin chip en dummy pull up -- need manually set GPIO \n");
+			sunxi_wlan_set_power(1);
+			WCN_INFO("marlin chip en pull up\n");
 		}
 		chip_en_count++;
 	} else {
 		chip_en_count--;
 		if (chip_en_count == 0) {
-//			sunxi_wlan_set_power(0);
-			WCN_INFO("marlin chip en dummy pull down -- need manually set GPIO \n");
+			sunxi_wlan_set_power(0);
+			WCN_INFO("marlin chip en pull down\n");
 		}
 	}
 	return;

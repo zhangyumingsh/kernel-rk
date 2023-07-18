@@ -53,7 +53,7 @@ extern int rockchip_wifi_set_carddetect(int val);
 #endif
 
 #ifdef CONFIG_AW_BOARD
-//extern void sunxi_mmc_rescan_card(unsigned int ids);
+extern void sunxi_mmc_rescan_card(unsigned int ids);
 extern int sunxi_wlan_get_bus_index(void);
 extern int sunxi_wlan_get_oob_irq(void);
 extern int sunxi_wlan_get_oob_irq_flags(void);
@@ -2067,9 +2067,7 @@ void sdiohal_remove_card(void)
 {
 	struct sdiohal_data_t *p_data = sdiohal_get_data();
 #ifdef CONFIG_AW_BOARD
-//	int wlan_bus_index = sunxi_wlan_get_bus_index();
-	/* don't need to remove sdio card. */
-	return;
+	int wlan_bus_index = sunxi_wlan_get_bus_index();
 #endif
 
 #ifdef CONFIG_AML_BOARD
@@ -2097,8 +2095,7 @@ void sdiohal_remove_card(void)
 #endif
 
 #ifdef CONFIG_AW_BOARD
-//	sunxi_mmc_rescan_card(wlan_bus_index);
-	return;
+	sunxi_mmc_rescan_card(wlan_bus_index);
 #endif
 
 	p_data->sdio_dev_host->card->state |= WCN_SDIO_CARD_REMOVED;
@@ -2123,7 +2120,7 @@ int sdiohal_scan_card(void)
 #ifdef CONFIG_AML_BOARD
 	struct sdio_func *func = p_data->sdio_func[FUNC_1];
 #endif
-#if 0
+#ifdef CONFIG_AW_BOARD
 	int wlan_bus_index;
 #endif
 
@@ -2198,7 +2195,7 @@ int sdiohal_scan_card(void)
 	rockchip_wifi_set_carddetect(1);
 #endif
 
-#if 0
+#ifdef CONFIG_AW_BOARD
 	wlan_bus_index = sunxi_wlan_get_bus_index();
 	if (wlan_bus_index < 0) {
 		ret = wlan_bus_index;

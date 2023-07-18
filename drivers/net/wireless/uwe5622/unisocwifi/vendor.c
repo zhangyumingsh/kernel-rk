@@ -17,7 +17,6 @@
 #include "sprdwl.h"
 #include "cmdevt.h"
 #include "vendor.h"
-#include "npi.h"
 #ifdef NAN_SUPPORT
 #include "nan.h"
 #include <linux/version.h>
@@ -3616,11 +3615,6 @@ static int sprdwl_set_offload_packet(struct wiphy *wiphy,
 	return 0;
 }
 
-static struct nla_policy sprdwl_genl_policy[SPRDWL_NL_ATTR_MAX + 1] = {
-	[SPRDWL_NL_ATTR_AP2CP] = {.type = NLA_BINARY, .len = 1024},
-	[SPRDWL_NL_ATTR_CP2AP] = {.type = NLA_BINARY, .len = 1024}
-};
-
 const struct wiphy_vendor_command sprdwl_vendor_cmd[] = {
 	{/*9*/
 		{
@@ -3629,7 +3623,6 @@ const struct wiphy_vendor_command sprdwl_vendor_cmd[] = {
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_genl_policy,
 		.doit = sprdwl_vendor_roaming_enable,
 	},
 	{/*12*/
@@ -3639,7 +3632,6 @@ const struct wiphy_vendor_command sprdwl_vendor_cmd[] = {
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_genl_policy,
 		.doit = sprdwl_vendor_nan_enable,
 	},
 	{/*14*/
@@ -3649,7 +3641,6 @@ const struct wiphy_vendor_command sprdwl_vendor_cmd[] = {
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_genl_policy,
 		.doit = sprdwl_vendor_set_llstat_handler
 	},
 	{/*15*/
@@ -3659,7 +3650,6 @@ const struct wiphy_vendor_command sprdwl_vendor_cmd[] = {
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_genl_policy,
 		.doit = sprdwl_vendor_get_llstat_handler
 	},
 	{/*16*/
@@ -3669,7 +3659,6 @@ const struct wiphy_vendor_command sprdwl_vendor_cmd[] = {
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_genl_policy,
 		.doit = sprdwl_vendor_clr_llstat_handler
 	},
 	{/*20*/
@@ -3679,7 +3668,6 @@ const struct wiphy_vendor_command sprdwl_vendor_cmd[] = {
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			 WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_genl_policy,
 		.doit = sprdwl_vendor_gscan_start,
 	},
 	{/*21*/
@@ -3689,7 +3677,6 @@ const struct wiphy_vendor_command sprdwl_vendor_cmd[] = {
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			 WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_genl_policy,
 		.doit = sprdwl_vendor_gscan_stop,
 	},
 	{/*22*/
@@ -3699,7 +3686,6 @@ const struct wiphy_vendor_command sprdwl_vendor_cmd[] = {
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			 WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_genl_policy,
 		.doit = sprdwl_vendor_get_channel_list,
 	},
 	{/*23*/
@@ -3709,7 +3695,6 @@ const struct wiphy_vendor_command sprdwl_vendor_cmd[] = {
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			 WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_genl_policy,
 		.doit = sprdwl_vendor_get_gscan_capabilities,
 	},
 	{/*24*/
@@ -3719,7 +3704,6 @@ const struct wiphy_vendor_command sprdwl_vendor_cmd[] = {
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			 WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_genl_policy,
 		.doit = sprdwl_vendor_get_cached_gscan_results,
 	},
 	{/*29*/
@@ -3729,7 +3713,6 @@ const struct wiphy_vendor_command sprdwl_vendor_cmd[] = {
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			 WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_genl_policy,
 		.doit = sprdwl_vendor_set_bssid_hotlist,
 	},
 	{/*30*/
@@ -3739,7 +3722,6 @@ const struct wiphy_vendor_command sprdwl_vendor_cmd[] = {
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			 WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_genl_policy,
 		.doit = sprdwl_vendor_reset_bssid_hotlist,
 	},
 	{/*32*/
@@ -3749,7 +3731,6 @@ const struct wiphy_vendor_command sprdwl_vendor_cmd[] = {
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			 WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_genl_policy,
 		.doit = sprdwl_vendor_set_significant_change,
 	},
 	{/*33*/
@@ -3759,7 +3740,6 @@ const struct wiphy_vendor_command sprdwl_vendor_cmd[] = {
 	    },
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			 WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_genl_policy,
 		.doit = sprdwl_vendor_reset_significant_change,
 	},
 	{/*38*/
@@ -3769,7 +3749,6 @@ const struct wiphy_vendor_command sprdwl_vendor_cmd[] = {
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			 WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_genl_policy,
 		.doit = sprdwl_vendor_get_support_feature,
 	},
 	{/*39*/
@@ -3779,7 +3758,6 @@ const struct wiphy_vendor_command sprdwl_vendor_cmd[] = {
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			 WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_genl_policy,
 		.doit = sprdwl_vendor_set_mac_oui,
 	},
 	{/*42*/
@@ -3789,7 +3767,6 @@ const struct wiphy_vendor_command sprdwl_vendor_cmd[] = {
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			 WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_genl_policy,
 		.doit = sprdwl_vendor_get_concurrency_matrix,
 	},
 	{/*55*/
@@ -3799,7 +3776,6 @@ const struct wiphy_vendor_command sprdwl_vendor_cmd[] = {
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			 WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_genl_policy,
 		.doit = sprdwl_vendor_get_feature,
 	},
 	{/*61*/
@@ -3809,7 +3785,6 @@ const struct wiphy_vendor_command sprdwl_vendor_cmd[] = {
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			 WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_genl_policy,
 		.doit = sprdwl_vendor_get_driver_info,
 	},
 	{/*62*/
@@ -3819,7 +3794,6 @@ const struct wiphy_vendor_command sprdwl_vendor_cmd[] = {
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			 WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_genl_policy,
 		.doit = sprdwl_vendor_start_logging,
 	},
 	{/*63*/
@@ -3829,7 +3803,6 @@ const struct wiphy_vendor_command sprdwl_vendor_cmd[] = {
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			 WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_genl_policy,
 		.doit = sprdwl_vendor_memory_dump,
 	},
 	{/*64*/
@@ -3839,7 +3812,6 @@ const struct wiphy_vendor_command sprdwl_vendor_cmd[] = {
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_genl_policy,
 		.doit = sprdwl_vendor_set_roam_params,
 	},
 	{/*65*/
@@ -3849,7 +3821,6 @@ const struct wiphy_vendor_command sprdwl_vendor_cmd[] = {
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_genl_policy,
 		.doit = sprdwl_vendor_set_ssid_hotlist,
 	},
 	{/*66*/
@@ -3859,7 +3830,6 @@ const struct wiphy_vendor_command sprdwl_vendor_cmd[] = {
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_genl_policy,
 		.doit = sprdwl_vendor_reset_ssid_hotlist,
 	},
 	{/*69*/
@@ -3869,7 +3839,6 @@ const struct wiphy_vendor_command sprdwl_vendor_cmd[] = {
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			 WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_genl_policy,
 		.doit = sprdwl_vendor_set_epno_list,
 	},
 	{/*70*/
@@ -3879,7 +3848,6 @@ const struct wiphy_vendor_command sprdwl_vendor_cmd[] = {
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			 WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_genl_policy,
 		.doit = sprdwl_vendor_set_passpoint_list,
 	},
 	{/*71 */
@@ -3889,7 +3857,6 @@ const struct wiphy_vendor_command sprdwl_vendor_cmd[] = {
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			 WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_genl_policy,
 		.doit = sprdwl_vendor_reset_passpoint_list,
 	},
 	{/*76 */
@@ -3899,7 +3866,6 @@ const struct wiphy_vendor_command sprdwl_vendor_cmd[] = {
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			 WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_genl_policy,
 		.doit = sprdwl_vendor_get_logger_feature,
 	},
 	{/*77*/
@@ -3909,7 +3875,6 @@ const struct wiphy_vendor_command sprdwl_vendor_cmd[] = {
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			 WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_genl_policy,
 		.doit = sprdwl_vendor_get_ring_data,
 	},
 	{/*79*/
@@ -3928,7 +3893,6 @@ const struct wiphy_vendor_command sprdwl_vendor_cmd[] = {
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			 WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_genl_policy,
 		.doit = sprdwl_vendor_monitor_rssi,
 	},
 	{/*82*/
@@ -3938,7 +3902,6 @@ const struct wiphy_vendor_command sprdwl_vendor_cmd[] = {
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			 WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_genl_policy,
 		.doit = sprdwl_vendor_enable_nd_offload,
 	},
 	{/*85 */
@@ -3948,7 +3911,6 @@ const struct wiphy_vendor_command sprdwl_vendor_cmd[] = {
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			 WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_genl_policy,
 		.doit = sprdwl_vendor_get_wake_state,
 	},
 	{/*146 */
@@ -3958,7 +3920,6 @@ const struct wiphy_vendor_command sprdwl_vendor_cmd[] = {
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			 WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_genl_policy,
 		.doit = sprdwl_vendor_set_sar_limits,
 	},
 
@@ -3970,7 +3931,6 @@ const struct wiphy_vendor_command sprdwl_vendor_cmd[] = {
 		},
 		.flags = WIPHY_VENDOR_CMD_NEED_WDEV |
 			WIPHY_VENDOR_CMD_NEED_NETDEV,
-		.policy = sprdwl_genl_policy,
 		.doit = sprdwl_vendor_nan_cmds
 	},
 #endif /* NAN_SUPPORT */

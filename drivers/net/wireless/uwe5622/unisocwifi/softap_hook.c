@@ -35,9 +35,7 @@ static int sprdwl_get_softap_chan(u8 *path)
 	int ret;
 	int chn;
 	struct file *fp = NULL;
-#ifdef setfs
 	mm_segment_t fs;
-#endif
 	char buf[64] = {0};
 
 	if (path == NULL)
@@ -49,17 +47,13 @@ static int sprdwl_get_softap_chan(u8 *path)
 		return -EINVAL;
 	}
 
-#ifdef setfs
 	fs = get_fs();
 	set_fs(get_ds());
-#endif
 
-	ret = kernel_read(fp, buf, sizeof(buf), &fp->f_pos);
+	ret = vfs_read(fp, buf, sizeof(buf), &fp->f_pos);
 
 	filp_close(fp, NULL);
-#ifdef setfs
 	set_fs(fs);
-#endif
 
 	if (ret <= 0) {
 		wl_err("read file failed, ret = %d\n", ret);
