@@ -270,7 +270,7 @@
 
 	unisoc_uwe_bsp: uwe-bsp {
 		compatible = "unisoc,uwe_bsp";
-		//wl-reg-on = <&gpio0 10 GPIO_ACTIVE_HIGH>;  // handled by sdio-pwrseq
+		wl-reg-on = <&gpio0 5 GPIO_ACTIVE_HIGH>;  // handled by sdio-pwrseq
 		bt-reg-on = <&gpio4 RK_PA5 GPIO_ACTIVE_HIGH>;
 		wl-wake-host-gpio = <&gpio0 RK_PC5 GPIO_ACTIVE_HIGH>;
 		bt-wake-host-gpio = <&gpio4 RK_PA3 GPIO_ACTIVE_HIGH>;
