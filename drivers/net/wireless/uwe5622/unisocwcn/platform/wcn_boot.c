@@ -3288,7 +3288,7 @@ static int marlin_set_power(int subsys, int val)
 				&marlin_dev->download_done,
 				msecs_to_jiffies(POWERUP_WAIT_MS));
 			if (!timeleft) {
-				WCN_ERR("marlin download timeout\n");
+				WCN_ERR("marlin download timeout1\n");
 				goto out;
 			}
 			marlin_dev->download_finish_flag = 1;
