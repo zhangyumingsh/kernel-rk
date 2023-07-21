@@ -2334,8 +2334,70 @@ static int marlin_start_run(void)
 }
 
 // #ifdef CONFIG_AW_BIND_VERIFY
-extern int wcn_bind_verify_calculate_verify_data
-	(uint8_t *confuse_data, uint8_t *verify_data);
+// extern int wcn_bind_verify_calculate_verify_data
+// 	(uint8_t *confuse_data, uint8_t *verify_data);
+
+#include <crypto/sha2.h>
+
+static void expand_seed(uint8_t *seed, uint8_t *out)
+{
+	unsigned char hash[64];
+	int i;
+
+	sha256(seed, 4, hash);
+
+	for (i = 0; i < 4; i++) {
+		memcpy(&out[i * 9], &hash[i * 8], 8);
+		out[i * 9 + 8] = seed[i];
+	}
+}
+
+static int wcn_bind_verify_calculate_verify_data(uint8_t *in, uint8_t *out)
+{
+	u8 seed[4], buf[36], a, b, c;
+	int i, n;
+
+	for (i = 0, n = 0; i < 4; i++) {
+		a = in[n++];
+		b = in[n++];
+		c = in[n++];
+		seed[i] = (a & b) ^ (a & c) ^ (b & c) ^ in[i + 12];
+	}
+
+	expand_seed(seed, buf);
+
+	for (i = 0, n = 0; i < 12; i++) {
+		a = buf[n++];
+		b = buf[n++];
+		c = buf[n++];
+		out[i] = (a & b) ^ (a & c) ^ (b & c);
+	}
+
+	for (i = 0, n = 0; i < 4; i++) {
+		a = out[n++];
+		b = out[n++];
+		c = out[n++];
+		seed[i] = (a & b) ^ (~a & c);
+	}
+
+	expand_seed(seed, buf);
+
+	for (i = 0, n = 0; i < 12; i++) {
+		a = buf[n++];
+		b = buf[n++];
+		c = buf[n++];
+		out[i] = (a & b) ^ (~a & c);
+	}
+
+	for (i = 0, n = 0; i < 4; i++) {
+		a = out[n++];
+		b = out[n++];
+		c = out[n++];
+		out[i + 12] = (a & b) ^ (a & c) ^ (b & c) ^ seed[i];
+	}
+
+	return 0;
+}
 static int marlin_bind_verify(void)
 {
 	unsigned char din[16], dout[16];
