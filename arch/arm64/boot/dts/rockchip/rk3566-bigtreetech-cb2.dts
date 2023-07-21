@@ -258,58 +258,33 @@
 		reset-gpios = <&gpio0 RK_PA5 GPIO_ACTIVE_LOW>;
 	};
 
-	// wireless_wlan: wireless-wlan {
-	// 	compatible = "wlan-platdata";
-	// 	rockchip,grf = <&grf>;
-	// 	wifi_chip_type = "rtl8733bs";
-	// 	pinctrl-names = "default";
-	// 	pinctrl-0 = <&wifi_host_wake_irq>;
-	// 	WIFI,host_wake_irq = <&gpio0 RK_PC5 GPIO_ACTIVE_HIGH>;//WIFI模块唤醒CPU的
-	// 	status = "okay";
-	// };
-
-	unisoc_uwe_bsp: uwe-bsp {
-		compatible = "unisoc,uwe_bsp";
-		wl-reg-on = <&gpio0 5 GPIO_ACTIVE_HIGH>;  // handled by sdio-pwrseq
-		bt-reg-on = <&gpio4 RK_PA5 GPIO_ACTIVE_HIGH>;
-		wl-wake-host-gpio = <&gpio0 RK_PC5 GPIO_ACTIVE_HIGH>;
-		bt-wake-host-gpio = <&gpio4 RK_PA3 GPIO_ACTIVE_HIGH>;
-		// sdio-ext-int-gpio = <&gpio3 30 GPIO_ACTIVE_HIGH>;
-		unisoc,btwf-file-name = "/lib/firmware/wcnmodem.bin";
-		data-irq;
-		blksz-512;
-		keep-power-on;
+	wireless_wlan: wireless-wlan {
+		compatible = "wlan-platdata";
+		rockchip,grf = <&grf>;
+		wifi_chip_type = "rtl8733bs";
+		pinctrl-names = "default";
+		pinctrl-0 = <&wifi_host_wake_irq>;
+		WIFI,host_wake_irq = <&gpio0 RK_PC5 GPIO_ACTIVE_HIGH>;//WIFI模块唤醒CPU的
 		status = "okay";
 	};
 
-	sprd-wlan {
-		compatible = "sprd,uwe5622-wifi";
+	wireless_bluetooth: wireless-bluetooth {
+		compatible = "bluetooth-platdata";
+		clocks = <&rk809 1>;
+		clock-names = "ext_clock";
+		//wifi-bt-power-toggle;
+		uart_rts_gpios = <&gpio4 RK_PA0 GPIO_ACTIVE_LOW>;
+		pinctrl-names = "default", "rts_gpio";
+		pinctrl-0 = <&uart1m1_rtsn
+			&bt_host_wake_gpio
+			&bt_poweren
+			&bt_host_wake_irq>;
+		pinctrl-1 = <&uart1_rts_gpio>;
+		BT,reset_gpio    = <&gpio4 RK_PA5 GPIO_ACTIVE_HIGH>;
+		BT,wake_gpio     = <&gpio4 RK_PA3 GPIO_ACTIVE_HIGH>;
+		BT,wake_host_irq = <&gpio3 RK_PD3 GPIO_ACTIVE_HIGH>;
 		status = "okay";
 	};
-
-	sprd-mtty {
-		compatible = "sprd,mtty";
-		sprd,name = "ttyBT";
-		status = "okay";
-	};
-
-	// wireless_bluetooth: wireless-bluetooth {
-	// 	compatible = "bluetooth-platdata";
-	// 	clocks = <&rk809 1>;
-	// 	clock-names = "ext_clock";
-	// 	//wifi-bt-power-toggle;
-	// 	uart_rts_gpios = <&gpio4 RK_PA0 GPIO_ACTIVE_LOW>;
-	// 	pinctrl-names = "default", "rts_gpio";
-	// 	pinctrl-0 = <&uart1m1_rtsn
-	// 		&bt_host_wake_gpio
-	// 		&bt_poweren
-	// 		&bt_host_wake_irq>;
-	// 	pinctrl-1 = <&uart1_rts_gpio>;
-	// 	BT,reset_gpio    = <&gpio4 RK_PA5 GPIO_ACTIVE_HIGH>;
-	// 	BT,wake_gpio     = <&gpio4 RK_PA3 GPIO_ACTIVE_HIGH>;
-	// 	BT,wake_host_irq = <&gpio3 RK_PD3 GPIO_ACTIVE_HIGH>;
-	// 	status = "okay";
-	// };
 
 	aliases {
 		/delete-property/ ethernet0;
