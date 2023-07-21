@@ -2337,7 +2337,7 @@ static int marlin_start_run(void)
 // extern int wcn_bind_verify_calculate_verify_data
 // 	(uint8_t *confuse_data, uint8_t *verify_data);
 
-#include <crypto/sha2.h>
+#include <crypto/sha.h>
 
 static void expand_seed(uint8_t *seed, uint8_t *out)
 {
