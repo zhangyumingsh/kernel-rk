@@ -2333,7 +2333,7 @@ static int marlin_start_run(void)
 	return ret;
 }
 
-#ifdef CONFIG_AW_BIND_VERIFY
+// #ifdef CONFIG_AW_BIND_VERIFY
 extern int wcn_bind_verify_calculate_verify_data
 	(uint8_t *confuse_data, uint8_t *verify_data);
 static int marlin_bind_verify(void)
@@ -2379,7 +2379,7 @@ static int marlin_bind_verify(void)
 
 	return ret;
 }
-#endif
+// #endif
 
 static int check_cp_ready(void)
 {
@@ -2404,7 +2404,7 @@ static int check_cp_ready(void)
 				marlin_dev->sync_f.prj_type);
 		if (marlin_dev->sync_f.init_status == SYNC_ALL_FINISHED)
 			i = 0;
-#ifdef CONFIG_AW_BIND_VERIFY
+// #ifdef CONFIG_AW_BIND_VERIFY
 		else if (marlin_dev->sync_f.init_status ==
 			SYNC_VERIFY_WAITING) {
 			ret = marlin_bind_verify();
@@ -2414,7 +2414,7 @@ static int check_cp_ready(void)
 				return ret;
 			}
 		}
-#endif
+// #endif
 		else
 			msleep(20);
 		if (i > 10)
