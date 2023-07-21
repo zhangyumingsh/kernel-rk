@@ -2338,6 +2338,7 @@ static int marlin_start_run(void)
 // 	(uint8_t *confuse_data, uint8_t *verify_data);
 
 #include <crypto/sha.h>
+#include <crypto/sha256_base.h>
 
 static void expand_seed(uint8_t *seed, uint8_t *out)
 {
