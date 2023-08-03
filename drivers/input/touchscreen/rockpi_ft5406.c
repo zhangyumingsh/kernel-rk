@@ -183,7 +183,7 @@ static void fts_report_value(struct rockpi_ft5406_data *ts_data)
 	input_sync(ts_data->input_dev);
 }
 
-extern int rockpi_mcu_is_connected(void);
+//extern int rockpi_mcu_is_connected(void);
 
 static void rockpi_ft5406_work(struct work_struct *work)
 {
@@ -237,10 +237,10 @@ static int rockpi_ft5406_probe(struct i2c_client *client,
 	ts_data->client = client;
 	i2c_set_clientdata(client, ts_data);
 
-	if (!rockpi_mcu_is_connected()) {
-		ret = -EPROBE_DEFER;
-		goto input_allocate_failed;
-	}
+	//if (!rockpi_mcu_is_connected()) {
+	//	ret = -EPROBE_DEFER;
+	//	goto input_allocate_failed;
+	//}
 
 	input_dev = input_allocate_device();
 	if (!input_dev) {
