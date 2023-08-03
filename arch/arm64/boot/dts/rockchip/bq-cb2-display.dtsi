@@ -105,12 +105,12 @@
 		status = "okay";
     };
 	ft5x06_ts@38 { /*触屏地址0x38*/
-		compatible = "edt,edt-ft5x06", "ft5x06";
+		compatible = "rockpi_ft5406", "ft5x06";
 		reg = <0x38>;
-		interrupt-parent = <&gpio0>;
-		interrupts = <13 IRQ_TYPE_LEVEL_LOW>;
-		power-domains = <&power RK3568_PD_VI>;
-		reset-gpios = <&gpio0 RK_PB6 GPIO_ACTIVE_LOW>;
+		//interrupt-parent = <&gpio0>;
+		//interrupts = <13 IRQ_TYPE_LEVEL_LOW>;
+		//power-domains = <&power RK3568_PD_VI>;
+		//reset-gpios = <&gpio0 RK_PB6 GPIO_ACTIVE_LOW>;
 		touchscreen-size-x = < 800 >;
 		touchscreen-size-y = < 480 >;
 		status = "okay";
