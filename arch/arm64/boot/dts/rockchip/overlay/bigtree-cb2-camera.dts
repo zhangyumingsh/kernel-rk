@@ -8,6 +8,7 @@
 
 / {	
 	compatible = "rockchip,rk3568";
+	
 	fragment@0 {
 		target = <&csi2_dphy_hw>;
 		
@@ -17,77 +18,23 @@
 	};
 	
 	fragment@1 {
-		target = <&csi2_dphy0>;
+		target = <&rkisp>;
 		
 		__overlay__ {
-			status = "okay";
-			ports {
-				#address-cells = <1>;
-				#size-cells = <0>;
-		
-				port@0 {
-					reg = <0>;
-					#address-cells = <1>;
-					#size-cells = <0>;
-		
-					mipi_in_ucam0: endpoint@1 {
-						reg = <1>;
-						remote-endpoint = <&ov5647_out>;
-						data-lanes = <1 2>;
-					};
-		
-				};
-		
-				port@1 {
-					reg = <1>;
-					#address-cells = <1>;
-					#size-cells = <0>;
-		
-					dphy0_out: endpoint@1 {
-						reg = <1>;
-						remote-endpoint = <&isp0_in>;
-					};
-				};
-			};
-		
+			status = "okay";		
 		};
 	};
 	
 	fragment@2 {
-		target = <&rkisp_vir0>;
+		target = <&rkisp_mmu>;
 		
 		__overlay__ {
 			
 			status = "okay";
-			port {
-				#address-cells = <1>;
-				#size-cells = <0>;
-		
-				isp0_in: endpoint@0 {
-					reg = <0>;
-					remote-endpoint = <&dphy0_out>;
-				};
-			};			
-		};
+			};
 	};
 	
 	fragment@3 {
-		target = <&csi2_dphy_hw>;
-		
-		__overlay__ {
-			status = "okay";
-		};
-	};
-	
-	fragment@4 {
-		target = <&rkisp_mmu>;
-		
-		__overlay__ {
-			status = "okay";
-		};
-	};
-	
-	fragment@5 {
 		target = <&rkcif_mmu>;
 		
 		__overlay__ {
@@ -95,44 +42,26 @@
 		};
 	};
 	
-	fragment@6 {
+	fragment@4 {
 		target = <&rkcif>;
 		
 		__overlay__ {
-			status = "okay";
+			status = "okay";		
 		};
 	};
 	
-	fragment@7 {
+	fragment@5 {
 		target = <&i2c2>;
 		
 		__overlay__ {
+			
 			status = "okay";
-			pinctrl-names = "default";
-			clock-frequency = <100000>;
-			pinctrl-0 = <&i2c2m1_xfer>;
-			avdd-1v8-supply = <&vcca1v8_image>;
-			avdd-0v9-supply = <&vdda0v9_image>;
-			//power-domains = <&power RK3568_PD_VI>;
-			#address-cells = <1>;
-			#size-cells = <0>;
 			ov5647@36 {
 				status = "okay";
-				compatible = "ovti,ov5647";
-				reg = <0x36>;
-				clocks = <&ext_cam_clk>;
-				clock-names = "ext_cam_ov5647_clk";
-				//power-domains = <&power RK3568_PD_VI>;
-				pwdn-gpios = <&gpio3 RK_PC3 GPIO_ACTIVE_LOW>;
-				port {
-					ov5647_out: endpoint {
-						remote-endpoint =<&mipi_in_ucam0>;//split:dphy1_in full: mipi_in_ucam0
-						data-lanes = <1 2>;
-					};
-				};
+	       
 			};
-					
 		};
+
 	};
-	
+		
 };
