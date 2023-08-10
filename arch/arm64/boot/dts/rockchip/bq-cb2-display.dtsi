@@ -4,56 +4,19 @@
  *
  */
 
-&route_dsi0 {
-    status = "disabled";//"okay";
-    connect = <&vp0_out_dsi0>;
-};
-
-&video_phy0 {
-    status = "disabled";//"okay";
-};
-
-&dsi0_in_vp0 {
-    status = "disabled";//"okay";
-};
-
-&dsi0_in_vp1 {
-    status = "disabled";
-};
-
 &route_dsi1 {
-    status = "okay";//"disabled";
+    status = "disabled"; //"okay";
     connect = <&vp0_out_dsi1>;
 };
 
 &video_phy1 {
-    status = "okay";//"disabled";
-};
-
-&dsi1_in_vp0 {
-    status = "okay";//"disabled";
+    status = "okay";  //"disabled";
 };
 
 &dsi1_in_vp1 {
-    status = "disabled";
+    status = "disabled";//"disabled";  "okay";
 };
 
-&route_hdmi {
-	status = "disabled";//"okay";//"disabled";
-	connect = <&vp1_out_hdmi>;
-};
-
-&hdmi {
-	status = "disabled";//;"okay"
-};
-
-&hdmi_in_vp0 {
-	status = "disabled";
-};
-
-&hdmi_in_vp1 {
-	status = "disabled";//"okay";//"disabled";
-};
 
 &dsi1 {
     status = "okay";
@@ -113,7 +76,7 @@
 		//reset-gpios = <&gpio0 RK_PB6 GPIO_ACTIVE_LOW>;
 		touchscreen-size-x = < 800 >;
 		touchscreen-size-y = < 480 >;
-		status = "okay";
+		status = "disabled"; //status = "okay";
 	};	
 };
 

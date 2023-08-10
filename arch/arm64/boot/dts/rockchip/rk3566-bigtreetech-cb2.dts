@@ -19,8 +19,8 @@
 #include "rk3568.dtsi"
 #include "bq-cb2-display.dtsi"
 #include "bq-cb2-camera.dtsi"
-/* #include "bq-cb2-hdmi.dtsi"
- */
+#include "bq-cb2-hdmi.dtsi"
+ 
 
 / {
 
@@ -1063,7 +1063,7 @@ sd_vcc3v3_power: sd-vcc3v3-power {
 };
 
 &spi1 {
-	status = "okay";
+	status = "disabled";
 	max-freq = <10000000>;
 	#address-cells = <1>;
 	#size-cells = <0>;
@@ -1071,7 +1071,7 @@ sd_vcc3v3_power: sd-vcc3v3-power {
 			<&gpio2 RK_PC0 GPIO_ACTIVE_LOW>,
 			<&gpio2 RK_PC6 GPIO_ACTIVE_LOW>;
 	can_mcp2515: can-mcp2515@0 {
-		status = "okay";
+		status = "disabled";
 		compatible = "microchip,mcp2515";
 		reg = <0>;
 		interrupt-parent = <&gpio2>;
@@ -1085,7 +1085,7 @@ sd_vcc3v3_power: sd-vcc3v3-power {
 	};
 
 	tft_35: st7789v@1 {
-		status = "okay";
+		status = "disabled";
 		compatible = "sitronix,st7796s";
 		reg = <1>;
 		spi-max-frequency =<12500000>;
