@@ -5,7 +5,7 @@
  */
 //#full
 &csi2_dphy_hw {
-	status = "disabled";
+	status = "okay";
 };
 
 &csi2_dphy0 {
@@ -56,19 +56,19 @@
 };
 
 &rkisp {
-	status = "disabled";
+	status = "okay";
 };
 
 &rkisp_mmu {
-	status = "disabled";
+	status = "okay";
 };
 
 &rkcif_mmu {
-	status = "disabled";
+	status = "okay";
 };
 
 &rkcif {
-	status = "disabled";
+	status = "okay";
 };
 
 &i2c2 {
@@ -82,7 +82,7 @@
 	#address-cells = <1>;
 	#size-cells = <0>;
 	ov5647@36 {
-		status = "disabled";
+		status = "okay";
 		compatible = "ovti,ov5647";
 		reg = <0x36>;
 		clocks = <&ext_cam_clk>;
