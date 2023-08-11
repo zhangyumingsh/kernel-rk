@@ -6,7 +6,7 @@
 
 
 &hdmi {
-	status = "okay";
+	status = "disabled"; //"okay";  		 +1
 };
 
 &hdmi_in_vp1 {
@@ -14,7 +14,11 @@
 };
 
 &hdmi_in_vp0 {
-	status = "okay";
+	status = "disabled"; //status = "okay";  +2
+};
+
+&dsi1_in_vp0 {
+	status = "disabled"; //status = "okay";
 };
 
 // &hdmi_sound {
@@ -22,5 +26,7 @@
 // };
 &route_hdmi {
 	status = "okay";
-	connect = <&vp0_out_hdmi>;
+	connect = <&vp0_out_hdmi>;              //+3
 };
+
+

@@ -22,45 +22,45 @@
 };
 
 &route_dsi1 {
-    status = "okay";//"disabled";
+    status = "disabled"; // //  "okay";          +0
     connect = <&vp1_out_dsi1>;
 };
 
 &video_phy1 {
-    status = "okay";//"disabled";
+    status = "disabled";  // "okay";            +1
 };
 
 &dsi1_in_vp0 {
-    status = "disabled"; // "okay";
+    status = "disabled"; 
 };
 
 &dsi1_in_vp1 {
-    status = "okay"; //"disabled";
+    status = "disabled"; //status = "okay";     +2
 };
 
-&route_hdmi {
-	status = "disabled";//"okay";//"disabled";
-	connect = <&vp1_out_hdmi>;
-};
+//&route_hdmi {
+//	status = "disabled";//"okay";//"disabled";
+//	connect = <&vp1_out_hdmi>;
+//};
+//
+//&hdmi {
+//	status = "disabled";//;"okay"
+//};
+//
+//&hdmi_in_vp0 {
+//	status = "disabled";
+//};
 
-&hdmi {
-	status = "disabled";//;"okay"
-};
-
-&hdmi_in_vp0 {
+&hdmi_in_vp1 {
 	status = "disabled";
 };
 
-&hdmi_in_vp1 {
-	status = "disabled";//"okay";//"disabled";
-};
-
 &dsi1 {
-    status = "okay";
+    status = "disabled";   //"disabled";                                       
 	dsi1_panel: dsi-panel@0 {
 				compatible = "raspits,tc358762";
 				reg = <0x0>;
-				status = "okay";
+				status = "okay"; //"disabled";
 
 				ports {
 					#address-cells = <1>;
@@ -69,7 +69,8 @@
 					port@0 {
 						reg = <0>;
 						panel_in_dsi1: endpoint {
-							remote-endpoint = <&dsi1_out_bridge>;
+							remote-endpoint = <&dsi1_out_bridge>;    //+3
+							status = "disabled";  //status ="okay";
 						};
 					};
 				};
