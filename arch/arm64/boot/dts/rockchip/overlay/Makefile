@@ -3,24 +3,27 @@ dtbo-$(CONFIG_ARCH_ROCKCHIP) += \
 	rk3566-bigtree-cb2-hdmi.dtbo \
 	rk3566-bigtree-cb2-camera.dtbo \
 	rk3566-bigtree-cb2-display.dtbo \
-	rk3566-bigtree-cb2-spi-display.dtbo \
 	rk3566-bigtree-cb2-i2c1.dtbo \
 	rk3566-bigtree-cb2-i2c3.dtbo \
-	rk3566-bigtree-cb2-i2c4.dtbo 
-	#rk3566-bigtree-cb2-mcp2515.dtbo \
-	#rk3566-bigtree-cb2-pwm0.dtbo \
-	#rk3566-bigtree-cb2-pwm1.dtbo \
-	#rk3566-bigtree-cb2-pwm2.dtbo \
-	#rk3566-bigtree-cb2-pwm4.dtbo \
-	#rk3566-bigtree-cb2-pwm5.dtbo \
-	#rk3566-bigtree-cb2-spi1.dtbo \
-	#rk3566-bigtree-cb2-spi2.dtbo \
-	#rk3566-bigtree-cb2-tft_35.dtbo \
-	#rk3566-bigtree-cb2-uart0.dtbo \
-	#rk3566-bigtree-cb2-uart1.dtbo \
-	#rk3566-bigtree-cb2-uart2.dtbo \
-	#rk3566-bigtree-cb2-uart3.dtbo \
-	#rk3566-bigtree-cb2-uart8.dtbo 
+	rk3566-bigtree-cb2-i2c4.dtbo \
+	rk3566-bigtree-cb2-mcp2515.dtbo \
+	rk3566-bigtree-cb2-pwm0.dtbo \
+	rk3566-bigtree-cb2-pwm1.dtbo \
+	rk3566-bigtree-cb2-pwm2.dtbo \
+	rk3566-bigtree-cb2-pwm4.dtbo \
+	rk3566-bigtree-cb2-pwm5.dtbo \
+	rk3566-bigtree-cb2-pwm12.dtbo \
+	rk3566-bigtree-cb2-pwm14.dtbo \
+	rk3566-bigtree-cb2-pwm15.dtbo \
+	rk3566-bigtree-cb2-spi1.dtbo \
+	rk3566-bigtree-cb2-spi3.dtbo \
+	rk3566-bigtree-cb2-tft_35.dtbo \
+	rk3566-bigtree-cb2-uart0.dtbo \
+	rk3566-bigtree-cb2-uart1.dtbo \
+	rk3566-bigtree-cb2-uart3.dtbo \
+	rk3566-bigtree-cb2-uart5.dtbo \
+	rk3566-bigtree-cb2-uart7.dtbo 
+	
 	
 	
 	# \

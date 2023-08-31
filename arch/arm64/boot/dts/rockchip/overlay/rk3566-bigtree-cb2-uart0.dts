@@ -12,10 +12,10 @@
 
 		__overlay__ {
 			pinctrl-names = "default";
-			pinctrl-0 = <&uart0_xfer &uart0m0_ctsn>;
+			pinctrl-0 = <&uart0_xfer>;
 			status = "okay";
 		
 		};
 	};
-		
-};
+	
+};	

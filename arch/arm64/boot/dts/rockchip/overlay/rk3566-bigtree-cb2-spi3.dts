@@ -9,11 +9,11 @@
 / {
 		
 	fragment@0 {
-		target = <&spi1>;
+		target = <&spi3>;
 
 		__overlay__ {
 			status = "okay";
-			pinctrl-0=<&spi1m1_pins>;
+			pinctrl-0=<&spi3m1_pins>;
 		};
 	};
 

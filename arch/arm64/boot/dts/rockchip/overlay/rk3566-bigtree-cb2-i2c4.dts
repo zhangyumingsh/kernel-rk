@@ -16,6 +16,5 @@
 			pinctrl-names = "default";
 			pinctrl-0 = <&i2c4m0_xfer>;
 		};
-	};
-		
+	};	
 };

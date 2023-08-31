@@ -10,7 +10,7 @@
 	compatible = "rockchip,rk3568";
 	
 	fragment@0 {
-		target = <&csi2_dphy_hw>;
+		target = <&rkisp>;
 		
 		__overlay__ {
 			status = "okay";
@@ -18,31 +18,6 @@
 	};
 	
 	fragment@1 {
-		target = <&rkisp>;
-		
-		__overlay__ {
-			status = "okay";		
-		};
-	};
-	
-	fragment@2 {
-		target = <&rkisp_mmu>;
-		
-		__overlay__ {
-			
-			status = "okay";
-			};
-	};
-	
-	fragment@3 {
-		target = <&rkcif_mmu>;
-		
-		__overlay__ {
-			status = "okay";
-		};
-	};
-	
-	fragment@4 {
 		target = <&rkcif>;
 		
 		__overlay__ {
@@ -50,18 +25,13 @@
 		};
 	};
 	
-	fragment@5 {
-		target = <&i2c2>;
+	fragment@2 {
+		target = <&ov5647>;
 		
 		__overlay__ {
 			
 			status = "okay";
-			ov5647@36 {
-				status = "okay";
-	       
 			};
-		};
-
 	};
-		
+			
 };
