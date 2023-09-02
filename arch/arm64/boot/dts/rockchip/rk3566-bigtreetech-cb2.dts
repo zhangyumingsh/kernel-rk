@@ -114,11 +114,40 @@
 	vcc5v0_host: vcc5v0-host-regulator {
 		compatible = "regulator-fixed";
 		enable-active-high;
-		gpio = <&gpio0 RK_PD6 GPIO_ACTIVE_HIGH>;
+		gpio = <&gpio0 RK_PB6 GPIO_ACTIVE_HIGH>,<&gpio4 RK_PC5 GPIO_ACTIVE_HIGH>,<&gpio4 RK_PC6 GPIO_ACTIVE_HIGH>;
 		pinctrl-names = "default";
-		pinctrl-0 = <&vcc5v0_host_en>;
+		//pinctrl-0 = <&vcc5v0_host_en>;
+		pinctrl-0 = <&vcc5v0_host_vbus_en>;
 		regulator-name = "vcc5v0_host";
+		regulator-boot-on;
 		regulator-always-on;
+		
+	};
+	
+	vcc5v0_host2: vcc5v0-host2-regulator {
+		compatible = "regulator-fixed";
+		enable-active-high;
+		gpio = <&gpio4 RK_PC5 GPIO_ACTIVE_HIGH>;
+		pinctrl-names = "default";
+		//pinctrl-0 = <&vcc5v0_host_en>;
+		pinctrl-0 = <&vcc5v0_host2_vbus_en>;
+		regulator-name = "vcc5v0_host";
+		regulator-boot-on;
+		regulator-always-on;
+		
+	};
+	
+	vcc5v0_host3: vcc5v0-host3-regulator {
+		compatible = "regulator-fixed";
+		enable-active-high;
+		gpio = <&gpio4 RK_PC6 GPIO_ACTIVE_HIGH>;
+		pinctrl-names = "default";
+		//pinctrl-0 = <&vcc5v0_host_en>;
+		pinctrl-0 = <&vcc5v0_host3_vbus_en>;
+		regulator-name = "vcc5v0_host";
+		regulator-boot-on;
+		regulator-always-on;
+		
 	};
 
 	vcc5v0_otg: vcc5v0-otg-regulator {
@@ -255,16 +284,16 @@
 			* - SDIO_RESET_L_WL_REG_ON
 			* - PDN (power down when low)
 		*/
-		reset-gpios = <&gpio0 RK_PA5 GPIO_ACTIVE_LOW>;
+		reset-gpios = <&gpio2 RK_PB2 GPIO_ACTIVE_LOW>;//cb2-v2 <&gpio0 RK_PA5 GPIO_ACTIVE_LOW>;
 	};
 
 	wireless_wlan: wireless-wlan {
 		compatible = "wlan-platdata";
 		rockchip,grf = <&grf>;
-		wifi_chip_type = "rtl8733bs";
+		wifi_chip_type = "ap6398s";//"rtl8733bs";
 		pinctrl-names = "default";
 		pinctrl-0 = <&wifi_host_wake_irq>;
-		WIFI,host_wake_irq = <&gpio0 RK_PC5 GPIO_ACTIVE_HIGH>;//WIFI模块唤醒CPU的
+		WIFI,host_wake_irq = <&gpio2 RK_PB1 GPIO_ACTIVE_HIGH>;//WIFI模块唤醒CPU的 cb2-v2 <&gpio0 RK_PC5 GPIO_ACTIVE_HIGH>;
 		status = "okay";
 	};
 
@@ -280,9 +309,9 @@
 			&bt_poweren
 			&bt_host_wake_irq>;
 		pinctrl-1 = <&uart1_rts_gpio>;
-		BT,reset_gpio    = <&gpio4 RK_PA5 GPIO_ACTIVE_HIGH>;
-		BT,wake_gpio     = <&gpio4 RK_PA3 GPIO_ACTIVE_HIGH>;
-		BT,wake_host_irq = <&gpio3 RK_PD3 GPIO_ACTIVE_HIGH>;
+		BT,reset_gpio    = <&gpio2 RK_PB7 GPIO_ACTIVE_HIGH>;//cb2-v2 <&gpio4 RK_PA5 GPIO_ACTIVE_HIGH>;
+		BT,wake_gpio     = <&gpio2 RK_PC1 GPIO_ACTIVE_HIGH>;//cb2-v2 <&gpio4 RK_PA3 GPIO_ACTIVE_HIGH>;
+		BT,wake_host_irq = <&gpio2 RK_PC0 GPIO_ACTIVE_HIGH>;//cb2-v2 <&gpio3 RK_PD3 GPIO_ACTIVE_HIGH>;
 		status = "okay";
 	};
 
@@ -771,7 +800,7 @@ sd_vcc3v3_power: sd-vcc3v3-power {
 };
 
 &u2phy0_host {
-	phy-supply = <&vcc5v0_host>;
+	phy-supply = <&vcc5v0_host>,<&vcc5v0_host2>,<&vcc5v0_host3>;
 	status = "okay";
 };
 
@@ -905,11 +934,23 @@ sd_vcc3v3_power: sd-vcc3v3-power {
 	usb {
 
 		vcc5v0_otg_en: vcc5v0-otg-en {
-			rockchip,pins = <0 RK_PA5 RK_FUNC_GPIO &pcfg_pull_none>;
+			//rockchip,pins = <0 RK_PA5 RK_FUNC_GPIO &pcfg_pull_none>;
+			rockchip,pins = <0 RK_PB5 RK_FUNC_GPIO &pcfg_pull_none>;
 		};
 
 		vcc5v0_host_vbus_en: vcc5v0-host-en {
-			rockchip,pins = <0 RK_PA6 RK_FUNC_GPIO &pcfg_pull_none>;
+			//rockchip,pins = <0 RK_PA6 RK_FUNC_GPIO &pcfg_pull_none>;
+			rockchip,pins = <0 RK_PB6 RK_FUNC_GPIO &pcfg_pull_none>;
+		};
+		
+		vcc5v0_host2_vbus_en: vcc5v0-host2-en {
+			//rockchip,pins = <0 RK_PA6 RK_FUNC_GPIO &pcfg_pull_none>;
+			rockchip,pins = <4 RK_PC5 RK_FUNC_GPIO &pcfg_pull_none>;
+		};
+		
+		vcc5v0_host3_vbus_en: vcc5v0-host3-en {
+			//rockchip,pins = <0 RK_PA6 RK_FUNC_GPIO &pcfg_pull_none>;
+			rockchip,pins = <4 RK_PC6 RK_FUNC_GPIO &pcfg_pull_none>;
 		};
 	};
 
@@ -921,13 +962,13 @@ sd_vcc3v3_power: sd-vcc3v3-power {
 
 	sdio-pwrseq {
 		wifi_enable_h: wifi-enable-h {
-			rockchip,pins = <0 RK_PA5 RK_FUNC_GPIO &pcfg_pull_none>;
+			rockchip,pins =<2 RK_PB2 RK_FUNC_GPIO &pcfg_pull_none>;// cb2-v2 <0 RK_PA5 RK_FUNC_GPIO &pcfg_pull_none>;
 		};
 	};
 
 	wireless-wlan {
 		wifi_host_wake_irq: wifi-host-wake-irq {
-			rockchip,pins = <0 RK_PC5 RK_FUNC_GPIO &pcfg_pull_down>;
+			rockchip,pins = <2 RK_PB1 RK_FUNC_GPIO &pcfg_pull_down>;//cb2-v2 <0 RK_PC5 RK_FUNC_GPIO &pcfg_pull_down>;
 		};
 	};
 
@@ -1192,11 +1233,12 @@ sd_vcc3v3_power: sd-vcc3v3-power {
 /delete-node/ &qos_pcie3x2;
 /delete-node/ &qos_sata2;
 /delete-node/ &sata2;
-&vcc5v0_host {
-    gpio = <&gpio0 RK_PA6 GPIO_ACTIVE_HIGH>;
-    pinctrl-names = "default";
-    pinctrl-0 = <&vcc5v0_host_vbus_en>;
-};
+//&vcc5v0_host {
+//    gpio = <&gpio0 RK_PB6 GPIO_ACTIVE_HIGH>;
+//    pinctrl-names = "default";
+//    pinctrl-0 = <&vcc5v0_host_vbus_en>;
+//	status = "okay";
+//};
 
 &vcc5v0_otg {
 	status = "disabled";
@@ -1277,7 +1319,7 @@ sd_vcc3v3_power: sd-vcc3v3-power {
 		     &gmac1m0_rgmii_clk
 		     &gmac1m0_clkinout
 		     &gmac1m0_rgmii_bus>;
-	snps,reset-gpio = <&gpio4 RK_PC2 GPIO_ACTIVE_LOW>;
+	snps,reset-gpio = <&gpio0 RK_PC5 GPIO_ACTIVE_LOW>;
 	snps,reset-active-low;
 	/* Reset time is 20ms, 100ms for rtl8211f */
 	snps,reset-delays-us = <0 20000 100000>;
