@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: GPL-2.0
 dtbo-$(CONFIG_ARCH_ROCKCHIP) += \
 	rk3566-bigtree-cb2-hdmi.dtbo \
-	rk3566-bigtree-cb2-camera.dtbo \
-	rk3566-bigtree-cb2-display.dtbo \
+	rk3566-bigtree-cb2-csi.dtbo \
+	rk3566-bigtree-cb2-dsi.dtbo \
 	rk3566-bigtree-cb2-i2c1.dtbo \
 	rk3566-bigtree-cb2-i2c3.dtbo \
 	rk3566-bigtree-cb2-i2c4.dtbo \
