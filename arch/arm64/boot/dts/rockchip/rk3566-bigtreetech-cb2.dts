@@ -302,7 +302,7 @@
 		clocks = <&rk809 1>;
 		clock-names = "ext_clock";
 		//wifi-bt-power-toggle;
-		uart_rts_gpios = <&gpio4 RK_PA0 GPIO_ACTIVE_LOW>;
+		uart_rts_gpios =<&gpio2 RK_PB6 GPIO_ACTIVE_LOW>; //cb2-v2 <&gpio4 RK_PA0 GPIO_ACTIVE_LOW>;
 		pinctrl-names = "default", "rts_gpio";
 		pinctrl-0 = <&uart1m1_rtsn
 			&bt_host_wake_gpio
@@ -1000,17 +1000,26 @@ sd_vcc3v3_power: sd-vcc3v3-power {
 
     	wireless-bluetooth {
 		uart1_rts_gpio: uart1-rts-gpio {
-			rockchip,pins = <4  RK_PA0 RK_FUNC_GPIO &pcfg_pull_none>;
+			//rockchip,pins = <4  RK_PA0 RK_FUNC_GPIO &pcfg_pull_none>;
+			rockchip,pins = <2  RK_PB6 RK_FUNC_GPIO &pcfg_pull_none>;
 		};
+		
+		//BT,reset_gpio    = <&gpio2 RK_PB7 GPIO_ACTIVE_HIGH>;//cb2-v2 <&gpio4 RK_PA5 GPIO_ACTIVE_HIGH>;
+		//BT,wake_gpio     = <&gpio2 RK_PC1 GPIO_ACTIVE_HIGH>;//cb2-v2 <&gpio4 RK_PA3 GPIO_ACTIVE_HIGH>;
+		//BT,wake_host_irq = <&gpio2 RK_PC0 GPIO_ACTIVE_HIGH>;//cb2-v2 <&gpio3 RK_PD3 GPIO_ACTIVE_HIGH>;
+		
 
 		bt_host_wake_irq: bt-host-wake-irq {
-			rockchip,pins = <3 RK_PD3 RK_FUNC_GPIO &pcfg_pull_down>;
+			//rockchip,pins = <3 RK_PD3 RK_FUNC_GPIO &pcfg_pull_down>;
+			rockchip,pins = <2 RK_PC0 RK_FUNC_GPIO &pcfg_pull_down>;
 		};
 		bt_host_wake_gpio: bt-host-wake-gpio {
-			rockchip,pins = <4 RK_PA3 RK_FUNC_GPIO &pcfg_pull_down>;
+			//rockchip,pins = <4 RK_PA3 RK_FUNC_GPIO &pcfg_pull_down>;
+			rockchip,pins = <2 RK_PC1 RK_FUNC_GPIO &pcfg_pull_down>;
 		};
 		bt_poweren: bt-poweren {
-			rockchip,pins = <4 RK_PA5 RK_FUNC_GPIO &pcfg_pull_down>;
+			//rockchip,pins = <4 RK_PA5 RK_FUNC_GPIO &pcfg_pull_down>;
+			rockchip,pins = <2 RK_PB7 RK_FUNC_GPIO &pcfg_pull_down>;
 		};
     	};
 
