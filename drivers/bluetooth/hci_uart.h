@@ -92,30 +92,28 @@ struct hci_uart_proto {
 
 struct hci_uart {
 	struct tty_struct	*tty;
+	struct serdev_device	*serdev;
 	struct hci_dev		*hdev;
 	unsigned long		flags;
 	unsigned long		hdev_flags;
 
+	struct work_struct	init_ready;
 	struct work_struct	write_work;
-	struct workqueue_struct *hci_uart_wq;
 
-	struct hci_uart_proto	*proto;
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 7, 0)
-	struct percpu_rw_semaphore proto_lock; /* Stop work for proto close */
-#else
-	struct rw_semaphore proto_lock;
-#endif
+	const struct hci_uart_proto *proto;
+	struct percpu_rw_semaphore proto_lock;	/* Stop work for proto close */
 	void			*priv;
-
-	struct semaphore tx_sem;	/* semaphore for tx */
 
 	struct sk_buff		*tx_skb;
 	unsigned long		tx_state;
 
-#if WOBT_NOTIFY
-	struct notifier_block pm_notify_block;
-#endif
+	unsigned int init_speed;
+	unsigned int oper_speed;
+
+	u8			alignment;
+	u8			padding;
 };
+
 
 /* HCI_UART proto flag bits */
 #define HCI_UART_PROTO_SET	0
