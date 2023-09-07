@@ -1345,7 +1345,7 @@ sd_vcc3v3_power: sd-vcc3v3-power {
 
 &pcie30_3v3 {
 	status = "okay";
-	//gpios = <&gpio0 RK_PC4 GPIO_ACTIVE_HIGH>;
+	gpios = <&gpio4 RK_PB1 GPIO_ACTIVE_HIGH>;
 };
 
 &its {
