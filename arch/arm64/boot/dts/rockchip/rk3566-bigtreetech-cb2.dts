@@ -317,6 +317,9 @@
 	
 //	##############
 wireless_bluetooth: wireless-bluetooth {
+    compatible = "bluetooth-platdata";
+    clocks = <&rk809 1>;
+    clock-names = "ext_clock";
     uart_rts_gpios = <&gpio2 RK_PB5 GPIO_ACTIVE_LOW>;
     pinctrl-names = "default", "rts_gpio";
     pinctrl-0 = <&uart1m0_rtsn
