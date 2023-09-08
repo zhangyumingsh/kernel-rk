@@ -328,8 +328,8 @@ wireless_bluetooth: wireless-bluetooth {
         &bt_host_wake_irq>;
     pinctrl-1 = <&uart1_rts_gpio>;
     BT,reset_gpio    = <&gpio2 RK_PB7 GPIO_ACTIVE_HIGH>;
-    BT,wake_gpio     = <&gpio2 RK_PC0 GPIO_ACTIVE_HIGH>;
-    BT,wake_host_irq = <&gpio2 RK_PC1 GPIO_ACTIVE_HIGH>;
+    BT,wake_gpio     = <&gpio2 RK_PC1 GPIO_ACTIVE_HIGH>;
+    BT,wake_host_irq = <&gpio2 RK_PC0 GPIO_ACTIVE_HIGH>;
     status = "okay";
 };
 	
@@ -1043,10 +1043,10 @@ sd_vcc3v3_power: sd-vcc3v3-power {
         };
 
         bt_host_wake_irq: bt-host-wake-irq {
-            rockchip,pins = <2 RK_PC1 RK_FUNC_GPIO &pcfg_pull_down>;
+            rockchip,pins = <2 RK_PC0 RK_FUNC_GPIO &pcfg_pull_down>;
         };
         bt_host_wake_gpio: bt-host-wake-gpio {
-            rockchip,pins = <2 RK_PC0 RK_FUNC_GPIO &pcfg_pull_down>;
+            rockchip,pins = <2 RK_PC1 RK_FUNC_GPIO &pcfg_pull_down>;
         };
         bt_poweren: bt-poweren {
             rockchip,pins = <2 RK_PB7 RK_FUNC_GPIO &pcfg_pull_down>;
