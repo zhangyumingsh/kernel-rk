@@ -18,7 +18,7 @@
 #include <dt-bindings/sensor-dev.h>
 #include "rk3568.dtsi"
 #include "bq-cb2-display.dtsi"
-#include "bq-cb2-camera.dtsi"
+//#include "bq-cb2-camera.dtsi"
 #include "bq-cb2-hdmi.dtsi"
  
 
@@ -42,21 +42,21 @@
 		regulator-min-microvolt = <12000000>;
 		regulator-max-microvolt = <12000000>;
 	};
-
-	rk809_sound: rk809-sound {
+	
+	rk809_sound: rk809-sound  {
 		status = "okay";
 		compatible = "simple-audio-card";
 		simple-audio-card,format = "i2s";
 		simple-audio-card,name = "rockchip,rk809-codec";
 		simple-audio-card,mclk-fs = <256>;
 		simple-audio-card,widgets =
-                        "Microphone", "Mic Jack",
-                        "Headphone", "Headphone Jack";
-        simple-audio-card,routing =
-                        "Mic Jack", "MICBIAS1",
-                        "IN1P", "Mic Jack",
-                        "Headphone Jack", "HPOL",
-                        "Headphone Jack", "HPOR";
+		"Microphone", "Mic Jack",
+		"Headphone", "Headphone Jack";
+		simple-audio-card,routing =
+		"Mic Jack", "MICBIAS1",
+		"IN1R", "Mic Jack",
+		"Headphone Jack", "HPOL",
+		"Headphone Jack", "HPOR";
 		simple-audio-card,cpu {
 			sound-dai = <&i2s1_8ch>;
 		};
@@ -64,7 +64,29 @@
 			sound-dai = <&rk809_codec>;
 		};
 	};
+	
+	bt-sound {
+	
+		compatible = "simple-audio-card";
+		simple-audio-card,format = "dsp_b";
+		simple-audio-card,bitclock-inversion = <1>;
+		simple-audio-card,mclk-fs = <256>;
+		simple-audio-card,name = "rockchip,bt";
+		simple-audio-card,cpu {
+			sound-dai = <&i2s2_2ch>; 
 
+		};
+		simple-audio-card,codec {
+			sound-dai = <&bt_sco>;
+		};
+	};
+	
+	bt_sco: bt-sco {
+		compatible = "delta,dfbmcs320";
+		#sound-dai-cells = <0>;
+		status = "okay";
+	};
+	
 	spdif-sound {
 		status = "okay";
 		compatible = "simple-audio-card";
@@ -194,21 +216,13 @@
 			<0x0 0xfd90e000 0x0 0x1000>,
 			<0x0 0xfd90f000 0x0 0x1000>;
 	};
-
-	rk809_sound: rk809-sound {
-		status = "okay";
-		compatible = "simple-audio-card";
-		simple-audio-card,format = "i2s";
-		simple-audio-card,hp-det-gpio = <&gpio3 RK_PC2 GPIO_ACTIVE_HIGH>;
-		simple-audio-card,name = "rockchip,rk809-codec";
-		simple-audio-card,widgets = "Headphones", "Headphones Jack";
-		simple-audio-card,mclk-fs = <256>;
-		simple-audio-card,cpu {
-			sound-dai = <&i2s1_8ch>;
-		};
-		simple-audio-card,codec {
-			sound-dai = <&rk809_codec>;
-		};
+	
+	rk_headset: rk-headset {
+		compatible = "rockchip_headset";
+		headset_gpio = <&gpio0 RK_PC6 GPIO_ACTIVE_HIGH>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&hp_det>;
+		io-channels = <&saradc 3>;	//HP_HOOK
 	};
 
 	vcc2v5_sys: vcc2v5-ddr {
@@ -296,24 +310,6 @@
 		WIFI,host_wake_irq = <&gpio2 RK_PB1 GPIO_ACTIVE_HIGH>;//WIFI模块唤醒CPU的 cb2-v2 <&gpio0 RK_PC5 GPIO_ACTIVE_HIGH>;
 		status = "okay";
 	};
-
-//	wireless_bluetooth: wireless-bluetooth {
-//		compatible = "bluetooth-platdata";
-//		clocks = <&rk809 1>;
-//		clock-names = "ext_clock";
-//		//wifi-bt-power-toggle;
-//		uart_rts_gpios =<&gpio2 RK_PB6 GPIO_ACTIVE_LOW>; //cb2-v2 <&gpio4 RK_PA0 GPIO_ACTIVE_LOW>;
-//		pinctrl-names = "default", "rts_gpio";
-//		pinctrl-0 = <&uart1m0_rtsn
-//			&bt_host_wake_gpio
-//			&bt_poweren
-//			&bt_host_wake_irq>;
-//		pinctrl-1 = <&uart1_rts_gpio>;
-//		BT,reset_gpio    = <&gpio2 RK_PB7 GPIO_ACTIVE_HIGH>;//cb2-v2 <&gpio4 RK_PA5 GPIO_ACTIVE_HIGH>;
-//		BT,wake_gpio     = <&gpio2 RK_PC1 GPIO_ACTIVE_HIGH>;//cb2-v2 <&gpio4 RK_PA3 GPIO_ACTIVE_HIGH>;
-//		BT,wake_host_irq = <&gpio2 RK_PC0 GPIO_ACTIVE_HIGH>;//cb2-v2 <&gpio3 RK_PD3 GPIO_ACTIVE_HIGH>;
-//		status = "okay";
-//	};
 	
 //	##############
 wireless_bluetooth: wireless-bluetooth {
@@ -377,6 +373,11 @@ sd_vcc3v3_power: sd-vcc3v3-power {
 
 };
 
+&i2s2_2ch {
+	#sound-dai-cells = <0>;
+	status = "okay";
+};
+
 &cpu0 {
 	cpu-supply = <&vdd_cpu>;
 };
@@ -419,7 +420,7 @@ sd_vcc3v3_power: sd-vcc3v3-power {
 		compatible = "rockchip,rk809";
 		reg = <0x20>;
 		interrupt-parent = <&gpio0>;
-		interrupts = <3 IRQ_TYPE_LEVEL_LOW>;
+		interrupts = <22 IRQ_TYPE_LEVEL_LOW>;
 
 		pinctrl-names = "default", "pmic-sleep",
 				"pmic-power-off", "pmic-reset";
@@ -661,7 +662,7 @@ sd_vcc3v3_power: sd-vcc3v3-power {
 				};
 			};
 		};
-
+		
 		rk809_codec: codec {
 			#sound-dai-cells = <0>;
 			compatible = "rockchip,rk809-codec", "rockchip,rk817-codec";
@@ -670,19 +671,15 @@ sd_vcc3v3_power: sd-vcc3v3-power {
 			assigned-clocks = <&cru I2S1_MCLKOUT>, <&cru I2S1_MCLK_TX_IOE>;
 			assigned-clock-rates = <12288000>;
 			assigned-clock-parents = <&cru I2S1_MCLKOUT_TX>, <&cru I2S1_MCLKOUT_TX>;
-			pinctrl-names = "default","spk_gpio";
+			pinctrl-names = "default";
 			pinctrl-0 = <&i2s1m0_mclk>;
-			pinctrl-1 = <&spk_ctl_gpio>;
 			hp-volume = <20>;
 			spk-volume = <3>;
-			//mic-in-differential;
-
-			capture-volume = <0>;
-			io-channels = <&saradc 4>;
-			hp-det-adc-value = <1000>;
-			spk-ctl-gpios = <&gpio3 RK_PC5 GPIO_ACTIVE_HIGH>;
+			mic-in-differential;
 			status = "okay";
 		};
+		
+		
 	};
 };
 
@@ -975,7 +972,7 @@ sd_vcc3v3_power: sd-vcc3v3-power {
 
 	headphone {
 		hp_det: hp-det {
-			rockchip,pins = <3 RK_PC2 RK_FUNC_GPIO &pcfg_pull_down>;
+			rockchip,pins = <0 RK_PC6 RK_FUNC_GPIO &pcfg_pull_down>;
 		};
 	};
 
@@ -990,12 +987,6 @@ sd_vcc3v3_power: sd-vcc3v3-power {
 			rockchip,pins = <2 RK_PB1 RK_FUNC_GPIO &pcfg_pull_down>;//cb2-v2 <0 RK_PC5 RK_FUNC_GPIO &pcfg_pull_down>;
 		};
 	};
-
-	// wireless-bluetooth {
-	// 	uart8_gpios: uart8-gpios {
-	// 		rockchip,pins = <2 RK_PB1 RK_FUNC_GPIO &pcfg_pull_none>;
-	// 	};
-	// };
 
 	touch {
 		touch_gpio: touch-gpio {
@@ -1017,26 +1008,6 @@ sd_vcc3v3_power: sd-vcc3v3-power {
 		};
 	};
 
-//   wireless-bluetooth {
-//		uart1_rts_gpio: uart1-rts-gpio {
-//			//rockchip,pins = <4  RK_PA0 RK_FUNC_GPIO &pcfg_pull_none>;
-//			rockchip,pins = <2  RK_PB6 RK_FUNC_GPIO &pcfg_pull_none>;
-//		};
-//	
-//		bt_host_wake_irq: bt-host-wake-irq {
-//			//rockchip,pins = <3 RK_PD3 RK_FUNC_GPIO &pcfg_pull_down>;
-//			rockchip,pins = <2 RK_PC0 RK_FUNC_GPIO &pcfg_pull_down>;
-//		};
-//		bt_host_wake_gpio: bt-host-wake-gpio {
-//			//rockchip,pins = <4 RK_PA3 RK_FUNC_GPIO &pcfg_pull_down>;
-//			rockchip,pins = <2 RK_PC1 RK_FUNC_GPIO &pcfg_pull_down>;
-//		};
-//		bt_poweren: bt-poweren {
-//			//rockchip,pins = <4 RK_PA5 RK_FUNC_GPIO &pcfg_pull_down>;
-//			rockchip,pins = <2 RK_PB7 RK_FUNC_GPIO &pcfg_pull_down>;
-//		};
-//   };
-	
 	wireless-bluetooth {
         uart1_rts_gpio: uart1-rts-gpio {
             rockchip,pins = <2  RK_PB5 RK_FUNC_GPIO &pcfg_pull_none>;
@@ -1079,25 +1050,6 @@ sd_vcc3v3_power: sd-vcc3v3-power {
 	};
 };
 
-&rk809_codec {
-	#sound-dai-cells = <0>;
-	compatible = "rockchip,rk809-codec", "rockchip,rk817-codec";
-	clocks = <&cru I2S1_MCLKOUT>;
-	clock-names = "mclk";
-	assigned-clocks = <&cru I2S1_MCLKOUT>, <&cru I2S1_MCLK_TX_IOE>;
-	assigned-clock-rates = <12288000>;
-	assigned-clock-parents = <&cru I2S1_MCLKOUT_TX>, <&cru I2S1_MCLKOUT_TX>;
-	pinctrl-names = "default";
-	pinctrl-0 = <&i2s1m0_mclk>;
-    io-channels = <&saradc 3>;
-    hp-det-adc-value = <941>;
-    hp_adc_drift_scope = <20>;
-    board-spk-from-hp;
-	hp-volume = <20>;
-	spk-volume = <3>;
-	status = "okay";
-};
-
 &rng {
 	status = "okay";
 };
@@ -1126,10 +1078,6 @@ sd_vcc3v3_power: sd-vcc3v3-power {
 	reset-gpios = <&gpio2 RK_PD6 GPIO_ACTIVE_HIGH>;
 	vpcie3v3-supply = <&pcie30_3v3>;
 	status = "disabled";
-};
-
-&rk809_sound {
-	/delete-property/ simple-audio-card,hp-det-gpio;
 };
 
 &sata2 {
@@ -1273,12 +1221,6 @@ sd_vcc3v3_power: sd-vcc3v3-power {
 /delete-node/ &qos_pcie3x2;
 /delete-node/ &qos_sata2;
 /delete-node/ &sata2;
-//&vcc5v0_host {
-//    gpio = <&gpio0 RK_PB6 GPIO_ACTIVE_HIGH>;
-//    pinctrl-names = "default";
-//    pinctrl-0 = <&vcc5v0_host_vbus_en>;
-//	status = "okay";
-//};
 
 &vcc5v0_otg {
 	status = "disabled";
@@ -1319,11 +1261,7 @@ sd_vcc3v3_power: sd-vcc3v3-power {
 
 
 /* BT config */
-//&uart1 {
-//    pinctrl-names = "default";
-//    pinctrl-0 = <&uart1m0_xfer &uart1m0_ctsn>;
-//    status = "okay";
-//};
+
 &uart1 {
     pinctrl-names = "default";
     pinctrl-0 = <&uart1m0_xfer &uart1m0_ctsn>;
@@ -1379,5 +1317,99 @@ sd_vcc3v3_power: sd-vcc3v3-power {
 	yt8531c: ethernet-phy@0 {
 		compatible = "ethernet-phy-id4f51.e91b", "ethernet-phy-ieee802.3-c22";
 		reg = <0x0>;
+	};
+};
+
+&csi2_dphy_hw {
+	status = "okay";
+};
+
+&csi2_dphy0 {
+	status = "okay";
+
+	ports {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		port@0 {
+			reg = <0>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			mipi_in_ucam0: endpoint@1 {
+				reg = <1>;
+				remote-endpoint = <&ov5647_out>;
+				data-lanes = <1 2>;
+			};
+
+		};
+
+		port@1 {
+			reg = <1>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			dphy0_out: endpoint@1 {
+				reg = <1>;
+				remote-endpoint = <&isp0_in>;
+			};
+		};
+	};
+};
+
+&rkisp_vir0 {
+	status = "okay";
+
+	port {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		isp0_in: endpoint@0 {
+			reg = <0>;
+			remote-endpoint = <&dphy0_out>;
+		};
+	};
+};
+
+&rkisp {
+	status = "okay";
+};
+
+&rkisp_mmu {
+	status = "okay";
+};
+
+&rkcif_mmu {
+	status = "okay";
+};
+
+&rkcif {
+	status = "okay";
+};
+
+&i2c2 {
+	status = "okay";
+	pinctrl-names = "default";
+	clock-frequency = <100000>;
+	pinctrl-0 = <&i2c2m1_xfer>;
+	avdd-1v8-supply = <&vcca1v8_image>;
+	avdd-0v9-supply = <&vdda0v9_image>;
+	power-domains = <&power RK3568_PD_VI>;
+	#address-cells = <1>;
+	#size-cells = <0>;
+	ov5647@36 {
+		status = "okay";
+		compatible = "ovti,ov5647";
+		reg = <0x36>;
+		clocks = <&ext_cam_clk>;
+		clock-names = "ext_cam_ov5647_clk";
+		power-domains = <&power RK3568_PD_VI>;
+		pwdn-gpios = <&gpio4 RK_PA7 GPIO_ACTIVE_LOW>;
+		port {
+			ov5647_out: endpoint {
+				remote-endpoint =<&mipi_in_ucam0>;//split:dphy1_in full: mipi_in_ucam0
+                data-lanes = <1 2>;
+            };
+        };
 	};
 };
