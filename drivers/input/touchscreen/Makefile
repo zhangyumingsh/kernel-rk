@@ -130,4 +130,6 @@ obj-$(CONFIG_TOUCHSCREEN_FT5436)	+= focaltech_touch_ft5436/
 obj-$(CONFIG_TOUCHSCREEN_HX83102)   += hxchipset/
 obj-$(CONFIG_TOUCHSCREEN_CYPRESS_CYTTSP5) += cyttsp5/
 #obj-$(CONFIG_TOUCHSCREEN_ROCKPI_FT5406)	+= rockpi_ft5406.o
-obj-y	+= rockpi_ft5406.o
+#obj-y	+= rockpi_ft5406.o
+obj-y	+= raspits_ft5426.o
+
