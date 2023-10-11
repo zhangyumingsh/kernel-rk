@@ -181,11 +181,11 @@
 		regulator-name = "vcc5v0_otg";
 	};
 
-    gpio_demo: gpio_demo {
-        status = "disabled";
-        compatible = "biqu,rk356x-gpio";
-        biqu-gpio = <&gpio0 12 GPIO_ACTIVE_HIGH>;          /* GPIO0_B4 */
-        biqu-irq-gpio = <&gpio4 29 IRQ_TYPE_EDGE_RISING>;  /* GPIO4_D5 */
+    bq_usbpwrio: bq_usbpwrio {
+        status = "okay";
+        compatible = "rk356x,bigtreetech-usb_pwrio";
+		bq-usbotg-pwrio = <&gpio0 13 GPIO_ACTIVE_HIGH>;          /* GPIO0_B5 */
+        bq-usbhost3-pwrio = <&gpio4 20 GPIO_ACTIVE_HIGH>;          /* GPIO4_C4 */    
     };
 
 	fiq-debugger {
@@ -222,7 +222,7 @@
 		headset_gpio = <&gpio0 RK_PC6 GPIO_ACTIVE_HIGH>;
 		pinctrl-names = "default";
 		pinctrl-0 = <&hp_det>;
-		io-channels = <&saradc 3>;	//HP_HOOK
+		//io-channels = <&saradc 3>;	//HP_HOOK
 	};
 
 	vcc2v5_sys: vcc2v5-ddr {
@@ -779,10 +779,10 @@ sd_vcc3v3_power: sd-vcc3v3-power {
 	status = "okay";
 };
 
-&saradc {
-	status = "okay";
-	vref-supply = <&vcca_1v8>;
-};
+//&saradc {
+//	status = "okay";
+//	vref-supply = <&vcca_1v8>;
+//};
 
 &sdhci {
 	bus-width = <8>;
