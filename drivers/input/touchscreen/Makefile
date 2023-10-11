@@ -131,5 +131,5 @@ obj-$(CONFIG_TOUCHSCREEN_HX83102)   += hxchipset/
 obj-$(CONFIG_TOUCHSCREEN_CYPRESS_CYTTSP5) += cyttsp5/
 #obj-$(CONFIG_TOUCHSCREEN_ROCKPI_FT5406)	+= rockpi_ft5406.o
 #obj-y	+= rockpi_ft5406.o
-obj-$(CONFIG_TOUCHSCREEN_ROCKPI_FT5406)	+= raspits_ft5426.o
+obj-m	+= raspits_ft5426.o
 
