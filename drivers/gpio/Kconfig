@@ -1321,8 +1321,6 @@ config GPIO_BIGTREETECH_USBPWRIO
 	help
 		bigtree usb power io driver
 
-endif
-
 config GPIO_RDC321X
 	tristate "RDC R-321x GPIO support"
 	select MFD_CORE
