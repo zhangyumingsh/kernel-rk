@@ -1033,7 +1033,7 @@ sd_vcc3v3_power: sd-vcc3v3-power {
 
 	mcp2515_int_pin {
 		mcp2515_int_pin: mcp2515_int_pin {
-			rockchip,pins = <2 RK_PC5 RK_FUNC_GPIO &pcfg_pull_up>;
+			rockchip,pins = <4 RK_PA3 RK_FUNC_GPIO &pcfg_pull_up>;
 		};
 	};
 
@@ -1092,19 +1092,20 @@ sd_vcc3v3_power: sd-vcc3v3-power {
 };
 
 &spi1 {
-	status = "disabled";
+	status = "okay";
 	max-freq = <10000000>;
+	pinctrl-0=<&spi1m1_pins>;
 	#address-cells = <1>;
 	#size-cells = <0>;
-	cs-gpios = <&gpio2 RK_PC4 GPIO_ACTIVE_LOW>,
-			<&gpio2 RK_PC0 GPIO_ACTIVE_LOW>,
-			<&gpio2 RK_PC6 GPIO_ACTIVE_LOW>;
+	cs-gpios = <&gpio3 RK_PD5 GPIO_ACTIVE_LOW>,
+			<&gpio3 RK_PA1 GPIO_ACTIVE_LOW>,
+			<&gpio4 RK_PA2 GPIO_ACTIVE_LOW>;
 	can_mcp2515: can-mcp2515@0 {
-		status = "disabled";
+		status = "okay";
 		compatible = "microchip,mcp2515";
 		reg = <0>;
-		interrupt-parent = <&gpio2>;
-		interrupts = <RK_PC5 IRQ_TYPE_LEVEL_LOW>;
+		interrupt-parent = <&gpio4>;
+		interrupts = <RK_PA3 IRQ_TYPE_LEVEL_LOW>;
 		spi-max-frequency = <10000000>;
 		clocks = <&can_mcp2515_osc>;
 		vdd-supply = <&vcc3v3_sys>;
@@ -1114,7 +1115,7 @@ sd_vcc3v3_power: sd-vcc3v3-power {
 	};
 
 	tft_35: st7789v@1 {
-		status = "disabled";
+		status = "okay";
 		compatible = "sitronix,st7796s";
 		reg = <1>;
 		spi-max-frequency =<12500000>;
