@@ -1091,6 +1091,54 @@ sd_vcc3v3_power: sd-vcc3v3-power {
 	pinctrl-0 = <&spdifm1_tx>;
 };
 
+&pwm0 {
+	status = "disabled";
+	pinctrl-names = "default";
+	pinctrl-0 = <&pwm0m1_pins>;
+};
+
+&pwm1 {
+	status = "disabled";
+	pinctrl-0 = <&pwm1m0_pins>;
+	pinctrl-names = "default";	
+};
+
+&pwm2 {
+	status = "disabled";
+	pinctrl-0 = <&pwm2m0_pins>;
+	pinctrl-names = "default";	
+};
+
+&pwm4 {
+	status = "disabled";
+	pinctrl-names = "default";
+	pinctrl-0 = <&pwm4_pins>;
+};
+
+&pwm5 {
+	status = "disabled";
+	pinctrl-names = "default";
+	pinctrl-0 = <&pwm5_pins>;
+};
+
+&pwm12 {
+	status = "disabled";
+	pinctrl-names = "default";
+	pinctrl-0 = <&pwm12m1_pins>;
+};
+
+&pwm14 {
+	status = "disabled";
+	pinctrl-names = "default";
+	pinctrl-0 = <&pwm14m1_pins>;
+};
+
+&pwm15 {
+	status = "disabled";
+	pinctrl-names = "default";
+	pinctrl-0 = <&pwm15m1_pins>;
+};
+
 &spi1 {
 	status = "disabled";
 	max-freq = <10000000>;
@@ -1134,6 +1182,16 @@ sd_vcc3v3_power: sd-vcc3v3-power {
 		// dc-gpios  = <&pio 2 14 GPIO_ACTIVE_HIGH>; /* PC14 */
 		dc-gpios  = <&gpio0 RK_PC7 GPIO_ACTIVE_HIGH>;
 	};
+};
+
+&spi2 {
+	status = "disabled";
+	pinctrl-0=<&spi2m0_pins>;
+};
+
+&spi3 {
+	status = "disabled";
+	pinctrl-0=<&spi3m1_pins>;
 };
 
 &i2c3{
@@ -1260,6 +1318,11 @@ sd_vcc3v3_power: sd-vcc3v3-power {
     status = "disabled";
 };
 
+&uart0 {
+    pinctrl-names = "default";
+    pinctrl-0 = <&uart0_xfer>;
+    status = "disabled";
+};
 
 /* BT config */
 
@@ -1269,6 +1332,29 @@ sd_vcc3v3_power: sd-vcc3v3-power {
     status = "okay";
 };
 
+&uart3 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&uart3m0_xfer>;
+    status = "disabled";
+};
+
+&uart5 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&uart5m1_xfer>;
+    status = "disabled";
+};
+
+&uart7 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&uart7m2_xfer>;
+    status = "disabled";
+};
+
+&uart8 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&uart8m0_xfer &uart8m0_ctsn>;
+    status = "disabled";
+};
 
 &spk_ctl_gpio{
 	rockchip,pins = <0 RK_PA6 RK_FUNC_GPIO &pcfg_pull_up>;
@@ -1388,6 +1474,12 @@ sd_vcc3v3_power: sd-vcc3v3-power {
 	status = "okay";
 };
 
+&i2c1{
+	status = "disabled";
+	pinctrl-names = "default";
+	pinctrl-0 = <&i2c1_xfer>;
+};
+
 &i2c2 {
 	status = "okay";
 	pinctrl-names = "default";
@@ -1413,4 +1505,16 @@ sd_vcc3v3_power: sd-vcc3v3-power {
             };
         };
 	};
+};
+
+&i2c3{
+	status = "disabled";
+	pinctrl-names = "default";
+	pinctrl-0 = <&i2c3m0_xfer>;
+};
+
+&i2c4{
+	status = "disabled";
+	pinctrl-names = "default";
+	pinctrl-0 = <&i2c4m0_xfer>;
 };

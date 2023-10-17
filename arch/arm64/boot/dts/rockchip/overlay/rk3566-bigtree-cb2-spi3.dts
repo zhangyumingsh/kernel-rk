@@ -13,10 +13,6 @@
 
 		__overlay__ {
 			status = "okay";
-			pinctrl-0=<&spi3m1_pins>;
 		};
-	};
-
-	
-		
+	};		
 };
