@@ -12,9 +12,7 @@
 		target = <&i2c4>;
 
 		__overlay__ {
-			status = "okay";
-			pinctrl-names = "default";
-			pinctrl-0 = <&i2c4m0_xfer>;
+			status = "okay";			
 		};
 	};	
 };
