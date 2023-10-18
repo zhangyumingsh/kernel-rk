@@ -11,7 +11,8 @@
 		target = <&pwm15>;
 
 		__overlay__ {
-			status = "okay";		
+			status = "okay";
+		
 		};
 	};
 	

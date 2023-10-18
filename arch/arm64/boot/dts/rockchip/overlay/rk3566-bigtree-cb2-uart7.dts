@@ -11,6 +11,8 @@
 		target = <&uart7>;
 
 		__overlay__ {
+			pinctrl-names = "default";
+			pinctrl-0 = <&uart7m2_xfer>;
 			status = "okay";
 		
 		};

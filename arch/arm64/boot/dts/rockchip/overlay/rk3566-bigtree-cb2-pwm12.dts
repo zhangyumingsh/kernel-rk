@@ -11,6 +11,8 @@
 		target = <&pwm12>;
 
 		__overlay__ {
+			pinctrl-names = "default";
+			pinctrl-0 = <&pwm12m1_pins>;
 			status = "okay";
 		
 		};

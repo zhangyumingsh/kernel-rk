@@ -10,7 +10,7 @@
 	fragment@0 {
 		target = <&uart5>;
 
-		__overlay__ {
+		__overlay__ {		
 			status = "okay";
 		
 		};

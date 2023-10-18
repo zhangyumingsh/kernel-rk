@@ -11,8 +11,7 @@
 		target = <&uart3>;
 
 		__overlay__ {
-			status = "okay";
-		
+			status = "okay";		
 		};
 	};
 	
