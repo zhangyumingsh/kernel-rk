@@ -1417,6 +1417,11 @@ sd_vcc3v3_power: sd-vcc3v3-power {
 	status = "okay";
 };
 
+&i2c1{
+	"disabled";
+	pinctrl-names = "default";
+	pinctrl-0 = <&i2c1_xfer>;
+};
 &i2c2 {
 	status = "okay";
 	pinctrl-names = "default";
@@ -1443,3 +1448,17 @@ sd_vcc3v3_power: sd-vcc3v3-power {
         };
 	};
 };
+
+&i2c3{
+	status = "disabled";
+	pinctrl-names = "default";
+	pinctrl-0 = <&i2c3m0_xfer>;
+};
+
+&i2c4{
+	status = "disabled";
+	pinctrl-names = "default";
+	pinctrl-0 = <&i2c4m0_xfer>;
+};
+
+
