@@ -9,7 +9,7 @@
 		__overlay__ {
 			
 			status = "okay";
-			connect = <&vp0_out_dsi1>;		
+			connect = <&vp1_out_dsi1>;		
 		};
 	};
 	
@@ -23,7 +23,7 @@
 	};
 	
 	fragment@2 {
-		target = <&dsi1_in_vp0>;
+		target = <&dsi1_in_vp1>;
 
 		__overlay__ {
 			
@@ -57,15 +57,5 @@
 			status = "okay";			
 		};
 	};
-	
-	fragment@6 {
-		target = <&route_hdmi>;
-
-		__overlay__ {
-			
-			status = "disabled";
-			connect = <&vp0_out_hdmi>;             		
-		};
-	};
-			
+		
 };

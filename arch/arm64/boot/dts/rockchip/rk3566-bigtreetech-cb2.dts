@@ -146,18 +146,18 @@
 		
 	};
 	
-	vcc5v0_host2: vcc5v0-host2-regulator {
-		compatible = "regulator-fixed";
-		enable-active-high;
-		gpio = <&gpio4 RK_PC5 GPIO_ACTIVE_HIGH>;
-		pinctrl-names = "default";
-		//pinctrl-0 = <&vcc5v0_host_en>;
-		pinctrl-0 = <&vcc5v0_host2_vbus_en>;
-		regulator-name = "vcc5v0_host";
-		regulator-boot-on;
-		regulator-always-on;
-		
-	};
+//	vcc5v0_host2: vcc5v0-host2-regulator {
+//		compatible = "regulator-fixed";
+//		enable-active-high;
+//		gpio = <&gpio4 RK_PC5 GPIO_ACTIVE_HIGH>;
+//		pinctrl-names = "default";
+//		//pinctrl-0 = <&vcc5v0_host_en>;
+//		pinctrl-0 = <&vcc5v0_host2_vbus_en>;
+//		regulator-name = "vcc5v0_host";
+//		regulator-boot-on;
+//		regulator-always-on;
+//		
+//	};
 	
 	vcc5v0_host3: vcc5v0-host3-regulator {
 		compatible = "regulator-fixed";
@@ -816,7 +816,7 @@ sd_vcc3v3_power: sd-vcc3v3-power {
 };
 
 &u2phy0_host {
-	phy-supply = <&vcc5v0_host>,<&vcc5v0_host2>,<&vcc5v0_host3>;
+	phy-supply = <&vcc5v0_host>,<&vcc5v0_host3>;
 	status = "okay";
 };
 
@@ -959,10 +959,10 @@ sd_vcc3v3_power: sd-vcc3v3-power {
 			rockchip,pins = <0 RK_PB6 RK_FUNC_GPIO &pcfg_pull_none>;
 		};
 		
-		vcc5v0_host2_vbus_en: vcc5v0-host2-en {
-			//rockchip,pins = <0 RK_PA6 RK_FUNC_GPIO &pcfg_pull_none>;
-			rockchip,pins = <4 RK_PC5 RK_FUNC_GPIO &pcfg_pull_none>;
-		};
+//		vcc5v0_host2_vbus_en: vcc5v0-host2-en {
+//			//rockchip,pins = <0 RK_PA6 RK_FUNC_GPIO &pcfg_pull_none>;
+//			rockchip,pins = <4 RK_PC5 RK_FUNC_GPIO &pcfg_pull_none>;
+//		};
 		
 		vcc5v0_host3_vbus_en: vcc5v0-host3-en {
 			//rockchip,pins = <0 RK_PA6 RK_FUNC_GPIO &pcfg_pull_none>;
