@@ -122,5 +122,6 @@ dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3568-firefly-roc-pc.dtb
 dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3568-bpi-r2-pro.dtb
 dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3568-bpi-r2pro-pc_mt7531sw.dtb
 dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3566-bigtreetech-cb2.dtb
+dtb-$(CONFIG_ARCH_ROCKCHIP) += rk3566-bigtreetech-pi2.dtb
 
 subdir-y := $(dts-dirs) overlay
