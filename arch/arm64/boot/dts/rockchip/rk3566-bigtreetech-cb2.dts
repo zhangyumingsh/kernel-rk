@@ -423,7 +423,7 @@ sd_vcc3v3_power: sd-vcc3v3-power {
 		compatible = "rockchip,rk809";
 		reg = <0x20>;
 		interrupt-parent = <&gpio0>;
-		interrupts = <22 IRQ_TYPE_LEVEL_LOW>;
+		interrupts = <3 IRQ_TYPE_LEVEL_LOW>;
 
 		pinctrl-names = "default", "pmic-sleep",
 				"pmic-power-off", "pmic-reset";
