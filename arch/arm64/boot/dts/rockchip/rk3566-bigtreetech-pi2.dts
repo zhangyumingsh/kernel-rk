@@ -217,13 +217,13 @@
 			<0x0 0xfd90f000 0x0 0x1000>;
 	};
 	
-	rk_headset: rk-headset {
-		compatible = "rockchip_headset";
-		headset_gpio = <&gpio0 RK_PC6 GPIO_ACTIVE_HIGH>;
-		pinctrl-names = "default";
-		pinctrl-0 = <&hp_det>;
-		//io-channels = <&saradc 3>;	//HP_HOOK
-	};
+//	rk_headset: rk-headset {
+//		compatible = "rockchip_headset";
+//		headset_gpio = <&gpio0 RK_PC6 GPIO_ACTIVE_HIGH>;
+//		pinctrl-names = "default";
+//		pinctrl-0 = <&hp_det>;
+//		//io-channels = <&saradc 3>;	//HP_HOOK
+//	};
 
 	vcc2v5_sys: vcc2v5-ddr {
 		compatible = "regulator-fixed";
