@@ -108,6 +108,7 @@ struct ov5647 {
 	struct mutex			lock;
 	struct clk			*xclk;
 	struct gpio_desc		*pwdn;
+	struct gpio_desc		*dsensor;
 	struct gpio_desc		*reset;
 	bool				clock_ncont;
 	struct v4l2_ctrl_handler	ctrls;
@@ -824,6 +825,7 @@ static int ov5647_power_on(struct device *dev)
 
 	if (sensor->pwdn) {
 		gpiod_set_value_cansleep(sensor->pwdn, 0);
+		gpiod_set_value_cansleep(sensor->dsensor, 0);
 		msleep(PWDN_ACTIVE_DELAY_MS);
 	}
 
@@ -853,6 +855,7 @@ error_clk_disable:
 	clk_disable_unprepare(sensor->xclk);
 error_pwdn:
 	gpiod_set_value_cansleep(sensor->pwdn, 1);
+	gpiod_set_value_cansleep(sensor->dsensor, 1);
 
 	return ret;
 }
@@ -882,6 +885,7 @@ static int ov5647_power_off(struct device *dev)
 
 	clk_disable_unprepare(sensor->xclk);
 	gpiod_set_value_cansleep(sensor->pwdn, 1);
+	gpiod_set_value_cansleep(sensor->dsensor, 1);
 
 	return 0;
 }
@@ -1574,6 +1578,12 @@ static int ov5647_probe(struct i2c_client *client)
 	sensor->pwdn = devm_gpiod_get_optional(dev, "pwdn", GPIOD_OUT_HIGH);
 	if (IS_ERR(sensor->pwdn)) {
 		dev_err(dev, "Failed to get 'pwdn' gpio\n");
+		return -EINVAL;
+	}
+	
+	sensor->dsensor = devm_gpiod_get_optional(dev, "dsensor", GPIOD_OUT_HIGH);
+	if (IS_ERR(sensor->dsensor)) {
+		dev_err(dev, "Failed to get 'dsensor' gpio\n");
 		return -EINVAL;
 	}
 

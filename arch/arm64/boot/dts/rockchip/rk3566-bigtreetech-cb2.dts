@@ -217,13 +217,13 @@
 			<0x0 0xfd90f000 0x0 0x1000>;
 	};
 	
-	rk_headset: rk-headset {
-		compatible = "rockchip_headset";
-		headset_gpio = <&gpio0 RK_PC6 GPIO_ACTIVE_HIGH>;
-		pinctrl-names = "default";
-		pinctrl-0 = <&hp_det>;
-		//io-channels = <&saradc 3>;	//HP_HOOK
-	};
+//	rk_headset: rk-headset {
+//		compatible = "rockchip_headset";
+//		headset_gpio = <&gpio0 RK_PC6 GPIO_ACTIVE_HIGH>;
+//		pinctrl-names = "default";
+//		pinctrl-0 = <&hp_det>;
+//		//io-channels = <&saradc 3>;	//HP_HOOK
+//	};
 
 	vcc2v5_sys: vcc2v5-ddr {
 		compatible = "regulator-fixed";
@@ -312,25 +312,25 @@
 	};
 	
 //	##############
-wireless_bluetooth: wireless-bluetooth {
-    compatible = "bluetooth-platdata";
-    clocks = <&rk809 1>;
-    clock-names = "ext_clock";
-    uart_rts_gpios = <&gpio2 RK_PB5 GPIO_ACTIVE_LOW>;
-    pinctrl-names = "default", "rts_gpio";
-    pinctrl-0 = <&uart1m0_rtsn
-        &bt_host_wake_gpio
-        &bt_poweren
-        &bt_host_wake_irq>;
-    pinctrl-1 = <&uart1_rts_gpio>;
-    //BT,reset_gpio    = <&gpio2 RK_PB7 GPIO_ACTIVE_HIGH>;
-	BT,reset_gpio    = <&gpio2 RK_PC0 GPIO_ACTIVE_HIGH>;
-    BT,wake_gpio     = <&gpio2 RK_PC1 GPIO_ACTIVE_HIGH>;
-    //BT,wake_host_irq = <&gpio2 RK_PC0 GPIO_ACTIVE_HIGH>;
-	BT,wake_host_irq = <&gpio2 RK_PB7 GPIO_ACTIVE_HIGH>;
-
-    status = "okay";
-};
+//wireless_bluetooth: wireless-bluetooth {
+//    compatible = "bluetooth-platdata";
+//    clocks = <&rk809 1>;
+//    clock-names = "ext_clock";
+//    uart_rts_gpios = <&gpio2 RK_PB5 GPIO_ACTIVE_LOW>;
+//    pinctrl-names = "default", "rts_gpio";
+//    pinctrl-0 = <&uart1m0_rtsn
+//        &bt_host_wake_gpio
+//        &bt_poweren
+//        &bt_host_wake_irq>;
+//    pinctrl-1 = <&uart1_rts_gpio>;
+//    //BT,reset_gpio    = <&gpio2 RK_PB7 GPIO_ACTIVE_HIGH>;
+//	BT,reset_gpio    = <&gpio2 RK_PC0 GPIO_ACTIVE_HIGH>;
+//    BT,wake_gpio     = <&gpio2 RK_PC1 GPIO_ACTIVE_HIGH>;
+//    //BT,wake_host_irq = <&gpio2 RK_PC0 GPIO_ACTIVE_HIGH>;
+//	BT,wake_host_irq = <&gpio2 RK_PB7 GPIO_ACTIVE_HIGH>;
+//
+//    status = "okay";
+//};
 	
 //	##################
 aliases {
@@ -973,11 +973,11 @@ sd_vcc3v3_power: sd-vcc3v3-power {
 		};
 	};
 
-	headphone {
-		hp_det: hp-det {
-			rockchip,pins = <0 RK_PC6 RK_FUNC_GPIO &pcfg_pull_down>;
-		};
-	};
+//	headphone {
+//		hp_det: hp-det {
+//			rockchip,pins = <0 RK_PC6 RK_FUNC_GPIO &pcfg_pull_down>;
+//		};
+//	};
 
 	sdio-pwrseq {
 		wifi_enable_h: wifi-enable-h {
@@ -1444,7 +1444,8 @@ sd_vcc3v3_power: sd-vcc3v3-power {
 		clocks = <&ext_cam_clk>;
 		clock-names = "ext_cam_ov5647_clk";
 		power-domains = <&power RK3568_PD_VI>;
-		pwdn-gpios = <&gpio4 RK_PA5 GPIO_ACTIVE_LOW>;
+		pwdn-gpios = <&gpio4 RK_PA7 GPIO_ACTIVE_LOW>;
+		dsensor-gpios = <&gpio4 RK_PA5 GPIO_ACTIVE_LOW>;
 		port {
 			ov5647_out: endpoint {
 				remote-endpoint =<&mipi_in_ucam0>;//split:dphy1_in full: mipi_in_ucam0
