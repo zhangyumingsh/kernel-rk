@@ -1440,6 +1440,7 @@ sd_vcc3v3_power: sd-vcc3v3-power {
 		clock-names = "ext_cam_ov5647_clk";
 		power-domains = <&power RK3568_PD_VI>;
 		pwdn-gpios = <&gpio4 RK_PA7 GPIO_ACTIVE_LOW>;
+		dsensor-gpios = <&gpio4 RK_PA5 GPIO_ACTIVE_LOW>;
 		port {
 			ov5647_out: endpoint {
 				remote-endpoint =<&mipi_in_ucam0>;//split:dphy1_in full: mipi_in_ucam0
