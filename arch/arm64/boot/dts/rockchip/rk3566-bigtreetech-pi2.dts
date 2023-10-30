@@ -146,6 +146,27 @@
 		
 	};
 	
+	bttcb3_leds: leds {
+       compatible = "gpio-leds";
+       pi_led: power {
+           label = "bttcb3:blue:power";
+           linux,default-trigger = "heartbeat";
+           default-state = "on";
+           gpios = <&gpio4 RK_PA1 GPIO_ACTIVE_LOW>;
+           pinctrl-names = "default";
+           pinctrl-0 = <&pi_power>;
+       };
+
+       work_led: work {
+           label = "bttcb3:green:work";
+           linux,default-trigger = "ir-user-click";
+           default-state = "off";
+           gpios = <&gpio0 RK_PB7 GPIO_ACTIVE_LOW>;
+           pinctrl-names = "default";
+           pinctrl-0 = <&working_led>;
+       };
+    };
+	
 //	vcc5v0_host2: vcc5v0-host2-regulator {
 //		compatible = "regulator-fixed";
 //		enable-active-high;
@@ -1036,6 +1057,16 @@ sd_vcc3v3_power: sd-vcc3v3-power {
 			rockchip,pins = <4 RK_PA3 RK_FUNC_GPIO &pcfg_pull_up>;
 		};
 	};
+	
+	leds {
+        pi_power: pi-power {
+            rockchip,pins = <4 RK_PA1 RK_FUNC_GPIO &pcfg_pull_none>;
+        };
+
+        working_led: working-led {
+            rockchip,pins = <0 RK_PB7 RK_FUNC_GPIO &pcfg_pull_none>;
+        };
+    };
 
 };
 

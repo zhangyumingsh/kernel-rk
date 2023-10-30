@@ -146,18 +146,26 @@
 		
 	};
 	
-//	vcc5v0_host2: vcc5v0-host2-regulator {
-//		compatible = "regulator-fixed";
-//		enable-active-high;
-//		gpio = <&gpio4 RK_PC5 GPIO_ACTIVE_HIGH>;
-//		pinctrl-names = "default";
-//		//pinctrl-0 = <&vcc5v0_host_en>;
-//		pinctrl-0 = <&vcc5v0_host2_vbus_en>;
-//		regulator-name = "vcc5v0_host";
-//		regulator-boot-on;
-//		regulator-always-on;
-//		
-//	};
+    bttcb3_leds: leds {
+       compatible = "gpio-leds";
+       pi_led: power {
+           label = "bttcb3:blue:power";
+           linux,default-trigger = "heartbeat";
+           default-state = "on";
+           gpios = <&gpio4 RK_PA1 GPIO_ACTIVE_LOW>;
+           pinctrl-names = "default";
+           pinctrl-0 = <&pi_power>;
+       };
+
+       work_led: work {
+           label = "bttcb3:green:work";
+           linux,default-trigger = "ir-user-click";
+           default-state = "off";
+           gpios = <&gpio0 RK_PB7 GPIO_ACTIVE_LOW>;
+           pinctrl-names = "default";
+           pinctrl-0 = <&working_led>;
+       };
+   };
 	
 	vcc5v0_host3: vcc5v0-host3-regulator {
 		compatible = "regulator-fixed";
@@ -312,25 +320,25 @@
 	};
 	
 //	##############
-//wireless_bluetooth: wireless-bluetooth {
-//    compatible = "bluetooth-platdata";
-//    clocks = <&rk809 1>;
-//    clock-names = "ext_clock";
-//    uart_rts_gpios = <&gpio2 RK_PB5 GPIO_ACTIVE_LOW>;
-//    pinctrl-names = "default", "rts_gpio";
-//    pinctrl-0 = <&uart1m0_rtsn
-//        &bt_host_wake_gpio
-//        &bt_poweren
-//        &bt_host_wake_irq>;
-//    pinctrl-1 = <&uart1_rts_gpio>;
-//    //BT,reset_gpio    = <&gpio2 RK_PB7 GPIO_ACTIVE_HIGH>;
-//	BT,reset_gpio    = <&gpio2 RK_PC0 GPIO_ACTIVE_HIGH>;
-//    BT,wake_gpio     = <&gpio2 RK_PC1 GPIO_ACTIVE_HIGH>;
-//    //BT,wake_host_irq = <&gpio2 RK_PC0 GPIO_ACTIVE_HIGH>;
-//	BT,wake_host_irq = <&gpio2 RK_PB7 GPIO_ACTIVE_HIGH>;
-//
-//    status = "okay";
-//};
+wireless_bluetooth: wireless-bluetooth {
+    compatible = "bluetooth-platdata";
+    clocks = <&rk809 1>;
+    clock-names = "ext_clock";
+    uart_rts_gpios = <&gpio2 RK_PB5 GPIO_ACTIVE_LOW>;
+    pinctrl-names = "default", "rts_gpio";
+    pinctrl-0 = <&uart1m0_rtsn
+        &bt_host_wake_gpio
+        &bt_poweren
+        &bt_host_wake_irq>;
+    pinctrl-1 = <&uart1_rts_gpio>;
+    //BT,reset_gpio    = <&gpio2 RK_PB7 GPIO_ACTIVE_HIGH>;
+	BT,reset_gpio    = <&gpio2 RK_PC0 GPIO_ACTIVE_HIGH>;
+    BT,wake_gpio     = <&gpio2 RK_PC1 GPIO_ACTIVE_HIGH>;
+    //BT,wake_host_irq = <&gpio2 RK_PC0 GPIO_ACTIVE_HIGH>;
+	BT,wake_host_irq = <&gpio2 RK_PB7 GPIO_ACTIVE_HIGH>;
+
+    status = "okay";
+};
 	
 //	##################
 aliases {
@@ -917,13 +925,6 @@ sd_vcc3v3_power: sd-vcc3v3-power {
 
 &pinctrl {
 
-	spi1 {
-		spi1m0_cs2: spi1m0-cs2 {
-			rockchip,pins =
-				/* spi1_cs1m0 */
-				<2 RK_PC4 3 &pcfg_pull_up_drv_level_1>;
-		};
-	};
 	pmic {
 		pmic_int: pmic_int {
 			rockchip,pins =
@@ -1041,6 +1042,16 @@ sd_vcc3v3_power: sd-vcc3v3-power {
 			rockchip,pins = <4 RK_PA3 RK_FUNC_GPIO &pcfg_pull_up>;
 		};
 	};
+	
+	leds {
+        pi_power: pi-power {
+            rockchip,pins = <4 RK_PA1 RK_FUNC_GPIO &pcfg_pull_none>;
+        };
+
+        working_led: working-led {
+            rockchip,pins = <0 RK_PB7 RK_FUNC_GPIO &pcfg_pull_none>;
+        };
+    };
 
 };
 
@@ -1097,7 +1108,7 @@ sd_vcc3v3_power: sd-vcc3v3-power {
 };
 
 &spi1 {
-	status = "disabled";
+	status = "okay";
 	max-freq = <10000000>;
 	pinctrl-0=<&spi1m1_pins>;
 	#address-cells = <1>;
@@ -1111,7 +1122,7 @@ sd_vcc3v3_power: sd-vcc3v3-power {
 		reg = <0>;
 		interrupt-parent = <&gpio4>;
 		interrupts = <RK_PA3 IRQ_TYPE_LEVEL_LOW>;
-		spi-max-frequency = <10000000>;
+		spi-max-frequency = <1000000>;
 		clocks = <&can_mcp2515_osc>;
 		vdd-supply = <&vcc3v3_sys>;
 		xceiver-supply = <&vcc3v3_sys>;
@@ -1136,7 +1147,6 @@ sd_vcc3v3_power: sd-vcc3v3-power {
 		txbuflen = <8192>;
 		spi-cpol;
 		spi-cpha;
-		// dc-gpios  = <&pio 2 14 GPIO_ACTIVE_HIGH>; /* PC14 */
 		dc-gpios  = <&gpio0 RK_PC7 GPIO_ACTIVE_HIGH>;
 	};
 };
