@@ -136,7 +136,7 @@
 	vcc5v0_host: vcc5v0-host-regulator {
 		compatible = "regulator-fixed";
 		enable-active-high;
-		gpio = <&gpio0 RK_PB6 GPIO_ACTIVE_HIGH>,<&gpio4 RK_PC6 GPIO_ACTIVE_HIGH>;
+		gpio = <&gpio0 RK_PB6 GPIO_ACTIVE_HIGH>; //,<&gpio4 RK_PC6 GPIO_ACTIVE_HIGH>
 		pinctrl-names = "default";
 		//pinctrl-0 = <&vcc5v0_host_en>;
 		pinctrl-0 = <&vcc5v0_host_vbus_en>;
@@ -170,7 +170,7 @@
 	vcc5v0_host3: vcc5v0-host3-regulator {
 		compatible = "regulator-fixed";
 		enable-active-high;
-		gpio = <&gpio4 RK_PC6 GPIO_ACTIVE_HIGH>;
+		//gpio = <&gpio4 RK_PC6 GPIO_ACTIVE_HIGH>;
 		pinctrl-names = "default";
 		//pinctrl-0 = <&vcc5v0_host_en>;
 		pinctrl-0 = <&vcc5v0_host3_vbus_en>;
@@ -1037,11 +1037,7 @@ sd_vcc3v3_power: sd-vcc3v3-power {
 			};
 	};
 
-	mcp2515_int_pin {
-		mcp2515_int_pin: mcp2515_int_pin {
-			rockchip,pins = <4 RK_PA3 RK_FUNC_GPIO &pcfg_pull_up>;
-		};
-	};
+
 	
 	leds {
         pi_power: pi-power {
@@ -1108,12 +1104,12 @@ sd_vcc3v3_power: sd-vcc3v3-power {
 };
 
 &spi1 {
-	status = "okay";
+	status = "disabled";
 	max-freq = <10000000>;
 	pinctrl-0=<&spi1m1_pins>;
 	#address-cells = <1>;
 	#size-cells = <0>;
-	cs-gpios = <&gpio3 RK_PD5 GPIO_ACTIVE_LOW>,
+	cs-gpios = <&gpio4 RK_PC6 GPIO_ACTIVE_LOW>,
 			<&gpio3 RK_PA1 GPIO_ACTIVE_LOW>,
 			<&gpio4 RK_PA2 GPIO_ACTIVE_LOW>;
 	can_mcp2515: can-mcp2515@0 {
@@ -1148,6 +1144,12 @@ sd_vcc3v3_power: sd-vcc3v3-power {
 		spi-cpol;
 		spi-cpha;
 		dc-gpios  = <&gpio0 RK_PC7 GPIO_ACTIVE_HIGH>;
+	};
+	
+	mcp2515_int_pin {
+		mcp2515_int_pin: mcp2515_int_pin {
+			rockchip,pins = <4 RK_PA3 RK_FUNC_GPIO &pcfg_pull_up>;
+		};
 	};
 };
 
