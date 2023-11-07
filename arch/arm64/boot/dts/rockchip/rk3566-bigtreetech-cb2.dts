@@ -750,7 +750,7 @@ sd_vcc3v3_power: sd-vcc3v3-power {
 	vccio3-supply = <&vccio_sd>;
 	vccio4-supply = <&vcc_1v8>;
 	vccio5-supply = <&vcc_3v3>;
-	vccio6-supply = <&vcc_1v8>;
+	vccio6-supply = <&vcc_3v3>;
 	vccio7-supply = <&vcc_3v3>;
 };
 
