@@ -14,6 +14,7 @@ dtbo-$(CONFIG_ARCH_ROCKCHIP) += \
 	rk3566-bigtree-cb2-pwm4.dtbo \
 	rk3566-bigtree-cb2-pwm5.dtbo \
 	rk3566-bigtree-cb2-pwm12.dtbo \
+	rk3566-bigtree-cb2-pwm13.dtbo \
 	rk3566-bigtree-cb2-pwm14.dtbo \
 	rk3566-bigtree-cb2-pwm15.dtbo \
 	rk3566-bigtree-cb2-spi1.dtbo \
@@ -23,7 +24,8 @@ dtbo-$(CONFIG_ARCH_ROCKCHIP) += \
 	rk3566-bigtree-cb2-uart1.dtbo \
 	rk3566-bigtree-cb2-uart3.dtbo \
 	rk3566-bigtree-cb2-uart5.dtbo \
-	rk3566-bigtree-cb2-uart7.dtbo 
+	rk3566-bigtree-cb2-uart7.dtbo \
+	rk3566-bigtree-cb2-uart9.dtbo
 	
 	
 	
