@@ -18,7 +18,6 @@
 #include <dt-bindings/sensor-dev.h>
 #include "rk3568.dtsi"
 #include "bq-cb2-display.dtsi"
-//#include "bq-cb2-camera.dtsi"
 #include "bq-cb2-hdmi.dtsi"
  
 
@@ -150,7 +149,7 @@
        compatible = "gpio-leds";
        pi_led: power {
            label = "bttcb3:blue:power";
-           linux,default-trigger = "heartbeat";
+           linux,default-trigger = "";
            default-state = "on";
            gpios = <&gpio4 RK_PA1 GPIO_ACTIVE_LOW>;
            pinctrl-names = "default";
@@ -160,7 +159,7 @@
        work_led: work {
            label = "bttcb3:green:work";
            linux,default-trigger = "ir-user-click";
-           default-state = "off";
+           default-state = "heartbeat";
            gpios = <&gpio0 RK_PB7 GPIO_ACTIVE_LOW>;
            pinctrl-names = "default";
            pinctrl-0 = <&working_led>;
