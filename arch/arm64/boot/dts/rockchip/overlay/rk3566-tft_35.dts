@@ -24,5 +24,21 @@
 			status = "okay";
 		};
 	};
+	
+	fragment@2 {
+		target = <&i2c3>;
+
+		__overlay__ {
+			status = "okay";
+		};
+	};
+
+	fragment@3 {
+		target = <&tft_tp>;
+
+		__overlay__ {
+			status = "okay";
+		};
+	};
 		
 };
