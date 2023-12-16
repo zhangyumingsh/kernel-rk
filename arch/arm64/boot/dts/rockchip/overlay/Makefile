@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0
 dtbo-$(CONFIG_ARCH_ROCKCHIP) += \
 	rk3566-hdmi.dtbo \
+	rk3566-hdmi_sound.dtbo \
 	rk3566-dsi.dtbo \
 	rk3566-i2c1.dtbo \
 	rk3566-i2c3.dtbo \

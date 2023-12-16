@@ -391,6 +391,23 @@ sd_vcc3v3_power: sd-vcc3v3-power {
 		clock-frequency = <8000000>;
 		#clock-cells = <0>;
 	};
+	
+	hdmi_sound: hdmi-sound {
+		status = "disabled";
+		compatible = "simple-audio-card";
+		simple-audio-card,format = "i2s";
+		simple-audio-card,mclk-fs = <128>;
+		simple-audio-card,name = "rockchip,hdmi";
+		
+		rockchip,jack-det;
+
+		simple-audio-card,cpu {
+				sound-dai = <&i2s0_8ch>;
+		};
+		simple-audio-card,codec {
+				sound-dai = <&hdmi>;
+		};
+	};
 
 };
 
