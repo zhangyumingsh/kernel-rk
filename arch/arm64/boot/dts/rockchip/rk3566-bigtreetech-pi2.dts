@@ -332,6 +332,15 @@
 		status = "okay";
 	};
 	
+	ext_cam_clk_imx219: ext-cam-clk-imx219 {
+		status = "okay";
+		compatible = "fixed-clock";
+		clock-frequency = <24000000>;
+		clock-output-names = "ext_cam_clk_imx219";
+		#clock-cells = <0>;
+	};
+	
+	
 //	##############
 wireless_bluetooth: wireless-bluetooth {
     compatible = "bluetooth-platdata";
@@ -1425,6 +1434,19 @@ sd_vcc3v3_power: sd-vcc3v3-power {
 		};
 
 		port@1 {
+			reg = <0>;
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			mipi_in_ucam1: endpoint@1 {
+				reg = <1>;
+				remote-endpoint = <&imx219_out>;  //imx219
+				data-lanes = <1 2>;
+			};
+
+		};
+		
+		port@2 {
 			reg = <1>;
 			#address-cells = <1>;
 			#size-cells = <0>;
@@ -1483,7 +1505,7 @@ sd_vcc3v3_power: sd-vcc3v3-power {
 	#address-cells = <1>;
 	#size-cells = <0>;
 	ov5647@36 {
-		status = "okay";
+		status = "okay";  
 		compatible = "ovti,ov5647";
 		reg = <0x36>;
 		clocks = <&ext_cam_clk>;
@@ -1498,6 +1520,30 @@ sd_vcc3v3_power: sd-vcc3v3-power {
             };
         };
 	};
+	
+	imx219@10 {
+		status = "okay";  //
+		compatible = "sony,imx219";
+		reg = <0x10>;
+		clocks = <&ext_cam_clk_imx219>;
+		clock-names = "ext_cam_clk_imx219";
+	
+		pwdn-gpios = <&gpio4 RK_PA7 GPIO_ACTIVE_LOW>;
+		dsensor-gpios = <&gpio4 RK_PA5 GPIO_ACTIVE_LOW>;				
+		rockchip,camera-module-index = <1>;
+		rockchip,camera-module-facing = "front";
+		rockchip,camera-module-name = "rpi-camera-v2";
+		rockchip,camera-module-lens-name = "default";
+
+		port {
+			imx219_out: endpoint {
+				remote-endpoint = <&mipi_in_ucam1>;
+				data-lanes = <1 2>;
+			};
+		};
+	
+	};
+	
 };
 
 &i2c3{
@@ -1510,6 +1556,46 @@ sd_vcc3v3_power: sd-vcc3v3-power {
 	status = "disabled";
 	pinctrl-names = "default";
 	pinctrl-0 = <&i2c4m0_xfer>;
+};
+
+&pwm3 {
+	status = "okay";
+
+	compatible = "rockchip,remotectl-pwm";
+	interrupts = <GIC_SPI 82 IRQ_TYPE_LEVEL_HIGH>;
+	remote_pwm_id = <3>;
+	handle_cpu_id = <1>;
+	remote_support_psci = <0>;
+	pinctrl-names = "default";
+	pinctrl-0 = <&pwm3_pins>;
+	
+	//User Code: 00FF, 807F,00BF, 00EF or others
+	ir_btt{
+		rockchip,usercode = <0xff00>;
+		rockchip,key_table =
+			<0xba   KEY_CHANNELDOWN>,
+			<0xb9   KEY_CHANNEL>,
+			<0xb8   KEY_CHANNELUP>,			
+			<0xbb   KEY_VIDEO_PREV>,
+			<0xbf   KEY_VIDEO_NEXT>,
+			<0xbc   KEY_PLAYPAUSE>,			
+			<0xf8   KEY_VOLUMEDOWN>,
+			<0xea   KEY_VOLUMEUP>,
+			<0xf6   KEY_EQUAL>,		
+			<0xe9   KEY_0>,
+//			<0xe6   KEY_100>,
+//			<0xf2   KEY_200>,		
+			<0xf3   KEY_1>,
+			<0xe7   KEY_2>,
+			<0xa1   KEY_3>,			
+			<0xf7   KEY_4>,
+			<0xe3   KEY_5>,
+			<0xa5   KEY_6>,			
+			<0xbd   KEY_7>,
+			<0xad   KEY_8>,
+			<0xb5   KEY_9>;
+	     
+	};
 };
 
 
