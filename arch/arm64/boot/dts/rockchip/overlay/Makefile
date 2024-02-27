@@ -27,7 +27,7 @@ dtbo-$(CONFIG_ARCH_ROCKCHIP) += \
 	rk3566-uart9.dtbo
 
 scr-$(CONFIG_ARCH_ROCKCHIP) += \
-	rockchip-fixup.scr
+	rk3566-fixup.scr
 
 dtbotxt-$(CONFIG_ARCH_ROCKCHIP) += \
 	README.rockchip-overlays
