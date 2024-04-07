@@ -47,23 +47,27 @@ if test -n "${param_gpio_shutdown_pin}"; then
 		else
 			setenv tmp_value 0
 		fi
-
+		
 		setenv tmp_pinctrl "${param_gpio_shutdown_pin}"
 		setenv tmp_bank "${param_gpio_shutdown_pin}"
 		setenv tmp_pin "${param_gpio_shutdown_pin}"
 		run decompose_pin
+		
 		fdt get value tmp_pinctrl /__symbols__	gpio${tmp_pinctrl}
 		fdt get value tmp_phandle ${tmp_pinctrl} phandle
-		fdt set /gpio_keys/button_power gpios "<${tmp_phandle} ${tmp_pin} 0 0>"
+		fdt set /gpio-keys/button@0 gpios "<${tmp_phandle} ${tmp_pin} ${tmp_value} 0>"
+		
 		fdt set /gpio-keys status "okay"
 		env delete tmp_pinctrl tmp_bank tmp_pin tmp_phandle tmp_value
+	
+	
+	
 	fi
 fi
 
 if test -n "${tft35_spi_rotate}"; then
 	fdt set /spi@fe620000/st7789v@1 rotate "<${tft35_spi_rotate}>"
 fi
-
 
 
 
