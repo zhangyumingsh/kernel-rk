@@ -418,6 +418,27 @@ sd_vcc3v3_power: sd-vcc3v3-power {
 		};
 	};
 
+
+gpio-keys {
+		compatible = "gpio-keys";
+		status = "disabled";
+		#address-cells = <1>;
+		#size-cells = <0>;
+		autorepeat;
+		
+		pinctrl-names = "default";
+		pinctrl-0 = <&pwrbtn>;
+
+		button@0 {
+			gpios = <&gpio4 RK_PC2 GPIO_ACTIVE_LOW>;
+			linux,code = <KEY_POWER>;
+			label = "GPIO Key Power";
+			linux,input-type = <1>;
+			gpio-key,wakeup = <1>;
+			debounce-interval = <50>;
+		};
+	};
+	
 };
 
 &i2s2_2ch {
@@ -1095,6 +1116,15 @@ sd_vcc3v3_power: sd-vcc3v3-power {
             rockchip,pins = <0 RK_PB7 RK_FUNC_GPIO &pcfg_pull_none>;
         };
     };
+	
+	buttons {
+		pwrbtn: pwrbtn {
+			rockchip,pins = <4 RK_PC2 RK_FUNC_GPIO &pcfg_pull_up>; //,
+			//rockchip,pins = <4 RK_PC2 RK_FUNC_GPIO &pcfg_pull_up>;
+		};
+	};
+	
+
 
 };
 
@@ -1598,4 +1628,9 @@ sd_vcc3v3_power: sd-vcc3v3-power {
 	};
 };
 
+&uart2{
+	pinctrl-names = "default";
+	pinctrl-0 = <&uart2m0_xfer>;
+	status = "disabled";
+};
 
