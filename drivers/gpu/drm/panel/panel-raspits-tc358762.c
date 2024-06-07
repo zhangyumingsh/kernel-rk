@@ -186,7 +186,7 @@ static int raspits_tc358762_of_get_native_mode(struct raspits_tc358762 *panel)
 	return 1;
 }
 
-//extern int rockpi_mcu_set_bright(int bright);
+extern int rockpi_mcu_set_bright(int bright);
 static int raspits_tc358762_disable(struct drm_panel *panel)
 {
 	struct raspits_tc358762 *p = to_raspits_tc358762(panel);
@@ -196,7 +196,7 @@ static int raspits_tc358762_disable(struct drm_panel *panel)
 
 	printk("panel disable\n");
 
-	//rockpi_mcu_set_bright(0x00);
+	rockpi_mcu_set_bright(0x00);
 
 	if (p->backlight) {
 		p->backlight->props.power = FB_BLANK_POWERDOWN;
@@ -298,7 +298,7 @@ static int raspits_tc358762_prepare(struct drm_panel *panel)
 	return 0;
 }
 
-//extern void rockpi_mcu_screen_power_up(void);
+extern void rockpi_mcu_screen_power_up(void);
 static int raspits_tc358762_enable(struct drm_panel *panel)
 {
 	struct raspits_tc358762 *p = to_raspits_tc358762(panel);
@@ -308,11 +308,7 @@ static int raspits_tc358762_enable(struct drm_panel *panel)
 
 	printk("panel enable\n");
 
-	//if(trigger_bridge_raspits_tc358762) {
-	//	pr_info("rockpi_mcu_screen_power_up");
-	//	rockpi_mcu_screen_power_up();
-	//}
-
+	rockpi_mcu_screen_power_up();
 	raspits_tc358762_dsi_init(p);
 
 	if (p->desc && p->desc->delay.enable)
@@ -323,7 +319,7 @@ static int raspits_tc358762_enable(struct drm_panel *panel)
 		backlight_update_status(p->backlight);
 	}
 
-	//rockpi_mcu_set_bright(0xFF);
+	rockpi_mcu_set_bright(0xFF);
 
 	p->enabled = true;
 

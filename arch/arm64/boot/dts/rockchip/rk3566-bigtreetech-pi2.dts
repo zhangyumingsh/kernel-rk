@@ -1574,6 +1574,14 @@ gpio-keys {
 	
 	};
 	
+	display_backlight@45 {
+		
+		status = "okay";  //
+		reg = <0x45>;
+		compatible = "rockpi_mcu";
+	
+	};
+	
 };
 
 &i2c3{
